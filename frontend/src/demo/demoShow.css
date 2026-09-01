@@ -1,0 +1,306 @@
+/*
+ * The show layer's chrome: callouts, the radar sweep, the walk's cutout, the keycap HUD,
+ * shimmers, arrival marks and the momentary scanlines.
+ *
+ * Kept beside `demoDirector.css` rather than inside it because these are the effects and
+ * that file is the card. Both are demo-only: only `main.tsx` of the demo build imports
+ * either, so nothing here can reach the product bundle.
+ *
+ * Every colour is one of the app's own theme variables, so a visitor switching theme
+ * mid-run takes the overlay with them. Every animation is disabled under
+ * `prefers-reduced-motion`, and none of them flashes the whole frame: the brightest thing
+ * here is a 26% accent wash over a forty-pixel chip.
+ */
+
+.demo-show {
+  position: fixed;
+  inset: 0;
+  z-index: 901;
+  pointer-events: none;
+}
+
+/* ------------------------------------------------------------------- the callouts */
+
+.demo-show-chip {
+  position: fixed;
+  padding: 2px 8px;
+  border: 1px solid var(--accent, #8bd450);
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--panel, #0d0f12) 88%, black);
+  color: var(--accent, #8bd450);
+  font-size: 11px;
+  letter-spacing: .06em;
+  white-space: nowrap;
+  animation: demo-show-chip-in .26s steps(1) both, demo-show-jitter .26s steps(2) both;
+}
+
+/* The first pass, before anything has been placed. The chip has to be in the document
+   to have a width, and its width is what the placement needs. */
+.demo-show-chip.measuring {
+  visibility: hidden;
+  animation: none;
+}
+
+.demo-show-sub {
+  margin-left: 7px;
+  color: var(--muted, #848b94);
+  font-size: 10px;
+}
+
+/* The glitch: three clip steps, one frame of colour split, then clean text. */
+@keyframes demo-show-chip-in {
+  0% { clip-path: inset(45% 0 45% 0); opacity: .35; filter: brightness(2.4); }
+  33% { clip-path: inset(10% 0 62% 0); opacity: .9; }
+  66% {
+    clip-path: inset(0 0 0 0);
+    opacity: 1;
+    text-shadow: 2px 0 var(--red, #f07178), -2px 0 var(--blue, #72a7ff);
+  }
+  100% { clip-path: inset(0 0 0 0); opacity: 1; text-shadow: none; }
+}
+
+@keyframes demo-show-jitter {
+  0% { transform: translate(2px, -1px); }
+  50% { transform: translate(-1px, 1px); }
+  100% { transform: translate(0, 0); }
+}
+
+.demo-show-mark {
+  position: fixed;
+  border: 1px solid var(--accent, #8bd450);
+  border-radius: 4px;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent, #8bd450) 16%, transparent);
+  animation: demo-show-mark-in .3s steps(1) both;
+}
+
+@keyframes demo-show-mark-in {
+  0% { clip-path: inset(0 100% 0 0); opacity: .5; }
+  50% { clip-path: inset(0 22% 0 0); opacity: 1; }
+  100% { clip-path: inset(0 0 0 0); opacity: 1; }
+}
+
+/* Blueprint mode: brackets rather than a box, because a drawing marks its extent at the
+   ends and leaves the middle alone. */
+.demo-show-mark.bracket {
+  border: 0;
+  box-shadow: none;
+}
+
+.demo-show-mark.bracket::before,
+.demo-show-mark.bracket::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 5px;
+  border: 1px solid var(--accent, #8bd450);
+  border-radius: 1px;
+}
+
+.demo-show-mark.bracket::before { left: -5px; border-right: 0; }
+.demo-show-mark.bracket::after { right: -5px; border-left: 0; }
+
+.demo-show-wires {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.demo-show-wires path {
+  fill: none;
+  stroke: var(--accent, #8bd450);
+  stroke-width: 1.25;
+  opacity: .85;
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  animation: demo-show-draw .42s ease-out both;
+  animation-delay: inherit;
+}
+
+.demo-show-wires circle {
+  fill: var(--accent, #8bd450);
+  animation: demo-show-fade .3s ease-out both;
+  animation-delay: inherit;
+}
+
+@keyframes demo-show-draw { to { stroke-dashoffset: 0; } }
+@keyframes demo-show-fade { from { opacity: 0; } to { opacity: 1; } }
+
+/* Blueprint draws no motion at all: it is the mode that has to survive a screenshot. */
+.demo-show.mode-blueprint .demo-show-chip { animation: demo-show-soft .34s ease both; }
+.demo-show.mode-blueprint .demo-show-mark { animation: demo-show-fade .34s ease both; }
+.demo-show.mode-blueprint .demo-show-wires path { animation-duration: .2s; }
+
+@keyframes demo-show-soft {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: none; }
+}
+
+/* -------------------------------------------------------------------- the sweep */
+
+/*
+ * A single band crossing the fleet column once, with the chips scheduled against its
+ * position rather than animated with it. One element, one animation, however many rows
+ * the column happens to have.
+ */
+.demo-show-sweep {
+  position: fixed;
+  height: 74px;
+  background: linear-gradient(
+    180deg,
+    transparent,
+    color-mix(in srgb, var(--accent, #8bd450) 20%, transparent) 55%,
+    transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--accent, #8bd450) 55%, transparent);
+  animation: demo-show-sweep var(--sweep-ms, 1500ms) cubic-bezier(.4, 0, .5, 1) forwards;
+}
+
+@keyframes demo-show-sweep {
+  from { transform: translateY(0); opacity: 1; }
+  85% { opacity: 1; }
+  to { transform: translateY(var(--sweep-travel, 400px)); opacity: 0; }
+}
+
+/* --------------------------------------------------------------------- the walk */
+
+/*
+ * One hole in a dimmed frame. The dimming is the cutout's own outer shadow rather than
+ * four positioned panels, which is what lets it animate between targets as one element.
+ */
+.demo-show-cutout {
+  position: fixed;
+  border-radius: 5px;
+  box-shadow: 0 0 0 9999px color-mix(in srgb, var(--bg, #0b0d10) 72%, transparent);
+  transition:
+    left .42s cubic-bezier(.33, .68, .35, 1),
+    top .42s cubic-bezier(.33, .68, .35, 1),
+    width .42s ease,
+    height .42s ease;
+}
+
+/* ------------------------------------------------------- shimmers and arrivals */
+
+/*
+ * A value changing under the visitor, marked where it sits. Drawn as an overlay wash
+ * rather than by adding a class to the app's own element: the show layer measures the
+ * product's DOM and never writes to it, which is the rule that keeps the demo's overlay
+ * from being able to break the app it is pointing at.
+ */
+.demo-show-shimmer {
+  position: fixed;
+  border-radius: 3px;
+  animation: demo-show-shimmer 1s ease both;
+}
+
+@keyframes demo-show-shimmer {
+  0% { background: color-mix(in srgb, var(--accent, #8bd450) 45%, transparent); }
+  100% { background: transparent; }
+}
+
+/* Chrome that has just arrived. Stepped rather than eased, so it reads as a terminal
+   painting a new line rather than as a panel sliding in. */
+.demo-show-arrive {
+  position: fixed;
+  border: 1px solid var(--accent, #8bd450);
+  border-radius: 4px;
+  animation: demo-show-arrive .62s steps(3) both;
+}
+
+@keyframes demo-show-arrive {
+  0% { opacity: 0; clip-path: inset(0 100% 0 0); }
+  40% { opacity: 1; clip-path: inset(0 40% 0 0); }
+  80% { opacity: 1; clip-path: inset(0 0 0 0); }
+  100% { opacity: 0; clip-path: inset(0 0 0 0); }
+}
+
+/* ------------------------------------------------------------------ the keycaps */
+
+.demo-show-keys {
+  position: fixed;
+  bottom: 84px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.demo-show-keys i {
+  font-style: normal;
+  font-size: 12px;
+  padding: 4px 9px;
+  border-radius: 4px;
+  border: 1px solid var(--line, #2a2e34);
+  border-bottom-width: 3px;
+  background: var(--panel, #0d0f12);
+  color: var(--text, #d9dde2);
+  animation: demo-show-key .55s ease both;
+}
+
+.demo-show-keys i.hit {
+  border-color: var(--accent, #8bd450);
+  color: var(--accent, #8bd450);
+}
+
+.demo-show-keys i.then {
+  border: 0;
+  background: none;
+  color: var(--muted, #848b94);
+}
+
+@keyframes demo-show-key {
+  0% { opacity: 0; transform: translateY(5px); }
+  20% { opacity: 1; transform: none; }
+  80% { opacity: 1; }
+  100% { opacity: .3; }
+}
+
+/* ---------------------------------------------------------------------- the CRT */
+
+/*
+ * Scanlines and a vignette, for the length of one beat.
+ *
+ * Momentary on purpose: a permanently-CRT demo is a costume, and the pitch is that this
+ * is the real interface. It arrives with the beat that wants it and leaves with it, and
+ * it is a texture rather than a flicker - a flickering full-frame overlay is both a
+ * photosensitivity hazard and, over a terminal, unreadable.
+ */
+.demo-show-crt {
+  position: fixed;
+  inset: 0;
+  animation: demo-show-fade .32s ease both;
+  background:
+    repeating-linear-gradient(180deg, rgba(255, 255, 255, .035) 0 1px, transparent 1px 3px),
+    radial-gradient(ellipse at center, transparent 55%, rgba(0, 0, 0, .4) 100%);
+}
+
+.demo-show-crt ~ .demo-show-chip,
+.demo-show-crt ~ .demo-show-mark {
+  text-shadow: 0 0 6px color-mix(in srgb, var(--accent, #8bd450) 70%, transparent);
+}
+
+/* ------------------------------------------------------------- reduced motion */
+
+/*
+ * The same posture as the director's own block: nothing moves, everything still says
+ * what it was going to say. The sweep is the one thing removed outright, because a band
+ * crossing the screen has no still frame that means anything.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .demo-show-chip,
+  .demo-show-mark,
+  .demo-show-arrive,
+  .demo-show-shimmer,
+  .demo-show-keys i,
+  .demo-show-wires path,
+  .demo-show-wires circle {
+    animation-duration: .01s !important;
+    animation-delay: 0s !important;
+  }
+
+  .demo-show-sweep { display: none; }
+  .demo-show-cutout { transition: none; }
+  .demo-show-crt { animation: none; }
+}

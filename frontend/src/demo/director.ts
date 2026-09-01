@@ -27,8 +27,11 @@
  * only the capture rig sets.
  */
 import { apply, state } from './store.ts'
+import type { Show } from './callouts.ts'
 import { DEMO_EPOCH_MS, DEMO_SEED, DETERMINISTIC } from './determinism.ts'
-import { clickFirst, delay, firstVisible, narrow, runCommand } from './drive.ts'
+import {
+  clearField, clickFirst, delay, firstVisible, focusField, narrow, runCommand, typeCharacter,
+} from './drive.ts'
 import { releaseDirectorLead, requestDirectorLead } from './mirror.ts'
 import {
   NUDGE_SCENARIO_ID, SCENARIOS, scenarioById, type Beat, type Gate, type Scenario,
@@ -82,12 +85,26 @@ export type DirectorSnapshot = {
   press: number
   /** Bumped on every *real* press while `HIGHLIGHT_INPUT` is on. */
   echo: { x: number; y: number; seq: number } | null
+  /**
+   * Everything this beat draws over the app besides its one ring: callouts, the radar
+   * sweep, the keycap HUD, shimmers, arrival marks, scanlines. The runner carries it and
+   * never measures it - all of that is geometry, and geometry belongs to the view.
+   */
+  show: Show | null
+  /**
+   * Bumped once per beat that carries a `show`.
+   *
+   * The view keys its chips off this rather than off the `show` object, so a beat that
+   * repeats the previous beat's callouts still replays their reveal. Without it, two
+   * consecutive identical shows would draw once and look like a frozen overlay.
+   */
+  showSeq: number
 }
 
 const EMPTY: DirectorSnapshot = {
   running: false, scenarioId: '', blurb: '', index: 0, total: 0,
   eyebrow: '', say: '', body: [], hint: '', gesture: null, spotlight: null,
-  gate: null, pointer: null, press: 0, echo: null,
+  gate: null, pointer: null, press: 0, echo: null, show: null, showSeq: 0,
 }
 
 let snapshot: DirectorSnapshot = EMPTY
@@ -170,6 +187,28 @@ async function typeInto(
   return true
 }
 
+/**
+ * Type into a field of the app's own chrome, one character at a time.
+ *
+ * Separate from `typeInto` because they are different destinations, not different paces:
+ * that one sends keystrokes to a pane through the fake PTY, this one drives a controlled
+ * input. Sharing a helper would mean one of the two lying about where its characters
+ * went.
+ */
+async function typeIntoField(
+  input: { at: string[]; text: string; pace?: number; clear?: boolean },
+): Promise<boolean> {
+  const field = focusField(input.at)
+  if (!field) return true
+  if (input.clear) clearField(field)
+  const pace = input.pace ?? 58
+  for (const character of input.text) {
+    typeCharacter(field, character)
+    if (!(await pause(pace))) return false
+  }
+  return true
+}
+
 async function perform(beat: Beat): Promise<boolean> {
   // The daemon's half first: a beat that both mutates and presses is describing an act
   // whose consequence the press then reveals, never the other way round.
@@ -184,6 +223,9 @@ async function perform(beat: Beat): Promise<boolean> {
     const ok = await pressAt(target, () => { if (target) target.click(); else clickFirst(beat.click!) })
     if (!ok) return false
   }
+  // After the press, because the field a beat types into is usually the one the press
+  // just opened.
+  if (beat.field && !(await typeIntoField(beat.field))) return false
   if (beat.key === 'Escape') {
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
   }
@@ -255,6 +297,7 @@ async function play(scenario: Scenario, beats: Beat[]): Promise<void> {
   for (const [index, beat] of beats.entries()) {
     if (!(await pause(Math.max(0, beat.at - elapsed)))) return
     elapsed = Math.max(elapsed, beat.at)
+    const show = typeof beat.show === 'function' ? beat.show() : beat.show
     publish({
       index: index + 1,
       total: beats.length,
@@ -266,6 +309,8 @@ async function play(scenario: Scenario, beats: Beat[]): Promise<void> {
       spotlight: beat.spotlight ?? null,
       gate: beat.gate ?? null,
       pointer: null,
+      show: show ?? null,
+      showSeq: show ? snapshot.showSeq + 1 : snapshot.showSeq,
     })
     if (!(await perform(beat))) return
     if (beat.gate) {
@@ -289,7 +334,7 @@ export function stop(reason: 'finished' | 'interrupted' | 'dismissed' | 'replace
   openGate = null
   if (reason === 'dismissed' && snapshot.scenarioId === 'tour') markTourDone()
   releaseDirectorLead()
-  publish({ ...EMPTY, echo: snapshot.echo, press: snapshot.press })
+  publish({ ...EMPTY, echo: snapshot.echo, press: snapshot.press, showSeq: snapshot.showSeq })
 }
 
 /**
@@ -314,6 +359,7 @@ export async function start(scenarioId: string): Promise<boolean> {
     blurb: scenario.blurb,
     total: beats.length,
     press: snapshot.press,
+    showSeq: snapshot.showSeq,
   })
   void play(scenario, beats)
   return true

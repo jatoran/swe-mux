@@ -106,30 +106,36 @@ function profilesPayload(): unknown {
  * Emacs and VS Code presets a visitor switches between here carry the real
  * chords rather than an invented handful - which is the whole point of offering
  * the switch in a demo at all.
+ *
+ * The *resolution* is generated too, and that half used to be a lie worth naming: this
+ * function asserted "every demo rule is deliverable in a browser" and returned an empty
+ * `undeliverable` and `contested`, while the shipped Vim preset's own warning says a
+ * browser tab closes on Ctrl+W before the page ever sees it. What the daemon actually
+ * answers is subtler and better: the browser-impossible chords are declared `host:
+ * "desktop"` in the preset documents, so a tab never resolves them at all, and what is
+ * left over is `contested` - chords that work but cost the visitor something, Ctrl+Shift+P
+ * against Firefox's private window among them. Serving the generated table is what lets
+ * the demo's Settings panel say that instead of drawing a dead chord as live.
  */
 function keybindingsPayload(): unknown {
   const preset = state.keymapPreset || 'swemux'
-  const rules = KEYMAP_FIXTURE.rules[preset as keyof typeof KEYMAP_FIXTURE.rules]
-    ?? KEYMAP_FIXTURE.rules.swemux
-  const summary = KEYMAP_FIXTURE.presets.find(item => item.id === preset)
-  // What this host dispatches on. Every demo rule is deliverable in a browser,
-  // so `resolved` is the rule list keyed by chord and `undeliverable` is empty.
-  const resolved: Record<string, Array<{ command: string; when: string }>> = {}
-  for (const rule of rules) {
-    const entry = { command: rule.command, when: (rule as { when?: string }).when ?? '' }
-    ;(resolved[rule.keys] ??= []).push(entry)
-  }
+  const known = (id: string): id is keyof typeof KEYMAP_FIXTURE.rules =>
+    id in KEYMAP_FIXTURE.rules
+  const id = known(preset) ? preset : 'swemux'
+  const rules = KEYMAP_FIXTURE.rules[id]
+  const resolution = KEYMAP_FIXTURE.resolution[id]
+  const summary = KEYMAP_FIXTURE.presets.find(item => item.id === id)
   return {
-    preset,
+    preset: id,
     presets: KEYMAP_FIXTURE.presets,
-    host: 'browser',
-    platform: 'win',
+    host: KEYMAP_FIXTURE.host,
+    platform: KEYMAP_FIXTURE.platform,
     rules,
-    resolved,
+    resolved: resolution.bindings,
     prefixes: summary?.prefix ? [summary.prefix, ...summary.prefix_alternates] : [],
     labels: {},
-    undeliverable: [],
-    contested: [],
+    undeliverable: resolution.undeliverable,
+    contested: resolution.contested,
     commands: KEYMAP_FIXTURE.commands,
     groups: [],
     when_flags: [
@@ -137,19 +143,7 @@ function keybindingsPayload(): unknown {
       'drawerFocused', 'sidebarFocused', 'settingsOpen', 'mobile', 'desktop', 'zoomed',
       'multiplePanes', 'multipleTabs', 'hasSelection', 'agentFocused',
     ],
-    policy: {
-      hosts: ['browser', 'desktop'], platforms: ['win', 'mac', 'linux'], max_sequence: 3,
-      browser_unreachable: ['ctrl+n', 'ctrl+t', 'ctrl+w'],
-      browser_contested: { 'ctrl+f': 'find in page', 'ctrl+p': 'print' },
-      wm_reserved: { win: { 'alt+tab': 'switch windows' }, mac: {}, linux: {} },
-      application_reserved: ['ctrl+-', 'ctrl+0', 'ctrl+='],
-      terminal_reserved: { 'ctrl+c': 'interrupt', 'ctrl+d': 'end of file' },
-      rules: [
-        'A chord may use Ctrl, Alt, or Meta plus a non-modifier key.',
-        'Known browser and terminal shortcuts are reserved.',
-        'This is a demo: nothing you bind here reaches a real keyboard.',
-      ],
-    },
+    policy: KEYMAP_FIXTURE.policy,
     rejected: {},
   }
 }

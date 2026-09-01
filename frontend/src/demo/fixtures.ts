@@ -11,6 +11,9 @@ import type { Preview } from '../processFleet.ts'
 import type { PaneLayout } from '../layout.ts'
 import type { Project, Session } from '../types.ts'
 import { defaultRailConfig, writeRailConfigBlob } from '../commandRail.ts'
+import {
+  defaultSessionRowConfig, type RowFieldId, type RowFieldMode,
+} from '../sessionRowConfig.ts'
 import { defaultSessionTopbarConfig } from '../sessionTopbarConfig.ts'
 import type { DemoLandRequest, DemoNote, DemoState } from './store.ts'
 import { initialTimelines, initialTranscripts } from './conversation.ts'
@@ -56,6 +59,11 @@ function makeSession(input: {
    *  rows: it is what makes the status dot pulse and the turn clock tick, and
    *  the clock ticks by itself because the UI measures it against wall time. */
   workingForSeconds?: number
+  /** What this session is standing over beyond its own turn - subagents, a loop,
+   *  scheduled work. It is the source of the row's badge strip, and the tour's
+   *  anatomy callouts name that strip, so at least one seeded session has to carry
+   *  one or the label would point at chrome the fixture never draws. */
+  standing?: Session['standing_activity']
 }): Session {
   const created = now - (input.ageSeconds ?? 3600)
   const cwd = input.cwd ?? DEMO_ROOT
@@ -98,6 +106,7 @@ function makeSession(input: {
     last_turn_end_ts: now - 120,
     pinned_attention: false,
     broadcast: false,
+    standing_activity: input.standing,
     process_job_assignment: 'assigned',
     compaction_count: 0,
     model: input.model,
@@ -150,16 +159,20 @@ const GARDEN_GIT: Partial<Session['git']> = {
   compare_removed: null, compare_files: null,
 }
 
-/** The linked checkout `s-working` occupies, so the Map draws it beside that row. */
+/** The linked checkout `s-working` occupies, so the Map draws it beside that row.
+ *  `worktree` is the leaf name the sidebar row prints, and it is set here as well as
+ *  `root` because they answer different questions: `root` is where the session stands and
+ *  `worktree` is the row's own statement that the checkout is a linked one rather than
+ *  the Project's. Without it the row simply omits the token. */
 const COUPON_GIT: Partial<Session['git']> = {
   branch: 'agent/coupon-table', dirty: 4, ahead: 3, behind: 1,
-  added: 91, removed: 34, root: DEMO_WORKTREE_COUPON,
+  added: 91, removed: 34, root: DEMO_WORKTREE_COUPON, worktree: 'coupon-table',
   compare_ref: 'master', compare_added: 214, compare_removed: 66, compare_files: 9,
 }
 
 const PROFILE_GIT: Partial<Session['git']> = {
   branch: 'agent/cart-profile', dirty: 1, ahead: 1, behind: 0,
-  added: 12, removed: 4, root: DEMO_WORKTREE_PROFILE,
+  added: 12, removed: 4, root: DEMO_WORKTREE_PROFILE, worktree: 'cart-profile',
   compare_ref: 'master', compare_added: 26, compare_removed: 8, compare_files: 2,
 }
 
@@ -182,6 +195,10 @@ const SESSIONS: Session[] = [
     tokens: 33100, cost: 1.12, contextPct: 0.24, turnSeq: 6, workedMs: 12 * 60_000,
     ageSeconds: 55 * 60, workingForSeconds: 96,
     cwd: DEMO_WORKTREE_COUPON, git: COUPON_GIT,
+    standing: [{
+      kind: 'subagents', source: 'transcript', evidence: 'two Task calls still open',
+      since: now - 240, expires_at: null, count: 2, detail: 'readers, writers',
+    }],
   }),
   makeSession({
     id: 's-codex', name: 'profile cart endpoint', project: DEMO_PROJECT_ID,
@@ -609,12 +626,28 @@ const LANDS: DemoLandRequest[] = [
  *    the rail is the keyboard on a real phone; inside a demo frame the second row is a
  *    second band of chrome across an already short screen, and its contents (the pickers
  *    and the long tail) are reachable from the app menu anyway.
+ *  * **The sidebar row promotes the two fields the tour points at.** `worktree` and
+ *    `badges` ship as `notable`, which is right in the product - they are occasional facts
+ *    and a row that always printed them would be noisier for no gain. The walkthrough
+ *    names both by hand, and a callout whose field is not drawn is simply not drawn
+ *    either, so the label would go missing on a fixture change nobody connected to it.
+ *    `tests/demoDirector.test.ts` asserts every field the tour names is placed here.
  */
 function demoDeviceSettings(): Record<string, Record<string, unknown>> {
   const topbar = defaultSessionTopbarConfig()
   const rail = defaultRailConfig()
+  const rows = defaultSessionRowConfig()
+  const promote = (slots: Array<{ id: RowFieldId; mode: RowFieldMode }>) =>
+    slots.map(slot => (
+      slot.id === 'worktree' || slot.id === 'badges' ? { ...slot, mode: 'always' as const } : slot
+    ))
   return {
     desktop: {
+      sessionRows: {
+        ...rows,
+        top: { ...rows.top, right: promote(rows.top.right) },
+        bottom: { ...rows.bottom, left: promote(rows.bottom.left) },
+      } as unknown as Record<string, unknown>,
       sessionTopbar: {
         ...topbar,
         rows: topbar.rows.map(row => ({
@@ -633,7 +666,7 @@ function demoDeviceSettings(): Record<string, Record<string, unknown>> {
 }
 
 /** Bump when the seed shape changes so persisted visitor state is discarded. */
-export const DEMO_STATE_VERSION = 12
+export const DEMO_STATE_VERSION = 13
 
 export function initialDemoState(): DemoState {
   return {

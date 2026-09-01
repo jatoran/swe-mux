@@ -25,6 +25,7 @@
  * invariants below (unique ids, ordered beats, a gate on every walkthrough beat) had
  * nothing asserting them. Markup in a data file bought nothing and cost the tests.
  */
+import type { Show } from './callouts.ts'
 import { createPreview, spawnSession } from './fakeApi.ts'
 import { scriptedCompletion, scriptedTurn } from './fakeSocket.ts'
 import {
@@ -77,12 +78,29 @@ export type Beat = {
   key?: 'Escape'
   /** Text typed into a pane's composer, one keystroke at a time. */
   type?: { session: string; text: string; submit?: boolean; pace?: number }
+  /** Text typed into a field of the app's own chrome - the palette, a filter - as
+   *  opposed to into a pane. Runs after this beat's press, because the field is usually
+   *  the one that press just opened. */
+  field?: { at: string[]; text: string; pace?: number; clear?: boolean }
   /** Wait for the visitor rather than for the clock. */
   gate?: Gate
   /** The hint under a gated card. */
   hint?: string
   /** Draw the swipe glyph over the spotlight, pointing this way. */
   gesture?: 'left' | 'right'
+  /**
+   * What this beat draws over the app beyond its one ring: labelled callouts, a radar
+   * sweep, a keycap HUD, a shimmer on a value that just changed, arrival marks on chrome
+   * that just appeared, scanlines. It is data here and geometry in the view; see
+   * `callouts.ts` for why the two are separate.
+   *
+   * A thunk, for the beats whose subject did not exist when the catalogue was built: a
+   * scenario that approves two spawn requests cannot write down the ids of the sessions
+   * it is about to create. It is resolved when the beat is published, which is before the
+   * beat's own `mutate` runs and after every earlier beat's - so a beat naming what the
+   * previous beat made is the shape that works, and a beat naming its own is not.
+   */
+  show?: Show | (() => Show)
 }
 
 export type Scenario = {
@@ -115,6 +133,20 @@ const DRAWER_TAB = (label: string): string[] => [
 ]
 
 const sessionRow = (id: string): string[] => [`[data-sidebar-session-id="${id}"]`]
+
+/**
+ * One field inside one session row.
+ *
+ * `data-row-field` carries the token engine's own field id into the DOM
+ * (`SessionRowBody.tsx`), which is what lets a callout say "the model" rather than
+ * matching on a tooltip's wording. The state indicator has no field id because it is not
+ * a token - it is the row's dot, and the context ring is drawn inside it.
+ */
+const rowField = (id: string, field: string): string[] =>
+  [`[data-sidebar-session-id="${id}"] [data-row-field="${field}"]`]
+
+const rowPart = (id: string, selector: string): string[] =>
+  [`[data-sidebar-session-id="${id}"] ${selector}`]
 
 /** A backend name read off the fleet rather than written down. */
 const backendOf = (sessionId: string): string => session(sessionId)?.backend ?? 'shell'
@@ -163,6 +195,22 @@ function tourDesktop(): Beat[] {
       spotlight: ['.sidebar'],
       gate: { kind: 'click', selectors: ['.session-row'] },
       hint: 'Click any session to focus its pane',
+      // The one beat that labels rather than points. A row carries seven facts in about
+      // forty pixels, and naming them one at a time would be seven stops nobody would sit
+      // through; the sweep crosses the column once and each label wakes as it passes.
+      show: {
+        reveal: 'sweep',
+        sweep: ['.sidebar'],
+        crt: true,
+        notes: [
+          { at: rowPart('s-working', '.state-indicator'), label: 'state', sub: 'ring is context left' },
+          { at: rowField('s-working', 'badges'), label: 'subagents it started' },
+          { at: rowField('s-working', 'duration'), label: 'this turn, still running' },
+          { at: rowField('s-working', 'worktree'), label: 'its own checkout' },
+          { at: rowField('s-working', 'model'), label: 'model' },
+          { at: rowPart('s-shell', '.row-title'), label: 'a plain shell' },
+        ],
+      },
       body: [
         'Projects group sessions; each row carries live state, the model, how long the'
         + ' current turn has been running, and what its checkout looks like.',
@@ -349,6 +397,10 @@ function queueBeats(): Beat[] {
       say: 'A follow-up is queued behind the running turn. It does not interrupt it.',
       command: 'drawer.show:queue',
       spotlight: DRAWER_TAB('Queue'),
+      // The row's own depth token changes under the visitor at exactly this moment, and
+      // it is two characters wide. A shimmer where it sits is the difference between a
+      // fact the demo demonstrated and one it merely contained.
+      show: { shimmer: [rowField(target, 'queue')] },
       mutate: () => {
         apply({
           kind: 'queue-add',
@@ -420,6 +472,7 @@ function queueBeats(): Beat[] {
       say: 'It arrives as an alert - ranked by what actually needs you, with every record kept behind it.',
       command: 'drawer.show:notifications',
       spotlight: DRAWER_TAB('Alerts'),
+      show: { arrive: [DRAWER_TAB('Alerts')] },
     },
     { at: 22_000, say: 'That is the control plane: it watches, it waits, and it never acts on its own.' },
   ]
@@ -498,6 +551,17 @@ function orchestrateBeats(): Beat[] {
       say: 'Both requests land in the fleet queue, where a person decides.',
       command: 'queue.fleet',
       spotlight: ['[role="dialog"][aria-label="Fleet queue"]'],
+      // Blueprint rather than glitch: this is the boundary the whole scenario exists to
+      // show, the card is dense, and a still of it should read on its own.
+      show: {
+        reveal: 'blueprint',
+        notes: [
+          { at: ['.observation-request-tag'], label: 'a request', sub: 'not a session' },
+          { at: ['.observation-request-reason'], label: 'why it asked' },
+          { at: ['.observation-request-prompt'], label: 'the exact prompt it would run' },
+          { at: ['.observation-request-actions .primary'], label: 'the human decides here' },
+        ],
+      },
     },
     {
       at: 14_500,
@@ -521,7 +585,15 @@ function orchestrateBeats(): Beat[] {
         }
       },
     },
-    { at: 16_500, key: 'Escape', say: 'Two panes, in the same Project, standing in the same repository.' },
+    {
+      at: 16_500,
+      key: 'Escape',
+      say: 'Two panes, in the same Project, standing in the same repository.',
+      // The ids only exist because the previous beat made them, which is what the thunk
+      // form of `show` is for. Stepped rather than eased: a row arriving in a fleet is a
+      // terminal painting a line, not a panel sliding in.
+      show: () => ({ arrive: spawned.map(id => sessionRow(id)) }),
+    },
     {
       at: 18_500,
       say: 'They work, and they answer the session that asked - into its queue, not into its keyboard.',
@@ -597,6 +669,17 @@ function previewBeats(): Beat[] {
       at: 10_000,
       say: 'It is a pane like any other: split it, move it to a tab, send it to the phone.',
       command: 'drawer.close',
+      // A walk rather than a diagram: there are two things to say and they are at
+      // opposite ends of the screen, so holding the eye on each in turn beats drawing a
+      // leader line the width of the frame.
+      show: {
+        reveal: 'walk',
+        crt: true,
+        notes: [
+          { at: ['.preview-row'], label: 'the listener, as a row' },
+          { at: ['.preview-frame'], label: 'and the page itself, as a pane' },
+        ],
+      },
     },
     { at: 13_000, say: 'The page is the one the session is serving. Nothing is proxied and nothing leaves the machine.' },
   ]
@@ -662,6 +745,14 @@ function landBeats(): Beat[] {
     {
       at: 12_500,
       say: 'Green, so the fast-forward is allowed. Red would have come back to the session that asked.',
+      show: {
+        reveal: 'blueprint',
+        notes: [
+          { at: ['.git-land-progress-head'], label: 'reconcile, verify, fast-forward' },
+          { at: ['.git-land-steps'], label: 'every step, on the record' },
+          { at: ['.git-land-reason'], label: 'and who asked for it' },
+        ],
+      },
       mutate: () => {
         apply({
           kind: 'land-patch', id,
@@ -687,6 +778,135 @@ function landBeats(): Beat[] {
       },
     },
     { at: 16_000, say: 'A fast-forward is the only merge allowed outside a worktree, because it cannot lose work.' },
+  ]
+}
+
+// -------------------------------------------------------------------- 6. the palette
+
+/** The scope tabs, in the order `PALETTE_PREFIXES` declares them. */
+const paletteScope = (index: number): string[] =>
+  [`.palette-scopes [role="tab"]:nth-child(${index})`]
+
+/**
+ * One field, four scopes, and the chord beside every answer.
+ *
+ * The palette is the surface that makes a keyboard-first product legible to somebody who
+ * has never used it, and it is invisible until you know it is there - which is exactly
+ * what a demo is for. The scenario types into the app's own input rather than into a
+ * pane (`field`), so what a visitor sees is the real filter narrowing real entries.
+ */
+function paletteBeats(): Beat[] {
+  const input = ['.palette input']
+  return [
+    {
+      at: 0,
+      eyebrow: 'ONE FIELD',
+      say: 'Everything the app can do, by name.',
+      command: 'palette.open',
+      spotlight: ['.palette'],
+      show: { keys: ['ctrl', 'shift', 'p'] },
+    },
+    {
+      at: 1_500,
+      say: 'Type what you want rather than remembering where it lives.',
+      field: { at: input, text: 'transcript' },
+    },
+    {
+      at: 4_400,
+      say: 'The same field addresses four different things, and one character says which.',
+      show: {
+        reveal: 'walk',
+        notes: [
+          { at: paletteScope(1), label: 'commands', sub: '>' },
+          { at: paletteScope(2), label: 'sessions', sub: '@' },
+          { at: paletteScope(3), label: 'Projects', sub: '#' },
+          { at: paletteScope(4), label: 'files', sub: ':' },
+        ],
+      },
+    },
+    {
+      at: 9_000,
+      say: 'Jumping to a session is navigation rather than a command, so it has its own scope.',
+      click: paletteScope(2),
+      field: { at: input, text: 'coupon', clear: true },
+    },
+    {
+      at: 12_400,
+      say: 'And every entry carries the chord that would have run it, in whichever keymap you chose.',
+      show: {
+        reveal: 'glitch',
+        notes: [{ at: ['#command-results [role="option"] kbd'], label: 'your own binding' }],
+      },
+    },
+    { at: 15_000, key: 'Escape', say: 'Nothing here is a second interface. It is the same commands.' },
+  ]
+}
+
+// -------------------------------------------------------------------- 7. the keymap
+
+/**
+ * Five keymaps, and the honest half: which of their chords a browser tab will never see.
+ *
+ * The presets are the daemon's own documents (`keymapFixture.ts` is generated from
+ * `swe_mux.keymaps`), so the chords a visitor switches to here are the ones the product
+ * ships. The undeliverable list is generated the same way, for host `browser`, which is
+ * why this scenario can point at a dead chord and say so rather than drawing it as
+ * though it were live.
+ */
+function keymapBeats(): Beat[] {
+  // The preset this scenario switches to, named once. Read off the fixture rather than
+  // written twice, so a regenerated catalogue cannot leave the scenario pointing at a
+  // preset the daemon no longer ships.
+  const target = 'tmux'
+  const card = (part = ''): string[] => [`[data-keymap-preset="${target}"] ${part}`.trim()]
+  return [
+    {
+      at: 0,
+      eyebrow: 'YOUR MUSCLE MEMORY',
+      say: 'Five keymaps ship. Take the one your hands already know.',
+      command: 'settings.open',
+      spotlight: ['.settings-panel'],
+    },
+    {
+      at: 1_600,
+      click: ['[data-settings-tab="input"]'],
+      spotlight: ['.keymap-presets'],
+      say: 'They are documents the daemon owns, not a handful of chords the demo invented.',
+    },
+    {
+      at: 4_200,
+      show: {
+        reveal: 'blueprint',
+        notes: [
+          { at: card('.keymap-preset-count'), label: 'the whole table', sub: 'not a starter set' },
+          { at: card('.keymap-warning'), label: 'and what it takes from the pane below' },
+        ],
+      },
+      say: 'A prefix keymap is a real trade: swe-mux is the outer shell, so it takes the prefix first.',
+    },
+    {
+      at: 8_600,
+      say: 'Applying one replaces every binding, immediately.',
+      click: card('.keymap-preset-apply'),
+      show: { keys: ['ctrl', 'b', '→', 'o'], crt: true },
+    },
+    { at: 10_400, click: ['.keymap-confirm .primary'] },
+    {
+      at: 12_600,
+      say: 'This is a browser tab, and a tab does not get every chord. So the table is resolved for one.',
+      show: {
+        reveal: 'sweep',
+        sweep: ['.keybinding-policy', '.keymap-host'],
+        notes: [
+          { at: ['.keymap-host'], label: 'resolved for this host', sub: 'not for a hope' },
+          { at: ['.keybinding-policy'], label: 'what the browser keeps', sub: 'and what it merely shares' },
+        ],
+      },
+    },
+    {
+      at: 16_400,
+      say: 'A chord a tab cannot receive is marked desktop-only in the preset itself, so it is never drawn as live here.',
+    },
   ]
 }
 
@@ -729,6 +949,20 @@ export const SCENARIOS: Scenario[] = [
     blurb: 'Reconcile, verify, fast-forward - one branch at a time.',
     interruptible: true,
     beats: landBeats(),
+  },
+  {
+    id: 'palette',
+    label: 'one field finds everything',
+    blurb: 'The command palette, and the four scopes inside it.',
+    interruptible: true,
+    beats: paletteBeats(),
+  },
+  {
+    id: 'keymap',
+    label: 'bring your own keymap',
+    blurb: 'Five presets, applied live, and which chords a browser tab keeps.',
+    interruptible: true,
+    beats: keymapBeats(),
   },
 ]
 
