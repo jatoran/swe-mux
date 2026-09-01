@@ -776,16 +776,20 @@ footer .social svg { width: 15px; height: 15px; fill: currentColor; display: blo
           <button class="demo-tab" type="button" role="tab" data-view="both" aria-selected="false">both</button>
         </div>
         <label class="demo-pick" for="demoscenario"><span class="demo-pick-label">scenarios</span>
-          <select id="demoscenario" title="Play a scripted run inside the demo, or replay the walkthrough">
+          <select id="demoscenario" title="Play a scripted run inside the demo. It drives itself; touch anything to take over.">
+            <!-- These have to match `SCENARIOS` in frontend/src/demo/scenarios.ts by id;
+                 the labels are duplicated here because this page is static and does not
+                 load the demo's bundle. Each one names a thing a developer wants rather
+                 than the mechanism behind it: nobody clicks "one field finds everything". -->
             <option value="">scenarios</option>
-            <option value="tour">replay the tour</option>
-            <option value="queue">a queued prompt delivers</option>
-            <option value="orchestrate">an agent asks for agents</option>
-            <option value="preview">a served page becomes a pane</option>
-            <option value="land">a branch lands through the queue</option>
-            <option value="palette">one field finds everything</option>
-            <option value="keymap">bring your own keymap</option>
-            <option value="voice">ask the fleet a question</option>
+            <option value="tour">Take the tour of the whole interface</option>
+            <option value="queue">Queue a prompt behind a running turn</option>
+            <option value="orchestrate">Let an agent ask for two more, and approve it</option>
+            <option value="preview">Open your dev server as a pane</option>
+            <option value="land">Land a worktree branch on the trunk</option>
+            <option value="palette">Find any command or session by name</option>
+            <option value="keymap">Bring your tmux keybindings with you</option>
+            <option value="voice">Ask the fleet what is blocked</option>
           </select></label>
         <a class="demo-full" href="demo/" title="Open the demo as its own page. On a phone that is the only place the keyboard behaves, because an embedded frame cannot measure one.">full screen ⤢</a>
         <button class="demo-reset" type="button" id="demoreset" title="Discard everything you changed in the demo and start it fresh">reset</button>

@@ -62,7 +62,9 @@ test('the scenario menu leads with the walkthrough', async ({ page }) => {
   expect(menu.map(item => item.id)).toEqual([
     'tour', 'queue', 'orchestrate', 'preview', 'land', 'palette', 'keymap', 'voice',
   ])
-  // Every entry has a label a dropdown can show; an id is not a label.
+  // Every entry has a label a dropdown can show; an id is not a label. The wording itself
+  // is checked in `tests/test_demo_scenario_menu.py`, which also holds the landing page's
+  // hand-written copy of this list to the same one.
   for (const entry of menu) expect(entry.label.length).toBeGreaterThan(3)
 })
 
@@ -73,8 +75,8 @@ test('the walkthrough labels the parts of a session row', async ({ page }) => {
   // and a selector that stops matching is exactly the failure that would otherwise ship
   // as a beat with nothing on it.
   const failures = await open(page, 'deterministic=1')
-  // Step off the opening card onto the fleet beat. The walkthrough is all gates, so this
-  // is the same press a visitor makes.
+  // Cut the opening card's wait short rather than sitting through it. Next is the one
+  // control that does not count as a handover, so this does not stop the run.
   await page.waitForSelector('.demo-director-next', { timeout: START_TIMEOUT })
   await page.click('.demo-director-next')
   const chips = page.locator('.demo-show-chip:not(.measuring)')
@@ -84,29 +86,55 @@ test('the walkthrough labels the parts of a session row', async ({ page }) => {
   // all six at once, and a visitor reading any one label had to work out which of six
   // leader lines belonged to it before the label meant anything. So the assertion is not
   // "six labels appear" but "never more than one, and eventually all of them".
+  //
+  // Sampled for as long as *this beat* lasts rather than for a fixed count. The tour used
+  // to gate here, so the beat went on until the visitor pressed something and any number
+  // of samples was safe; it advances on its own clock now, and a sample taken one beat
+  // later would read the next beat's empty overlay as a failure of this one.
+  const beat = await page.evaluate(() => window.__demoDirector!.snapshot().index)
   const seen = new Set<string>()
+  // Sampled inside the loop, because the overlay is gone by the time the beat is: the
+  // placement used to be read after it and would now measure an empty frame.
+  const placements: Array<{ gap: number; inside: boolean }> = []
   for (let sample = 0; sample < 24; sample += 1) {
-    const drawn = await page.evaluate(() =>
-      [...document.querySelectorAll('.demo-show-chip:not(.measuring)')]
-        .map(chip => chip.textContent || ''))
-    expect(drawn.length).toBe(1)
-    seen.add(drawn[0])
+    const drawn = await page.evaluate(() => {
+      const chip = document.querySelector('.demo-show-chip:not(.measuring)')?.getBoundingClientRect()
+      const mark = document.querySelector('.demo-show-mark')?.getBoundingClientRect()
+      return {
+        index: window.__demoDirector!.snapshot().index,
+        chips: [...document.querySelectorAll('.demo-show-chip:not(.measuring)')]
+          .map(item => item.textContent || ''),
+        wires: document.querySelectorAll('.demo-show-wires path').length,
+        marks: document.querySelectorAll('.demo-show-mark').length,
+        // Placed beside its own target rather than parked somewhere generic. Nearness is
+        // measured on whichever axis the gutter did not use: a side gutter shares the
+        // target's line, a gutter above or below shares its column.
+        place: chip && mark
+          ? {
+            gap: Math.min(Math.abs(chip.top - mark.top), Math.abs(chip.left - mark.left)),
+            inside: chip.left >= 0 && chip.right <= innerWidth
+              && chip.top >= 0 && chip.bottom <= innerHeight,
+          }
+          : null,
+      }
+    })
+    if (drawn.index !== beat) break
+    expect(drawn.chips.length).toBe(1)
+    seen.add(drawn.chips[0])
     // A label without its leader line and its mark is a floating word.
-    expect(await page.locator('.demo-show-wires path').count()).toBe(1)
-    expect(await page.locator('.demo-show-mark').count()).toBe(1)
+    expect(drawn.wires).toBe(1)
+    expect(drawn.marks).toBe(1)
+    if (drawn.place) placements.push(drawn.place)
     await page.waitForTimeout(700)
   }
   // The walk really advances, and it covers the row rather than sticking on one part.
   expect(seen.size).toBeGreaterThan(4)
 
-  // Each label is placed beside its own target rather than parked somewhere generic.
-  const placement = await page.evaluate(() => {
-    const chip = document.querySelector('.demo-show-chip:not(.measuring)')!.getBoundingClientRect()
-    const mark = document.querySelector('.demo-show-mark')!.getBoundingClientRect()
-    return { gap: Math.abs(chip.top - mark.top), inside: chip.left > 0 && chip.right < innerWidth }
-  })
-  expect(placement.inside).toBe(true)
-  expect(placement.gap).toBeLessThan(40)
+  expect(placements.length).toBeGreaterThan(4)
+  for (const place of placements) {
+    expect(place.inside).toBe(true)
+    expect(place.gap).toBeLessThan(40)
+  }
   expect(failures).toEqual([])
 })
 
@@ -178,22 +206,30 @@ test('a real press stops a playing scenario at once, and does not restart it', a
   await expect(page.locator('.demo-director-card')).toHaveCount(0)
 })
 
-test('the walkthrough waits rather than driving, and its card offers a way out', async ({ page }) => {
+test('the walkthrough drives itself, and its card offers a way out', async ({ page }) => {
   await page.addInitScript(() => { localStorage.removeItem('swemux-demo-coach-v1') })
   await open(page, 'deterministic=1&scenario=tour')
   await page.waitForFunction(() => window.__demoDirector?.snapshot().running === true, null, { timeout: START_TIMEOUT })
 
   const card = page.locator('.demo-director-card')
   await expect(card).toBeVisible()
-  // A gated beat must not advance by itself: it is waiting for the visitor, and a tour
-  // that moved on while they were reading would be worse than none.
+  // The whole point of the rewrite: nobody is asked for anything, so the tour advances on
+  // its own clock. It used to gate here and this assertion was its mirror image - the
+  // index had to *stay* put, because the beat was waiting for a press that a visitor who
+  // had not decided to care yet was never going to make.
   const before = await page.evaluate(() => window.__demoDirector!.snapshot().index)
-  await page.waitForTimeout(2_500)
-  expect(await page.evaluate(() => window.__demoDirector!.snapshot().index)).toBe(before)
+  await expect
+    .poll(() => page.evaluate(() => window.__demoDirector!.snapshot().index), { timeout: 10_000 })
+    .toBeGreaterThan(before)
 
-  // Pressing Next is a real click on the card, and it does advance.
+  // Next is an offer rather than a demand: it cuts the current beat's wait short. A real
+  // click anywhere else would stop the run, so this also pins the distinction - the card
+  // is the director's own chrome and pressing it is not a handover.
+  const stepped = await page.evaluate(() => window.__demoDirector!.snapshot().index)
   await card.getByRole('button', { name: 'Next' }).click()
-  await expect.poll(() => page.evaluate(() => window.__demoDirector!.snapshot().index)).toBeGreaterThan(before)
+  await expect.poll(() => page.evaluate(() => window.__demoDirector!.snapshot().index))
+    .toBeGreaterThan(stepped)
+  expect(await running(page)).toBe(true)
 
   // The explicit stop affordance, which every run carries.
   await card.getByRole('button', { name: 'Stop the demo walkthrough' }).click()

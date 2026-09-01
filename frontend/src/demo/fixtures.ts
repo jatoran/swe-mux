@@ -238,30 +238,31 @@ function composerFor(id: string): ComposerInfo {
   return composerInfo(found)
 }
 
+/**
+ * The Project a visitor lands on: **one pane**, every session in it as a tab.
+ *
+ * It used to open on a three-way split with a shell and a preview already placed, which
+ * is the state the demo *ends* in rather than the one it should start from. A first frame
+ * that is already at maximum chrome has nothing left to demonstrate, and the walkthrough
+ * was reduced to naming furniture that was there before it started.
+ *
+ * So the seed is the simplest true thing - a stack of terminals, the flaky-test session
+ * on top - and the walkthrough builds the rest out of it with the app's own commands:
+ * `pane.detach` gives a session its own pane, and the side panel is opened by pressing
+ * one of its tabs. Both are acts a visitor could perform, which is the same rule every
+ * scripted beat obeys.
+ */
 const P1_LAYOUT: PaneLayout = {
   version: 7,
   root: {
-    type: 'split', id: 'split-root', direction: 'horizontal', ratio: 0.55,
-    first: {
-      type: 'stack', id: 'stack-agents', active_child_id: 's-claude',
-      children: [
-        { type: 'leaf', kind: 'terminal', id: 's-claude' },
-        { type: 'leaf', kind: 'terminal', id: 's-rage' },
-        { type: 'leaf', kind: 'terminal', id: 's-working' },
-        { type: 'leaf', kind: 'terminal', id: 's-codex' },
-      ],
-    },
-    second: {
-      type: 'split', id: 'split-side', direction: 'vertical', ratio: 0.5,
-      first: {
-        type: 'stack', id: 'stack-shell', active_child_id: 's-shell',
-        children: [{ type: 'leaf', kind: 'terminal', id: 's-shell' }],
-      },
-      second: {
-        type: 'stack', id: 'stack-preview', active_child_id: DEMO_PREVIEW_ID,
-        children: [{ type: 'leaf', kind: 'preview', id: DEMO_PREVIEW_ID }],
-      },
-    },
+    type: 'stack', id: 'stack-agents', active_child_id: 's-claude',
+    children: [
+      { type: 'leaf', kind: 'terminal', id: 's-claude' },
+      { type: 'leaf', kind: 'terminal', id: 's-rage' },
+      { type: 'leaf', kind: 'terminal', id: 's-working' },
+      { type: 'leaf', kind: 'terminal', id: 's-codex' },
+      { type: 'leaf', kind: 'terminal', id: 's-shell' },
+    ],
   },
 }
 
@@ -308,14 +309,16 @@ const PROJECTS: Project[] = [
   },
 ]
 
-const PREVIEWS: Preview[] = [
-  {
-    id: DEMO_PREVIEW_ID, session_id: '', project_id: DEMO_PROJECT_ID,
-    url: '', host: '', port: 0, source: 'demo', viewport: 'desktop', listed: true,
-    kind: 'static', label: 'landing.html', entry: 'index.html',
-    doc_root: `${DEMO_ROOT}/site`, doc_root_relative: 'site', worktree: '',
-  },
-]
+/**
+ * None, at the start.
+ *
+ * A seeded preview was the other half of the seeded split: it put a served page on screen
+ * before anything had served one, which is exactly the scenario that exists to show it
+ * happening (`previewBeats` runs a dev server in the shell and turns its listener into a
+ * pane). `createPreview` mints `DEMO_PREVIEW_ID` as the first unused id, so the scenario
+ * now produces the pane this list used to hand it.
+ */
+const PREVIEWS: Preview[] = []
 
 const NOTES: DemoNote[] = [
   {
@@ -690,7 +693,7 @@ function demoDeviceSettings(): Record<string, Record<string, unknown>> {
 export const DEMO_DIALOG_ID = 'dlg-demo'
 
 /** Bump when the seed shape changes so persisted visitor state is discarded. */
-export const DEMO_STATE_VERSION = 16
+export const DEMO_STATE_VERSION = 17
 
 export function initialDemoState(): DemoState {
   return {

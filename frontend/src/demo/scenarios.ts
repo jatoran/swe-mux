@@ -19,11 +19,14 @@
  * `tests/test_harness_name_literals.py` allowlists three demo files by name and this is
  * not one of them, so backends are read off the fleet (`backendOf`) rather than written.
  *
+ * Nothing here waits for the visitor. The walkthrough used to, and the gates are gone;
+ * see `tourDesktop` for why, and `director.ts` for the one rule that replaced them.
+ *
  * It is a `.ts` and its copy is plain strings on purpose. The obvious first cut had the
  * walkthrough's longer cards as JSX, which made this a `.tsx` - and Node's type stripping
  * does not handle JSX, so the unit suite could not import the catalogue at all and the
- * invariants below (unique ids, ordered beats, a gate on every walkthrough beat) had
- * nothing asserting them. Markup in a data file bought nothing and cost the tests.
+ * invariants below (unique ids, ordered beats, every callout naming chrome) had nothing
+ * asserting them. Markup in a data file bought nothing and cost the tests.
  */
 import {
   assistantDone, assistantHeard, assistantProposes, assistantResolved, assistantSays,
@@ -41,25 +44,15 @@ import { apply, demoId, nowSeconds, session, state } from './store.ts'
 
 // --------------------------------------------------------------------- the shapes
 
-/** What a gated beat waits for. The walkthrough is built entirely out of these: it never
- *  simulates the act, it waits for the visitor to perform it against the real interface. */
-export type Gate =
-  /** Any real click landing inside one of these selectors. */
-  | { kind: 'click'; selectors: string[] }
-  /** A horizontal drag of at least `SWIPE_MIN` px in this direction, anywhere. */
-  | { kind: 'swipe'; direction: 'left' | 'right' }
-  /** A window event the app already raises. */
-  | { kind: 'event'; name: string }
-  /** The card's own Next button. */
-  | { kind: 'next' }
-
 export type Beat = {
   /**
    * Milliseconds from the start of the scenario's clock.
    *
-   * The clock *pauses* while a gate is open, which is what lets one shape serve both a
-   * timed scenario (no gates, so `at` is simply the timeline) and the walkthrough (all
-   * gates, so `at` is the pause before each card appears).
+   * The walkthrough used to be the exception here: its beats were *gates* that waited for
+   * the visitor, so `at` was only the pause before each card appeared. It drives itself
+   * now, so there is one shape and `at` is simply the timeline - which means a beat's
+   * budget has to cover what it does. A `walk` of nine labels holding 1.8s each needs
+   * eighteen seconds before the next beat may start, or the visitor sees four of them.
    */
   at: number
   /** A short line under the caption card. Persists until a later beat replaces it. */
@@ -85,11 +78,13 @@ export type Beat = {
    *  opposed to into a pane. Runs after this beat's press, because the field is usually
    *  the one that press just opened. */
   field?: { at: string[]; text: string; pace?: number; clear?: boolean }
-  /** Wait for the visitor rather than for the clock. */
-  gate?: Gate
-  /** The hint under a gated card. */
-  hint?: string
-  /** Draw the swipe glyph over the spotlight, pointing this way. */
+  /**
+   * Draw the swipe glyph over the spotlight, pointing this way.
+   *
+   * On a beat that opens a panel by command, which is what the phone walkthrough does now
+   * that it no longer waits for a real drag: the glyph is the caption for the act, saying
+   * which gesture the visitor would use to do the same thing themselves.
+   */
   gesture?: 'left' | 'right'
   /**
    * What this beat draws over the app beyond its one ring: labelled callouts, a radar
@@ -112,14 +107,6 @@ export type Scenario = {
   label: string
   /** One line, shown while it plays. */
   blurb: string
-  /**
-   * Whether a real pointerdown or keypress ends it.
-   *
-   * True for anything that plays by itself, because a script fighting a click is worse
-   * than no script. False for the walkthrough, whose gates *are* real input - aborting on
-   * the act it is waiting for would make it impossible to finish.
-   */
-  interruptible: boolean
   /** Put the fleet into the state this scenario opens on. Deliberately not a full reset:
    *  a visitor who has been playing keeps their panes, notes and layout. */
   prepare?: () => void
@@ -176,37 +163,51 @@ function reopenTurn(id: string): void {
 // ---------------------------------------------------------------------- 1. the tour
 
 /**
- * The walkthrough, unchanged in intent: flash one piece of real chrome at a time and hand
- * over the moment the visitor does the thing. It is a scenario now rather than a separate
- * component, which is what stops it and a scripted scenario from driving one screen at
- * once - and it is the only entry whose beats are all gates.
+ * The walkthrough: the same stops as before, driving itself.
+ *
+ * It used to be built entirely out of gates - draw a card, name a control, wait for the
+ * visitor to press it. That reads well and fails in practice, because it asks somebody who
+ * has not decided to care yet to do work, and stalls forever on the ones who will not. So
+ * every stop performs its own act now, through the app's own commands and controls
+ * exactly as the scripted scenarios do, and the first real touch hands the whole thing
+ * over (`director.ts`).
+ *
+ * Two consequences worth knowing before editing a beat here:
+ *
+ * - **The copy is short on purpose.** A gated card had a wait to fill and three
+ *   paragraphs to fill it with. An autoplaying one is competing with motion on screen, so
+ *   it is a headline and one sentence. The `body` may not be empty, though: a beat with no
+ *   body renders as a bottom caption rather than as the anchored card with the counter.
+ * - **`at` has to cover what the beat does.** A nine-label walk holding 1.8s each needs
+ *   eighteen seconds, not the 200ms a gated beat used to carry.
+ *
+ * It also builds the layout it explains. The Project seeds as one pane with every session
+ * in it as a tab (`fixtures.ts`), so the split and the side panel below are produced here
+ * rather than found - which is the difference between showing a workspace and showing how
+ * one is made.
  */
 function tourDesktop(): Beat[] {
+  const talker = 's-rage'
   return [
     {
       at: 0,
       eyebrow: 'THE REAL INTERFACE',
       say: 'This is the actual app, running on a fake daemon.',
-      gate: { kind: 'next' },
       body: [
-        'Every pane, panel and menu below is the shipped frontend. The sessions are'
-        + ' invented and the agents only tell jokes, but nothing else is a mock-up.',
-        'Eight quick stops. Do the thing each one asks and it moves on by itself.',
+        'Every pane, panel and menu is the shipped frontend. The sessions are invented and'
+        + ' the agents only tell jokes; nothing else is a mock-up.',
       ],
     },
     {
-      at: 200,
+      at: 3_200,
       eyebrow: 'THE FLEET',
       say: 'Every session, in one column.',
       spotlight: ['.sidebar'],
-      gate: { kind: 'click', selectors: ['.session-row'] },
-      hint: 'Click any session to focus its pane',
       // The one beat that labels rather than points, and it does it one label at a time.
-      // Six at once is six things being pointed at: a visitor reading any of them has to
-      // work out which of six leader lines belongs to it before the label means anything,
-      // and the answer is on the far side of five others. So the band crosses the column
+      // Nine at once is nine things being pointed at: a visitor reading any of them has to
+      // work out which of nine leader lines belongs to it before the label means anything,
+      // and the answer is on the far side of eight others. So the band crosses the column
       // once to say "all of this", and then the labels take turns against a dimmed frame.
-      // It loops, because the beat is gated - it waits for the visitor, not the reverse.
       show: {
         reveal: 'walk',
         sweep: ['.sidebar'],
@@ -228,21 +229,38 @@ function tourDesktop(): Beat[] {
         ],
       },
       body: [
-        'Projects group sessions, and this scans one row part at a time. The dot is the'
-        + ' state; the ring around it is how much of the context window has gone, so a'
-        + ' conversation running out of room says so before it stops making sense.',
-        'Then what the session started, how long its turn has been running, which checkout'
-        + ' it is standing in, and the model.',
-        'Click any session - the workspace focuses that pane.',
+        'The dot is live state and the ring around it is how much of the context window'
+        + ' has gone, so a conversation running out of room says so before it stops making'
+        + ' sense.',
       ],
     },
     {
-      at: 200,
+      at: 21_700,
+      eyebrow: 'ONE PANE, OR SEVERAL',
+      say: 'Right now every session is a tab in one pane.',
+      click: sessionRow(talker),
+      spotlight: sessionRow(talker),
+      body: ['Picking one in the column brings it to the front of the workspace.'],
+    },
+    {
+      at: 24_500,
+      say: 'Any of them can have its own.',
+      // `pane.detach` rather than a split: splitting spawns a *new* session, which would
+      // put a session in the fleet that the tour never mentions. Detaching moves the tab
+      // that is already there, which is the act a visitor rearranging a workspace does.
+      command: 'pane.detach',
+      spotlight: ['.workspace'],
+      show: { arrive: [['.terminal-pane.focused']] },
+      body: [
+        'Panes split, stack, zoom and swap, and the arrangement belongs to the Project'
+        + ' rather than to this browser.',
+      ],
+    },
+    {
+      at: 28_100,
       eyebrow: 'THE COMMAND RAIL',
       say: 'The things a mouse cannot type.',
       spotlight: ['.terminal-action-rail'],
-      gate: { kind: 'click', selectors: ['.terminal-action-rail'] },
-      hint: 'Press anything on the rail',
       // The desktop rail and the phone rail are the opposite trade, and the tour used to
       // describe the phone's on both. You have a keyboard here: arrows and Ctrl-C are
       // already under your fingers, and what the rail is for is the things no key sends -
@@ -259,111 +277,107 @@ function tourDesktop(): Beat[] {
           { at: railItem('prompts'), label: 'your saved prompts' },
         ],
       },
-      body: [
-        'You already have a keyboard, so this strip is not one: it is the acts a terminal'
-        + ' has no key for. Branch a conversation, copy the command that resumes it, rewind'
-        + ' to an earlier turn, paste a block as a block, insert a saved prompt.',
-        'Press anything. Nothing here can break anything.',
-      ],
+      body: ['Not a keyboard. The acts a terminal has no key for.'],
     },
     {
-      at: 200,
+      at: 38_700,
       eyebrow: 'TALK TO IT',
-      say: 'Type into the agent and press Enter.',
+      say: 'The composer is the CLI\'s own, drawn by the CLI.',
+      type: { session: talker, text: 'is the cart endpoint still slow?', pace: 42 },
       spotlight: ['.terminal-pane.focused', '.terminal-pane'],
-      gate: { kind: 'event', name: 'mux:turn-ended' },
-      hint: 'Type anything, then Enter',
-      body: [
-        'The composer is the CLI\'s own, drawn by the CLI. swe-mux is the multiplexer'
-        + ' around it, not a chat window bolted on top.',
-        'Ask it something. It will answer badly, on purpose.',
-      ],
+      body: ['swe-mux is the multiplexer around it, not a chat window bolted on top.'],
     },
     {
-      at: 200,
+      at: 41_600,
+      say: 'It answers badly, on purpose.',
+      mutate: () => {
+        scriptedTurn({
+          id: talker,
+          prompt: 'is the cart endpoint still slow?',
+          reply: [
+            '● §Bash§(curl -w %{time_total} localhost:3000/cart)  ¶⎿ 0.011s¶',
+            '● No. It has been eleven milliseconds for four hours, which is roughly',
+            '  how long you have been asking me whether it is still slow.',
+          ],
+        })
+      },
+      body: ['Every keystroke goes to the real process; nothing here is replayed video.'],
+    },
+    {
+      at: 49_200,
       eyebrow: 'THE SIDE PANEL',
-      say: 'Read the conversation beside the terminal.',
+      say: 'The conversation, beside the terminal.',
+      command: 'drawer.show:transcript',
       spotlight: DRAWER_TAB('Transcript'),
-      gate: { kind: 'click', selectors: DRAWER_TAB('Transcript') },
-      hint: 'Open Transcript',
+      show: { arrive: [DRAWER_TAB('Transcript')] },
       body: [
-        'The same turn you just drove, merged into readable messages with the tool calls'
-        + ' between them - searchable, copyable, and never scrolled away.',
-        'Activity, beside it, is the behavioural timeline of the same run.',
+        'The turn you just watched, merged into readable messages with the tool calls'
+        + ' between them - searchable, copyable, never scrolled away.',
       ],
     },
     {
-      at: 200,
+      at: 54_400,
       eyebrow: 'THE REPOSITORY',
       say: 'Worktrees, commits, and who made them.',
+      command: 'drawer.show:git',
       spotlight: DRAWER_TAB('Git'),
-      gate: { kind: 'click', selectors: DRAWER_TAB('Git') },
-      hint: 'Open Git',
       body: [
-        'Map is one row per checkout with its changes and the sessions standing in it.'
-        + ' Log is the real commit graph. Provenance connects each commit back to the'
-        + ' session and run that produced it.',
+        'One row per checkout with the sessions standing in it, the real commit graph, and'
+        + ' each commit traced back to the run that produced it.',
       ],
     },
     {
-      at: 200,
+      at: 59_600,
       eyebrow: 'THE MACHINE',
       say: 'What the fleet is actually consuming.',
       // The summary button by its own class rather than "a button in the footer": the
       // footer carries several now, and any of them would have satisfied the step.
+      click: ['.resource-usage-summary'],
       spotlight: ['.resource-usage-summary', '.sidebar-footer'],
-      gate: { kind: 'click', selectors: ['.resource-usage-summary'] },
-      hint: 'Open the resource summary',
-      body: [
-        'Processes, listeners, bandwidth, disk, and the durable telemetry behind them -'
-        + ' per session, per Project, and for swe-mux itself.',
-      ],
+      body: ['Processes, listeners, bandwidth, disk - per session, per Project, and for swe-mux itself.'],
     },
     {
-      at: 200,
+      at: 64_400,
       eyebrow: 'IT IS YOURS NOW',
       say: 'Break it however you like.',
-      gate: { kind: 'next' },
+      key: 'Escape',
       body: [
-        'Spawn panes, split them, kill them, edit notes, change the keymap, switch the'
-        + ' theme. Everything persists in this browser and nowhere else.',
-        'The scenarios menu above the frame replays this, and plays four scripted runs'
-        + ' through the control plane.',
+        'Everything persists in this browser and nowhere else. The menu above the frame'
+        + ' replays this and plays seven more.',
       ],
     },
   ]
 }
 
+/**
+ * The phone walkthrough.
+ *
+ * Its two gestures used to be gates waiting for a real drag. They are commands now, with
+ * the swipe glyph still drawn over the act - which is the honest arrangement rather than a
+ * weaker one: the glyph is a caption saying which gesture does this, and the panel really
+ * opens through the same command the gesture dispatches.
+ */
 function tourMobile(): Beat[] {
+  const talker = 's-claude'
   return [
     {
       at: 0,
       eyebrow: 'THE REAL INTERFACE',
       say: 'The phone layout, not a screenshot of one.',
-      gate: { kind: 'next' },
-      body: [
-        'This is the same frontend the desktop runs, laid out for a thumb. The sessions'
-        + ' are invented; the interface is not.',
-        'Seven stops, and two of them are gestures worth knowing.',
-      ],
+      body: ['The same frontend the desktop runs, laid out for a thumb.'],
     },
     {
-      at: 200,
+      at: 2_800,
       eyebrow: 'GESTURE',
       say: 'Swipe right to reach the fleet.',
-      gate: { kind: 'swipe', direction: 'right' },
+      command: 'sidebar.open',
       gesture: 'right',
-      hint: 'Swipe right across the terminal',
-      body: [
-        'Both panels live off the edges of the screen. Swipe right anywhere over the'
-        + ' terminal and the session list comes in.',
-      ],
+      body: ['Both panels live off the edges of the screen.'],
     },
     {
-      at: 200,
+      at: 6_200,
       eyebrow: 'THE FLEET',
-      say: 'Every session, in one column - and every row says this much.',
-      gate: { kind: 'next' },
+      say: 'Every row says this much.',
       // A walk rather than the desktop's swept column: an open panel covers most of a
       // phone, so there is no gutter to lay six labels out in, and the targets that stay
       // narrow enough to point at individually are the ones worth naming anyway. The
@@ -384,75 +398,81 @@ function tourMobile(): Beat[] {
           { at: rowField('s-rage', 'model'), label: 'model' },
         ],
       },
-      body: [
-        'The same row the desktop draws, at a width that has to earn every token: live'
-        + ' state with the context left around it, what it started, how long this turn has'
-        + ' been running, and what it is running on.',
-      ],
+      body: ['The desktop\'s row at a width that has to earn every token.'],
     },
     {
-      at: 200,
-      eyebrow: 'GESTURE',
-      say: 'Swipe left for the side panel.',
-      gate: { kind: 'swipe', direction: 'left' },
-      gesture: 'left',
-      hint: 'Swipe left across the terminal',
-      body: [
-        'The other direction opens notes, the transcript, Git, and alerts. Two fingers'
-        + ' moves between tabs; every gesture is rebindable in Settings.',
-      ],
-    },
-    {
-      at: 200,
+      at: 18_800,
       eyebrow: 'THE COMMAND RAIL',
       say: 'Here, the rail is the keyboard.',
+      command: 'sidebar.close',
       spotlight: ['.terminal-action-rail'],
-      gate: { kind: 'click', selectors: ['.terminal-action-rail'] },
-      hint: 'Press anything on the rail',
-      // The opposite trade from the desktop stop, and the reason the two now say
-      // different things: a phone keyboard has no arrows, no Escape, no control key, and
-      // those are most of what driving an agent CLI is.
+      // The opposite trade from the desktop stop, and the reason the two say different
+      // things: a phone keyboard has no arrows and no control key, and those are most of
+      // what driving an agent CLI is.
+      //
+      // Every one of these five is a chip a 390px phone has *on screen*. The rail scrolls,
+      // and it used to name `esc` and `tab`, which sit past the right edge at that width:
+      // the label was clamped back into the frame while its leader line ran off towards a
+      // target nobody could see. `DemoShow` now drops a note whose target is wholly off
+      // screen, so that failure is silent rather than wrong - which is a reason to choose
+      // targets that fit, not a substitute for it.
       show: {
         reveal: 'walk',
         sweep: ['.terminal-action-rail'],
         notes: [
           { at: railItem('padArrows'), label: 'arrows', sub: 'drag a direction' },
-          { at: railItem('esc'), label: 'escape' },
           { at: railItem('ctrlC'), label: 'interrupt the turn' },
           { at: railItem('ctrlU'), label: 'clear the line' },
-          { at: railItem('tab'), label: 'complete' },
+          { at: railItem('copyReply'), label: 'copy what it just said' },
+          { at: railItem('prompts'), label: 'send a saved prompt', sub: 'no typing at all' },
         ],
       },
-      body: [
-        'A phone keyboard has no arrows, no Escape and no control key, and those are most'
-        + ' of what driving an agent CLI is. This strip is why a phone can drive one'
-        + ' rather than watch one.',
-      ],
+      body: ['This strip is why a phone can drive an agent rather than watch one.'],
     },
     {
-      at: 200,
+      at: 29_400,
       eyebrow: 'TALK TO IT',
-      say: 'Send it a prompt, without a keyboard.',
-      spotlight: ['.terminal-action-rail'],
-      gate: { kind: 'event', name: 'mux:turn-ended' },
-      hint: 'Prompts on the rail, pick one, then send',
+      say: 'A real turn, in a real process.',
+      type: { session: talker, text: 'is the checkout test still flaky?', pace: 42 },
+      spotlight: ['.terminal-pane.focused', '.terminal-pane'],
       body: [
-        'This frame refuses the phone keyboard on purpose: it is an embed, so it cannot'
-        + ' measure one, and a keyboard swe-mux cannot measure is one it cannot get out'
-        + ' of your way. Open it full screen, under the frame, for the real thing.',
-        'The rail is how a phone drives an agent anyway. Press Prompts, choose a saved'
-        + ' one, then press send - the reply is as bad as the ones on the desktop.',
+        'This frame refuses the phone keyboard on purpose - it is an embed, so it cannot'
+        + ' measure one. Open it full screen for the real thing.',
       ],
     },
     {
-      at: 200,
+      at: 32_600,
+      say: 'It answers badly, on purpose.',
+      mutate: () => {
+        scriptedTurn({
+          id: talker,
+          prompt: 'is the checkout test still flaky?',
+          reply: [
+            '● §Bash§(npm test -- checkout --repeat 40)  ¶⎿ 40 passed¶',
+            '● Forty green runs. The flake was a fixed sleep, which is a bet on a',
+            '  machine being idle, and this one never is.',
+          ],
+        })
+      },
+      body: ['The rail sends it; the pane is the CLI\'s own.'],
+    },
+    {
+      at: 40_400,
+      eyebrow: 'GESTURE',
+      say: 'Swipe left for the side panel.',
+      command: 'drawer.toggle',
+      gesture: 'left',
+      body: [
+        'Notes, the transcript, Git and alerts. Two fingers moves between tabs, and every'
+        + ' gesture is rebindable.',
+      ],
+    },
+    {
+      at: 45_000,
       eyebrow: 'IT IS YOURS NOW',
       say: 'Have a look around.',
-      gate: { kind: 'next' },
-      body: [
-        'Everything persists in this browser and nowhere else. The scenarios menu above'
-        + ' the frame replays this and plays four scripted runs.',
-      ],
+      command: 'drawer.close',
+      body: ['Everything persists in this browser and nowhere else.'],
     },
   ]
 }
@@ -650,7 +670,7 @@ function orchestrateBeats(): Beat[] {
       },
     },
     {
-      at: 14_500,
+      at: 16_800,
       say: 'Approved. Now they start.',
       mutate: () => {
         for (const request of state.spawnRequests.filter(item => !item.done)) {
@@ -672,7 +692,7 @@ function orchestrateBeats(): Beat[] {
       },
     },
     {
-      at: 16_500,
+      at: 18_800,
       key: 'Escape',
       say: 'Two panes, in the same Project, standing in the same repository.',
       // The ids only exist because the previous beat made them, which is what the thunk
@@ -681,7 +701,7 @@ function orchestrateBeats(): Beat[] {
       show: () => ({ arrive: spawned.map(id => sessionRow(id)) }),
     },
     {
-      at: 18_500,
+      at: 20_800,
       say: 'They work, and they answer the session that asked - into its queue, not into its keyboard.',
       mutate: () => {
         for (const [index, id] of spawned.entries()) {
@@ -704,13 +724,13 @@ function orchestrateBeats(): Beat[] {
       },
     },
     {
-      at: 20_000,
+      at: 22_300,
       command: 'drawer.show:queue',
       spotlight: DRAWER_TAB('Queue'),
       click: sessionRow(lead),
     },
     {
-      at: 23_000,
+      at: 25_300,
       say: 'Nothing was interrupted, nothing was auto-approved, and every step is on the record.',
     },
   ]
@@ -767,7 +787,7 @@ function previewBeats(): Beat[] {
         ],
       },
     },
-    { at: 13_000, say: 'The page is the one the session is serving. Nothing is proxied and nothing leaves the machine.' },
+    { at: 13_800, say: 'The page is the one the session is serving. Nothing is proxied and nothing leaves the machine.' },
   ]
 }
 
@@ -919,20 +939,20 @@ function paletteBeats(): Beat[] {
       },
     },
     {
-      at: 9_000,
+      at: 11_800,
       say: 'Jumping to a session is navigation rather than a command, so it has its own scope.',
       click: paletteScope(2),
       field: { at: input, text: 'coupon', clear: true },
     },
     {
-      at: 12_400,
+      at: 15_200,
       say: 'And every entry carries the chord that would have run it, in whichever keymap you chose.',
       show: {
         reveal: 'glitch',
         notes: [{ at: ['#command-results [role="option"] kbd'], label: 'your own binding' }],
       },
     },
-    { at: 15_000, key: 'Escape', say: 'Nothing here is a second interface. It is the same commands.' },
+    { at: 17_800, key: 'Escape', say: 'Nothing here is a second interface. It is the same commands.' },
   ]
 }
 
@@ -1103,63 +1123,65 @@ function voiceBeats(): Beat[] {
 
 // ------------------------------------------------------------------- the catalogue
 
+/**
+ * The catalogue, and the one rule about its labels.
+ *
+ * A label is a dropdown row on a marketing page, so it has to answer "why would I click
+ * that" before anything else can happen. Every entry names a thing a developer already
+ * wants and states the outcome: "one field finds everything" describes the mechanism and
+ * could be any product's search box, while "Find any command or session by name" is a
+ * thing you might be trying to do this afternoon. The blurb underneath is where the
+ * mechanism goes.
+ */
 export const SCENARIOS: Scenario[] = [
   {
     id: 'tour',
-    label: 'replay the tour',
-    blurb: 'A short hands-on walk around the interface.',
-    interruptible: false,
+    label: 'Take the tour of the whole interface',
+    blurb: 'A hands-off walk around the whole app. Touch anything to take over.',
     beats: tourDesktop(),
     mobileBeats: tourMobile(),
   },
   {
     id: 'queue',
-    label: 'a queued prompt delivers',
+    label: 'Queue a prompt behind a running turn',
     blurb: 'A turn ends, a waiting prompt is sent, and swe-mux says so.',
-    interruptible: true,
     prepare: () => { reopenTurn('s-working') },
     beats: queueBeats(),
   },
   {
     id: 'orchestrate',
-    label: 'an agent asks for agents',
-    blurb: 'One session drafts two more, a human approves, and they report back.',
-    interruptible: true,
+    label: 'Let an agent ask for two more, and approve it',
+    blurb: 'One session drafts the requests, a human decides, and they report back.',
     beats: orchestrateBeats(),
   },
   {
     id: 'preview',
-    label: 'a served page becomes a pane',
-    blurb: 'A shell starts a dev server and its listener opens as a preview.',
-    interruptible: true,
+    label: 'Open your dev server as a pane',
+    blurb: 'A shell starts one and its listener becomes a preview beside the terminal.',
     beats: previewBeats(),
   },
   {
     id: 'land',
-    label: 'a branch lands through the queue',
+    label: 'Land a worktree branch on the trunk',
     blurb: 'Reconcile, verify, fast-forward - one branch at a time.',
-    interruptible: true,
     beats: landBeats(),
   },
   {
     id: 'palette',
-    label: 'one field finds everything',
-    blurb: 'The command palette, and the four scopes inside it.',
-    interruptible: true,
+    label: 'Find any command or session by name',
+    blurb: 'One field, four scopes, and the chord beside every answer.',
     beats: paletteBeats(),
   },
   {
     id: 'keymap',
-    label: 'bring your own keymap',
+    label: 'Bring your tmux keybindings with you',
     blurb: 'Five presets, applied live, and which chords a browser tab keeps.',
-    interruptible: true,
     beats: keymapBeats(),
   },
   {
     id: 'voice',
-    label: 'ask the fleet a question',
-    blurb: 'A spoken turn, answered from the live fleet, ending in a card a person resolves.',
-    interruptible: true,
+    label: 'Ask the fleet what is blocked',
+    blurb: 'A spoken question, answered from the live fleet, ending in a card you resolve.',
     beats: voiceBeats(),
   },
 ]

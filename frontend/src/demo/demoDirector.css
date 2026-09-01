@@ -241,33 +241,18 @@
   transition: width .2s ease;
 }
 
-.demo-director-card footer em {
-  flex: 1 1 100%;
-  order: 3;
-  font-style: normal;
-  font-size: 12px;
-  color: var(--accent, #8bd450);
-}
-
-.demo-director-next,
-.demo-director-skip {
+.demo-director-next {
   font: inherit;
   font-size: 12px;
   padding: 4px 11px;
   border-radius: 4px;
   cursor: pointer;
   background: none;
-  border: 1px solid var(--line, #2a2e34);
-  color: var(--fg-2, #b6bcc4);
-}
-
-.demo-director-next {
-  border-color: var(--accent, #8bd450);
+  border: 1px solid var(--accent, #8bd450);
   color: var(--accent, #8bd450);
 }
 
-.demo-director-next:hover,
-.demo-director-skip:hover { color: var(--fg, #d9dde2); }
+.demo-director-next:hover { color: var(--fg, #d9dde2); }
 
 /* The boundary's panel. Plain and self-contained, because it is what renders when
    the app's own tree is gone. */

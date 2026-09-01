@@ -10,7 +10,9 @@ import {
 import { SCENARIOS, scenarioById, NUDGE_SCENARIO_ID } from '../src/demo/scenarios.ts'
 import { apply, state } from '../src/demo/store.ts'
 import { DEMO_PROJECT_ID } from '../src/demo/fixtures.ts'
-import { placeCallouts, gutterSide, wirePath, unionBox, sweepDelays, type Box } from '../src/demo/callouts.ts'
+import {
+  placeCallouts, gutterSide, wirePath, unionBox, sweepAxis, sweepDelays, type Box,
+} from '../src/demo/callouts.ts'
 import { verifyCommandPayload } from '../src/demo/gitFixtures.ts'
 import { parseLandVerifyCommand } from '../src/gitLand.ts'
 import { railConfigFromBlob, type RailBlob } from '../src/commandRail.ts'
@@ -93,33 +95,64 @@ test('beats run forwards', () => {
   }
 })
 
-test('the walkthrough waits for the visitor at every beat, and nothing else does', () => {
-  // This is the line between the two kinds of run, and it has to hold in both directions.
-  // A tour beat with no gate would advance past the visitor mid-instruction; a scripted
-  // beat with one would hang forever, because nobody is being asked to do anything.
+test('the walkthrough drives itself at every beat', () => {
+  // The tour used to be all gates: it named a control and waited for a real press. It
+  // performs its own acts now, so every beat has to *do* something a visitor could have
+  // done - a beat with copy and no lever is a card that appears, says a thing, and leaves
+  // the interface exactly as it found it, which is the failure this replaced.
+  const tour = scenarioById('tour')!
+  const acts = (beat: (typeof tour.beats)[number]): boolean =>
+    Boolean(beat.command || beat.click || beat.type || beat.key || beat.field
+      || beat.mutate || beat.show)
+  for (const [name, beats] of [['desktop', tour.beats], ['phone', tour.mobileBeats ?? []]] as const) {
+    // The opening card is the one exception, and it is deliberately inert: it is the frame
+    // around everything after it, so it introduces rather than acts.
+    for (const [index, beat] of beats.slice(1).entries()) {
+      assert.ok(acts(beat), `${name} tour beat ${index + 1} narrates without doing anything`)
+    }
+  }
+})
+
+test('every walkthrough beat has a body, so its card is the anchored one', () => {
+  // `DemoDirector` renders the caption form - a strip at the foot of the frame, no
+  // counter and no Next - for any beat with an empty body. That is right for a scripted
+  // run and wrong for the tour, whose card is the thing carrying the progress through it.
   const tour = scenarioById('tour')!
   for (const beats of [tour.beats, tour.mobileBeats ?? []]) {
     for (const [index, beat] of beats.entries()) {
-      assert.ok(beat.gate, `tour beat ${index} has no gate`)
+      assert.ok(beat.body?.length, `tour beat ${index} has no body`)
     }
   }
-  for (const scenario of SCENARIOS.filter(item => item.id !== 'tour')) {
-    for (const beat of scenario.beats) assert.equal(beat.gate, undefined, `${scenario.id} gates a beat`)
-  }
 })
 
-test('a scenario that plays by itself can be interrupted, and a gated one cannot', () => {
-  // Real input aborts anything autoplaying, and must not abort the walkthrough - whose
-  // gates *are* real input, so aborting on it would make the tour impossible to finish.
+test('a walk is given enough of the clock to finish one pass', () => {
+  // The walk holds 1.8s per label and loops, and the beat's own budget is the gap to the
+  // next `at`. A nine-label walk in a two-second slot draws one label and moves on, which
+  // is not a failure anything else can see: the beat still "played".
+  const WALK_MS = 1_800
+  const SWEEP_MS = 1_500
   for (const scenario of SCENARIOS) {
-    assert.equal(scenario.interruptible, scenario.id !== 'tour', scenario.id)
+    for (const beats of [scenario.beats, scenario.mobileBeats ?? []]) {
+      for (const [index, beat] of beats.entries()) {
+        const show = typeof beat.show === 'function' ? undefined : beat.show
+        if (show?.reveal !== 'walk' || !show.notes?.length) continue
+        const next = beats[index + 1]
+        if (!next) continue
+        const needed = show.notes.length * WALK_MS + (show.sweep ? SWEEP_MS : 0)
+        assert.ok(
+          next.at - beat.at >= needed,
+          `${scenario.id} beat ${index} walks ${show.notes.length} labels in `
+          + `${next.at - beat.at}ms, and needs ${needed}ms`,
+        )
+      }
+    }
   }
 })
 
-test('the idle nudge names a scenario that exists and plays by itself', () => {
-  const nudge = scenarioById(NUDGE_SCENARIO_ID)
-  assert.ok(nudge, 'the nudge names a scenario the catalogue does not have')
-  assert.ok(nudge.interruptible, 'the nudge must abort on the first touch')
+test('the idle nudge names a scenario that exists', () => {
+  // Every run aborts on the first real touch now, the walkthrough included, so there is
+  // no longer a class of scenario the nudge must avoid - only one that must exist.
+  assert.ok(scenarioById(NUDGE_SCENARIO_ID), 'the nudge names a scenario the catalogue does not have')
 })
 
 test('no scenario writes a harness name', () => {
@@ -182,7 +215,10 @@ test('the gutter goes to whichever side has room', () => {
   // serve both.
   assert.equal(gutterSide([box(20, 100)], VIEWPORT), 'right')
   assert.equal(gutterSide([box(1_100, 100)], VIEWPORT), 'left')
-  assert.equal(gutterSide([box(20, 100), box(700, 100)], VIEWPORT), 'right')
+  // Several targets stacked in a column: still a side gutter, and still the side with
+  // room, which is what the fleet column actually looks like.
+  assert.equal(gutterSide([box(20, 100), box(20, 240)], VIEWPORT), 'right')
+  assert.equal(gutterSide([box(1_100, 100), box(1_100, 240)], VIEWPORT), 'left')
   // And the case a centre reading gets wrong: a row inside a nearly-full-width dialog.
   // Its centre is the middle of the screen, so a centre rule calls it left-hand chrome
   // and puts the label in the sliver on the right; both slivers are equal here, and what
@@ -192,23 +228,83 @@ test('the gutter goes to whichever side has room', () => {
   assert.equal(gutterSide([box(400, 200, 860, 20)], { width: 1_280, height: 800 }), 'left')
 })
 
+test('a row of targets is labelled from above, not from beside', () => {
+  // The command rail: five chips side by side along the bottom of the frame. A side
+  // gutter puts every label on the same line as the thing it names, with a leader line
+  // running horizontally through the four chips in between - so the axis follows the
+  // arrangement, and the side within it is still free space.
+  const rail = [265, 335, 537, 789, 997].map(left => box(left, 867, 60, 30))
+  assert.equal(gutterSide(rail, { width: 1_440, height: 900 }), 'top')
+  // The same strip near the top of the frame has its room the other way.
+  const banner = [200, 400, 600].map(left => box(left, 12, 60, 24))
+  assert.equal(gutterSide(banner, { width: 1_440, height: 900 }), 'bottom')
+  // One target has no arrangement, however wide it is: a lone label goes beside its
+  // chrome, which is where every callout went before there was a choice.
+  assert.equal(gutterSide([box(265, 867, 800, 30)], { width: 1_440, height: 900 }), 'right')
+})
+
+test('a row of labels stacks sideways rather than on top of each other', () => {
+  // The horizontal gutter's deconfliction is the mirror of the vertical one's, and it has
+  // the same job: three rail chips 40px apart want three labels in the same 40px.
+  const placed = placeCallouts(
+    [265, 305, 345].map(left => entry(box(left, 867, 30, 30), `n${left}`, 90, 20)),
+    { width: 1_440, height: 900 },
+  )
+  assert.equal(placed.length, 3)
+  for (const item of placed) {
+    assert.equal(item.side, 'top')
+    assert.ok(item.top + item.height <= 867, 'a label sat on the chrome it names')
+  }
+  for (let index = 1; index < placed.length; index += 1) {
+    assert.ok(
+      placed[index].left >= placed[index - 1].left + 90,
+      `label ${index} at ${placed[index].left} overlaps the one before it`,
+    )
+  }
+})
+
+test('the walk keeps one gutter for the whole beat', () => {
+  // A walk places one label at a time, so the side has to come from the whole set: asked
+  // about the active target alone, a rail chip on the left of the strip would be labelled
+  // from the right and the next one from above, and the gutter would jump between stops.
+  const rail = [265, 335, 997].map(left => box(left, 867, 60, 30))
+  const viewport = { width: 1_440, height: 900 }
+  const side = gutterSide(rail, viewport)
+  for (const target of rail) {
+    const [only] = placeCallouts([entry(target, 'one', 90, 20)], viewport, side)
+    assert.equal(only.side, 'top')
+  }
+})
+
 test('a label stays inside the viewport on both axes', () => {
   // A wide chip beside chrome near the right edge, and a target below the fold: both
   // clamp, because the two things most worth labelling sit on the frame's edges.
   const [wide] = placeCallouts([entry(box(300, 790), 'edge', 600, 40)], VIEWPORT)
   assert.equal(wide.side, 'right')
-  assert.ok(wide.x + 600 <= VIEWPORT.width, 'ran off the right edge')
-  assert.ok(wide.top + 40 <= VIEWPORT.height, 'ran off the bottom edge')
-  // And on the other side the clamp is the mirror: `x` is the chip's right edge there.
+  assert.ok(wide.left + wide.width <= VIEWPORT.width, 'ran off the right edge')
+  assert.ok(wide.top + wide.height <= VIEWPORT.height, 'ran off the bottom edge')
+  // And on the other side the clamp is the mirror.
   const [mirrored] = placeCallouts([entry(box(1_240, 40), 'edge', 300, 20)], VIEWPORT)
   assert.equal(mirrored.side, 'left')
-  assert.ok(mirrored.x - 300 >= 0, 'ran off the left edge')
+  assert.ok(mirrored.left >= 0, 'ran off the left edge')
+  // A row along the very top has no room above it for a chip, so the clamp is what keeps
+  // the label on screen even though the side it chose is the one with more space.
+  const [high] = placeCallouts(
+    [entry(box(400, 2, 60, 16), 'edge', 90, 20), entry(box(600, 2, 60, 16), 'edge2', 90, 20)],
+    VIEWPORT,
+  )
+  assert.equal(high.side, 'bottom')
+  assert.ok(high.top >= 0, 'ran off the top edge')
 })
 
 test('the leader line is orthogonal, so nine of them do not cross', () => {
   const [item] = placeCallouts([entry(box(20, 300))], VIEWPORT)
-  const path = wirePath(item)
-  assert.match(path, /^M [\d.]+ [\d.]+ H [\d.]+ V [\d.]+ H [\d.]+$/)
+  assert.match(wirePath(item), /^M [\d.]+ [\d.]+ H [\d.]+ V [\d.]+ H [\d.]+$/)
+  // The horizontal gutter turns the elbow ninety degrees: out of the top of the target,
+  // across to the label's column, and up into its edge.
+  const rail = [entry(box(265, 867, 30, 30), 'a', 90, 20), entry(box(345, 867, 30, 30), 'b', 90, 20)]
+  const [chip] = placeCallouts(rail, { width: 1_440, height: 900 })
+  assert.match(wirePath(chip), /^M [\d.]+ [\d.]+ V [\d.]+ H [\d.]+ V [\d.]+$/)
 })
 
 test('the sweep wakes each label as the band reaches it', () => {
@@ -222,6 +318,19 @@ test('the sweep wakes each label as the band reaches it', () => {
   // The band leads the labels slightly, so the topmost target has already been passed
   // when its label arrives rather than the other way round.
   assert.equal(sweepDelays([box(20, 0, 60, 8)], column, 1_500)[0], 0)
+})
+
+test('the band crosses a strip the long way', () => {
+  // A band travelling down an 800x30 command rail has crossed it in one frame and reads
+  // as a flash. The axis comes off the chrome's own shape, not off the gutter, because it
+  // is a fact about the thing being scanned.
+  const rail = unionBox([box(265, 867, 800, 30)])!
+  const column = unionBox([box(0, 0, 300, 400)])!
+  assert.equal(sweepAxis(rail), 'across')
+  assert.equal(sweepAxis(column), 'down')
+  // And the labels are then scheduled along that axis: left to right, not top to bottom.
+  const delays = sweepDelays([box(1_000, 867), box(300, 867)], rail, 1_500)
+  assert.ok(delays[0] > delays[1], 'a strip must wake its labels left to right')
 })
 
 test('every callout names chrome, and every scenario that has one is playable', () => {
