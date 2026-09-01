@@ -13,12 +13,16 @@
  * mirror then carries the winner's acts to the other, which demonstrates more than a
  * second copy would.
  *
- * **Nothing plays by itself except one nudge.** The demo's pitch is "this is the real app,
- * touch it", and something moving on its own converts that into "wait and watch". A
- * script that fights a click is worse than no script. So scenarios are chosen from the
- * page's own menu, with a single exception: a demo that has been on screen and untouched
- * for ten seconds plays one short scenario, once, and **any** real pointerdown, keydown
- * or touch ends it instantly and permanently for that visit.
+ * **Everything plays itself, and the first touch is the visitor's.** The walkthrough used
+ * to be built out of *gates*: it drew a card, asked for a click, and waited. That asks a
+ * visitor who has not decided to care yet for work, and it stalls indefinitely on the ones
+ * who will not do it - which on a marketing page is most of them. So a scenario performs
+ * its own acts, start to finish, and **any** real pointerdown, keydown or touch stops it
+ * instantly and permanently for that visit. There is one rule rather than two, and it is
+ * the rule the pitch already implies: watch it, and the moment you touch it, it is yours.
+ *
+ * The card keeps two controls, and neither is a demand. `Next` cuts the current beat's
+ * wait short for somebody reading faster than the script; `stop` ends the run.
  *
  * **Highlights are for scripted acts only.** A ghost cursor, a ripple and a caption are
  * essential when the script presses something, because otherwise the interface appears to
@@ -34,7 +38,7 @@ import {
 } from './drive.ts'
 import { releaseDirectorLead, requestDirectorLead } from './mirror.ts'
 import {
-  NUDGE_SCENARIO_ID, SCENARIOS, scenarioById, type Beat, type Gate, type Scenario,
+  NUDGE_SCENARIO_ID, SCENARIOS, scenarioById, type Beat, type Scenario,
 } from './scenarios.ts'
 
 /** Where the walkthrough records that it is finished. Unchanged from the coach's key, so
@@ -54,9 +58,6 @@ const IDLE_NUDGE_MS = 10_000
 const TRAVEL_MS = 420
 const PRESS_MS = 170
 
-/** A horizontal drag this long counts as a swipe, for the phone tour's gestures. */
-const SWIPE_MIN = 55
-
 const params = (): URLSearchParams => {
   try { return new URLSearchParams(location.search) } catch { return new URLSearchParams() }
 }
@@ -74,11 +75,8 @@ export type DirectorSnapshot = {
   eyebrow: string
   say: string
   body: string[]
-  hint: string
   gesture: 'left' | 'right' | null
   spotlight: string[] | null
-  /** Whether the current beat is waiting for the visitor, and how. */
-  gate: Gate | null
   /** Where the ghost cursor is, or null when it is not on screen. */
   pointer: { x: number; y: number } | null
   /** Bumped on every scripted press, so the view can key one ripple per act. */
@@ -103,8 +101,8 @@ export type DirectorSnapshot = {
 
 const EMPTY: DirectorSnapshot = {
   running: false, scenarioId: '', blurb: '', index: 0, total: 0,
-  eyebrow: '', say: '', body: [], hint: '', gesture: null, spotlight: null,
-  gate: null, pointer: null, press: 0, echo: null, show: null, showSeq: 0,
+  eyebrow: '', say: '', body: [], gesture: null, spotlight: null,
+  pointer: null, press: 0, echo: null, show: null, showSeq: 0,
 }
 
 let snapshot: DirectorSnapshot = EMPTY
@@ -133,8 +131,8 @@ function publish(patch: Partial<DirectorSnapshot>): void {
  * would have needed the same check anyway, and a token also makes a *restart* safe.
  */
 let token = 0
-/** Resolves the open gate, or null when nothing is gated. */
-let openGate: ((satisfied: boolean) => void) | null = null
+/** Ends the wait between two beats early, or null when nothing is waiting. */
+let cutWait: (() => void) | null = null
 /** Set once the nudge has played or been refused, for the life of this page. */
 let nudgeSpent = false
 let lastRealInput = 0
@@ -154,6 +152,30 @@ const markTourDone = (): void => {
 async function pause(ms: number): Promise<boolean> {
   const mine = token
   if (ms > 0) await delay(ms)
+  return mine === token
+}
+
+/**
+ * The wait *between* beats, which the card's Next can cut short.
+ *
+ * Only this wait, and deliberately: the pauses inside a scripted act - the ghost cursor's
+ * travel, the gap between two keystrokes - are the act being legible, and skipping them
+ * would leave a press with nothing on screen to say it happened. Skipping a beat means
+ * "I have read this one", not "type faster".
+ */
+async function dwell(ms: number): Promise<boolean> {
+  const mine = token
+  if (ms > 0) {
+    await new Promise<void>(resolve => {
+      const done = (): void => {
+        window.clearTimeout(timer)
+        cutWait = null
+        resolve()
+      }
+      const timer = window.setTimeout(done, ms)
+      cutWait = done
+    })
+  }
   return mine === token
 }
 
@@ -233,69 +255,12 @@ async function perform(beat: Beat): Promise<boolean> {
   return true
 }
 
-/**
- * Wait for the visitor to satisfy a gate.
- *
- * Every listener is passive and capture-phase: the director observes the real interaction
- * and must never consume it. That is the walkthrough's original contract and it is what
- * separates a gate from a scripted act - the gate does not simulate anything, it waits.
- */
-function waitForGate(gate: Gate): Promise<boolean> {
-  return new Promise(resolve => {
-    const mine = token
-    let cleanup = (): void => {}
-    const settle = (satisfied: boolean): void => {
-      cleanup()
-      openGate = null
-      resolve(satisfied && mine === token)
-    }
-    openGate = settle
-
-    if (gate.kind === 'next') return
-    if (gate.kind === 'event') {
-      const handler = (): void => settle(true)
-      window.addEventListener(gate.name, handler)
-      cleanup = () => window.removeEventListener(gate.name, handler)
-      return
-    }
-    if (gate.kind === 'click') {
-      const handler = (event: MouseEvent): void => {
-        const target = event.target instanceof Element ? event.target : null
-        // A microtask, so the app's own handler for this click runs first and the next
-        // beat measures the chrome the click produced rather than the old one.
-        if (target && gate.selectors.some(selector => target.closest(selector))) {
-          queueMicrotask(() => settle(true))
-        }
-      }
-      document.addEventListener('click', handler, true)
-      cleanup = () => document.removeEventListener('click', handler, true)
-      return
-    }
-    let origin: { x: number; y: number } | null = null
-    const down = (event: PointerEvent): void => { origin = { x: event.clientX, y: event.clientY } }
-    const up = (event: PointerEvent): void => {
-      if (!origin) return
-      const dx = event.clientX - origin.x
-      const dy = event.clientY - origin.y
-      origin = null
-      if (Math.abs(dx) < SWIPE_MIN || Math.abs(dy) > Math.abs(dx)) return
-      if ((gate.direction === 'right') === (dx > 0)) settle(true)
-    }
-    document.addEventListener('pointerdown', down, true)
-    document.addEventListener('pointerup', up, true)
-    cleanup = () => {
-      document.removeEventListener('pointerdown', down, true)
-      document.removeEventListener('pointerup', up, true)
-    }
-  })
-}
-
 async function play(scenario: Scenario, beats: Beat[]): Promise<void> {
   const mine = token
   scenario.prepare?.()
   let elapsed = 0
   for (const [index, beat] of beats.entries()) {
-    if (!(await pause(Math.max(0, beat.at - elapsed)))) return
+    if (!(await dwell(Math.max(0, beat.at - elapsed)))) return
     elapsed = Math.max(elapsed, beat.at)
     const show = typeof beat.show === 'function' ? beat.show() : beat.show
     publish({
@@ -304,20 +269,13 @@ async function play(scenario: Scenario, beats: Beat[]): Promise<void> {
       eyebrow: beat.eyebrow ?? snapshot.eyebrow,
       say: beat.say ?? (beat.body ? '' : snapshot.say),
       body: beat.body ?? [],
-      hint: beat.hint ?? '',
       gesture: beat.gesture ?? null,
       spotlight: beat.spotlight ?? null,
-      gate: beat.gate ?? null,
       pointer: null,
       show: show ?? null,
       showSeq: show ? snapshot.showSeq + 1 : snapshot.showSeq,
     })
     if (!(await perform(beat))) return
-    if (beat.gate) {
-      const satisfied = await waitForGate(beat.gate)
-      if (!satisfied || mine !== token) return
-      publish({ gate: null })
-    }
   }
   if (mine !== token) return
   if (scenario.id === 'tour') markTourDone()
@@ -330,8 +288,8 @@ async function play(scenario: Scenario, beats: Beat[]): Promise<void> {
 export function stop(reason: 'finished' | 'interrupted' | 'dismissed' | 'replaced'): void {
   if (!snapshot.running && reason !== 'dismissed') return
   token += 1
-  openGate?.(false)
-  openGate = null
+  cutWait?.()
+  cutWait = null
   if (reason === 'dismissed' && snapshot.scenarioId === 'tour') markTourDone()
   releaseDirectorLead()
   publish({ ...EMPTY, echo: snapshot.echo, press: snapshot.press, showSeq: snapshot.showSeq })
@@ -365,10 +323,16 @@ export async function start(scenarioId: string): Promise<boolean> {
   return true
 }
 
-/** The card's Next button, and its "skip this step". Both resolve the open gate; there is
- *  no separate skip path, because "the visitor moved on" is one thing however it happened. */
-export function advanceGate(): void {
-  openGate?.(true)
+/**
+ * The card's Next button: stop waiting and go on to the next beat.
+ *
+ * Not a real press as far as the abort listener is concerned - it is a click on the
+ * director's own chrome, and stopping the run somebody just asked to advance would be
+ * absurd. `DemoDirector` calls this directly rather than raising an event, which is what
+ * keeps that distinction from having to be inferred.
+ */
+export function advanceBeat(): void {
+  cutWait?.()
 }
 
 export const scenarioMenu = (): Array<{ id: string; label: string }> =>
@@ -426,6 +390,13 @@ export function installDirector(): void {
     // `element.click()`, which is untrusted and produces no `pointerdown` at all, so a
     // scenario can never abort itself. Anything reaching here came from a person.
     if (!event.isTrusted) return
+    // Except the director's own card, which is the one piece of chrome on screen that is
+    // *not* the app. Pressing Next is asking the run to go on, and a rule that read it as
+    // "the visitor has taken over" would make the button stop the thing it advances - the
+    // exact bug the walkthrough's `interruptible: false` used to hide. `stop` needs no
+    // exception here because it stops the run either way.
+    const target = event.target instanceof Element ? event.target : null
+    if (target?.closest('.demo-director')) return
     lastRealInput = Date.now()
     if (HIGHLIGHT_INPUT && event instanceof PointerEvent) {
       publish({ echo: { x: event.clientX, y: event.clientY, seq: (snapshot.echo?.seq ?? 0) + 1 } })
@@ -433,11 +404,11 @@ export function installDirector(): void {
     // The nudge is spent by the first touch whether or not it was playing: a visitor who
     // arrived and started clicking has already answered the question the nudge asks.
     nudgeSpent = true
-    if (!snapshot.running) return
-    const scenario = scenarioById(snapshot.scenarioId)
-    // A gated scenario is *waiting* for exactly this. Aborting on it would make the
-    // walkthrough impossible to finish.
-    if (scenario?.interruptible) stop('interrupted')
+    // One rule, for every scenario including the walkthrough: the first touch is the
+    // handover. There used to be an exception for the tour, whose gates *were* real input
+    // so aborting on one would have made it impossible to finish; the tour drives itself
+    // now, so the exception went with the gates.
+    if (snapshot.running) stop('interrupted')
   }
   for (const name of ['pointerdown', 'keydown', 'touchstart']) {
     document.addEventListener(name, onRealInput, { capture: true, passive: true })
@@ -490,7 +461,9 @@ export function installDirector(): void {
     return
   }
 
-  // The one exception to "nothing plays by itself".
+  // What a *returning* visitor gets: the walkthrough above only plays for somebody who
+  // has not seen it, and this is the second visit's version of the same offer. One short
+  // scenario, once, and the first touch spends it whether or not it played.
   const tick = window.setInterval(() => {
     if (nudgeSpent || snapshot.running) return
     if (!visibleSince || document.visibilityState !== 'visible') return

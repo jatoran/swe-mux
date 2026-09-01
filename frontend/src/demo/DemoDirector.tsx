@@ -16,9 +16,18 @@ import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { placeTutorialCard } from '../tutorial.ts'
 import { DemoShow } from './DemoShow.tsx'
 import {
-  advanceGate, directorSnapshot, stop, subscribeDirector, type DirectorSnapshot,
+  advanceBeat, directorSnapshot, stop, subscribeDirector, type DirectorSnapshot,
 } from './director.ts'
 import { firstVisible } from './drive.ts'
+
+/**
+ * Where a dodging card lands when it goes upwards.
+ *
+ * Clear of the full-screen demo's own bar (`--demo-bar-h`, 34px), which is drawn outside
+ * the app and would otherwise clip the card's header and its stop button. In the embed
+ * there is no bar and this is simply an inset.
+ */
+const TOP_DODGE = 44
 
 const sameRect = (left: DOMRect | null, right: DOMRect | null): boolean =>
   left === right || Boolean(left && right
@@ -81,9 +90,17 @@ export function DemoDirector() {
   // placed beside the chrome it explains, which is exactly where that beat's labels are,
   // and it covered three of the six on the fleet step. The labels are the instruction
   // there, so the card is what gives way.
+  //
+  // *Which* way it gives is measured off the subject rather than fixed, because "the foot
+  // of the frame" stopped being empty when the callouts learned a horizontal gutter: the
+  // command rail sits on the bottom border, its labels are now drawn just above it, and a
+  // card parked at the foot covered them. So a subject in the lower part of the frame
+  // sends the card to the top and everything else keeps the foot, which is where a card
+  // belongs when the thing it explains is the sidebar or a dialog.
   const dodges = view.gesture || (view.show?.notes?.length ?? 0) > 0
+  const lowSubject = Boolean(rect) && rect!.top + rect!.height / 2 > innerHeight * 0.6
   const position = dodges
-    ? { ...placed, top: Math.max(16, innerHeight - cardSize.height - 20) }
+    ? { ...placed, top: lowSubject ? TOP_DODGE : Math.max(16, innerHeight - cardSize.height - 20) }
     : placed
   const last = view.index >= view.total
   // Clamped into the viewport, because the two things most worth flashing sit on its
@@ -156,14 +173,14 @@ export function DemoDirector() {
         <div class="demo-director-progress" aria-hidden="true">
           <i style={{ width: `${(view.index / Math.max(1, view.total)) * 100}%` }} />
         </div>
-        {view.gate && view.gate.kind !== 'next'
-          ? <>
-            <em>{view.hint}</em>
-            <button class="demo-director-skip" onClick={advanceGate}>skip step</button>
-          </>
-          : <button class="demo-director-next" onClick={() => (last ? stop('dismissed') : advanceGate())}>
-            {last ? 'Start playing' : 'Next'}
-          </button>}
+        {/* An offer rather than a demand: the run advances on its own, and this is for
+            somebody who reads faster than it plays. There used to be a second branch here
+            for a gated beat ("skip step", beside the instruction it was waiting on); the
+            walkthrough drives itself now, so there is one button and it always means the
+            same thing. */}
+        <button class="demo-director-next" onClick={() => (last ? stop('dismissed') : advanceBeat())}>
+          {last ? 'Start playing' : 'Next'}
+        </button>
       </footer>}
     </section>
   </div>

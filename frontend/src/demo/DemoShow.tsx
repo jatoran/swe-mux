@@ -9,10 +9,10 @@
  *
  * Three things are load-bearing and easy to undo by accident:
  *
- * - **Everything is `pointer-events: none`.** A gated walkthrough beat is waiting for the
- *   visitor to press the very control a callout is labelling, so a chip that could take
- *   the click would make the tour impossible to finish. The CSS enforces it; nothing here
- *   may add a handler.
+ * - **Everything is `pointer-events: none`.** The visitor's first real press is what hands
+ *   the demo over, and a callout sits on top of the very control they are most likely to
+ *   press; a chip that could take that click would swallow the handover. The CSS enforces
+ *   it; nothing here may add a handler.
  * - **Placement is re-measured on DOM change, never on a timer.** The chrome a callout
  *   names moves when a panel opens or the sidebar scrolls, and a label pointing at where
  *   a row used to be is worse than no label.
@@ -22,7 +22,7 @@
  */
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks'
 import {
-  anchorPoint, boxOf, placeCallouts, sweepDelays, unionBox, wirePath,
+  anchorPoint, boxOf, gutterSide, placeCallouts, sweepAxis, sweepDelays, unionBox, wirePath,
   type Box, type Placed, type Show,
 } from './callouts.ts'
 import { firstVisible } from './drive.ts'
@@ -41,11 +41,27 @@ const SWEEP_MS = 1_500
 const WALK_MS = 1_800
 /** The gap between one chip's reveal and the next, when they all arrive together. */
 const STAGGER_MS = 95
+/** How thick the radar band is across its travel, and so how far off-column it starts.
+ *  Shared with the stylesheet, which sizes the band on the other axis. */
+const BAND_DEPTH = 74
 
-/** Measure one callout's target, or nothing when this beat's chrome is not on screen. */
+/**
+ * Measure one callout's target, or nothing when this beat's chrome is not on screen.
+ *
+ * "On screen" includes the viewport, not just the DOM. The command rail scrolls
+ * horizontally on a phone, so a chip can be rendered, visible to `firstVisible`, and sit
+ * two hundred pixels past the right edge - and a label for it gets clamped back into the
+ * frame with a leader line running out towards nothing. A box *wholly* outside the
+ * viewport can never be usefully labelled, so it is treated as absent; a box that merely
+ * overhangs an edge is still measured, because half a session row is still that row.
+ */
 const measure = (selectors: string[]): Box | null => {
   const element = firstVisible(selectors)
-  return element ? boxOf(element.getBoundingClientRect()) : null
+  if (!element) return null
+  const box = boxOf(element.getBoundingClientRect())
+  const off = box.right <= 0 || box.left >= innerWidth
+    || box.bottom <= 0 || box.top >= innerHeight
+  return off ? null : box
 }
 
 const measureAll = (groups: string[][]): Box[] =>
@@ -63,6 +79,8 @@ export function DemoShow({ show, seq }: { show: Show; seq: number }) {
     { shimmer: [], arrive: [] },
   )
   const [step, setStep] = useState(0)
+  /** How many of this beat's notes last measured, which is what the walk cycles over. */
+  const [live, setLive] = useState(0)
   /** Whether anything this beat names has been on screen yet. */
   const [armed, setArmed] = useState(false)
 
@@ -90,15 +108,26 @@ export function DemoShow({ show, seq }: { show: Show; seq: number }) {
         // and then hiding all but one puts the gutter wherever the *widest spread* of
         // targets wants it, which drew a label for a sidebar row against the far right
         // edge with a leader line the width of the screen.
-        const active = mode === 'walk'
-          ? entries.filter(item => item.callout === notes[step])
+        //
+        // Indexed into the *measured* entries rather than into the beat's notes, so a note
+        // whose chrome is not on screen costs no stop at all. Walking the written list
+        // instead spends 1.8s on a blank frame, which reads as the tour having lost its
+        // place - and the phone's rail scrolls, so it is not a hypothetical.
+        setLive(current => (current === entries.length ? current : entries.length))
+        const active = mode === 'walk' && entries.length
+          ? [entries[step % entries.length]]
           : entries
+        // The side, though, is decided from the whole set even when one label is placed.
+        // A row of rail chips is a row whichever of them is being named, and asking the
+        // active target alone would let the gutter jump from above the strip to beside
+        // one chip between two stops of the same walk.
+        const side = gutterSide(entries.map(item => item.target), viewport)
         // A beat publishes before its own press runs, so the chrome it labels routinely
         // arrives a second later. The walk's clock waits for that rather than starting on
         // the beat: it used to spend its first stop pointing at a dialog that had not
         // opened yet, and the visitor saw the tour skip a label it never drew.
         if (entries.length) setArmed(true)
-        const next = placeCallouts(active, viewport)
+        const next = placeCallouts(active, viewport, side)
         setPlaced(current => (samePlacement(current, next) ? current : next))
         const band = show.sweep
           ? measure(show.sweep)
@@ -137,25 +166,30 @@ export function DemoShow({ show, seq }: { show: Show; seq: number }) {
    * Three things it waits for or does, each of which was a way of being unreadable:
    * it does not start until something it can point at is on screen; it lets the radar
    * band finish crossing first, so the scan reads as one gesture rather than as a band
-   * racing a label; and it **loops**, because the walkthrough's beats are gated - a walk
-   * that stopped on its last label would leave a visitor who looked away with one word
-   * and no way to see the rest again short of replaying the tour.
+   * racing a label; and it **loops**, so a beat that outlasts its labels holds the eye
+   * rather than freezing on the last one - and a visitor who looked away is not left with
+   * one word and no way to see the rest.
+   *
+   * It cycles over `live` rather than over `notes`: a note whose chrome is off screen
+   * costs no stop at all, where walking the written list would spend 1.8s on a blank
+   * frame.
    */
   useEffect(() => {
-    if (mode !== 'walk' || notes.length < 2 || !armed) return
+    if (mode !== 'walk' || live < 2 || !armed) return
     let tick = 0
     const lead = setTimeout(() => {
       tick = setInterval(
-        () => setStep(current => (current + 1) % notes.length),
+        () => setStep(current => (current + 1) % live),
         WALK_MS,
       ) as unknown as number
     }, show.sweep ? SWEEP_MS : 0)
     return () => { clearTimeout(lead); clearInterval(tick) }
-  }, [seq, mode, notes.length, armed, show.sweep])
+  }, [seq, mode, live, armed, show.sweep])
 
   /** A new beat starts its walk from the top, and disarms until it has measured. */
   useEffect(() => {
     setStep(0)
+    setLive(0)
     setArmed(false)
   }, [seq])
 
@@ -230,8 +264,11 @@ export function DemoShow({ show, seq }: { show: Show; seq: number }) {
         class={`demo-show-chip ${item ? '' : 'measuring'}`}
         style={item
           ? {
-            left: item.side === 'right' ? item.x : undefined,
-            right: item.side === 'left' ? innerWidth - item.x : undefined,
+            // The placement hands back the chip's own box for every side, so one rule
+            // draws all four. It used to anchor the right edge for a left-hand gutter,
+            // which was the same arithmetic done twice - once here and once in the
+            // module that already knew the width.
+            left: item.left,
             top: item.top,
             animationDelay: `${visibleDelays[order] ?? 0}ms`,
           }
@@ -279,17 +316,25 @@ export function DemoShow({ show, seq }: { show: Show; seq: number }) {
  * custom property in JSX is not part of the typed style surface, and the alternative -
  * writing the whole animation inline - would put the easing and the shape of the effect
  * in a TypeScript file instead of beside the rest of the demo's CSS.
+ *
+ * It crosses the long way, which for the fleet column is downwards and for the command
+ * rail is sideways. A band that always travelled down would cross the rail's thirty
+ * pixels in one frame and read as a flash.
  */
 function SweepBand({ column }: { column: Box }) {
   const band = useRef<HTMLDivElement>(null)
+  const across = sweepAxis(column) === 'across'
+  const travel = Math.round((across ? column.width : column.height) + BAND_DEPTH)
   useLayoutEffect(() => {
-    band.current?.style.setProperty('--sweep-travel', `${Math.round(column.height + 74)}px`)
+    band.current?.style.setProperty('--sweep-travel', `${travel}px`)
     band.current?.style.setProperty('--sweep-ms', `${SWEEP_MS}ms`)
-  }, [column.height])
+  }, [travel])
   return <div
     ref={band}
-    class="demo-show-sweep"
-    style={{ left: column.left, width: column.width, top: column.top - 74 }}
+    class={`demo-show-sweep ${across ? 'across' : 'down'}`}
+    style={across
+      ? { top: column.top, height: column.height, left: column.left - BAND_DEPTH }
+      : { left: column.left, width: column.width, top: column.top - BAND_DEPTH }}
     aria-hidden="true"
   />
 }

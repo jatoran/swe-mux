@@ -150,6 +150,10 @@
  */
 .demo-show-sweep {
   position: fixed;
+  animation: demo-show-sweep-down var(--sweep-ms, 1500ms) cubic-bezier(.4, 0, .5, 1) forwards;
+}
+
+.demo-show-sweep.down {
   height: 74px;
   background: linear-gradient(
     180deg,
@@ -157,13 +161,32 @@
     color-mix(in srgb, var(--accent, #8bd450) 20%, transparent) 55%,
     transparent);
   border-bottom: 1px solid color-mix(in srgb, var(--accent, #8bd450) 55%, transparent);
-  animation: demo-show-sweep var(--sweep-ms, 1500ms) cubic-bezier(.4, 0, .5, 1) forwards;
 }
 
-@keyframes demo-show-sweep {
+/* The same band turned ninety degrees, for chrome that is a strip rather than a column -
+   the command rail. Sizing and travel are the only difference; the leading edge is still
+   the bright one, so the scan reads the same way whichever axis it is on. */
+.demo-show-sweep.across {
+  width: 74px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in srgb, var(--accent, #8bd450) 20%, transparent) 55%,
+    transparent);
+  border-right: 1px solid color-mix(in srgb, var(--accent, #8bd450) 55%, transparent);
+  animation-name: demo-show-sweep-across;
+}
+
+@keyframes demo-show-sweep-down {
   from { transform: translateY(0); opacity: 1; }
   85% { opacity: 1; }
   to { transform: translateY(var(--sweep-travel, 400px)); opacity: 0; }
+}
+
+@keyframes demo-show-sweep-across {
+  from { transform: translateX(0); opacity: 1; }
+  85% { opacity: 1; }
+  to { transform: translateX(var(--sweep-travel, 400px)); opacity: 0; }
 }
 
 /* --------------------------------------------------------------------- the walk */

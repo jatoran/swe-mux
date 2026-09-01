@@ -301,22 +301,37 @@ A scenario is a flat timeline of beats, and a beat has exactly **two levers**, w
 - **`mutate`** is something the *daemon* did. It reaches the demo store, so it mirrors to the other frame, appears in the event stream, and is indistinguishable from a real backend act - because here it is one.
 - **`command` / `click` / `type` / `key`** are things the *user* did, driven through the app's own command bus and its own controls (`drive.ts`, factored out of `mirror.ts`, which already had a working drive layer). Never through app internals: a scripted act can only do what a visitor could.
 
-`at` is milliseconds on the scenario's own clock, and that clock **pauses while a gate is open** - which is what lets one shape serve both a timed run (no gates, so `at` is simply the timeline) and the walkthrough (all gates, so `at` is the pause before each card appears).
-`tests/demoDirector.test.ts` asserts both halves of that: every walkthrough beat has a gate, and no scripted beat does.
-A gated beat with no gate would advance past the visitor mid-instruction; a scripted beat with one would hang forever, because nobody is being asked to do anything.
+`at` is milliseconds on the scenario's own clock, and it is simply the timeline.
+The walkthrough used to be the exception: its beats were **gates** that waited for the visitor, so its clock paused and `at` was only the pause before each card appeared.
+The gates are gone (see "Nothing waits for the visitor" below), so there is one shape, which means a beat's budget has to cover what the beat *does* - a `walk` of nine labels holding 1.8s each needs eighteen seconds before the next beat may start, or the visitor sees four of them and the tour appears to skip.
+`demoDirector.test.ts` asserts that arithmetic across every scenario, and it found three walks already running short when it was written.
 
 **It runs in exactly one frame**, elected over the mirror's channel (the same election the walkthrough already used, renamed).
 Two copies of a script racing one shared fixture drift within a beat or two and look broken; the view mirror carries the winner's acts to the other frame instead, which demonstrates more than a second copy would.
 Measured in "both": the wide frame draws the card and runs the beats, the narrow one draws nothing and follows.
 The lead is **released on stop**, which the walkthrough never needed - it ran once and was over - and a director that held it forever would answer every later claim with "taken", so the other frame could never lead again.
 
-**Nothing plays by itself except one nudge.**
-The demo's pitch is "this is the real app, touch it", and something moving on its own converts that into "wait and watch"; a script that fights a click is worse than no script.
-Scenarios are chosen from the page's own **scenarios** menu, which replaced the separate "replay tour" control - three buttons beside a menu of scripts was one too many, and the tour is the menu's first entry.
-The one exception: a demo that has been on screen and untouched for ten seconds plays one short scenario, once.
-**Any** real `pointerdown`, `keydown` or `touchstart` ends a playing scenario instantly, leaves the state where it got to, and does not restart it.
+**Nothing waits for the visitor, and the first touch is the handover.**
+The walkthrough used to be built entirely out of gates: it drew a card, named a control, and waited for a real press on it.
+That reads well and fails in practice, because it asks somebody who has not decided to care yet to do work, and it stalls indefinitely on the ones who will not - which on a marketing page is most of them.
+So every stop performs its own act now, through the same command bus and the same controls a scripted scenario uses, and **any** real `pointerdown`, `keydown` or `touchstart` ends a playing scenario instantly, leaves the state where it got to, and does not restart it.
+One rule instead of two: watch it, and the moment you touch it, it is yours.
 `isTrusted` is the discriminator and it is exact: a scripted press is `element.click()`, which is untrusted and produces no `pointerdown` at all, so a scenario can never abort itself.
-A gated scenario is exempt, because its gates *are* real input - aborting on the act it is waiting for would make the walkthrough impossible to finish.
+The only exemption is the **director's own card**, matched by `closest('.demo-director')`: pressing Next is asking the run to go on, and a rule that read it as a handover would make the button stop the thing it advances.
+That was a real bug the moment `interruptible: false` came off the tour, and it is the reason the exemption is a selector rather than a comment.
+
+Two consequences followed, and both are simplifications.
+The card lost its "skip step" branch, so there is one button and it always means the same thing (cut this beat's wait short; the pauses *inside* an act are not skippable, because they are the act being legible).
+And `Scenario.interruptible` is gone, because every scenario answers the same way.
+
+Scenarios are still chosen from the page's own **scenarios** menu, which replaced the separate "replay tour" control - three buttons beside a menu of scripts was one too many, and the tour is the menu's first entry.
+A visitor who has already seen the tour and then sits untouched for ten seconds gets one short scenario, once; the first touch spends that whether or not it played.
+
+**A scenario label names an outcome, not a mechanism.**
+A dropdown row on a marketing page has to answer "why would I click that" before anything else can happen, and "one field finds everything" describes a search box that could belong to any product.
+"Find any command or session by name" is a thing a developer might be trying to do this afternoon.
+The mechanism goes in the blurb underneath.
+The eight labels are duplicated in `site/index.html`, because that page is static and never loads the demo's bundle; `tests/test_demo_scenario_menu.py` holds the two lists to the same ids **and** the same wording, since the frames are told a scenario by id and a renamed entry would otherwise go on working while the page advertised a name the product no longer uses.
 
 **Highlights are split by origin, and the split is the point.**
 A scripted act gets a ghost cursor, a ripple at the point of action and a caption, because without them the interface appears to move on its own - the single worst thing a demo of a *tool* can look like.
@@ -326,21 +341,30 @@ The one exception is `?highlightInput=1`, which only the capture rig sets, so a 
 **A beat can also label the chrome it is talking about** (`callouts.ts` for the geometry, `DemoShow.tsx` for the drawing).
 The ring pointed at exactly one thing, which is right for "press this" and useless for "here is what a row is made of": a session row carries seven facts in about forty pixels, and naming them one at a time would be seven stops nobody would sit through.
 So `show.notes` is a list of selector-and-label pairs, drawn as one gutter column of chips with orthogonal leader lines - one column because nine labels scattered around their targets is a ransom note, and orthogonal because nine diagonals cross each other.
-The gutter side is measured from the targets rather than configured, so one beat shape serves the fleet column on the left and the side panel on the right; labels are pushed *down* when two want the same band of pixels, never the ring, because the ring's position is the only part that carries meaning.
+Both the gutter's **axis** and its **side** are measured from the targets rather than configured, so one beat shape serves the fleet column on the left, the side panel on the right, and the command rail along the bottom.
+The axis follows the targets' arrangement: several of them laid out in a *row* have no gutter to either side, because the space beside any one of them is the next one and the free space at the ends of the strip is off where nothing is being named - so a row is labelled from above or below, and everything else keeps the side gutter.
+(A single target has no arrangement and always takes a side, however wide it is.)
+The side within the axis is free space, not the targets' centre: a centre reading calls a row inside a thousand-pixel dialog "left-hand chrome" and puts every label in the sixty pixels left over on the right.
+Labels are pushed *along* the gutter when two want the same pixels - down in a column, sideways in a row - never the ring, because the ring's position is the only part that carries meaning.
+The radar band turns with the chrome for the same reason and by its own measurement (`sweepAxis`): a band travelling down an 800x30 command rail has crossed it in one frame and reads as a flash, so a strip is swept sideways and its labels wake left to right.
 `show.reveal` picks how they arrive: `glitch` (clip steps and a one-frame colour split), `sweep` (a radar band crosses the column once and each label wakes as it passes), `walk` (dim the frame and cut one hole, holding the eye on one target at a time) or `blueprint` (brackets and dimension ticks, no motion, the one that survives a screenshot).
 `show.sweep` is independent of the mode, and the fleet stop is why: it sweeps the column once to say "all of this" and then *walks* it, one label at a time, because six labels on screen together are six things being pointed at - a visitor reading any one of them has to work out which of six leader lines belongs to it before it means anything, and the answer is on the far side of five others.
-A walk holds its first label until the band has finished crossing (answering the scan before it has finished asking puts two things on screen that are each other's noise) and it **loops**, because the walkthrough's beats are gated: a walk that stopped on its last label would leave a visitor who looked away with one word and no way back to the rest.
+A walk holds its first label until the band has finished crossing (answering the scan before it has finished asking puts two things on screen that are each other's noise) and it **loops**, so a visitor who looked away is not left with one word and no way back to the rest.
+It also cycles over the notes that **measured**, not over the notes the beat wrote: the phone's command rail scrolls, so a beat can name a chip that is off the right edge, and walking the written list would spend 1.8s on a blank frame that reads as the tour having lost its place.
+The card gives way to the labels, and *which* way is measured too - a subject in the lower part of the frame sends the card to the top, because "the foot of the frame" stopped being empty the moment callouts learned a horizontal gutter.
 Beside them are four smaller effects a beat can ask for: `keys` draws the chord that just fired on a keycap HUD, `shimmer` flashes a value that changed under the visitor where it sits, `arrive` marks chrome that has just appeared with a stepped reveal, and `crt` puts scanlines and a vignette over the frame for the length of one beat and no longer - a permanently-CRT demo is a costume, and the pitch is that this is the real interface.
 
 Three rules hold that layer together, and each is one line from being undone:
 
-- **It is `pointer-events: none`, all of it.** A gated walkthrough beat is waiting for a press on the very control a callout is labelling.
+- **It is `pointer-events: none`, all of it.** A chip that could take a click would swallow the visitor's handover on the very control it is labelling, which is the one press the whole demo is inviting.
 - **It measures the app's DOM and never writes to it.** The shimmer is an overlay wash rather than a class added to a product element, which is what keeps an overlay from being able to break the thing it is pointing at.
 - **Placement is re-measured on DOM change, never on a timer**, because the chrome a label names moves when a panel opens or the sidebar scrolls.
 
-The geometry is a pure function of boxes and a viewport, so the rules above are asserted in `demoDirector.test.ts` without a browser: labels stack rather than overlap, they are placed in target order rather than the order the beat wrote them, the gutter goes on the side away from the chrome, everything clamps into the frame, and the sweep's delays follow the band.
+The geometry is a pure function of boxes and a viewport, so the rules above are asserted in `demoDirector.test.ts` without a browser: labels stack rather than overlap, they are placed in target order rather than the order the beat wrote them, a column of targets takes a side gutter and a row of them takes one above, the walk keeps one gutter for a whole beat, everything clamps into the frame, and the sweep's delays follow the band on whichever axis it crossed.
 The phone walkthrough has its own fleet stop, and it is a `walk` rather than the desktop's swept column: an open panel covers most of a phone, so there is no gutter to lay six labels out in, and one label at a time against a dimmed frame is what a 390px screen can carry.
-A callout whose target is not on screen is simply not drawn, which is a real degradation rather than a failure - but a label going quietly missing is exactly the rot that would go unnoticed, so the seeded row config promotes the two fields the tour names (`worktree`, `badges`) to `always`, the fixture actually carries them, and the test asserts every field a callout names is placed in that config.
+A callout whose target is not on screen is simply not drawn - and "on screen" means the viewport, not just the DOM, because a rail chip two hundred pixels past the right edge is rendered, findable, and gets a label clamped back into the frame with a leader line running out towards nothing.
+That is a real degradation rather than a failure, but a label going quietly missing is exactly the rot that would go unnoticed, so the seeded row config promotes the two fields the tour names (`worktree`, `badges`) to `always`, the fixture actually carries them, and the test asserts every field a callout names is placed in that config.
+The guard is also not a substitute for choosing targets that fit: the phone rail stop names five chips a 390px screen actually shows, after the two it used to name (`esc`, `tab`) turned out to sit past that edge.
 `data-row-field` in `SessionRowBody.tsx` is what makes the naming possible at all: the only other handle on a row's model or worktree was a `title` string, which is copy, so a reworded tooltip would silently break whatever selected on it.
 `data-settings-tab` and `data-keymap-preset` exist for the same reason on the surfaces the keymap scenario drives.
 
@@ -348,10 +372,10 @@ The eight scenarios, and why those:
 
 | Scenario | What it demonstrates |
 |---|---|
-| `tour` | The interface itself. All gates; it waits for the visitor and never simulates the act. |
+| `tour` | The interface itself, and the layout it explains: the Project seeds as **one pane** with every session in it as a tab, and the tour produces the split and the side panel with `pane.detach` and the panel's own tabs. Showing a workspace and showing how one is made are different things. |
 | `queue` | A turn ends, a prompt queued behind it delivers itself as keystrokes, and an alert fires. The cheapest, and it shows the control plane rather than the terminal - the part that is not commodity. Also the idle nudge. |
 | `orchestrate` | One session drafts two spawn requests, a human approves, the two report back into the requester's queue. The highest pitch value, and it draws the boundary: an agent can ask, only a person can start. |
-| `preview` | A shell starts a dev server and its listener opens as a preview pane. Mostly built already, and the most visual. |
+| `preview` | A shell starts a dev server and its listener opens as a preview pane. The most visual, and it now produces the pane rather than finding it: the seed carries no preview at all, because a served page on screen before anything served one is the thing this scenario exists to show happening. |
 | `land` | Reconcile, verify, fast-forward, one branch at a time - the state machine, not a finished row. |
 | `palette` | One field, four scopes, and the chord printed beside every answer. It types into the app's own input rather than a pane, so the filter narrowing is the real one. |
 | `keymap` | Five presets applied for real, and then the honest half: this is a browser tab, and the table is resolved for one. |
@@ -419,9 +443,11 @@ Three traps paid for while building this, worth not rediscovering:
 - **A `waitForFunction(running === false)` passes instantly on a scenario that has not started yet**, because the director waits out the app's first paint. Wait for `true` and then `false`, or the test asserts nothing in under a second - which it did.
 - **Node has a `BroadcastChannel`, and opening one keeps the event loop alive.** `typeof BroadcastChannel === 'function'` was not the right guard: importing the store in the unit suite hung the run forever. `typeof window !== 'undefined'` says what was meant.
 
-**The walkthrough itself** is unchanged in intent: it flashes one piece of real chrome at a time and advances when the visitor performs the act against the real interface, never by simulating it.
+**The walkthrough itself** flashes one piece of real chrome at a time and performs the act against the real interface, through the app's own commands and controls rather than through its internals.
 It is not the product's own `GuidedTutorial`: that one teaches an install (create a Project, sign in to a CLI, start a session) and none of those acts exist here.
-The phone list is different from the desktop one and is mostly gestures, because the panels being on the ends of a swipe is the one thing nothing on screen can say for itself.
+Its copy is a headline and one sentence per stop, which is a consequence of the autoplay rather than a style preference: a gated card had a wait to fill and three paragraphs to fill it with, and an autoplaying one is competing with motion on screen.
+(One thing the copy may not do is be empty - `DemoDirector` renders the caption form, with no counter and no Next, for a beat with no `body`, which is right for a scripted run and wrong for the tour.)
+The phone list is different from the desktop one and still carries its two gestures, drawn as the swipe glyph over a beat that opens the panel by command: the glyph is a caption saying which gesture does this, and the panel really opens through the same command the gesture dispatches.
 It renders beside `<App/>` rather than inside it, so the product build cannot accidentally ship it, and it is dismissible for good.
 Its copy is plain strings rather than JSX, and that is not cosmetic: the first cut made `scenarios` a `.tsx`, Node's type stripping does not handle JSX, and the unit suite could not import the catalogue at all - so the invariants above had nothing asserting them. Markup in a data file bought nothing and cost the tests.
 
