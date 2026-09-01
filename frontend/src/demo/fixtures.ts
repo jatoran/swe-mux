@@ -662,7 +662,24 @@ function demoDeviceSettings(): Record<string, Record<string, unknown>> {
       } as unknown as Record<string, unknown>,
       commandRail: writeRailConfigBlob(undefined, {
         ...rail,
-        layouts: { ...rail.layouts, mobile: { strip: rail.layouts.mobile.strip.slice(0, 1) } },
+        layouts: {
+          ...rail.layouts,
+          mobile: {
+            strip: rail.layouts.mobile.strip.slice(0, 1).map(row => ({
+              ...row,
+              // `prompts` is a second-row item in the product and is pulled up here,
+              // because the second row is the one this seed drops and this is the phone's
+              // only keyboard-free way to say anything to an agent: the embed refuses the
+              // soft keyboard (`main.tsx`), and the pickers pad reaches Prompts only
+              // through a directional drag, which is not something a walkthrough can ask
+              // for in one line.
+              // First, not appended: the row is 26 items long and scrolls horizontally on
+              // a phone, so the end of it is off-screen and a walkthrough that says "press
+              // Prompts" would be pointing at something the visitor cannot see.
+              items: ['prompts', ...row.items],
+            })),
+          },
+        },
       }) as unknown as Record<string, unknown>,
     },
     mobile: {},
@@ -673,7 +690,7 @@ function demoDeviceSettings(): Record<string, Record<string, unknown>> {
 export const DEMO_DIALOG_ID = 'dlg-demo'
 
 /** Bump when the seed shape changes so persisted visitor state is discarded. */
-export const DEMO_STATE_VERSION = 14
+export const DEMO_STATE_VERSION = 15
 
 export function initialDemoState(): DemoState {
   return {

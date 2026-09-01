@@ -211,6 +211,20 @@ The rules it lives under:
 
 - **Rebuild with `npm run build:demo`** (in `frontend/`) after any frontend change you want the demo to carry, and commit `site/demo/`.
   It is the same committed-build-output posture as the generated pages: `deploy-site.yml` uploads it verbatim and never builds it.
+- **On a phone the embed refuses the soft keyboard, and the full-screen link is where the keyboard is real.**
+  The app's own policy is right and is untouched: on a coarse pointer, tapping a terminal pane is typing intent, so the keyboard comes up, and a rail press preserves the state it found (`focusAfterTerminalActionRef`, `softKeyboardInputMode`).
+  What breaks is the premise underneath it.
+  The landing page sizes the iframe itself, so opening the OS keyboard never changes the frame's `visualViewport`: `--keyboard-inset` stays 0, the pane never shrinks, the rail never lifts, the peek button never appears.
+  Every part of swe-mux's soft-keyboard handling is unreachable in there, and what is left is a keyboard covering a demo that cannot react to it - which is what "the rail summons the keyboard" actually was.
+  So `main.tsx` shadows `inputMode` on the terminal's live input when `window.top !== window.self`, which makes the app's write a no-op and leaves `inputmode="none"` standing.
+  A shadow rather than a listener that puts the attribute back, because the app sets `inputMode` immediately before it focuses and anything reacting *after* focus gets a keyboard that opens and then dismisses.
+  Only that one field is pinned: the Draft composer, the palette and the settings fields keep their keyboards, because there the keyboard is the point and the app draws its surface above it.
+  The head row's **open full screen** link loads `/demo/` at the top level, where `visualViewport` does shrink and the whole adaptation is not only correct but worth watching.
+  Nothing about the viewport meta changes for that page: `interactive-widget=resizes-visual` is already what both the app and the demo ship, and deliberately so - `resizes-content` shrinks the layout viewport, which refits every terminal and would truncate an alternate screen that has no scrollback.
+  A keyboard-free way to *start* a turn had to exist for that to be honest, so the demo's prompt library leads with a variable-free template ("What is blocked?"); a template with variables opens a field form, and a form needs the keyboard the embed just refused.
+- **Below 700px the demo stops drawing a phone.**
+  A handset, drawn on a handset, at 74% of its height, is smaller than the device it stands for and still not it.
+  The bezel, the lens and the scale all go, the frame takes the full width, and `fitDemoFrames` pins `--demo-scale` to 1 - so the app renders at *this* phone's viewport rather than at an idealised 390 shrunk to fit.
 - **It is an application, not a marketing page.** `check.mjs` and `contrast.py` both skip `demo/` and `preview/`; its gates are the frontend's own (`tsc`, the unit suite).
 - **Fixtures are invented.** Same rule as the screenshots (section 8): no name, path, or number in `frontend/src/demo/fixtures.ts` may come from a real install.
 - The landing page's frame loader promotes `data-src` to `src` only near the viewport and only for visible frames, so visitors who never reach it download none of its ~700 KB gz.

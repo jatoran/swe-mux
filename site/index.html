@@ -374,6 +374,12 @@ a:focus-visible, button:focus-visible { outline: 2px solid var(--green); outline
    because a control that plays one script beside a menu of scripts is one too many. */
 .demo-reset { font: inherit; background: none; border: 1px solid transparent;
   color: var(--fg-4); padding: 3px 8px; cursor: pointer; }
+/* The escape hatch from the frame, and on a phone the most useful control in the row:
+   an embedded demo cannot measure the soft keyboard, so it refuses to raise one, and
+   this link is where the keyboard (and everything swe-mux does about it) is real. */
+.demo-full { font: inherit; border: 1px solid transparent; color: var(--fg-4);
+  padding: 3px 8px; text-decoration: none; }
+.demo-full:hover { color: var(--green); border-color: var(--line-2); }
 .demo-pick { margin-left: auto; display: inline-flex; align-items: center; }
 .demo-pick-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
 .demo-pick select { font: inherit; background: var(--panel-2); color: var(--fg-4);
@@ -453,13 +459,18 @@ a:focus-visible, button:focus-visible { outline: 2px solid var(--green); outline
 @media (max-width: 700px) {
   .demo-tabs { display: none; }
   .demo-stage .demo-desktop { display: none !important; }
-  /* One frame and no overlay, so the handset is simply centred and sized to the
-     screen it is being read on. `--demo-phone-drop` has nothing to be shorter than
-     here, which is why the height is stated outright rather than derived. */
-  .demo-stage .demo-phone { display: inline-flex !important; position: static !important;
-    margin: 10px auto; box-shadow: none; }
-  .demo-stage .demo-phone-screen { height: min(74vh, 620px); }
-  .demo-stage { padding: 0 8px; }
+  /* A drawn handset, on a handset, at 74% of its height, is the worst of both: smaller
+     than the device it is standing in for and still not it. Here the bezel, the lens and
+     the scale all go, the frame takes the width it is given, and the app is rendered at
+     this phone's own viewport rather than at an idealised 390 shrunk to fit. `--demo-scale`
+     is pinned to 1 in `fitDemoFrames` for the same reason: there is nothing left to fit. */
+  .demo-stage .demo-phone { display: block !important; position: static !important;
+    width: 100%; margin: 0; padding: 0; border: 0; border-radius: 0;
+    background: none; box-shadow: none; }
+  .demo-stage .demo-phone::before, .demo-stage .demo-phone::after { display: none; }
+  .demo-stage .demo-phone-screen { width: 100%; height: min(78vh, 700px);
+    aspect-ratio: auto; border-radius: 0; }
+  .demo-stage { padding: 0; }
 }
 
 /* ------------------------------------------------------------- hero visual */
@@ -768,6 +779,7 @@ footer .social svg { width: 15px; height: 15px; fill: currentColor; display: blo
             <option value="keymap">bring your own keymap</option>
             <option value="voice">ask the fleet a question</option>
           </select></label>
+        <a class="demo-full" href="demo/" title="Open the demo as its own page. On a phone that is the only place the keyboard behaves, because an embedded frame cannot measure one.">open full screen ⤢</a>
         <button class="demo-reset" type="button" id="demoreset" title="Discard everything you changed in the demo and start it fresh">reset demo</button>
       </div>
       <div class="demo-stage" id="demostage" data-view="desktop">
@@ -1650,6 +1662,13 @@ footer .social svg { width: 15px; height: 15px; fill: currentColor; display: blo
          the stylesheet. Leaving the last good value alone is right anyway: it is
          still what that frame will be drawn at when its tab comes back. */
       if (!width || !viewport) return;
+      /* On a phone the frame is not standing in for a device, it is on one: the stylesheet
+         has already dropped the bezel and given it the full width, so the app is rendered
+         at this screen's own viewport and there is nothing to scale. */
+      if (phoneOnly.matches && sel === '.demo-phone') {
+        frame.style.setProperty('--demo-scale', '1');
+        return;
+      }
       frame.style.setProperty('--demo-scale', String(Math.min(1, width / viewport)));
     });
   }

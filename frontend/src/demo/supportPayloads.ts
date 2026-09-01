@@ -29,6 +29,18 @@ export function promptsPayload(): unknown {
   return {
     configured_scope: 'both',
     items: [
+      // First and favourite, and the only one with no variables - which is what makes it
+      // the phone's way to start a turn. A template with variables opens a field form,
+      // and a form needs a keyboard the embed deliberately refuses (`main.tsx`), so
+      // without one of these there is no keyboard-free way to say anything to an agent.
+      {
+        id: 'demo-blocked', key: 'blocked', scope: 'global', title: 'What is blocked?',
+        body: 'What is blocked right now, and what is it waiting on?',
+        tags: ['status'], variables: [], backends: [],
+        created_at: nowSeconds() - 12 * 86400, updated_at: nowSeconds() - 86400,
+        revision: '1', favorite: true, use_count: 31, conflict: false,
+        project_id: null, project_name: null,
+      },
       {
         id: 'demo-review', key: 'review', scope: 'global', title: 'Review this diff',
         body: 'Review the diff on {{branch}} for correctness bugs, then stop.',
