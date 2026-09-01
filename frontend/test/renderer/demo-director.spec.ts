@@ -18,7 +18,14 @@ import { expect, test } from 'playwright/test'
 const START_TIMEOUT = 30_000
 
 type DirectorHandle = {
-  snapshot: () => { running: boolean; index: number; total: number; scenarioId: string; say: string }
+  snapshot: () => {
+    running: boolean
+    index: number
+    total: number
+    scenarioId: string
+    say: string
+    spotlight: string[] | null
+  }
   fingerprint: () => string
   scenarios: () => Array<{ id: string; label: string }>
   stop: (reason: string) => void
@@ -196,6 +203,7 @@ test('a real press stops a playing scenario at once, and does not restart it', a
 
   // A trusted pointerdown, which is the discriminator: the director's own presses are
   // `element.click()` and produce no pointerdown at all, so a scenario cannot abort itself.
+  const stoppedAt = await page.evaluate(() => window.__demoDirector!.snapshot().index)
   await page.mouse.click(400, 500)
   await expect.poll(() => running(page), { timeout: 5_000 }).toBe(false)
 
@@ -204,6 +212,41 @@ test('a real press stops a playing scenario at once, and does not restart it', a
   await page.waitForTimeout(2_000)
   expect(await running(page)).toBe(false)
   await expect(page.locator('.demo-director-card')).toHaveCount(0)
+
+  // What it leaves instead of nothing: an offer. The first autoplaying cut stopped with
+  // no chrome at all, which read as a dead end even though the menu could replay it.
+  const chip = page.locator('.demo-director-resume')
+  await expect(chip).toBeVisible()
+  await chip.getByRole('button', { name: 'resume' }).click()
+  await expect.poll(() => running(page), { timeout: 10_000 }).toBe(true)
+  // Resumed on the beat it stopped on rather than from the top.
+  expect(await page.evaluate(() => window.__demoDirector!.snapshot().index)).toBe(stoppedAt)
+})
+
+test('a press on the chrome a beat is pointing at is joining in, not leaving', async ({ page }) => {
+  // The rule the first autoplaying cut got wrong. The tour spends two minutes saying
+  // "here is a thing you can press", and ending on the press it invited is the one thing
+  // about driving itself that read as fragile.
+  await page.addInitScript(() => { localStorage.removeItem('swemux-demo-coach-v1') })
+  await open(page, 'deterministic=1&scenario=tour')
+  // The fleet stop, whose ring is the sidebar the session rows live in.
+  await page.waitForFunction(
+    () => window.__demoDirector?.snapshot().spotlight?.[0] === '.sidebar',
+    null, { timeout: START_TIMEOUT },
+  )
+  await page.locator('[data-sidebar-session-id="s-shell"]').click()
+  await page.waitForTimeout(1_500)
+  expect(await running(page)).toBe(true)
+
+  // A press outside it still hands over, and a keypress hands over wherever it lands -
+  // the composer sits inside the pane the talking beats point at, and somebody typing has
+  // unambiguously taken the demo.
+  await page.mouse.click(900, 300)
+  await expect.poll(() => running(page), { timeout: 5_000 }).toBe(false)
+  await page.locator('.demo-director-resume').getByRole('button', { name: 'resume' }).click()
+  await expect.poll(() => running(page), { timeout: 10_000 }).toBe(true)
+  await page.keyboard.press('a')
+  await expect.poll(() => running(page), { timeout: 5_000 }).toBe(false)
 })
 
 test('the walkthrough drives itself, and its card offers a way out', async ({ page }) => {

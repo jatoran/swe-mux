@@ -314,18 +314,26 @@ Two copies of a script racing one shared fixture drift within a beat or two and 
 Measured in "both": the wide frame draws the card and runs the beats, the narrow one draws nothing and follows.
 The lead is **released on stop**, which the walkthrough never needed - it ran once and was over - and a director that held it forever would answer every later claim with "taken", so the other frame could never lead again.
 
-**Nothing waits for the visitor, and the first touch is the handover.**
+**Nothing waits for the visitor, and a touch hands the demo over.**
 The walkthrough used to be built entirely out of gates: it drew a card, named a control, and waited for a real press on it.
 That reads well and fails in practice, because it asks somebody who has not decided to care yet to do work, and it stalls indefinitely on the ones who will not - which on a marketing page is most of them.
-So every stop performs its own act now, through the same command bus and the same controls a scripted scenario uses, and **any** real `pointerdown`, `keydown` or `touchstart` ends a playing scenario instantly, leaves the state where it got to, and does not restart it.
-One rule instead of two: watch it, and the moment you touch it, it is yours.
+So every stop performs its own act now, through the same command bus and the same controls a scripted scenario uses, and a real `pointerdown`, `keydown` or `touchstart` ends the run, leaves the state where it got to, and does not restart it.
 `isTrusted` is the discriminator and it is exact: a scripted press is `element.click()`, which is untrusted and produces no `pointerdown` at all, so a scenario can never abort itself.
-The only exemption is the **director's own card**, matched by `closest('.demo-director')`: pressing Next is asking the run to go on, and a rule that read it as a handover would make the button stop the thing it advances.
-That was a real bug the moment `interruptible: false` came off the tour, and it is the reason the exemption is a selector rather than a comment.
+
+The first cut of that was *any* press, and it was too sharp in three specific ways. Each has its own rule now, and the three together are what "semi-interactive" turned out to mean:
+
+- **The director's own card is exempt** (`closest('.demo-director')`). Pressing Next is asking the run to go on, and a rule that read it as a handover made the button stop the thing it advances. That was a real bug the moment `interruptible: false` came off the tour, which is why the exemption is a selector rather than a comment.
+- **A pointer press on the chrome the current beat is *about* is joining in, not leaving.** The subject is the beat's own ring plus every callout target, read off the published snapshot - the same thing the visitor is looking at. The tour spends two minutes saying "here is a thing you can press", and ending on the press it invited was the one thing about the autoplay that read as fragile. A `keydown` is deliberately **not** forgiven: the composer sits inside the pane the talking beats point at, and somebody typing has unambiguously taken the demo. A beat that points at nothing - the opening and closing cards - matches nothing, which is right.
+- **The first press into the embedded frame is forgiven once**, because clicking an iframe is how you reach anything inside it rather than a decision about the demo. It is a counter and not `document.hasFocus()`: measured, a same-origin frame reports itself focused *before* it has ever been clicked, so the reading that sounds precise does not work. It costs at most one press, and only one that was going to stop the run - the subject check runs first.
+
+And a stopped run leaves an **offer** rather than nothing. `stop('interrupted')` keeps the beat it was on, the card collapses to a `resume · n / total · ×` chip in the corner, and resuming re-publishes that beat without re-running its act. Skipping the act is the whole trick: re-publishing is safe and is most of what a returning visitor wants (the card comes back and the callouts re-measure against what is on screen *now*), while re-running is not - `pane.detach` twice makes two panes and a scripted turn replays. Every other stop reason clears the offer, because "it finished", "you pressed stop" and "you chose another one" are answers rather than accidents.
+
+A confirmation dialog was the obvious alternative and is the wrong one: it has to decide what happens to the click that triggered it, and both answers are bad. Swallow it and the visitor's press does nothing; let it through and the run is frozen mid-beat pointing at chrome that just changed underneath it.
 
 Two consequences followed, and both are simplifications.
 The card lost its "skip step" branch, so there is one button and it always means the same thing (cut this beat's wait short; the pauses *inside* an act are not skippable, because they are the act being legible).
 And `Scenario.interruptible` is gone, because every scenario answers the same way.
+The seven scripted runs inherit all of the above without needing to think about it: they are twenty to thirty seconds and rarely point at something you would press mid-run.
 
 Scenarios are still chosen from the page's own **scenarios** menu, which replaced the separate "replay tour" control - three buttons beside a menu of scripts was one too many, and the tour is the menu's first entry.
 A visitor who has already seen the tour and then sits untouched for ten seconds gets one short scenario, once; the first touch spends that whether or not it played.

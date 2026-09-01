@@ -18,6 +18,42 @@
   pointer-events: none;
 }
 
+/* What is left when the visitor takes over: a chip in the corner offering the run back,
+   and the count of where it got to. Small and out of the way on purpose - they stopped it
+   deliberately, and a panel asking them to justify that is worse than the dead end it
+   replaced. It overrides the wrapper's full-bleed inset rather than living outside it, so
+   the abort listener's `.demo-director` exemption covers its two buttons for free. */
+.demo-director-resume {
+  /* Clear of the foot of the frame, which in both layouts is the composer with the
+     command rail under it - and the rail's own "all of them" button is in exactly the
+     corner this would otherwise sit in, with `pointer-events: auto` over the top of it.
+     Everything it does cover at this height is terminal text. */
+  inset: auto 14px 104px auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 7px 5px 9px;
+  border: 1px solid var(--line, #2a2e34);
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--panel, #0d0f12) 92%, black);
+  box-shadow: 4px 5px 0 #0007;
+  pointer-events: auto;
+}
+
+.demo-director-resume > button:last-child {
+  font: inherit;
+  font-size: 13px;
+  line-height: 1;
+  padding: 2px 5px;
+  border: 0;
+  border-radius: 3px;
+  cursor: pointer;
+  background: none;
+  color: var(--fg-4, #6b7280);
+}
+
+.demo-director-resume > button:last-child:hover { color: var(--fg, #d9dde2); }
+
 /* The flash: a ring that pulses around live chrome rather than a modal cut-out.
    A dimming mask would hide the thing being explained, which on a 390px phone is
    most of the screen. */
