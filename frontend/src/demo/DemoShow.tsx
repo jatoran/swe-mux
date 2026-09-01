@@ -29,8 +29,14 @@ import { firstVisible } from './drive.ts'
 
 /** How long the radar band takes to cross its column. */
 const SWEEP_MS = 1_500
-/** How long the walk holds on each target before moving to the next. */
-const WALK_MS = 1_050
+/**
+ * How long the walk holds on each target before moving to the next.
+ *
+ * Long enough to read a two-word label and look at what it points at, which is the whole
+ * job: six labels on screen together are six things being pointed at, and a visitor
+ * reading any one of them has to work out which line belongs to it first.
+ */
+const WALK_MS = 1_450
 /** The gap between one chip's reveal and the next, when they all arrive together. */
 const STAGGER_MS = 95
 
@@ -123,16 +129,27 @@ export function DemoShow({ show, seq }: { show: Show; seq: number }) {
     // the label it is currently holding on.
   }, [seq, show, mode, step, notes])
 
-  /** The walk's own clock. One target at a time, in the order the beat wrote them, and
-   *  not started until something it can point at is actually on screen. */
+  /**
+   * The walk's own clock. One target at a time, in the order the beat wrote them.
+   *
+   * Three things it waits for or does, each of which was a way of being unreadable:
+   * it does not start until something it can point at is on screen; it lets the radar
+   * band finish crossing first, so the scan reads as one gesture rather than as a band
+   * racing a label; and it **loops**, because the walkthrough's beats are gated - a walk
+   * that stopped on its last label would leave a visitor who looked away with one word
+   * and no way to see the rest again short of replaying the tour.
+   */
   useEffect(() => {
     if (mode !== 'walk' || notes.length < 2 || !armed) return
-    const tick = setInterval(
-      () => setStep(current => (current + 1 >= notes.length ? current : current + 1)),
-      WALK_MS,
-    )
-    return () => clearInterval(tick)
-  }, [seq, mode, notes.length, armed])
+    let tick = 0
+    const lead = setTimeout(() => {
+      tick = setInterval(
+        () => setStep(current => (current + 1) % notes.length),
+        WALK_MS,
+      ) as unknown as number
+    }, show.sweep ? SWEEP_MS : 0)
+    return () => { clearTimeout(lead); clearInterval(tick) }
+  }, [seq, mode, notes.length, armed, show.sweep])
 
   /** A new beat starts its walk from the top, and disarms until it has measured. */
   useEffect(() => {
@@ -140,13 +157,27 @@ export function DemoShow({ show, seq }: { show: Show; seq: number }) {
     setArmed(false)
   }, [seq])
 
+  /** Whether the radar band has finished crossing. A walk holds its first label until it
+   *  has: the scan says "all of this", and answering it before it has finished asking
+   *  puts two things on screen that are each other's noise. */
+  const [swept, setSwept] = useState(false)
+  useEffect(() => {
+    setSwept(!show.sweep)
+    if (!show.sweep) return
+    const done = setTimeout(() => setSwept(true), SWEEP_MS)
+    return () => clearTimeout(done)
+  }, [seq, show.sweep])
+
   // `placed` is already only what this beat is showing - a walk places one label at a
-  // time - so there is no second filter here, and the delays line up with it by index.
-  const visible = placed
+  // time - so there is no second filter here beyond the sweep's hold, and the delays line
+  // up with it by index.
+  // The hold is the walk's alone: `sweep` mode wakes its labels *with* the band on
+  // purpose, and holding them there would delete the effect rather than tidy it.
+  const visible = mode === 'walk' && !swept ? [] : placed
   const visibleDelays = mode === 'sweep' && column
     ? sweepDelays(placed.map(item => item.target), column, SWEEP_MS)
     : placed.map((_, index) => (mode === 'walk' ? 0 : index * STAGGER_MS))
-  const spot = mode === 'walk' ? placed[0]?.target ?? null : null
+  const spot = mode === 'walk' && swept ? placed[0]?.target ?? null : null
 
   return <div class={`demo-show mode-${mode}`}>
     {show.crt && <div class="demo-show-crt" aria-hidden="true" />}
@@ -157,7 +188,11 @@ export function DemoShow({ show, seq }: { show: Show; seq: number }) {
       left: spot.left - 6, top: spot.top - 5, width: spot.width + 12, height: spot.height + 10,
     }} aria-hidden="true" />}
 
-    {mode === 'sweep' && column && <SweepBand key={`sweep-${seq}`} column={column} />}
+    {/* The band is the scan, and it is not tied to the reveal mode: a beat can sweep the
+        column once to say "all of this", then walk it one label at a time to say what each
+        part is. Only an explicit `sweep` target draws it - in the other modes `column` is
+        the union of the targets, which is a box rather than a thing to scan. */}
+    {show.sweep && column && <SweepBand key={`sweep-${seq}`} column={column} />}
 
     <svg class="demo-show-wires" aria-hidden="true">
       {visible.map((item, index) => <g
@@ -185,8 +220,8 @@ export function DemoShow({ show, seq }: { show: Show; seq: number }) {
     {/* Rendered for every note, placed for the ones that measured. The hidden pass is
         what gives the placement its widths, so the list cannot be filtered first. */}
     {notes.map((callout, index) => {
-      const order = placed.findIndex(entry => entry.callout === callout)
-      const item = order >= 0 ? placed[order] : null
+      const order = visible.findIndex(entry => entry.callout === callout)
+      const item = order >= 0 ? visible[order] : null
       return <div
         key={`chip-${seq}-${index}`}
         ref={element => { chips.current[index] = element }}
