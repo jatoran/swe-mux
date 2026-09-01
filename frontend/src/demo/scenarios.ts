@@ -219,7 +219,11 @@ function tourDesktop(): Beat[] {
           { at: rowField('s-working', 'badges'), label: 'subagents it started' },
           { at: rowField('s-working', 'duration'), label: 'this turn, still running' },
           { at: rowField('s-working', 'worktree'), label: 'its own checkout' },
-          { at: rowField('s-working', 'model'), label: 'model' },
+          // The model comes off a different row on purpose: the checkout token above
+          // spends that row's width, so its model name is elided to fit and pointing at
+          // it names something the visitor cannot read. A row with no worktree has the
+          // room to print the name in full.
+          { at: rowField('s-rage', 'model'), label: 'model' },
           { at: rowPart('s-shell', '.row-title'), label: 'a plain shell' },
         ],
       },
@@ -375,7 +379,9 @@ function tourMobile(): Beat[] {
           { at: rowPart('s-rage', '.ind-fill'), label: 'context nearly full' },
           { at: rowField('s-working', 'badges'), label: 'subagents' },
           { at: rowField('s-working', 'duration'), label: 'this turn' },
-          { at: rowField('s-working', 'model'), label: 'model' },
+          // Off the worktree-less row, for the reason the desktop beat gives: a phone is
+          // where an elided model name is least readable, not most.
+          { at: rowField('s-rage', 'model'), label: 'model' },
         ],
       },
       body: [
