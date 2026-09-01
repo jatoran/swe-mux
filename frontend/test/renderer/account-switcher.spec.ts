@@ -41,7 +41,32 @@ test('each account names its quota periods inline without a detached heading row
   expect(new Set(rights).size).toBe(1)
 
   await expect(page.locator('.account-popover .quota-columns')).toHaveCount(0)
-  await expect(rows.first()).toHaveText('5% 4h3m/5h • 63% 3d1h/7d • 30% fable')
+  await expect(rows.first().locator('.quota-cell')).toHaveText(['5% 4h3m/5h', '63% 3d1h/7d', '30% fable'])
+  // A hairline between columns, drawn rather than typed, and a breath between the
+  // percentage and what follows it. Both measured: the separator has width, the gap
+  // between the figure's box and the reset text is under one character, and the two
+  // columns sit closer than the 2ch they used to.
+  const geometry = await rows.first().evaluate(row => {
+    const box = (selector: string) => row.querySelector(selector)!.getBoundingClientRect()
+    const percent = box('.quota-cell-session b')
+    // The figure's box is `flex:0 0 4ch`, so it is the row's own ruler for `ch`.
+    const ch = percent.width / 4
+    const reset = box('.quota-cell-session .quota-reset')
+    const separator = box('.quota-cell-weekly .quota-separator')
+    const session = box('.quota-cell-session')
+    const weekly = box('.quota-cell-weekly b')
+    return {
+      separatorWidth: separator.width,
+      separatorHeight: separator.height,
+      breath: (reset.left - percent.right) / ch,
+      columnGap: (weekly.left - session.right) / ch,
+    }
+  })
+  expect(geometry.separatorWidth).toBeGreaterThan(0)
+  expect(geometry.separatorHeight).toBeGreaterThan(0)
+  expect(geometry.breath).toBeGreaterThan(0.2)
+  expect(geometry.breath).toBeLessThan(0.6)
+  expect(geometry.columnGap).toBeLessThan(1.5)
   const tones = await rows.first().evaluate(row => {
     const style = (selector: string) => getComputedStyle(row.querySelector(selector)!)
     return {
@@ -90,14 +115,30 @@ test('the popover counts live sessions per account and names the ones a switch l
   const counts = page.locator('.account-popover .account-session-count')
   await expect(counts).toHaveText(['5×', '2×'])
 
-  // The point of the count. A switch reaches the next process, not the ones already
-  // running, so each non-selected login still being spent is named - and the unsaved
-  // one is named too, or the numbers would not add up.
+  // The point of the count. Each non-selected login sessions were started under is
+  // named - and the unsaved one is named too, or the numbers would not add up. What
+  // the switch did to them is the daemon's per-provider fact, and this harness declares
+  // Claude Code as one that follows: the sentence says so in the muted tone, not the
+  // amber one a login still being spent gets.
   const notices = page.locator('.account-popover .account-session-notice')
   await expect(notices).toHaveCount(2)
-  await expect(notices.nth(0)).toContainText('2 live sessions on personal')
-  await expect(notices.nth(0)).toContainText('Switching is not retroactive')
-  await expect(notices.nth(1)).toContainText('1 live session on a login that is not saved here')
+  await expect(notices.nth(0)).toContainText('2 live sessions started under personal')
+  await expect(notices.nth(0)).toContainText('Claude Code picks up a credential change on its next request')
+  await expect(notices.nth(0)).toHaveClass(/follows/)
+  await expect(notices.nth(1)).toContainText('1 live session started under a login that is not saved here')
+  const tones = await notices.nth(0).evaluate(node => {
+    const style = getComputedStyle(node)
+    return { color: style.color, border: style.borderLeftColor }
+  })
+  const amber = await page.locator('.account-popover .account-session-notice').first().evaluate(node => {
+    node.classList.remove('follows')
+    const style = getComputedStyle(node)
+    const tone = { color: style.color, border: style.borderLeftColor }
+    node.classList.add('follows')
+    return tone
+  })
+  expect(tones.color).not.toBe(amber.color)
+  expect(tones.border).not.toBe(amber.border)
 
   // The badge rides in the row's own `small`, so the quota columns above it keep the
   // geometry `quota-row` depends on: adding it must not move a percentage.
