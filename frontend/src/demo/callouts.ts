@@ -63,6 +63,17 @@ export type Show = {
   reveal?: RevealMode
   /** The chrome the radar band crosses. Defaults to the notes' own bounding column. */
   sweep?: string[]
+  /**
+   * How long a `walk` rests on anything: before its first stop, and on each one.
+   *
+   * Defaults to the walk's own pace. Raised on a beat whose subject needs reading rather
+   * than glancing at - a dialog that just opened, a picker whose rows are sentences -
+   * where the shared pace goes through it faster than anybody can follow. The lead half
+   * matters as much as the per-stop half: a beat that presses something and labels it in
+   * the same breath gives the chrome no moment to be seen before the first chip lands on
+   * top of it.
+   */
+  hold?: number
   /** A chord to show on the keycap HUD, one cap per entry, in order. */
   keys?: string[]
   /** Chrome whose value changed under the visitor, flashed where it sits. Each entry is

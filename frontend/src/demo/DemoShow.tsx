@@ -72,6 +72,8 @@ export function DemoShow({ show, seq }: { show: Show; seq: number }) {
   // array on every render, re-creating the MutationObserver for nothing.
   const notes = useMemo(() => show.notes ?? [], [show])
   const mode = show.reveal ?? 'glitch'
+  /** How long this walk rests on each stop; see `Show.hold`. */
+  const hold = show.hold ?? WALK_MS
   const chips = useRef<Array<HTMLDivElement | null>>([])
   const [placed, setPlaced] = useState<Placed[]>([])
   const [column, setColumn] = useState<Box | null>(null)
@@ -164,27 +166,35 @@ export function DemoShow({ show, seq }: { show: Show; seq: number }) {
    * The walk's own clock. One target at a time, in the order the beat wrote them.
    *
    * Three things it waits for or does, each of which was a way of being unreadable:
-   * it does not start until something it can point at is on screen; it lets the radar
-   * band finish crossing first, so the scan reads as one gesture rather than as a band
-   * racing a label; and it **loops**, so a beat that outlasts its labels holds the eye
-   * rather than freezing on the last one - and a visitor who looked away is not left with
-   * one word and no way to see the rest.
+   *
+   * - It does not start until something it can point at is on screen.
+   * - It lets the radar band finish crossing first, so the scan reads as one gesture
+   *   rather than as a band racing a label. A beat with no band waits `hold` instead,
+   *   which is what gives chrome the beat just opened a moment to be seen.
+   * - It **stops on its last label** rather than wrapping. It used to wrap, from when the
+   *   walkthrough's beats were gates and a beat lasted until the visitor acted; beats are
+   *   timed now, and every one of them is given enough clock for a full pass
+   *   (`demoDirector.test.ts`), so wrapping only ever meant starting the list again in
+   *   the seconds before the next beat - which reads as the tour having lost its place.
    *
    * It cycles over `live` rather than over `notes`: a note whose chrome is off screen
-   * costs no stop at all, where walking the written list would spend 1.8s on a blank
+   * costs no stop at all, where walking the written list would spend a stop on a blank
    * frame.
    */
   useEffect(() => {
     if (mode !== 'walk' || live < 2 || !armed) return
     let tick = 0
     const lead = setTimeout(() => {
+      // The updater clamps rather than the interval clearing itself: a state updater has
+      // to be pure, and a timer that keeps firing on an unchanged value costs nothing and
+      // is cleared with the beat.
       tick = setInterval(
-        () => setStep(current => (current + 1) % live),
-        WALK_MS,
+        () => setStep(current => Math.min(current + 1, live - 1)),
+        hold,
       ) as unknown as number
-    }, show.sweep ? SWEEP_MS : 0)
+    }, show.sweep ? SWEEP_MS : (show.hold ?? 0))
     return () => { clearTimeout(lead); clearInterval(tick) }
-  }, [seq, mode, live, armed, show.sweep])
+  }, [seq, mode, live, armed, show.sweep, show.hold, hold])
 
   /** A new beat starts its walk from the top, and disarms until it has measured. */
   useEffect(() => {

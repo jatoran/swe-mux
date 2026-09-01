@@ -273,6 +273,56 @@ function tourDesktop(): Beat[] {
     },
     {
       at: 36_100,
+      eyebrow: 'THE CLIPBOARD',
+      say: 'Two of those open a picker.',
+      click: railItem('clipboardHistory'),
+      spotlight: ['.rail-dropup'],
+      // A raised `hold`, and this is the beat it was added for: the rows are sentences
+      // rather than glyphs, and the shared 1.8s pace goes through them faster than
+      // anybody can read one. The lead half of it is what gives the drop-up a moment to
+      // be on screen before the first chip lands on top of it.
+      show: {
+        reveal: 'walk',
+        hold: 2_200,
+        notes: [
+          { at: ['.rail-dropup-list .rail-dropup-row'], label: 'everything you have copied' },
+          { at: ['.rail-dropup-row small'], label: 'from where, and how long ago' },
+          { at: ['.rail-dropup-open'], label: 'the whole history is a tab' },
+        ],
+      },
+      body: ['Panes and app both, kept per Project.'],
+    },
+    {
+      at: 45_400,
+      key: 'Escape',
+      spotlight: railItem('skills'),
+      body: ['The other one is the skills the CLI can run.'],
+    },
+    {
+      at: 47_800,
+      eyebrow: 'THE SKILLS',
+      say: 'Every skill, by name.',
+      click: railItem('skills'),
+      spotlight: ['.rail-dropup'],
+      show: {
+        reveal: 'walk',
+        hold: 2_200,
+        notes: [
+          { at: ['.rail-dropup-row code'], label: 'the command it sends' },
+          { at: ['.rail-dropup-row .skill-flag'], label: 'and how the CLI loads it' },
+          { at: ['.rail-dropup-note'], label: 'what it cannot see from out here' },
+        ],
+      },
+      body: ['Yours, the Project\'s, and the ones a plugin brought.'],
+    },
+    {
+      at: 57_100,
+      key: 'Escape',
+      spotlight: railItem('branch'),
+      body: ['And the last chip opens a surface of its own.'],
+    },
+    {
+      at: 59_500,
       eyebrow: 'BRANCHING',
       say: 'Fork the conversation from any turn.',
       click: railItem('branch'),
@@ -281,8 +331,12 @@ function tourDesktop(): Beat[] {
       // messages (`branchPointsPayload` in `fakeApi.ts`). Nothing is branched - the next
       // beat closes it - because the claim here is "from any point", and that is a claim
       // about the list rather than about the act.
+      //
+      // The slowest walk in the tour. Each row is a speaker, a timestamp, a cut and a
+      // line of the conversation, and the point of the stop is that a visitor reads one.
       show: {
         reveal: 'walk',
+        hold: 2_600,
         notes: [
           { at: ['.branch-point-list'], label: 'every turn, newest first' },
           { at: ['.branch-point-action'], label: 'before this one, or after it' },
@@ -292,7 +346,7 @@ function tourDesktop(): Beat[] {
       body: ['A wrong turn costs one branch, not the thread.'],
     },
     {
-      at: 43_600,
+      at: 70_100,
       eyebrow: 'ALL OF THEM',
       say: 'Nothing was branched.',
       // Escape on a beat of its own, and this is the reason: `perform` runs a beat's
@@ -302,7 +356,7 @@ function tourDesktop(): Beat[] {
       body: ['The strip is a ranking, not the whole set.'],
     },
     {
-      at: 46_600,
+      at: 73_100,
       say: 'The rest are one press away.',
       click: ['.rail-more'],
       spotlight: ['.rail-overflow-popover'],
@@ -316,20 +370,20 @@ function tourDesktop(): Beat[] {
       body: ['In the order you put them, on every pane.'],
     },
     {
-      at: 51_600,
+      at: 78_100,
       eyebrow: 'ONE PANE, OR SEVERAL',
       say: 'One pane, every session a tab.',
       key: 'Escape',
       spotlight: ['.sidebar'],
     },
     {
-      at: 54_600,
+      at: 81_100,
       click: sessionRow(talker),
       spotlight: sessionRow(talker),
       body: ['Picking one brings it to the front.'],
     },
     {
-      at: 57_400,
+      at: 83_900,
       say: 'Any of them can have its own.',
       // `pane.detach` rather than a split: splitting spawns a *new* session, which would
       // put a session in the fleet that the tour never mentions. Detaching moves the tab
@@ -340,7 +394,7 @@ function tourDesktop(): Beat[] {
       body: ['The arrangement belongs to the Project, not this browser.'],
     },
     {
-      at: 61_000,
+      at: 87_500,
       eyebrow: 'TALK TO IT',
       say: 'The composer is the CLI\'s own.',
       type: { session: talker, text: 'is the cart endpoint still slow?', pace: 42 },
@@ -348,7 +402,7 @@ function tourDesktop(): Beat[] {
       body: ['A multiplexer around it, not a chat window.'],
     },
     {
-      at: 64_400,
+      at: 90_900,
       say: 'It answers badly, on purpose.',
       mutate: () => {
         scriptedTurn({
@@ -364,7 +418,7 @@ function tourDesktop(): Beat[] {
       body: ['A real process, not replayed video.'],
     },
     {
-      at: 71_900,
+      at: 98_400,
       eyebrow: 'THE SIDE PANEL',
       say: 'Notes that outlive the context window.',
       command: 'drawer.show:notes',
@@ -373,7 +427,7 @@ function tourDesktop(): Beat[] {
       body: ['One per Project, one for the machine.'],
     },
     {
-      at: 77_500,
+      at: 104_000,
       eyebrow: 'THE FILES',
       say: 'The checkout, beside the terminal.',
       command: 'drawer.show:files',
@@ -381,13 +435,13 @@ function tourDesktop(): Beat[] {
       body: ['Search names or contents; Recent is fed by Git.'],
     },
     {
-      at: 81_500,
+      at: 108_000,
       click: ['.file-tree-row.directory[data-file-path="src"]'],
       spotlight: ['.file-tree'],
       body: ['Folders expand in place.'],
     },
     {
-      at: 84_100,
+      at: 110_600,
       say: 'A file opens where you are looking.',
       click: ['.file-tree-row.file[data-file-path="src/coupons.js"]'],
       spotlight: ['.project-resource.file-editor'],
@@ -404,7 +458,7 @@ function tourDesktop(): Beat[] {
       body: ['Ctrl-click opens it as a pane instead.'],
     },
     {
-      at: 90_100,
+      at: 116_600,
       eyebrow: 'THE CONVERSATION',
       say: 'That turn, as readable messages.',
       command: 'drawer.show:transcript',
@@ -412,7 +466,7 @@ function tourDesktop(): Beat[] {
       body: ['Searchable, copyable, never scrolled away.'],
     },
     {
-      at: 95_100,
+      at: 121_600,
       eyebrow: 'THE REPOSITORY',
       say: 'Worktrees, commits, and who made them.',
       command: 'drawer.show:git',
@@ -420,7 +474,7 @@ function tourDesktop(): Beat[] {
       body: ['Every commit traced to the run that wrote it.'],
     },
     {
-      at: 100_100,
+      at: 126_600,
       eyebrow: 'THE MACHINE',
       say: 'What the fleet is actually consuming.',
       // The summary button by its own class rather than "a button in the footer": the
@@ -430,7 +484,7 @@ function tourDesktop(): Beat[] {
       spotlight: ['.resource-usage-popover', '.resource-usage-summary'],
     },
     {
-      at: 103_700,
+      at: 130_200,
       say: 'And the full accounting behind it.',
       // The popover's own footer route rather than the menu command that opens the same
       // modal: the point of the beat is that the small reading is a door into the large
@@ -449,7 +503,7 @@ function tourDesktop(): Beat[] {
       body: ['Per session, per Project, and for swe-mux itself.'],
     },
     {
-      at: 109_900,
+      at: 136_400,
       eyebrow: 'WHOSE QUOTA',
       say: 'Every quota window, always in view.',
       key: 'Escape',
@@ -460,7 +514,7 @@ function tourDesktop(): Beat[] {
       },
     },
     {
-      at: 114_100,
+      at: 140_600,
       say: 'Several accounts, and what each is carrying.',
       click: ['.account-summary button'],
       spotlight: ['.account-popover'],
@@ -474,20 +528,20 @@ function tourDesktop(): Beat[] {
       body: ['Polled, not guessed.'],
     },
     {
-      at: 119_500,
+      at: 146_000,
       say: 'Switch which credential is current.',
       click: ['.account-popover [data-provider-account$="-work"]'],
       show: { shimmer: [['.account-popover [data-provider-account$="-work"]']] },
       body: ['Running sessions keep the one they started on.'],
     },
     {
-      at: 123_100,
+      at: 149_600,
       click: ['.account-popover [data-provider-account$="-personal"]'],
       show: { shimmer: [['.account-popover [data-provider-account$="-personal"]']] },
       body: ['And back. Nothing was signed in or out.'],
     },
     {
-      at: 126_700,
+      at: 153_200,
       eyebrow: 'IT IS YOURS NOW',
       say: 'It is yours. Break it.',
       key: 'Escape',

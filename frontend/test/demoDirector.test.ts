@@ -145,9 +145,14 @@ test('a walkthrough card is a headline and at most one short line', () => {
 })
 
 test('a walk is given enough of the clock to finish one pass', () => {
-  // The walk holds 1.8s per label and loops, and the beat's own budget is the gap to the
-  // next `at`. A nine-label walk in a two-second slot draws one label and moves on, which
-  // is not a failure anything else can see: the beat still "played".
+  // The beat's own budget is the gap to the next `at`, and a walk needs its lead plus one
+  // rest per label. A nine-label walk in a two-second slot draws one label and moves on,
+  // which is not a failure anything else can see: the beat still "played".
+  //
+  // This is load-bearing twice over now. The walk stops on its last label rather than
+  // wrapping, so a beat short of clock silently drops the labels it never reached - and a
+  // beat with *spare* clock rests on the last one, which is the readable end and the
+  // reason wrapping went.
   const WALK_MS = 1_800
   const SWEEP_MS = 1_500
   for (const scenario of SCENARIOS) {
@@ -157,7 +162,9 @@ test('a walk is given enough of the clock to finish one pass', () => {
         if (show?.reveal !== 'walk' || !show.notes?.length) continue
         const next = beats[index + 1]
         if (!next) continue
-        const needed = show.notes.length * WALK_MS + (show.sweep ? SWEEP_MS : 0)
+        const hold = show.hold ?? WALK_MS
+        const lead = show.sweep ? SWEEP_MS : (show.hold ?? 0)
+        const needed = lead + show.notes.length * hold
         assert.ok(
           next.at - beat.at >= needed,
           `${scenario.id} beat ${index} walks ${show.notes.length} labels in `
