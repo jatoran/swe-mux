@@ -589,7 +589,12 @@ function tourDesktop(): Beat[] {
       say: 'Switch which credential is current.',
       click: ['.account-popover [data-provider-account$="-work"]'],
       show: { shimmer: [['.account-popover [data-provider-account$="-work"]']] },
-      body: ['Running sessions keep the one they started on.'],
+      // Not "running sessions keep the one they started on", which is what this said and
+      // is false for one of the two providers: one CLI stats its credential file ahead of
+      // each request and follows the switch, the other reads its login once at startup.
+      // The popover says which, per provider, off a fact the daemon declares
+      // (`switch_reaches_live`) rather than off the provider's name.
+      body: ['What it does to a running one depends on the CLI.'],
     },
     {
       at: 165_400,
