@@ -209,29 +209,43 @@ That is not a further rule but the first one applied honestly: a grant that clea
 
 ## First use
 
-Every automation is off for a new Project, which is correct as a rule and made every analysis
-surface in the drawer inert on the first day.
-Two things address that without weakening the rule:
+Every automation is off for a new Project unless the install says otherwise, which is correct
+as a rule and made every analysis surface in the drawer inert on the first day.
+Three things address that without weakening the rule:
 
+- **The install's own default template** (`automation_project_defaults`, edited in the policy
+  matrix's Default column). This is the answer to "you shouldn't have to think about it for
+  every Project": an id the operator defaults on is inherited by every Project that never
+  wrote it down, and a Project deviates only where it needs to. It ships empty, so an existing
+  install resolves exactly as before. The four layers and why a default may not silently widen
+  anything: `automation-enablement.md` § The four layers.
 - **Named starting sets at Project creation, and as preset cards on the policy matrix.**
-  Three checkboxes on the creation form (greyed, with the reason, when the install-wide
-  ceiling blocks part of a set), and the same three sets as cards at the head of the
+  Two checkboxes on the creation form (greyed, with the reason, when the install-wide
+  ceiling blocks part of a set), and three sets as cards at the head of the
   Automation Policy matrix - expanded as the welcome on a first run, behind a
   "Choose preset" button after. Each is
   served by `GET /api/grants` (`project_starting_sets`) and applied through the ordinary
   `POST /api/grants` - the ticked sets go as **one** POST, so the daemon computes the
   dependency closure, writes the Project file once, and leaves one audit record. Turning
   a set *off* is the matrix's own editor write, never a grant.
-  None is an inherited default template: each is written into that Project's own
-  `.swe-mux/config.toml`, so "nothing runs on a Project that did not opt in" stays literally
-  true and no existing Project changes behaviour because a constant did.
+  Neither of the two the form still offers is an inherited default: each is written into that
+  Project's own `.swe-mux/config.toml`, because one can bill and the other hands agents
+  authority, and those are decisions about a repository rather than postures to inherit.
   - `RECOMMENDED_PROJECT_AUTOMATIONS` is the model-free set - the four detectors and the code
-    graph - and the only checkbox defaulted on.
+    graph. It stopped being a creation checkbox on 2026-08-31 and became the **seed** for the
+    form's inherited defaults: where the install has no opinion about one of its ids the form
+    pre-ticks it, so a fresh install's first Project is not empty; where the install has an
+    opinion either way, the form leaves it alone. It remains a preset card on the matrix.
     `_validate_recommended` refuses at import to let a spending automation into it.
   - `LLM_PROJECT_AUTOMATIONS` is the model tier - `scan_timeline`, `continuous_title`,
     `model_narration`, with the closure (`attention_ranking` and the detectors under it)
     written alongside - plus `scan_timeline_auto_enable` (`grants.LLM_PROJECT_VALUES`) so the
     timeline arms per run instead of waiting for a grant nobody new knows to press.
+    `continuous_title` **re-titles** a session when its scope changes; naming a pane in the
+    first place is the built-in Session titler (`observer_titler_enabled`), an install-wide
+    switch on the Automation dashboard that is gated by no Project opt-in at all. Both were
+    described as "session titles" until 2026-08-31, which made declining this checkbox read
+    as declining titles.
     Off by default because it can bill; the checkbox discloses spend, points at the
     install-wide budgets, and states the unproven provider when `llm.ready` is false.
     `_validate_llm_set` holds every member to `needs_llm` and the closure to `implemented`.

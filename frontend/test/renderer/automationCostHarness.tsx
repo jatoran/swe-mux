@@ -70,23 +70,33 @@ const TELEMETRY = {
   cost_note: 'ccusage costs are backend/model aggregates and are not attributed to individual runs',
 }
 
+// `install_default` is the daemon's resolved answer for an id no Project file
+// mentions - the operator's `project_defaults` merged over the registry's own
+// `default_on`, closure completed. Both halves ship because the Default column
+// renders the first and writes the second, and a fixture carrying only one of
+// them could not tell an inherited row from a pinned one.
 const MATRIX = {
   automations: [
-    { id: 'raw_store', kind: 'substrate', label: 'Raw event store', requires: [], implemented: true, spends: false, globally_allowed: true, install_switch: null },
-    { id: 'tier0', kind: 'substrate', label: 'Tier 0 facts', requires: ['raw_store'], implemented: true, spends: false, globally_allowed: true, install_switch: null },
-    { id: 'scan_timeline', kind: 'substrate', label: 'Scan timeline', requires: ['raw_store', 'tier0'], implemented: true, spends: true, needs_llm: true, globally_allowed: true, install_switch: 'scan_timeline_enabled' },
-    { id: 'loop_detection', kind: 'consumer', label: 'Loop detection', requires: ['tier0'], implemented: true, spends: false, globally_allowed: true, install_switch: null },
+    { id: 'raw_store', kind: 'substrate', label: 'Raw event store', requires: [], implemented: true, spends: false, install_default: true, globally_allowed: true, install_switch: null },
+    { id: 'tier0', kind: 'substrate', label: 'Tier 0 facts', requires: ['raw_store'], implemented: true, spends: false, install_default: true, globally_allowed: true, install_switch: null },
+    { id: 'scan_timeline', kind: 'substrate', label: 'Scan timeline', requires: ['raw_store', 'tier0'], implemented: true, spends: true, needs_llm: true, install_default: false, globally_allowed: true, install_switch: 'scan_timeline_enabled' },
+    { id: 'loop_detection', kind: 'consumer', label: 'Loop detection', requires: ['tier0'], implemented: true, spends: false, install_default: true, globally_allowed: true, install_switch: null },
     // One row under the install-wide ceiling, so the spec can see the greyed cell.
-    { id: 'doc_debt', kind: 'consumer', label: 'Doc-debt ledger', requires: ['tier0'], implemented: true, spends: false, globally_allowed: false, install_switch: null },
-    { id: 'session_control', kind: 'consumer', label: 'Agent session control', requires: [], implemented: true, spends: false, default_on: true, globally_allowed: true, install_switch: null },
-    { id: 'catch_me_up', kind: 'consumer', label: 'Catch-me-up digest', requires: ['scan_timeline'], implemented: true, spends: false, globally_allowed: true, install_switch: null },
-    { id: 'cross_session_interlocks', kind: 'consumer', label: 'Cross-session interlocks', requires: ['tier0'], implemented: false, spends: false, globally_allowed: true, install_switch: null },
+    { id: 'doc_debt', kind: 'consumer', label: 'Doc-debt ledger', requires: ['tier0'], implemented: true, spends: false, install_default: false, globally_allowed: false, install_switch: null },
+    { id: 'session_control', kind: 'consumer', label: 'Agent session control', requires: [], implemented: true, spends: false, default_on: true, install_default: true, globally_allowed: true, install_switch: null },
+    { id: 'catch_me_up', kind: 'consumer', label: 'Catch-me-up digest', requires: ['scan_timeline'], implemented: true, spends: false, install_default: false, globally_allowed: true, install_switch: null },
+    { id: 'cross_session_interlocks', kind: 'consumer', label: 'Cross-session interlocks', requires: ['tier0'], implemented: false, spends: false, install_default: false, globally_allowed: true, install_switch: null },
   ],
   projects: [
-    { project_id: 'p1', project_name: 'swe-mux', status: 'ready', revision: 'r1', requested: { raw_store: true, tier0: true, loop_detection: true, doc_debt: true }, enabled: ['loop_detection', 'raw_store', 'tier0', 'session_control'], blocked: {}, unverified: [], globally_disabled: ['doc_debt'], llm: { ready: true, reason: '' }, scan_timeline_auto_enable: false, authority: { session_control_grant: 'draft' }, authority_effective: { session_control_grant: 'draft', spawn_grant: 'granted', land_grant: 'draft', land_verify_grant: 'granted', interject_grant: 'granted', message_envelope: 'compact' } },
-    { project_id: 'p2', project_name: 'orca', status: 'ready', revision: 'r2', requested: {}, enabled: ['session_control'], blocked: {}, unverified: [], globally_disabled: [], llm: { ready: true, reason: '' }, scan_timeline_auto_enable: false, authority: {}, authority_effective: { session_control_grant: 'granted', spawn_grant: 'granted', land_grant: 'draft', land_verify_grant: 'granted', interject_grant: 'granted', message_envelope: 'compact' } },
+    // p1 pins loop detection off against an install that defaults it on, so the
+    // Project cell has a state neither "follow global" nor the inherited answer.
+    { project_id: 'p1', project_name: 'swe-mux', status: 'ready', revision: 'r1', requested: { raw_store: true, tier0: true, loop_detection: false, doc_debt: true }, enabled: ['raw_store', 'tier0', 'session_control'], blocked: {}, unverified: [], globally_disabled: ['doc_debt'], llm: { ready: true, reason: '' }, scan_timeline_auto_enable: false, scan_timeline_auto_enable_own: null, authority: { session_control_grant: 'draft' }, authority_effective: { session_control_grant: 'draft', spawn_grant: 'granted', land_grant: 'draft', land_verify_grant: 'granted', interject_grant: 'granted', message_envelope: 'compact' } },
+    // p2 wrote nothing at all and runs the install's defaults.
+    { project_id: 'p2', project_name: 'orca', status: 'ready', revision: 'r2', requested: {}, enabled: ['raw_store', 'tier0', 'loop_detection', 'session_control'], blocked: {}, unverified: [], globally_disabled: [], llm: { ready: true, reason: '' }, scan_timeline_auto_enable: false, scan_timeline_auto_enable_own: null, authority: {}, authority_effective: { session_control_grant: 'granted', spawn_grant: 'granted', land_grant: 'draft', land_verify_grant: 'granted', interject_grant: 'granted', message_envelope: 'compact' } },
   ],
   global_allow: { doc_debt: false },
+  project_defaults: { raw_store: true, tier0: true, loop_detection: true },
+  scan_timeline_auto_enable_default: false,
   install_switches: { automation_enabled: true, scan_timeline_enabled: true, scheduled_runs_enabled: true, land_queue_enabled: true },
   authority_fields: [
     { field: 'session_control_grant', label: 'Interrupt and end sessions', levels: ['draft', 'granted'], builtin: 'granted', gated_by: 'session_control' },

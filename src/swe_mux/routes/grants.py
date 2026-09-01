@@ -60,6 +60,12 @@ async def describe_grants(request: web.Request) -> web.Response:
             # so the creation form and every gate can grey a set the install-wide
             # ceiling blocks instead of offering a grant the daemon will refuse.
             "automations": automation._automation_registry_payload(config),
+            # The install's inherited default template as *stored*, which the
+            # creation form needs beside each entry's resolved `install_default`
+            # for one reason: an id the operator explicitly defaulted off and an
+            # id the install has never had an opinion about both resolve to
+            # `false`, and only the second may be pre-ticked on a new Project.
+            "project_defaults": dict(config.automation_project_defaults),
             "recommended_project_automations": list(RECOMMENDED_PROJECT_AUTOMATIONS),
             # The named starting sets the create form offers as checkboxes. Served
             # rather than restated in the browser so the form and the daemon cannot
@@ -168,6 +174,7 @@ async def apply_grants(request: web.Request) -> web.Response:
             current_automations=current_automations,
             current_values=current_values,
             global_allow=automation._global_allow(config),
+            project_defaults=automation._project_defaults(config),
         )
     except GrantRefusal as refusal:
         return json_response({"error": refusal.message, "code": refusal.code}, 409)
@@ -271,6 +278,11 @@ async def apply_grants(request: web.Request) -> web.Response:
                 project,
                 llm=await automation._llm_readiness(request),
                 global_allow=automation._global_allow(config),
+                # Threaded, unlike before: without it this answer resolves the
+                # Project against the registry's defaults rather than the
+                # install's, so a gate press would report back a state the
+                # daemon does not agree with.
+                install=config,
             ),
             "automations": automation._automation_registry_payload(config),
         }

@@ -172,9 +172,36 @@ test('the policy matrix draws Global and Project side by side, grouped by depend
   // The dependency map is grouped; the structure is the "needs X" story, so rows
   // carry no per-row dependency prose.
   await expect(page.locator('.automation-matrix-grid .project-automation-group')).toContainText([/Foundations/, /Deterministic checks/])
-  // Two switches per row: the install-wide ceiling and this Project's opt-in.
+  // Three controls per row: the install default and the ceiling in the Global
+  // cell, then this Project's own three-position answer.
   const row = page.locator('.automation-matrix-row', { hasText: 'Loop detection' })
   await expect(row.locator('input[type=checkbox]')).toHaveCount(2)
+  await expect(row.locator('.dropdown-trigger')).toHaveCount(1)
+})
+
+test('the install default is a control of its own, with the reach it decides', async ({ page }) => {
+  // The half that did not exist until 2026-08-31. Without it the only thing an
+  // install could say about an automation was "no", so every "yes" had to be
+  // repeated in each Project's file and could never be revised in one place.
+  await page.setViewportSize({ width: 1200, height: 900 })
+  await openTab(page, 'Policy')
+  await page.waitForSelector('.automation-matrix-grid')
+  const row = page.locator('.automation-matrix-row', { hasText: 'Loop detection' })
+  const global = row.locator('.automation-authority-global')
+  await expect(global).toContainText('default')
+  await expect(global).toContainText('off everywhere')
+  // The default is on and one of the two Projects pinned it, so the line has to
+  // say the click reaches one Project rather than reading as a preference.
+  await expect(global.locator('input[type=checkbox]').first()).toBeChecked()
+  await expect(global.locator('.automation-authority-meta')).toContainText('1 inherit · 1 custom')
+  // A Project that wrote nothing shows Follow global and names what it resolves
+  // to; the one that pinned it off shows Off.
+  await expect(row.locator('.dropdown-value')).toHaveText(['Off'])
+  await page.locator('.automation-project-toolbar .dropdown-trigger').click()
+  await page.locator('.dropdown-option', { hasText: 'orca' }).click()
+  await expect(
+    page.locator('.automation-matrix-row', { hasText: 'Loop detection' }).locator('.dropdown-value'),
+  ).toHaveText(['Follow global (on)'])
 })
 
 test('the sticky policy headings close against the top bar with no content gap', async ({ page }) => {
@@ -243,11 +270,16 @@ test('a ceiling-blocked row greys the Project switch and keeps the Project choic
   await page.waitForSelector('.automation-matrix-grid')
   const row = page.locator('.automation-matrix-row', { hasText: 'Doc-debt ledger' })
   await expect(row).toHaveClass(/globally-off/)
-  // The Global cell stays operable (it is the switch that turns this back on);
-  // the Project cell is disabled but still shows the retained opt-in.
-  await expect(row.locator('input[type=checkbox]').nth(0)).toBeEnabled()
-  await expect(row.locator('input[type=checkbox]').nth(1)).toBeDisabled()
-  await expect(row.locator('input[type=checkbox]').nth(1)).toBeChecked()
+  // The lock stays operable - it is the switch that turns this back on - while
+  // the default beside it and the Project control both grey. Setting a default
+  // for something no Project may run is a control that does nothing.
+  const checkboxes = row.locator('input[type=checkbox]')
+  await expect(checkboxes.nth(0)).toBeDisabled()
+  await expect(checkboxes.nth(1)).toBeEnabled()
+  await expect(checkboxes.nth(1)).toBeChecked()
+  // The Project's own opt-in is retained on disk and still rendered, disabled.
+  await expect(row.locator('.dropdown-trigger')).toBeDisabled()
+  await expect(row.locator('.dropdown-value')).toHaveText(['On'])
 })
 
 test('a fresh install opens on the starting-set presets; a returning one gets the button', async ({ page }) => {

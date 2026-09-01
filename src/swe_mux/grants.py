@@ -32,6 +32,7 @@ from .automation_registry import (
     DEDICATED_INSTALL_SWITCHES,
     REGISTRY,
     enabling_closure,
+    install_defaults,
     needs_llm,
     spends_money,
 )
@@ -173,6 +174,7 @@ def plan_grant(
     current_automations: Mapping[str, bool],
     current_values: Mapping[str, Any],
     global_allow: Mapping[str, bool] | None = None,
+    project_defaults: Mapping[str, bool] | None = None,
 ) -> GrantPlan:
     """Validate a grant request against the allowlists and the current state.
 
@@ -188,6 +190,13 @@ def plan_grant(
     success against it would offer to turn on nothing. A grant that raises the
     blocking dedicated switch in the same act is not refused, because the act
     itself lifts the ceiling.
+
+    `project_defaults` is the install's inherited template
+    (`automation_registry.install_defaults`), and it makes a grant for something
+    already inherited a no-op rather than a write. That is not only about saving
+    a revision: writing it down would *pin* the Project to today's answer, so an
+    operator who later withdrew the default would find the Projects a gate had
+    happened to touch still running it.
     """
     planned_install: dict[str, bool] = {}
     for key, value in (install or {}).items():
@@ -237,13 +246,22 @@ def plan_grant(
                 + ", ".join(disallowed)
                 + "; allow it in Automation policy first",
             )
+    inherited = (
+        dict(project_defaults) if project_defaults is not None else install_defaults(None)
+    )
+
     def _already_on(item: str) -> bool:
         explicit = current_automations.get(item)
         if explicit is not None:
             return explicit is True
-        # Unset and default-on is on already; granting it would only bump a
-        # revision under an open editor to write down what is already true.
-        return REGISTRY[item].default_on
+        # Unset and inherited-on is on already; granting it would only bump a
+        # revision under an open editor to write down what is already true - and
+        # would *pin* it, so the Project would stop following an install default
+        # the operator later changes their mind about. `project_defaults` is the
+        # install's answer (`automation_registry.install_defaults`); without one
+        # this falls back to the registry's, which is what the pre-2026-08-31
+        # callers saw.
+        return bool(inherited.get(item))
 
     planned_automations = frozenset(item for item in closure if not _already_on(item))
 
@@ -292,15 +310,12 @@ def project_values_after(
     """
     values = dict(current)
     if plan.automations:
-        # A false entry is noise for an ordinary opt-in and load-bearing for a
-        # default-on automation (absent means on there), so an explicit opt-out
-        # survives the rewrite - unless this very grant is turning that
-        # automation on, which is the one way a gate may override it.
-        table = {
-            key: bool(value)
-            for key, value in current_automations.items()
-            if value or REGISTRY[key].default_on
-        }
+        # Every explicit entry survives the rewrite, `false` included: absence
+        # means *inherit* now that the install carries a default template, so a
+        # dropped `false` is a Project that comes on by itself later rather than a
+        # Project that is off. The one thing a grant may override is a `false`
+        # for an id it is turning on, which is the act the operator just made.
+        table = {key: bool(value) for key, value in current_automations.items()}
         for automation_id in plan.automations:
             table[automation_id] = True
         values["automations"] = table

@@ -35,6 +35,9 @@ from ..automation_registry import (
     DEDICATED_INSTALL_SWITCHES,
     dependency_closure,
     effective_global_allow,
+    install_defaults,
+    requested_from_config,
+    resolve_scan_auto_enable,
 )
 from ..automation_registry import REGISTRY as AUTOMATION_REGISTRY
 from ..automation_registry import resolve_config as resolve_automation_config
@@ -932,6 +935,11 @@ async def patch_automation_notifications(request: web.Request) -> web.Response:
     return json_response({"ok": True, "changed": changed})
 
 
+#: "The caller did not mention this field", which JSON cannot spell and which a
+#: three-position control needs kept apart from an explicit null.
+_UNSET: Any = object()
+
+
 def _global_allow(config: Config) -> dict[str, bool]:
     """The install-wide ceiling as `resolve` consumes it."""
     return effective_global_allow(
@@ -940,17 +948,35 @@ def _global_allow(config: Config) -> dict[str, bool]:
     )
 
 
+def _project_defaults(config: Config | None) -> dict[str, bool]:
+    """The inherited default template as `resolve` consumes it.
+
+    Without a `config` this is the registry's own answer, which is what a caller
+    with no install to consult should get - the same shape `_global_allow`'s
+    absence means permissive.
+    """
+    return install_defaults(config.automation_project_defaults if config is not None else None)
+
+
 def _automation_registry_payload(config: Config | None = None) -> list[dict[str, Any]]:
     """The enablement registry as every opt-in surface receives it.
 
     With a `config`, each entry also answers whether the install-wide ceiling
     allows it anywhere at all (`globally_allowed` - the id itself and its whole
     dependency closure), so a toggle surface and a grant gate render the ceiling
-    from the same resolution the daemon enforces. `install_switch` names the
-    dedicated `Config` boolean where one exists, because those rows' global
-    toggle writes that key and never an `automation_global_allow` entry.
+    from the same resolution the daemon enforces, and what a Project that never
+    wrote the id down inherits (`install_default`, the merge of the operator's
+    template with the registry's own). `install_switch` names the dedicated
+    `Config` boolean where one exists, because those rows' global toggle writes
+    that key and never an `automation_global_allow` entry.
+
+    Both keys are absent without a `config` rather than defaulted, so a surface
+    can tell "this install says nothing" from "this install says no": a form that
+    rendered a missing answer as `false` would show every inherited automation as
+    off, which is the reading the whole inheritance layer exists to remove.
     """
     allow = _global_allow(config) if config is not None else None
+    defaults = _project_defaults(config) if config is not None else None
 
     def allowed(automation_id: str) -> bool:
         if allow is None:
@@ -979,6 +1005,11 @@ def _automation_registry_payload(config: Config | None = None) -> list[dict[str,
             "default_on": automation.default_on,
             "install_switch": DEDICATED_INSTALL_SWITCHES.get(automation.id),
             **({"globally_allowed": allowed(automation.id)} if allow is not None else {}),
+            **(
+                {"install_default": bool(defaults.get(automation.id))}
+                if defaults is not None
+                else {}
+            ),
         }
         for automation in sorted(AUTOMATION_REGISTRY.values(), key=lambda a: a.id)
     ]
@@ -1021,6 +1052,7 @@ async def _project_automation_state(  # type: ignore[no-untyped-def]
     }
     resolution = resolve_automation_config(
         requested,
+        _project_defaults(install),
         llm_ready=llm.ready if llm is not None else True,
         global_allow=global_allow,
     )
@@ -1044,7 +1076,23 @@ async def _project_automation_state(  # type: ignore[no-untyped-def]
         "unverified": sorted(resolution.unverified),
         "globally_disabled": sorted(resolution.globally_disabled),
         "llm": llm.as_dict() if llm is not None else None,
-        "scan_timeline_auto_enable": bool(values.get("scan_timeline_auto_enable", False)),
+        # Two readings again, for the same reason the authority pair below carries
+        # two: `scan_timeline_auto_enable` is what the daemon will actually do
+        # (the install default layered under the Project's own value, so every
+        # existing reader keeps getting a plain boolean that is *true*), and
+        # `scan_timeline_auto_enable_own` is null where the Project said nothing
+        # - which is what lets its control offer "Follow global" rather than
+        # pinning the inherited value the moment anything else on the row is
+        # edited.
+        "scan_timeline_auto_enable": resolve_scan_auto_enable(
+            values.get("scan_timeline_auto_enable"),
+            default=install.scan_timeline_auto_enable_default if install else False,
+        ),
+        "scan_timeline_auto_enable_own": (
+            values["scan_timeline_auto_enable"]
+            if isinstance(values.get("scan_timeline_auto_enable"), bool)
+            else None
+        ),
         # Two readings, because the matrix needs both and cannot derive one from
         # the other: `authority` is what this repository's file explicitly says
         # (None where it left the field alone, which is what makes "Follow
@@ -1117,6 +1165,19 @@ async def automation_project_matrix(request: web.Request) -> web.Response:
             # `globally_allowed` above is the *resolved* reading (closure
             # included); this is what the toggles edit.
             "global_allow": dict(config.automation_global_allow),
+            # The inherited default template, as stored: what the Default column
+            # writes. The per-entry `install_default` above is the *resolved*
+            # reading (the registry's own defaults merged in, closure completed);
+            # this is the operator's own map, so unticking a row it never named
+            # is a write that changes nothing rather than one that pins the
+            # registry's answer into the file.
+            "project_defaults": dict(config.automation_project_defaults),
+            # The default under the one Project field that qualifies an opt-in
+            # rather than being one. Beside `project_defaults` rather than inside
+            # `install_switches`: that map is exactly the dedicated per-automation
+            # ceilings, and a fifth key with different semantics in it is how a
+            # payload starts meaning two things.
+            "scan_timeline_auto_enable_default": config.scan_timeline_auto_enable_default,
             "install_switches": {
                 "automation_enabled": config.automation_enabled,
                 "scan_timeline_enabled": config.scan_timeline_enabled,
@@ -1187,9 +1248,15 @@ async def put_project_automations(request: web.Request) -> web.Response:
             },
             409,
         )
-    auto_enable = body.get("scan_timeline_auto_enable")
-    if auto_enable is not None and not isinstance(auto_enable, bool):
-        raise ValueError("scan_timeline_auto_enable must be a boolean")
+    # Three positions, so a sentinel rather than `None`: an absent key leaves the
+    # field alone, an explicit `null` *removes* it (the "Follow global" position,
+    # the same spelling the authority fields use), and a boolean pins it. Reading
+    # `null` as "leave alone" would make returning to the inherited value
+    # unsayable over this route, which is how the field became a per-Project
+    # write nobody could undo in one place.
+    auto_enable = body.get("scan_timeline_auto_enable", _UNSET)
+    if auto_enable is not _UNSET and auto_enable is not None and not isinstance(auto_enable, bool):
+        raise ValueError("scan_timeline_auto_enable must be a boolean or null")
     # Agent authority arrives on the same write as the opt-ins it qualifies,
     # because the matrix edits both and a Project's file is one revision. A
     # field mapped to None is the "Follow global" position: the key is *removed*
@@ -1221,22 +1288,24 @@ async def put_project_automations(request: web.Request) -> web.Response:
     # still sends it is ignored rather than refused, and the retired key is
     # dropped from the file on this write.
     #
-    # A false is stripped as noise for an ordinary opt-in (absent already means
-    # off) and *persisted* for a default-on automation, where absent means on -
-    # dropping it there would make unticking the box a write that changes
-    # nothing.
-    automations = {
-        key: bool(value)
-        for key, value in requested.items()
-        if value or AUTOMATION_REGISTRY[key].default_on
-    }
+    # Every explicit value is persisted, `false` included. It used to be stripped
+    # as noise wherever absence already meant off, which was true while absence
+    # could only mean the registry's own default. It stopped being true when the
+    # install gained a default template: absence now means *inherit*, so a
+    # stripped `false` is not a Project that is off, it is a Project that will
+    # silently come on the moment the operator defaults the id on. "Off" has to
+    # stay sayable, and the file is the only place it can be said.
+    automations = {key: bool(value) for key, value in requested.items()}
     changes: dict[str, Any] = {"automations": automations, **authority}
     # Auto-enable is meaningless without the permission it rides on, and leaving
     # it set would silently re-arm every run the moment the Project is opted in
-    # again. Opting out clears it.
-    if not automations.get("scan_timeline"):
+    # again. Opting out clears it - back to inheriting, which is the only thing
+    # clearing can mean now that the install has a default for it too.
+    if "scan_timeline" not in requested_from_config(
+        automations, _project_defaults(request.app[keys.CONFIG])
+    ):
         changes["scan_timeline_auto_enable"] = None
-    elif auto_enable is not None:
+    elif auto_enable is not _UNSET:
         changes["scan_timeline_auto_enable"] = auto_enable
     base = body.get("base")
     if isinstance(base, dict):
