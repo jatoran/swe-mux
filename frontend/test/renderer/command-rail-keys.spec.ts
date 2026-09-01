@@ -1,6 +1,6 @@
 import { expect, test, type Page } from 'playwright/test'
 import { RAIL_KEY_REPEAT_DELAY_MS, RAIL_KEY_REPEAT_INTERVAL_MS } from '../../src/railKeyRepeat.ts'
-import { keyPoint, scrollLeft, sends, touch } from './railTouch.ts'
+import { keyPoint, scrollLeft, sends, sendsAtLift, touch } from './railTouch.ts'
 
 /**
  * What an Action rail key does with a finger that is not simply tapping it.
@@ -98,15 +98,22 @@ test('holding an arrow key repeats it, and lifting adds no extra tap', async ({ 
 
   await finger.down(centre.x, centre.y)
   await page.waitForTimeout(HOLD_MS)
-  const held = await sends(page)
   await finger.up()
 
-  expect(held.length).toBeGreaterThan(2)
-  expect(held.every(sequence => sequence === UP_SEQUENCE)).toBe(true)
+  // How many repetitions the hold had produced *at the lift*, taken inside the page.
+  // Sampling it from here instead was a race the runner lost: reading the count over CDP
+  // takes longer than one repeat interval under load, so the hold's own next repetition
+  // landed between the read and the lift and was counted as an extra tap (CI, 2026-09-01:
+  // 6 sampled, 7 after). The tap a lift synthesises is dispatched after `pointerup`, so it
+  // still lands after the snapshot - which is the claim this test exists to make.
+  const held = await sendsAtLift(page)
+  expect(held).toBeGreaterThan(2)
   // The click a hold ends with was already answered by the hold itself. Give it time to
   // arrive before concluding that nothing followed.
   await page.waitForTimeout(200)
-  expect(await sends(page)).toHaveLength(held.length)
+  const after = await sends(page)
+  expect(after.every(sequence => sequence === UP_SEQUENCE)).toBe(true)
+  expect(after).toHaveLength(held)
   // A committed hold owns its pointer, so the strip stays where it was rather than
   // drifting under the key being spammed.
   expect(await scrollLeft(page)).toBe(start)
