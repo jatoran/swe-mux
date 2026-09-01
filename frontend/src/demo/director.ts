@@ -13,15 +13,23 @@
  * mirror then carries the winner's acts to the other, which demonstrates more than a
  * second copy would.
  *
- * **Everything plays itself, and the first touch is the visitor's.** The walkthrough used
- * to be built out of *gates*: it drew a card, asked for a click, and waited. That asks a
- * visitor who has not decided to care yet for work, and it stalls indefinitely on the ones
- * who will not do it - which on a marketing page is most of them. So a scenario performs
- * its own acts, start to finish, and **any** real pointerdown, keydown or touch stops it
- * instantly and permanently for that visit. There is one rule rather than two, and it is
- * the rule the pitch already implies: watch it, and the moment you touch it, it is yours.
+ * **Everything plays itself, and a touch hands it over.** The walkthrough used to be built
+ * out of *gates*: it drew a card, asked for a click, and waited. That asks a visitor who
+ * has not decided to care yet for work, and it stalls indefinitely on the ones who will
+ * not do it - which on a marketing page is most of them. So a scenario performs its own
+ * acts, start to finish, and a real pointerdown, keydown or touch stops it and leaves the
+ * state where it got to.
  *
- * The card keeps two controls, and neither is a demand. `Next` cuts the current beat's
+ * Three things that press does *not* end, each written from a way the blunt version was
+ * too sharp: the director's own card (pressing Next asks the run to go on), a pointer
+ * press on the chrome the current beat is pointing at (that is joining in, and the tour
+ * spends two minutes inviting it), and the first press into an embedded frame (which is
+ * how you reach anything inside an iframe). See `onRealInput`.
+ *
+ * And a press that does end it leaves an **offer** rather than nothing: `stop` keeps the
+ * beat, and `resume` re-publishes it without re-running its act.
+ *
+ * The card carries two controls, and neither is a demand. `Next` cuts the current beat's
  * wait short for somebody reading faster than the script; `stop` ends the run.
  *
  * **Highlights are for scripted acts only.** A ghost cursor, a ripple and a caption are
@@ -102,6 +110,8 @@ export type DirectorSnapshot = {
   eyebrow: string
   say: string
   body: string[]
+  /** Which card the running scenario draws; see `Scenario.card`. */
+  card: 'anchored' | 'caption'
   gesture: 'left' | 'right' | null
   spotlight: string[] | null
   /** Where the ghost cursor is, or null when it is not on screen. */
@@ -136,7 +146,7 @@ export type DirectorSnapshot = {
 
 const EMPTY: DirectorSnapshot = {
   running: false, scenarioId: '', blurb: '', index: 0, total: 0,
-  eyebrow: '', say: '', body: [], gesture: null, spotlight: null,
+  eyebrow: '', say: '', body: [], card: 'caption', gesture: null, spotlight: null,
   pointer: null, press: 0, echo: null, show: null, showSeq: 0, paused: null,
 }
 
@@ -394,6 +404,7 @@ export async function resume(): Promise<boolean> {
     running: true,
     scenarioId: scenario.id,
     blurb: scenario.blurb,
+    card: scenario.card ?? 'caption',
     total: target.beats.length,
     press: snapshot.press,
     showSeq: snapshot.showSeq,
@@ -430,6 +441,7 @@ export async function start(scenarioId: string): Promise<boolean> {
     running: true,
     scenarioId: scenario.id,
     blurb: scenario.blurb,
+    card: scenario.card ?? 'caption',
     total: beats.length,
     press: snapshot.press,
     showSeq: snapshot.showSeq,
