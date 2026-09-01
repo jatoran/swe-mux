@@ -12,10 +12,13 @@
  * here is a 26% accent wash over a forty-pixel chip.
  */
 
+/* Deliberately no `z-index`. It sits inside the director's own layer and paints in DOM
+   order, which puts it under the caption card and the ghost cursor - and it has to be
+   under the card, because the walk's dimming is a 9999px shadow that would otherwise
+   dim the sentence explaining what the walk is pointing at. */
 .demo-show {
   position: fixed;
   inset: 0;
-  z-index: 901;
   pointer-events: none;
 }
 

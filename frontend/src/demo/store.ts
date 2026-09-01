@@ -9,6 +9,7 @@
  * `onMutation` to push event frames / terminal bytes into the app. Nothing here
  * talks to any network - that is the entire point of the demo build.
  */
+import type { AssistantAction, AssistantMessage } from '../assistant.ts'
 import type { PaneLayout, PaneNode } from '../layout.ts'
 import type { Preview } from '../processFleet.ts'
 import type { QueueMessage, SpawnRequestRow } from '../queueApi.ts'
@@ -68,6 +69,25 @@ export type DemoLandRequest = {
   events: Array<{ at: number; state: string; note: string }>
 }
 
+/**
+ * The Mux assistant's dialog, as the demo's daemon owns it.
+ *
+ * In the product this state is genuinely daemon-side: the panel rebuilds from one detail
+ * fetch and then advances on `assistant_*` events, so two devices watching one dialog
+ * render the same turn. Keeping it in the store rather than in a module beside the panel
+ * is what preserves that here - the desktop and the phone frame are separate JavaScript
+ * realms, and a conversation held in one of them would be a conversation the other could
+ * not see, which is the opposite of the claim the scenario is making.
+ */
+export type DemoAssistant = {
+  dialogId: string
+  createdAt: number
+  title: string
+  messages: AssistantMessage[]
+  actions: AssistantAction[]
+  turnRunning: boolean
+}
+
 export type DemoState = {
   /** Fixture-schema version. Bump `DEMO_STATE_VERSION` in fixtures.ts when the
    *  seed shape changes; persisted copies from an older demo build are discarded. */
@@ -119,6 +139,8 @@ export type DemoState = {
    *  product's switch is per session inside a per-install master, and the demo's point
    *  is that a prompt delivers into *this* pane because someone allowed it to. */
   autoDelivery: string[]
+  /** The voice assistant's conversation. See `DemoAssistant`. */
+  assistant: DemoAssistant
   /** Event-bus watermark; monotonic across every frame via the reducer. */
   seq: number
 }
@@ -160,6 +182,19 @@ export type DemoMutation =
   | { kind: 'land-patch'; id: string; patch: Partial<DemoLandRequest>; event?: { state: string; note: string } }
   | { kind: 'land-remove'; id: string }
   | { kind: 'auto-delivery-set'; id: string; enabled: boolean }
+  // ------------------------------------------------------------------- the assistant
+  /** What the operator said, accepted. One message id per turn, as the daemon does it. */
+  | { kind: 'assistant-turn'; turnId: string; text: string }
+  /** One sentence of the reply, appended to this turn's assistant bubble. Sentence at a
+   *  time rather than all at once because that is how the product streams it - synthesis
+   *  runs behind the words - and a demo that pasted the paragraph would be showing a
+   *  different product. */
+  | { kind: 'assistant-say'; turnId: string; messageId: string; display: string; speech?: string }
+  /** A confirmation card, opened or updated. */
+  | { kind: 'assistant-action'; action: AssistantAction }
+  /** A card resolved: the card closes and a line saying what happened stays. */
+  | { kind: 'assistant-resolved'; actionId: string; display: string; status: string }
+  | { kind: 'assistant-done'; turnId: string; messageId: string }
   | { kind: 'reset' }
 
 const STORAGE_KEY = 'swemux-demo-state-v1'
@@ -436,6 +471,83 @@ function reduce(current: DemoState, mutation: DemoMutation): DemoState {
         ? [...new Set([...current.autoDelivery, mutation.id])]
         : current.autoDelivery.filter(item => item !== mutation.id)
       return next
+    case 'assistant-turn': {
+      const id = `user:${mutation.turnId}`
+      const messages = current.assistant.messages.some(item => item.id === id)
+        ? current.assistant.messages
+        : [...current.assistant.messages, {
+          id,
+          dialog_id: current.assistant.dialogId,
+          turn_id: mutation.turnId,
+          created_at: nowSeconds(),
+          role: 'user' as const,
+          display: mutation.text,
+          speech: '',
+          status: 'done' as const,
+        }]
+      next.assistant = { ...current.assistant, messages, turnRunning: true }
+      return next
+    }
+    case 'assistant-say': {
+      const messages = [...current.assistant.messages]
+      const index = messages.findIndex(item => item.id === mutation.messageId)
+      if (index < 0) {
+        messages.push({
+          id: mutation.messageId,
+          dialog_id: current.assistant.dialogId,
+          turn_id: mutation.turnId,
+          created_at: nowSeconds(),
+          role: 'assistant',
+          display: mutation.display,
+          speech: mutation.speech ?? mutation.display,
+          status: 'streaming',
+        })
+      } else {
+        messages[index] = {
+          ...messages[index],
+          display: `${messages[index].display} ${mutation.display}`.trim(),
+        }
+      }
+      next.assistant = { ...current.assistant, messages }
+      return next
+    }
+    case 'assistant-action': {
+      const actions = [...current.assistant.actions]
+      const index = actions.findIndex(item => item.id === mutation.action.id)
+      if (index < 0) actions.push(mutation.action)
+      else actions[index] = mutation.action
+      next.assistant = { ...current.assistant, actions }
+      return next
+    }
+    case 'assistant-resolved': {
+      const actions = current.assistant.actions.map(item => (
+        item.id === mutation.actionId
+          ? { ...item, status: mutation.status as AssistantAction['status'], resolved_at: nowSeconds() }
+          : item
+      ))
+      const messages = current.assistant.messages.some(item => item.action_id === mutation.actionId)
+        ? current.assistant.messages
+        : [...current.assistant.messages, {
+          id: `action:${mutation.actionId}`,
+          dialog_id: current.assistant.dialogId,
+          turn_id: '',
+          created_at: nowSeconds(),
+          role: 'action' as const,
+          display: mutation.display,
+          speech: '',
+          status: 'done' as const,
+          action_id: mutation.actionId,
+        }]
+      next.assistant = { ...current.assistant, actions, messages }
+      return next
+    }
+    case 'assistant-done': {
+      const messages = current.assistant.messages.map(item => (
+        item.id === mutation.messageId ? { ...item, status: 'done' as const } : item
+      ))
+      next.assistant = { ...current.assistant, messages, turnRunning: false }
+      return next
+    }
     case 'reset':
       return initialDemoState()
   }

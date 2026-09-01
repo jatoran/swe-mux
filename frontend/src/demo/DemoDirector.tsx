@@ -76,7 +76,13 @@ export function DemoDirector() {
   // A gesture step has no anchor, so the card would centre itself - directly over the
   // glyph that is the whole instruction. It sits at the foot of the screen instead,
   // which is also where a thumb is.
-  const position = view.gesture
+  //
+  // A beat with callouts moves for a different reason and the same distance: the card is
+  // placed beside the chrome it explains, which is exactly where that beat's labels are,
+  // and it covered three of the six on the fleet step. The labels are the instruction
+  // there, so the card is what gives way.
+  const dodges = view.gesture || (view.show?.notes?.length ?? 0) > 0
+  const position = dodges
     ? { ...placed, top: Math.max(16, innerHeight - cardSize.height - 20) }
     : placed
   const last = view.index >= view.total

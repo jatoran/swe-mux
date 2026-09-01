@@ -99,14 +99,23 @@ export type Viewport = { width: number; height: number }
  * Which side of the targets the gutter goes on.
  *
  * Measured from the targets rather than configured, because the same beat shape labels
- * the fleet column (left of the screen, so the gutter is on the right) and the side
- * panel (right of the screen, so it is on the left). A beat that spans both is treated
- * as left-hand chrome, which is the common case and never draws off screen.
+ * the fleet column (left of the screen, so the gutter is on the right) and the side panel
+ * (right of the screen, so it is on the left).
+ *
+ * The measurement is **free space**, not the targets' centre. A centre reading is right
+ * for a narrow column and wrong for a wide card: a beat labelling rows inside a
+ * thousand-pixel dialog has its centre near the middle of the screen, reads as left-hand
+ * chrome, and puts every label in the sixty pixels left over on the right - clamped, on
+ * top of each other, at the end of leader lines the width of the card. Asking which side
+ * has room gives the same answer as the centre rule wherever the centre rule was right,
+ * and a usable one where it was not.
  */
 export function gutterSide(boxes: Box[], viewport: Viewport): 'left' | 'right' {
   if (!boxes.length) return 'right'
-  const centre = boxes.reduce((total, box) => total + box.cx, 0) / boxes.length
-  return centre > viewport.width * 0.58 ? 'left' : 'right'
+  const gap = COLUMN_GAP + ELBOW_GAP
+  const rightRoom = viewport.width - Math.max(...boxes.map(box => box.right)) - gap
+  const leftRoom = Math.min(...boxes.map(box => box.left)) - gap
+  return rightRoom >= leftRoom ? 'right' : 'left'
 }
 
 /**

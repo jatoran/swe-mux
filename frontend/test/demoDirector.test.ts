@@ -11,6 +11,8 @@ import { SCENARIOS, scenarioById, NUDGE_SCENARIO_ID } from '../src/demo/scenario
 import { apply, state } from '../src/demo/store.ts'
 import { DEMO_PROJECT_ID } from '../src/demo/fixtures.ts'
 import { placeCallouts, gutterSide, wirePath, unionBox, sweepDelays, type Box } from '../src/demo/callouts.ts'
+import { verifyCommandPayload } from '../src/demo/gitFixtures.ts'
+import { parseLandVerifyCommand } from '../src/gitLand.ts'
 import { railConfigFromBlob, type RailBlob } from '../src/commandRail.ts'
 import { normalizeSessionRowConfig } from '../src/sessionRowConfig.ts'
 import { normalizeSessionTopbarConfig } from '../src/sessionTopbarConfig.ts'
@@ -174,21 +176,26 @@ test('a label is placed in target order, not in the order the beat wrote them', 
   assert.deepEqual(placed.map(item => item.callout.label), ['upper', 'lower'])
 })
 
-test('the gutter goes on the side away from the chrome', () => {
+test('the gutter goes to whichever side has room', () => {
   // Left-hand chrome (the fleet column) labels to its right; right-hand chrome (the side
   // panel) labels to its left. Measured from the targets, because one beat shape has to
   // serve both.
   assert.equal(gutterSide([box(20, 100)], VIEWPORT), 'right')
   assert.equal(gutterSide([box(1_100, 100)], VIEWPORT), 'left')
-  // A spread that straddles the middle is treated as left-hand chrome, which is the
-  // common case and never draws off screen.
   assert.equal(gutterSide([box(20, 100), box(700, 100)], VIEWPORT), 'right')
+  // And the case a centre reading gets wrong: a row inside a nearly-full-width dialog.
+  // Its centre is the middle of the screen, so a centre rule calls it left-hand chrome
+  // and puts the label in the sliver on the right; both slivers are equal here, and what
+  // matters is that the rule is asking about space rather than about position.
+  const wide = box(119, 200, 1_042, 20)
+  assert.equal(gutterSide([wide], { width: 1_280, height: 800 }), 'right')
+  assert.equal(gutterSide([box(400, 200, 860, 20)], { width: 1_280, height: 800 }), 'left')
 })
 
 test('a label stays inside the viewport on both axes', () => {
   // A wide chip beside chrome near the right edge, and a target below the fold: both
   // clamp, because the two things most worth labelling sit on the frame's edges.
-  const [wide] = placeCallouts([entry(box(700, 790), 'edge', 600, 40)], VIEWPORT)
+  const [wide] = placeCallouts([entry(box(300, 790), 'edge', 600, 40)], VIEWPORT)
   assert.equal(wide.side, 'right')
   assert.ok(wide.x + 600 <= VIEWPORT.width, 'ran off the right edge')
   assert.ok(wide.top + 40 <= VIEWPORT.height, 'ran off the bottom edge')
@@ -257,6 +264,19 @@ test('the walkthrough labels only fields the seeded row config actually draws', 
   for (const field of named) {
     assert.ok(placedFields.has(field), `a callout names "${field}", which the seed does not place`)
   }
+})
+
+test('the land gate payload parses as a configured, approved gate', () => {
+  // Parsed with the app's own parser rather than eyeballed, because the previous fixture
+  // answered a 200 with entirely different key names - `command`, `grant`,
+  // `approved_digest` - and every field the parser reads fell back to the empty gate. The
+  // Git tab then told every visitor "No verification command. A land here would be
+  // refused rather than run", directly under a scenario narrating the gate passing.
+  const gate = parseLandVerifyCommand(verifyCommandPayload())
+  assert.equal(gate.configured, true)
+  assert.equal(gate.approved, true)
+  assert.equal(gate.scriptPresent, true)
+  assert.equal(gate.display, '.worktree-verify')
 })
 
 // ------------------------------------------------------------------ control plane

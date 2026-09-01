@@ -20,7 +20,7 @@
  *   element across beats, and a reused element does not replay its reveal animation - the
  *   overlay would look frozen from the second beat onwards.
  */
-import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks'
 import {
   anchorPoint, boxOf, placeCallouts, sweepDelays, unionBox, wirePath,
   type Box, type Placed, type Show,
@@ -44,7 +44,9 @@ const measureAll = (groups: string[][]): Box[] =>
   groups.map(measure).filter((box): box is Box => box !== null)
 
 export function DemoShow({ show, seq }: { show: Show; seq: number }) {
-  const notes = show.notes ?? []
+  // Memoised because it is an effect dependency and `?? []` would otherwise mint a new
+  // array on every render, re-creating the MutationObserver for nothing.
+  const notes = useMemo(() => show.notes ?? [], [show])
   const mode = show.reveal ?? 'glitch'
   const chips = useRef<Array<HTMLDivElement | null>>([])
   const [placed, setPlaced] = useState<Placed[]>([])
@@ -53,6 +55,8 @@ export function DemoShow({ show, seq }: { show: Show; seq: number }) {
     { shimmer: [], arrive: [] },
   )
   const [step, setStep] = useState(0)
+  /** Whether anything this beat names has been on screen yet. */
+  const [armed, setArmed] = useState(false)
 
   /**
    * Measure, place, and keep doing both while the beat is on screen.
@@ -74,7 +78,19 @@ export function DemoShow({ show, seq }: { show: Show; seq: number }) {
           if (!target || !chip) return null
           return { callout, target, width: chip.offsetWidth, height: chip.offsetHeight }
         }).filter((entry): entry is NonNullable<typeof entry> => entry !== null)
-        const next = placeCallouts(entries, viewport)
+        // A walk shows one label at a time, so it places one: laying the whole set out
+        // and then hiding all but one puts the gutter wherever the *widest spread* of
+        // targets wants it, which drew a label for a sidebar row against the far right
+        // edge with a leader line the width of the screen.
+        const active = mode === 'walk'
+          ? entries.filter(item => item.callout === notes[step])
+          : entries
+        // A beat publishes before its own press runs, so the chrome it labels routinely
+        // arrives a second later. The walk's clock waits for that rather than starting on
+        // the beat: it used to spend its first stop pointing at a dialog that had not
+        // opened yet, and the visitor saw the tour skip a label it never drew.
+        if (entries.length) setArmed(true)
+        const next = placeCallouts(active, viewport)
         setPlaced(current => (samePlacement(current, next) ? current : next))
         const band = show.sweep
           ? measure(show.sweep)
@@ -103,29 +119,34 @@ export function DemoShow({ show, seq }: { show: Show; seq: number }) {
       removeEventListener('scroll', run, true)
     }
     // `seq` is in the list so a new beat re-measures from scratch rather than inheriting
-    // the previous one's placement for a frame.
-  }, [seq, show])
+    // the previous one's placement for a frame, and `step` because a walk places only
+    // the label it is currently holding on.
+  }, [seq, show, mode, step, notes])
 
-  /** The walk's own clock. One target at a time, in the order the beat wrote them. */
+  /** The walk's own clock. One target at a time, in the order the beat wrote them, and
+   *  not started until something it can point at is actually on screen. */
   useEffect(() => {
-    setStep(0)
-    if (mode !== 'walk' || notes.length < 2) return
+    if (mode !== 'walk' || notes.length < 2 || !armed) return
     const tick = setInterval(
       () => setStep(current => (current + 1 >= notes.length ? current : current + 1)),
       WALK_MS,
     )
     return () => clearInterval(tick)
-  }, [seq, mode, notes.length])
+  }, [seq, mode, notes.length, armed])
 
-  const delays = mode === 'sweep' && column
+  /** A new beat starts its walk from the top, and disarms until it has measured. */
+  useEffect(() => {
+    setStep(0)
+    setArmed(false)
+  }, [seq])
+
+  // `placed` is already only what this beat is showing - a walk places one label at a
+  // time - so there is no second filter here, and the delays line up with it by index.
+  const visible = placed
+  const visibleDelays = mode === 'sweep' && column
     ? sweepDelays(placed.map(item => item.target), column, SWEEP_MS)
-    : placed.map((_, index) => index * STAGGER_MS)
-
-  const visible = mode === 'walk'
-    ? placed.filter((_, index) => index === step)
-    : placed
-  const visibleDelays = mode === 'walk' ? [0] : delays
-  const spot = mode === 'walk' ? placed[step]?.target ?? null : null
+    : placed.map((_, index) => (mode === 'walk' ? 0 : index * STAGGER_MS))
+  const spot = mode === 'walk' ? placed[0]?.target ?? null : null
 
   return <div class={`demo-show mode-${mode}`}>
     {show.crt && <div class="demo-show-crt" aria-hidden="true" />}
@@ -164,19 +185,18 @@ export function DemoShow({ show, seq }: { show: Show; seq: number }) {
     {/* Rendered for every note, placed for the ones that measured. The hidden pass is
         what gives the placement its widths, so the list cannot be filtered first. */}
     {notes.map((callout, index) => {
-      const item = placed.find(entry => entry.callout === callout)
-      const order = item ? placed.indexOf(item) : -1
-      const shown = item && (mode !== 'walk' || order === step)
+      const order = placed.findIndex(entry => entry.callout === callout)
+      const item = order >= 0 ? placed[order] : null
       return <div
         key={`chip-${seq}-${index}`}
         ref={element => { chips.current[index] = element }}
-        class={`demo-show-chip ${shown ? '' : 'measuring'}`}
+        class={`demo-show-chip ${item ? '' : 'measuring'}`}
         style={item
           ? {
             left: item.side === 'right' ? item.x : undefined,
             right: item.side === 'left' ? innerWidth - item.x : undefined,
             top: item.top,
-            animationDelay: `${(order >= 0 ? visibleDelays[visible.indexOf(item)] : 0) ?? 0}ms`,
+            animationDelay: `${visibleDelays[order] ?? 0}ms`,
           }
           : { left: 0, top: 0 }}
       >

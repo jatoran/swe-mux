@@ -59,9 +59,40 @@ test('the scenario menu leads with the walkthrough', async ({ page }) => {
   await page.evaluate(() => localStorage.setItem('swemux-demo-coach-v1', 'done'))
   const menu = await page.evaluate(() => window.__demoDirector!.scenarios())
   expect(menu[0].id).toBe('tour')
-  expect(menu.map(item => item.id)).toEqual(['tour', 'queue', 'orchestrate', 'preview', 'land'])
+  expect(menu.map(item => item.id)).toEqual([
+    'tour', 'queue', 'orchestrate', 'preview', 'land', 'palette', 'keymap', 'voice',
+  ])
   // Every entry has a label a dropdown can show; an id is not a label.
   for (const entry of menu) expect(entry.label.length).toBeGreaterThan(3)
+})
+
+test('the walkthrough labels the parts of a session row', async ({ page }) => {
+  // The one beat that names chrome rather than pointing at it, and the reason the whole
+  // callout layer exists. Asserted end to end because every interesting thing about it is
+  // geometry: the labels are placed against elements this test has to have really drawn,
+  // and a selector that stops matching is exactly the failure that would otherwise ship
+  // as a beat with nothing on it.
+  const failures = await open(page, 'deterministic=1')
+  // Step off the opening card onto the fleet beat. The walkthrough is all gates, so this
+  // is the same press a visitor makes.
+  await page.waitForSelector('.demo-director-next', { timeout: START_TIMEOUT })
+  await page.click('.demo-director-next')
+  const chips = page.locator('.demo-show-chip:not(.measuring)')
+  await expect(chips).toHaveCount(6, { timeout: 15_000 })
+  // Each label has a leader line and a mark, or it is a floating word.
+  await expect(page.locator('.demo-show-wires path')).toHaveCount(6)
+  await expect(page.locator('.demo-show-mark')).toHaveCount(6)
+  // And they are a column beside the fleet rather than scattered over it: one x, six ys.
+  const boxes = await page.evaluate(() =>
+    [...document.querySelectorAll('.demo-show-chip:not(.measuring)')]
+      .map(chip => chip.getBoundingClientRect())
+      .map(rect => ({ left: Math.round(rect.left), top: Math.round(rect.top) })))
+  expect(new Set(boxes.map(box => box.left)).size).toBe(1)
+  expect(new Set(boxes.map(box => box.top)).size).toBe(6)
+  const sidebar = await page.evaluate(() =>
+    document.querySelector('.sidebar')!.getBoundingClientRect().right)
+  for (const box of boxes) expect(box.left).toBeGreaterThan(sidebar)
+  expect(failures).toEqual([])
 })
 
 test('a scripted scenario plays to its last beat and moves the control plane', async ({ page }) => {

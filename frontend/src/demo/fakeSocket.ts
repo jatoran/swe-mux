@@ -619,6 +619,42 @@ onMutation((mutation, local) => {
   if (mutation.kind === 'land-add' || mutation.kind === 'land-patch' || mutation.kind === 'land-remove') {
     broadcastEvent('land_changed', '')
   }
+  // The assistant panel is the one surface that does not refetch on a named event: it
+  // rebuilds once from a detail read and then *advances* on `assistant_*` frames, which
+  // `App.tsx` relays to the window as `mux:assistant-event`. So these are not a nudge to
+  // reload, they are the conversation itself, and the payload each one carries is the
+  // payload that reducer reads.
+  const dialog = state.assistant.dialogId
+  if (mutation.kind === 'assistant-turn') {
+    broadcastEvent('assistant_turn_started', '', {
+      dialog_id: dialog, turn_id: mutation.turnId, text: mutation.text,
+    })
+  }
+  if (mutation.kind === 'assistant-say') {
+    broadcastEvent('assistant_sentence', '', {
+      dialog_id: dialog, turn_id: mutation.turnId,
+      message_id: mutation.messageId, display: mutation.display,
+      speech: mutation.speech ?? mutation.display,
+    })
+  }
+  if (mutation.kind === 'assistant-action') {
+    broadcastEvent('assistant_action', '', { ...mutation.action })
+  }
+  if (mutation.kind === 'assistant-resolved') {
+    const action = state.assistant.actions.find(item => item.id === mutation.actionId)
+    if (action) broadcastEvent('assistant_action', '', { ...action })
+    broadcastEvent('assistant_message', '', {
+      dialog_id: dialog, action_id: mutation.actionId,
+      message_id: `action:${mutation.actionId}`,
+      display: mutation.display, status: 'done',
+      created_at: state.assistant.messages.at(-1)?.created_at,
+    })
+  }
+  if (mutation.kind === 'assistant-done') {
+    broadcastEvent('assistant_turn_done', '', {
+      dialog_id: dialog, turn_id: mutation.turnId, message_id: mutation.messageId,
+    })
+  }
   // Everything except pure terminal traffic (which returned above) nudges the
   // event bus - that is what makes the *other* frame (the phone beside the
   // desktop) refetch and follow along.
