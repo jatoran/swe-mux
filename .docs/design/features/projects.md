@@ -172,13 +172,36 @@ persisted ordering organize Project rows without acquiring behavioral ownership.
   The new folder's leaf is validated server-side under the shared Windows-safe leaf rules
   (`leaf_names.py`), because the dialog's folder field is free text and not every create path
   has a dialog; adopting an existing folder skips the leaf check.
-- Add project also offers three named starting sets as checkboxes - the free analysis
-  automations (defaulted on), the model-backed automations, and agent acting authority
-  (spawn/land without per-request approval). The sets are served by `GET /api/grants`
-  (`project_starting_sets`) and whatever is ticked is applied after registration as one
-  ordinary `POST /api/grants`, dependency closure and audit record included; a failure is
-  reported and never unwinds the Project. Contents, defaults, and the disclosures each
-  checkbox owes: `setting-links.md` § First use, `automation-enablement.md` § First-use
+- **Add project inherits this install's automation defaults rather than choosing for the
+  Project** (2026-08-31). The form shows one summary line - what the new Project will run and
+  that it comes from the install - and expands to a per-automation panel where individual
+  rows can be changed *for this Project only*. Only a row that genuinely disagrees with the
+  inherited answer is written, through the ordinary revision-checked
+  `PUT /api/projects/{id}/automations`; a form nobody expanded writes nothing at all, so the
+  Project goes on following the install as the operator changes their mind. Ticking a row
+  back to the value it already inherits is likewise not a write - writing the agreeing value
+  would pin the Project to today's answer, which is the failure the whole change removes.
+  The panel enforces the same two DAG rules the policy matrix does: a ticked consumer brings
+  its substrate, an unticked substrate takes its readers.
+
+  It replaced three checkboxes that each wrote a fixed id set down. What was wrong with them
+  is recorded in `automation-enablement.md` § What it is; the short version is that a new
+  Project inherited nothing and an existing one could never be revised in one place.
+
+  **The free analysis set survives as a seed, not as a write.** When the install has no
+  opinion about an id at all, the form pre-ticks it, so a fresh install's first Project still
+  has working analysis panes on day one exactly as before. An id the operator defaulted *on*
+  is left to inherit; an id they defaulted *off* is left alone, because a create form does not
+  overrule an install-wide decision. The form therefore goes quiet as soon as a policy exists,
+  which is the point.
+
+  **Two sets stay explicit checkboxes**: the model-backed automations and agent acting
+  authority (spawn/land without per-request approval). One can bill and the other hands agents
+  real authority, so each is a decision about *this repository* rather than a posture to
+  inherit quietly. They are served by `GET /api/grants` (`project_starting_sets`) and applied
+  after registration as one ordinary `POST /api/grants`, dependency closure and audit record
+  included; a failure is reported and never unwinds the Project. Contents and the disclosures
+  each checkbox owes: `setting-links.md` § First use, `automation-enablement.md` § First-use
   starting sets.
 - **A successful creation lands in the new Project's workspace** (operator decision 2026-08-22).
   It selects the Project, closes the create form, closes Manage projects, and closes the mobile

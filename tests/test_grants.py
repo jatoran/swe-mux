@@ -22,6 +22,7 @@ from swe_mux.automation_registry import (
     RECOMMENDED_PROJECT_AUTOMATIONS,
     REGISTRY,
     enabling_closure,
+    install_defaults,
     spends_money,
 )
 from swe_mux.config import Config
@@ -200,6 +201,71 @@ def test_a_grant_for_something_already_on_plans_nothing() -> None:
         current_values={},
     )
     assert plan.empty
+
+
+def test_a_grant_for_something_the_install_already_defaults_on_writes_nothing() -> None:
+    """A gate must not pin a Project to a default the operator can still change.
+
+    Not only about saving a revision. Writing the id down turns an inherited
+    "on" into this repository's own decision, so an operator who later withdrew
+    the install default would find every Project a gate happened to touch still
+    running it - the default silently stops meaning anything, one press at a
+    time. `plan_grant` therefore treats inherited-on as already-on.
+    """
+    defaults = install_defaults({"doc_debt": True})
+    plan = plan_grant(
+        install=None,
+        automations=["doc_debt"],
+        values=None,
+        current_install={},
+        current_automations={},
+        current_values={},
+        project_defaults=defaults,
+    )
+    assert plan.empty
+    # Without the install layer the same call is a real write, which is what an
+    # install that has expressed no policy still gets.
+    assert not plan_grant(
+        install=None,
+        automations=["doc_debt"],
+        values=None,
+        current_install={},
+        current_automations={},
+        current_values={},
+    ).empty
+    # An explicit opt-out is still the one state a grant overrides.
+    explicit = plan_grant(
+        install=None,
+        automations=["doc_debt"],
+        values=None,
+        current_install={},
+        current_automations={"doc_debt": False},
+        current_values={"automations": {"doc_debt": False}},
+        project_defaults=defaults,
+    )
+    assert explicit.automations == frozenset({"doc_debt"})
+
+
+def test_an_explicit_opt_out_survives_a_grant_that_never_mentioned_it() -> None:
+    """Every explicit false is kept now, not only a default-on one.
+
+    Absence used to mean off for an ordinary opt-in, so dropping its `false` was
+    lossless. Absence means *inherit* now, so a dropped false is a Project that
+    comes on by itself the moment somebody defaults that id on.
+    """
+    current_automations = {"code_graph": False, "tier0": True, "raw_store": True}
+    plan = plan_grant(
+        install=None,
+        automations=["doc_debt"],
+        values=None,
+        current_install={},
+        current_automations=current_automations,
+        current_values={"automations": dict(current_automations)},
+    )
+    merged = project_values_after(
+        {"automations": dict(current_automations)}, plan, current_automations
+    )
+    assert merged["automations"]["code_graph"] is False
 
 
 def test_a_globally_disallowed_automation_is_refused_not_granted_inert() -> None:
@@ -473,6 +539,16 @@ async def test_the_catalogue_describes_exactly_what_will_be_accepted(tmp_path: P
     # offers the same switch have to say the same thing about it.
     assert {item["id"] for item in body["automations"]} == set(REGISTRY)
     assert all("spends" in item for item in body["automations"])
+    # Two readings of the install's defaults, and the create form needs both. An
+    # id the operator explicitly defaulted *off* and an id the install has never
+    # had an opinion about both resolve to `install_default: false`, and only the
+    # second may be pre-ticked on a new Project - so the stored map ships too.
+    assert body["project_defaults"] == {}
+    assert all("install_default" in item for item in body["automations"])
+    session_control = next(
+        item for item in body["automations"] if item["id"] == "session_control"
+    )
+    assert session_control["install_default"] is True
 
 
 # -- the starting set --------------------------------------------------------

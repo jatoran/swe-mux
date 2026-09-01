@@ -2,11 +2,68 @@
 
 ## What it is
 
-Per-project opt-in for control-plane automations, gated by a dependency graph and an
-install-wide ceiling. Every automation is enabled explicitly per Project; a consumer
-cannot run unless the full transitive closure of the substrate it depends on is also
-enabled, and nothing the ceiling disallows runs anywhere. Nothing runs on a Project
-that did not opt in. Roadmap/vision context: `../../development/CONTROL_PLANE_ROADMAP.md`.
+Per-project opt-in for control-plane automations, gated by a dependency graph, an
+install-wide default template, and an install-wide ceiling.
+A consumer cannot run unless the full transitive closure of the substrate it depends on is
+also enabled, and nothing the ceiling disallows runs anywhere.
+Nothing runs that the operator did not opt into, install-wide or per Project.
+Roadmap/vision context: `../../development/CONTROL_PLANE_ROADMAP.md`.
+
+That sentence used to read "nothing runs on a Project that did not opt in", and the
+narrowing on 2026-08-31 is the point rather than a weakening.
+An opt-in is still required and still refuses by default; what changed is *where it can be
+said*.
+Until then the only thing an install could say about an automation was "no" - the ceiling
+subtracts and nothing added - so every "yes" had to be repeated in each Project's file at
+creation time, by a form that wrote three fixed id sets down.
+Two consequences followed, and the second is the one nobody could see: an operator with
+fifteen Projects said the same thing fifteen times, and because the sets were *written*, an
+operator who later changed their mind reached none of the Projects that already existed.
+A Project that had chosen and a Project that had merely been created were indistinguishable
+on disk.
+
+## The four layers
+
+In this order, and deliberately the same four `agent_authority` already draws for the
+authority fields - one shape to learn rather than two:
+
+1. **The Project's own entry** in `<project>/.swe-mux/config.toml` under
+   `automations = { id = bool }`. A written value is a decision somebody made about that
+   repository and outranks anything on this machine, up to the ceiling.
+2. **The install default** (`Config.automation_project_defaults`, automation id → bool),
+   which reaches only ids a Project left unset. This is "what should a Project that has not
+   decided do". It may say `false` as well as `true`: withdrawing a built-in default
+   install-wide is a decision an operator is entitled to make, and it is not the ceiling -
+   it does not cascade and it does not grey a Project's control.
+3. **The registry's own default** (`Automation.default_on`, today just `session_control`),
+   unchanged, so an install that configures nothing behaves exactly as it did.
+4. **The ceiling** (`automation_global_allow` plus the dedicated switches), which caps all
+   three, reaches Projects that wrote an explicit value, cascades over dependents, and only
+   ever subtracts.
+
+`automation_registry.install_defaults(configured)` merges layers 2 and 3 and is the one place
+that happens; `requested_from_config(project_map, defaults)` then applies layer 1 and
+`resolve` applies layer 4.
+
+**A default completes its own dependency closure.** A template naming a consumer whose
+substrate is not also on would resolve to `blocked` and do nothing - a switch that reads on
+and has no effect, which is the exact outcome this whole design exists to prevent. So an id
+left on in the template pulls its closure in with it. An explicit `false` anywhere in that
+closure *stops* the completion rather than being overridden: "run doc debt but never capture
+Tier 0" is a contradiction, and the honest reading is that doc debt is blocked, not that Tier
+0 comes back on behind the operator.
+
+**Widening still never happens by accident.** Layer 2 reaches only unset ids, so setting a
+default cannot change what a Project that decided does; layer 4 only subtracts; and
+`automation_project_defaults` ships empty, so an existing install resolves exactly as it did
+before this layer existed.
+
+**Every explicit `false` is now persisted.** The write path used to strip one as noise
+wherever absence already meant off, keeping it only for a default-on id. That was true while
+the registry was the only thing that could default an id on. It stopped being true the moment
+the install could: absence means *inherit* now, so a stripped `false` is not a Project that is
+off, it is a Project that comes on by itself the next time somebody sets that default. "Off"
+has to stay sayable, and the file is the only place it can be said.
 
 ## Key concepts
 
@@ -142,8 +199,22 @@ that did not opt in. Roadmap/vision context: `../../development/CONTROL_PLANE_RO
 
 - Opt-ins live in `<project>/.swe-mux/config.toml` under `automations = { id = bool }`.
   Unknown ids are rejected on write and dropped on resolve; non-boolean values rejected.
+  An explicit `false` is written down and kept, because absence means inherit.
 - Global config is only an inherited default template a Project overrides — there is no
-  `rules.toml` that executes on every repo.
+  `rules.toml` that executes on every repo. `automation_project_defaults` uses the same
+  loud-on-write, quiet-on-load asymmetry as the ceiling beside it: an unknown or
+  unimplemented id is refused by `config._validate` and scrubbed by `scrub_registry_maps`,
+  since a typo must fail and a build that retired an id must still start. Unlike the
+  ceiling it *keeps* the three dedicated-switch ids: the switch is that automation's
+  ceiling, and "what does an undecided Project do" is a different question the switch does
+  not answer.
+- `scan_timeline_auto_enable` inherits the same way, through
+  `Config.scan_timeline_auto_enable_default` and `registry.resolve_scan_auto_enable`. It is
+  the one Project field that *qualifies* an opt-in rather than being one, and it needed a
+  default for the same reason: the creation form wrote it into every Project it armed, so
+  an operator could never change their mind about it in one place. Its route takes three
+  positions - key absent leaves it alone, explicit `null` removes it (follow global), a
+  boolean pins it.
 - Cross-project consumers (fan-out, absence report) are aggregators over the opted-in
   set, never global automations: a Project that never opted in contributes nothing.
 - Enablement gating is distinct from config-value precedence. Once enabled, a setting
@@ -154,17 +225,39 @@ that did not opt in. Roadmap/vision context: `../../development/CONTROL_PLANE_RO
 ## Toggle surface
 
 The editor is the policy matrix (`frontend/src/AutomationMatrix.tsx`, on the Automation
-workspace's Policy tab): every automation is one row carrying its install-wide Global
-switch and the selected Project's opt-in side by side, plus a fleet count of the Projects
+workspace's Policy tab): every automation is one row carrying the install-wide answer and
+the selected Project's own answer side by side, plus a fleet count of the Projects
 it actually runs in. Rows render grouped by dependency layer (Foundations, Deterministic
 checks, Capabilities, Reads the timeline), so the structure IS the "needs X" story and
 rows carry no per-row dependency prose. It is the one surface that may turn an automation
 off in either scope, which is what keeps every grant gate additive-only.
 
-- Enabling a consumer enables its whole transitive closure in the same action.
+**The Global cell holds two controls**, the same split the agent authority rows below it
+already draw, because the install has two different things to say:
+
+- the **default** checkbox writes `automation_project_defaults` - what a Project that never
+  wrote this id down inherits. It reaches only undecided Projects, so it can never
+  contradict a Project that decided.
+- the **off everywhere** lock writes `automation_global_allow`, or the dedicated install
+  switch for the three rows that have one. It reaches every Project whatever its file says.
+
+Under the pair is the reach line - "12 inherit · 3 custom", or "15 off" when the lock is on -
+so a fleet-wide change is legible before the click rather than discovered after it. A Default
+checkbox with no such line is the version of this control that lets somebody change fifteen
+Projects while believing they changed a preference.
+
+**The Project cell has three positions, not two**: Follow global, On, Off. Follow global
+*removes* the key. Collapsing "inheriting" into "off" is what would make an install default
+unreachable the moment anything touched the Project - the same failure the authority rows'
+dropdown was built to avoid, and the reason that one has three positions too.
+
+- Enabling a consumer enables its whole transitive closure in the same action, in either
+  scope. The Default checkbox cascades identically, and for the identical reason.
 - Disabling substrate disables everything that reads from it, rather than leaving dependents
-  enabled-but-inert.
-- A Project cell whose row the install ceiling blocks greys with the Global cell beside it
+  enabled-but-inert. In the Project scope a dependent that was only *inheriting* is left
+  inheriting: it is already off through the substrate, and pinning it would outlive the
+  choice that caused it.
+- A Project control whose row the install ceiling blocks greys with the lock beside it
   as the fix; the Project's stored choice is retained, never rewritten by the ceiling.
 - Unimplemented ids render disabled and labelled, never as ready to switch on.
 - The agent authority rows (`frontend/src/AutomationAuthority.tsx`) sit in their own section
@@ -182,7 +275,9 @@ off in either scope, which is what keeps every grant gate additive-only.
 - The three starting sets render as preset cards at the head of the matrix: expanded as the
   welcome on a first run (a device-local seen flag), a "Choose preset" button after. Turning
   a set on goes through the ordinary grant; turning it off is this editor's own write and
-  clears exactly the ids the set named, leaving the substrate under them.
+  clears exactly the ids the set named, leaving the substrate under them. An id the install
+  defaults on is cleared to an explicit `false` rather than deleted, or inheritance would
+  hand it straight back and the button would not turn anything off.
 - Spending limits are **not** per-project, and the scan timeline no longer has dedicated
   ones anywhere: it spends under the global automation budget, hourly call cap, and
   per-call output ceiling (`budgets.md`). A `scan_timeline_daily_budget_usd`

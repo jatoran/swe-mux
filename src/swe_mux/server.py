@@ -50,7 +50,11 @@ from .auto_delivery import AutoDeliveryController
 from .automation import (
     AutomationEngine,
 )
-from .automation_registry import effective_global_allow
+from .automation_registry import (
+    effective_global_allow,
+    install_defaults,
+    resolve_scan_auto_enable,
+)
 from .automation_registry import resolve_config as resolve_automation_config
 from .automation_store import AutomationStore
 from .background_tasks import background
@@ -1598,6 +1602,13 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
         the operator disallowed globally (`automation_global_allow`, plus the
         scan timeline's dedicated switch) is off in every Project along with
         everything that depends on it, however the Project's own map reads.
+
+        So does the install-wide *default* template
+        (`automation_project_defaults`), which is the opposite direction and
+        reaches only ids the Project never wrote down. Resolving it here rather
+        than at the call sites is what lets a Project inherit a decision the
+        operator made once, without any of the twenty surfaces that ask "is this
+        on" having to know there is more than one layer.
         """
         now = time.monotonic()
         cached = automation_gate_cache.get(root)
@@ -1607,6 +1618,7 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
         ready = await _llm_ready()
         enabled = resolve_automation_config(
             project_map,
+            install_defaults(config.automation_project_defaults),
             llm_ready=ready.ready,
             global_allow=effective_global_allow(
                 config.automation_global_allow,
@@ -2212,7 +2224,10 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
             project_root=root,
             agent_run_id=record.agent_run_id,
             dead_end_memory_enabled="dead_end_memory" in enabled,
-            auto_enable=bool(values.get("scan_timeline_auto_enable", False)),
+            auto_enable=resolve_scan_auto_enable(
+                values.get("scan_timeline_auto_enable"),
+                default=config.scan_timeline_auto_enable_default,
+            ),
             continuous_title_enabled="continuous_title" in enabled,
             phase_transitions_enabled="phase_transitions" in enabled,
         )

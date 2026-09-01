@@ -115,11 +115,16 @@ def forget_llm_readiness(app: web.Application) -> None:
         gate_cache.clear()
 
 
-#: Config fields the per-Project automation gate resolves under. Editing one
-#: must drop the gate cache so the flip lands on the next event rather than up
-#: to five seconds later, when the HTTP reads (which resolve fresh) would
-#: already disagree with it.
-AUTOMATION_CEILING_FIELDS = frozenset({"automation_global_allow", "scan_timeline_enabled"})
+#: Config fields the per-Project automation gate resolves under - the ceiling
+#: and the inherited default template alike. Editing one must drop the gate
+#: cache so the flip lands on the next event rather than up to five seconds
+#: later, when the HTTP reads (which resolve fresh) would already disagree with
+#: it. The defaults map belongs here for a sharper reason than the ceiling does:
+#: it reaches every Project that never wrote the id down, so a stale cache means
+#: a fleet-wide change appearing Project by Project as each entry expires.
+AUTOMATION_CEILING_FIELDS = frozenset(
+    {"automation_global_allow", "automation_project_defaults", "scan_timeline_enabled"}
+)
 
 
 def apply_runtime_config(app: web.Application, changed: set[str]) -> None:

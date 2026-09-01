@@ -31,6 +31,8 @@ A rollover writes a visible boundary record and resets the transcript cursor, co
 
 That boundary is right as a cost decision and, repeated per conversation, is pure friction for a Project that has already decided it wants a timeline.
 `scan_timeline_auto_enable` in the Project config answers "yes, always" once.
+Since 2026-08-31 it inherits like an opt-in rather than being written per Project: unset means follow `Config.scan_timeline_auto_enable_default`, so an operator answers it once for the install and a Project overrides only where it disagrees (`automation-enablement.md`).
+It was previously written into every Project the creation form armed, which is exactly why nobody could change their mind about it in one place.
 It only ever creates a grant for a run that has **no row at all**: a run the human switched off, or one an ended session disabled, stays off, because an off switch that re-arms itself is not an off switch.
 The snapshot reports `auto_enable` but never applies it - a read that started scanning would make opening the drawer a spending decision - so a brand-new run reads as off until its first trigger arms it.
 Turning the Project's permission off clears the flag, so re-permitting later does not silently re-arm every conversation.

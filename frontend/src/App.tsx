@@ -35,9 +35,11 @@ import { folderNameFromPath } from './pathNames'
 import { agentTargetName } from './agentTargets'
 import { runDisplayName, sessionDisplayName } from './sessionNames'
 import {
-  defaultInitScriptSelection, emptyProjectCreateDraft, projectCreateFolder, projectCreateReady,
-  projectCreateRoot, selectedStartingSets, suggestFolderName, toggleInitScript,
-  type InitScript, type ProjectCreateDraft, type StartingSetCatalog,
+  defaultInitScriptSelection, emptyProjectCreateDraft, inheritedOn, projectCreateEffective,
+  projectCreateFolder, projectCreateOverrides, projectCreateReady, projectCreateRoot,
+  seedRecommendedOverrides, selectedStartingSets, setCreateAutomation, suggestFolderName,
+  toggleInitScript,
+  type InheritedAutomation, type InitScript, type ProjectCreateDraft, type StartingSetCatalog,
 } from './projectCreate'
 import { isStaticPreview, previewLabel, type FleetSnapshot, type Preview } from './processFleet'
 import { isPreviewableDocument } from './staticPreview'
@@ -424,13 +426,19 @@ type StaticPreviewContext = { previewId:string;projectId:string;label:string;x:n
 type TabContext = { leaf:PaneLeaf;label:string;projectId:string;x:number;y:number;source:'tab'|'mobile' } | null
 type RenameTarget = { kind: 'session'; session: Session } | { kind: 'project'; project: Project }
 /** What the create dialog needs from `GET /api/grants`: the named starting sets its
- *  checkboxes apply, and the provider verdict the model-backed one discloses. */
+ *  checkboxes apply, the provider verdict the model-backed one discloses, and what a
+ *  new Project inherits before anything is ticked. */
 type GrantsCatalogue={
   project_starting_sets:StartingSetCatalog
   llm:{ready:boolean;reason:string}
-  /** The registry with each entry's resolved install-wide ceiling, so the
-   *  creation form can grey a set the daemon would refuse to grant. */
-  automations?:{id:string;globally_allowed?:boolean}[]
+  /** The registry with each entry's resolved install-wide ceiling and its
+   *  resolved install default, so the creation form can grey a set the daemon
+   *  would refuse to grant and show what inheriting actually means here. */
+  automations?:InheritedAutomation[]
+  /** The install's default template as stored - which ids the operator has an
+   *  opinion about at all, as opposed to what those opinions resolve to. */
+  project_defaults?:Record<string,boolean>
+  recommended_project_automations?:string[]
 }
 type NoteTarget={projectId:string;kind:'note'|'global-note'|'file'|'worktree-file';resourceId:string;worktree?:string}
 type StartupMilestone = 'pane_mounted' | 'socket_open' | 'replay_ready'
@@ -701,6 +709,22 @@ export function App() {
     const ceiling=new Map(grantsCatalogue.automations.map(item=>[item.id,item.globally_allowed!==false]))
     return set.automations.some(id=>ceiling.get(id)===false)
   }
+  // The rows the create dialog's expansion offers: everything implemented that the
+  // install-wide ceiling permits, ordered the way the policy matrix orders it
+  // (substrate first, then what reads from it) so the two surfaces read alike.
+  const projectCreateAutomationRows:InheritedAutomation[]=(grantsCatalogue?.automations||[])
+    .filter(item=>item.implemented&&item.globally_allowed!==false)
+    .sort((left,right)=>left.requires.length-right.requires.length||left.label.localeCompare(right.label))
+  // What the dialog says before anyone expands it. A count plus the first few names,
+  // because "5 on" alone tells you nothing about whether it is the set you wanted and
+  // the full list does not fit on a summary line.
+  const projectCreateAutomationSummary=(():string=>{
+    if(!grantsCatalogue)return 'reading this install’s defaults…'
+    const effective=projectCreateEffective(projectCreate,projectCreateAutomationRows)
+    if(!effective.length)return 'none — this install turns nothing on by default'
+    const shown=effective.slice(0,3).map(item=>item.label).join(', ')
+    return `${effective.length} on · ${shown}${effective.length>3?`, +${effective.length-3} more`:''}`
+  })()
   const [projectsManagerOpen,setProjectsManagerOpen]=useState(false)
   // Which Project the registry should land on, and whether on its record or its
   // settings. Projects is the only per-Project editor, so every "project settings"
@@ -4045,8 +4069,20 @@ export function App() {
       setProjectCreate(value=>({...value,scripts:defaultInitScriptSelection(scripts)}))
     }catch{/* the dialog still registers a Project without its optional setup commands */}
     try{
-      setGrantsCatalogue(await api<GrantsCatalogue>('GET','/api/grants'))
-    }catch{/* the checkboxes still render; submit refetches the catalogue it needs */}
+      const catalogue=await api<GrantsCatalogue>('GET','/api/grants')
+      setGrantsCatalogue(catalogue)
+      // Pre-tick the free set only where this install has no opinion about it,
+      // so a fresh install's first Project still has working analysis panes and
+      // an install that has expressed a policy is left to inherit it. Applied
+      // once, when the catalogue lands, rather than derived on every render:
+      // it is a starting position the operator may then disagree with, and a
+      // derived value would keep overwriting their disagreement.
+      setProjectCreate(value=>({...value,automationOverrides:seedRecommendedOverrides(
+        catalogue.recommended_project_automations||[],
+        catalogue.automations||[],
+        catalogue.project_defaults||{},
+      )}))
+    }catch{/* the form still registers a Project; it just inherits with nothing ticked */}
   }
 
   const openProjectsManager=(focus?:{project:Project;setting?:string})=>{
@@ -4177,22 +4213,33 @@ export function App() {
     // behind a panel covering the workspace it just switched to.
     setProjectsManagerOpen(false);setProjectsManagerFocus(null);setSidebarOpen(false)
     emitTutorialAction({action:'project-created'})
-    // The ticked starting sets, through the ordinary grant path so they leave the same
-    // audit record as a gate press. One POST for the union rather than one per
-    // checkbox: the daemon computes the dependency closure and writes the Project file
-    // once, so there is one revision and no half-applied state. After the registration
-    // and never before it: a Project that exists with nothing opted in is a normal
-    // state, and one that failed to register has nothing to opt in. `restored` is
-    // skipped because that Project already has whatever table it was registered with.
-    const wantsStartingSets=projectCreate.automations||projectCreate.llm||projectCreate.autonomy
-    if(wantsStartingSets&&!(next as Project&{restored?:boolean}).restored){
+    // Two writes, in this order, and only what actually deviates from what the new
+    // Project would inherit. After the registration and never before it: a Project
+    // that exists with nothing written down is the *normal* state now, and one that
+    // failed to register has nothing to opt in. `restored` is skipped because that
+    // Project already has whatever table it was registered with.
+    //
+    // First the per-automation deviations, through the ordinary revision-checked
+    // Project write. `projectCreateOverrides` drops every id that agrees with the
+    // inherited answer, so a form nobody expanded writes nothing at all and the
+    // Project goes on following this install for as long as it is not told otherwise.
+    //
+    // Then the two optional starting sets, through the ordinary grant path so they
+    // leave the same audit record as a gate press. They stay explicit writes because
+    // one can bill and the other hands agents authority: those are decisions about a
+    // repository, not postures to inherit quietly.
+    if(!(next as Project&{restored?:boolean}).restored){
       try{
         const catalogue=grantsCatalogue??await api<GrantsCatalogue>('GET','/api/grants')
+        const overrides=projectCreateOverrides(projectCreate,catalogue.automations||[])
+        if(Object.keys(overrides).length){
+          await api('PUT',`/api/projects/${next.id}/automations`,{automations:overrides})
+          forgetProjectAutomations(next.id)
+        }
         // A set the ceiling blocks was greyed on the form; strip it here too so
-        // a stale draft flag cannot turn one grant refusal into losing all three.
+        // a stale draft flag cannot turn one grant refusal into losing both.
         const selection=selectedStartingSets({
           ...projectCreate,
-          automations:projectCreate.automations&&!startingSetBlocked('recommended'),
           llm:projectCreate.llm&&!startingSetBlocked('llm'),
           autonomy:projectCreate.autonomy&&!startingSetBlocked('autonomy'),
         },catalogue.project_starting_sets)
@@ -8940,20 +8987,37 @@ export function App() {
             <label>New folder name<input value={projectCreateFolder(projectCreate)} onInput={event=>setProjectCreate(value=>({...value,folder:event.currentTarget.value,folderTouched:true}))} placeholder={suggestFolderName(projectCreate.name)||'horizon'} /></label>
           </>}
         <label>Group<Dropdown value={projectCreate.group_id} onChange={group=>setProjectCreate(value=>({...value,group_id:group}))} options={[{value:'',label:'Ungrouped'},...projectGroups.map(group=>({value:group.id,label:group.name}))]}/></label>
-        {/* One choice instead of twenty checkboxes found later. Everything in this set
-            reads transcripts swe-mux already stores and never calls a model, which is
-            what makes it safe to default on; the scan timeline is the one that spends
-            and is deliberately not in it. A set the install-wide ceiling blocks is
-            greyed with the reason, because the daemon would refuse the grant
-            (`automation_globally_disabled`) and a checkbox that then errors is worse
-            than one that says why it is off. */}
-        <label class="check project-create-automations">
-          <input type="checkbox" checked={projectCreate.automations&&!startingSetBlocked('recommended')} disabled={startingSetBlocked('recommended')} onChange={event=>setProjectCreate(value=>({...value,automations:event.currentTarget.checked}))} />
-          <span><strong>Turn on the free analysis automations</strong>
-          <small>Change map, findings detectors, and commit provenance, for this Project.
-          Free — they read what swe-mux already captures and never call a model. Recorded
-          in the Project’s <code>.swe-mux/config.toml</code>, and changeable any time.</small></span>
-        </label>
+        {/* What this Project will run, and where the answer came from. It is a summary
+            with an expansion rather than a row of checkboxes, because the common case
+            is that the install has already decided and there is nothing here to do:
+            deviating is the exception, and the panel below is where the exception is
+            expressed. A row the install-wide ceiling blocks is not offered at all -
+            the daemon would refuse it, and a control that then errors is worse than
+            one that is not there. */}
+        <details class="project-create-automations">
+          <summary>Automations · {projectCreateAutomationSummary}</summary>
+          <p class="modal-note">These follow this install’s defaults, set once in
+          Automation → Policy. Nothing is written into this Project’s
+          <code>.swe-mux/config.toml</code> unless you change one of them here, so a
+          Project you leave alone keeps following the install as you change your mind.</p>
+          {projectCreateAutomationRows.map(item=>{
+            const on=projectCreate.automationOverrides[item.id]??inheritedOn(item)
+            const deviates=projectCreate.automationOverrides[item.id]!==undefined
+              &&projectCreate.automationOverrides[item.id]!==inheritedOn(item)
+            return <label class="check" key={item.id}>
+              <input type="checkbox" checked={on} onChange={event=>setProjectCreate(value=>({
+                ...value,
+                automationOverrides:setCreateAutomation(
+                  value,projectCreateAutomationRows,item.id,event.currentTarget.checked),
+              }))} />
+              <span><strong>{item.label}</strong>
+              {item.spends&&<em class="project-setting-chip spends">spends</em>}
+              <small>{deviates
+                ?`Just this Project — the install default is ${inheritedOn(item)?'on':'off'}.`
+                :`Inherited from the install default (${inheritedOn(item)?'on':'off'}).`}</small></span>
+            </label>
+          })}
+        </details>
         {/* The two optional sets. Never defaulted on: one can bill and the other hands
             agents real authority, so each is a deliberate choice rather than part of
             the common name-folder-Enter path. Both apply through the same grant path
@@ -8961,10 +9025,13 @@ export function App() {
         <label class="check project-create-automations">
           <input type="checkbox" checked={projectCreate.llm&&!startingSetBlocked('llm')} disabled={startingSetBlocked('llm')} onChange={event=>setProjectCreate(value=>({...value,llm:event.currentTarget.checked}))} />
           <span><strong>Turn on the model-backed automations</strong>
-          <small>Scan timeline (armed for every new session), adaptive session titles,
-          and model narration, plus the detectors they rank over. These call your
-          configured model and can cost money; the budgets are install-wide, in
-          the Automation workspace.{grantsCatalogue&&!grantsCatalogue.llm.ready?' No verified model provider yet, so these stay inert until one is set up under Settings → Accounts.':''}{startingSetBlocked('llm')?' Part of this set is disabled install-wide in Automation → Policy.':''}</small></span>
+          {/* "re-titled", not "titles": naming a pane is the Session titler, an
+              install-wide switch in the Automation workspace that runs whatever a
+              Project opted into. Declining this does not decline session titles. */}
+          <small>Scan timeline (armed for every new session), sessions re-titled when
+          their scope changes, and model narration, plus the detectors they rank over.
+          These call your configured model and can cost money; the budgets are
+          install-wide, in the Automation workspace.{grantsCatalogue&&!grantsCatalogue.llm.ready?' No verified model provider yet, so these stay inert until one is set up under Settings → Accounts.':''}{startingSetBlocked('llm')?' Part of this set is disabled install-wide in Automation → Policy.':''}</small></span>
         </label>
         <label class="check project-create-automations">
           <input type="checkbox" checked={projectCreate.autonomy&&!startingSetBlocked('autonomy')} disabled={startingSetBlocked('autonomy')} onChange={event=>setProjectCreate(value=>({...value,autonomy:event.currentTarget.checked}))} />
