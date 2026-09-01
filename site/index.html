@@ -1640,11 +1640,26 @@ footer .social svg { width: 15px; height: 15px; fill: currentColor; display: blo
     if (view === 'both') return ['.demo-desktop', '.demo-phone'];
     return [view === 'phone' ? '.demo-phone' : '.demo-desktop'];
   }
+  /* One id per page, carried by both of its frames.
+     A BroadcastChannel is scoped to the origin rather than to the page, so without this a
+     second tab of the site is in the same election as this one - and its leader refuses
+     the frames the visitor is actually looking at. Frames of one page still elect between
+     themselves, which is the part that has to keep working. */
+  var PEER = Math.random().toString(36).slice(2, 10);
+  var restarts = 0;
+  function frameSrc(frame, scenario) {
+    var src = frame.getAttribute('data-src');
+    var query = 'peer=' + PEER;
+    /* A distinct URL every time, so asking for the same scenario twice really reloads
+       rather than being treated as a navigation to where the frame already is. */
+    if (scenario) query += '&scenario=' + encodeURIComponent(scenario) + '&run=' + (restarts += 1);
+    return src + (src.indexOf('?') === -1 ? '?' : '&') + query;
+  }
   function promote() {
     if (!armed) return;
     visibleFrames().forEach(function (sel) {
       var frame = stage.querySelector(sel + ' iframe');
-      if (frame && !frame.src) frame.src = frame.getAttribute('data-src');
+      if (frame && !frame.src) frame.src = frameSrc(frame, '');
     });
   }
   /* Render each frame at a device viewport and scale the picture to its box.
@@ -1756,15 +1771,26 @@ footer .social svg { width: 15px; height: 15px; fill: currentColor; display: blo
     visibleFrames().forEach(function (sel) {
       var frame = stage.querySelector(sel + ' iframe');
       if (!frame) return;
-      if (frame.src) {
+      if (!frame.src) { frame.src = frameSrc(frame, chosen); return; }
+      try {
+        frame.contentWindow.dispatchEvent(
+          new frame.contentWindow.CustomEvent('swemux-demo:scenario', { detail: chosen })
+        );
+      } catch (error) { /* mid-navigation; the reload below is the answer */ }
+      /* And then check that the ask took, because there is more than one way for it not
+         to and every one of them looks the same from here: nothing happens, with nothing
+         on screen to say why. The director may have lost its election, the frame may be
+         mid-navigation, the modules may not have evaluated. Reloading it with the
+         scenario in the URL is the one path that cannot fail for any of those reasons -
+         it is a fresh page - and it is what a cold frame already does. */
+      window.setTimeout(function () {
+        var running = false;
         try {
-          frame.contentWindow.dispatchEvent(
-            new frame.contentWindow.CustomEvent('swemux-demo:scenario', { detail: chosen })
-          );
-        } catch (error) { /* mid-navigation; the next choice reaches it */ }
-      } else {
-        frame.src = frame.getAttribute('data-src') + '?scenario=' + encodeURIComponent(chosen);
-      }
+          var shot = frame.contentWindow.__demoDirector.snapshot();
+          running = shot.running && shot.scenarioId === chosen;
+        } catch (error) { running = false; }
+        if (!running) frame.src = frameSrc(frame, chosen);
+      }, 1400);
     });
   });
   document.getElementById('demoreset').addEventListener('click', function () {
