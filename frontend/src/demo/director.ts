@@ -69,6 +69,29 @@ const params = (): URLSearchParams => {
 /** Draw a marker where the *visitor* pressed. Capture only: see the header. */
 export const HIGHLIGHT_INPUT = params().get('highlightInput') === '1'
 
+/** Whether this is the landing page's frame rather than the demo at top level. */
+const embedded = (): boolean => {
+  try { return window.top !== window.self } catch { return true }
+}
+
+/**
+ * Whether a press landed on the chrome the current beat is talking about.
+ *
+ * Read off the published snapshot rather than off the beat, because that is the same
+ * answer the visitor is looking at: the ring's selectors and every callout's target. A
+ * beat that points at nothing - the opening and closing cards - matches nothing, which is
+ * right, because there a press is unambiguously "I am done watching".
+ */
+function onBeatSubject(target: Element): boolean {
+  const notes = snapshot.show?.notes ?? []
+  const selectors = [...(snapshot.spotlight ?? []), ...notes.flatMap(note => note.at)]
+  return selectors.some(selector => {
+    // A malformed selector throws rather than returning null, and one bad entry in a
+    // beat's data must not take the abort listener down with it.
+    try { return Boolean(target.closest(selector)) } catch { return false }
+  })
+}
+
 export type DirectorSnapshot = {
   running: boolean
   scenarioId: string
@@ -101,12 +124,20 @@ export type DirectorSnapshot = {
    * consecutive identical shows would draw once and look like a frozen overlay.
    */
   showSeq: number
+  /**
+   * A run the visitor's own press ended, and where it got to.
+   *
+   * Set only by `stop('interrupted')`, so it is exactly "you took over" and never
+   * "it finished" or "you pressed stop". The view draws it as a chip offering to resume;
+   * see `resume` for what that replays and what it deliberately does not.
+   */
+  paused: { label: string; index: number; total: number } | null
 }
 
 const EMPTY: DirectorSnapshot = {
   running: false, scenarioId: '', blurb: '', index: 0, total: 0,
   eyebrow: '', say: '', body: [], gesture: null, spotlight: null,
-  pointer: null, press: 0, echo: null, show: null, showSeq: 0,
+  pointer: null, press: 0, echo: null, show: null, showSeq: 0, paused: null,
 }
 
 let snapshot: DirectorSnapshot = EMPTY
@@ -137,8 +168,16 @@ function publish(patch: Partial<DirectorSnapshot>): void {
 let token = 0
 /** Ends the wait between two beats early, or null when nothing is waiting. */
 let cutWait: (() => void) | null = null
+
+/** Where the run currently is, so an interruption knows what to offer back. */
+type Playing = { scenarioId: string; label: string; beats: Beat[]; index: number }
+let playing: Playing | null = null
+/** The run a visitor's own press ended, held until they resume it or dismiss it. */
+let resumable: Playing | null = null
 /** Set once the nudge has played or been refused, for the life of this page. */
 let nudgeSpent = false
+/** Set once the embed's one forgiven press has been used, for the life of this page. */
+let spentFirstPress = false
 let lastRealInput = 0
 /** When the demo came into view, or 0 while it is out of it. The nudge's countdown runs
  *  from the later of this and the last real input, so scrolling past does not spend it. */
@@ -259,14 +298,27 @@ async function perform(beat: Beat): Promise<boolean> {
   return true
 }
 
-async function play(scenario: Scenario, beats: Beat[]): Promise<void> {
+/**
+ * Play a scenario's beats, optionally picking up part way through.
+ *
+ * `from` and the act it skips are the whole of the resume story. Re-publishing the beat
+ * is safe and is most of what a returning visitor wants: the card comes back and the
+ * callouts re-measure against whatever is on screen *now*. Re-running its act is not -
+ * `pane.detach` twice makes two panes and a scripted turn replays - so a resumed beat
+ * narrates and the clock carries on from there.
+ */
+async function play(
+  scenario: Scenario, beats: Beat[], from = 0, actOnFirst = true,
+): Promise<void> {
   const mine = token
-  scenario.prepare?.()
-  let elapsed = 0
+  if (from === 0) scenario.prepare?.()
+  let elapsed = beats[from]?.at ?? 0
   for (const [index, beat] of beats.entries()) {
+    if (index < from) continue
     if (!(await dwell(Math.max(0, beat.at - elapsed)))) return
     elapsed = Math.max(elapsed, beat.at)
     const show = typeof beat.show === 'function' ? beat.show() : beat.show
+    playing = { scenarioId: scenario.id, label: scenario.label, beats, index }
     publish({
       index: index + 1,
       total: beats.length,
@@ -279,6 +331,7 @@ async function play(scenario: Scenario, beats: Beat[]): Promise<void> {
       show: show ?? null,
       showSeq: show ? snapshot.showSeq + 1 : snapshot.showSeq,
     })
+    if (index === from && !actOnFirst) continue
     if (!(await perform(beat))) return
   }
   // The last beat needs a dwell of its own, because the loop's dwell belongs to the beat
@@ -292,15 +345,69 @@ async function play(scenario: Scenario, beats: Beat[]): Promise<void> {
 
 // ------------------------------------------------------------------------- control
 
-/** End whatever is playing. Idempotent, and the only way a run ever stops. */
+/**
+ * End whatever is playing. Idempotent, and the only way a run ever stops.
+ *
+ * One reason keeps something behind: `interrupted` means the visitor took over, and the
+ * run they took it from is held so the card can collapse to an offer rather than vanish.
+ * That was the sharp edge in the first autoplaying cut - the demo did not stop *wrongly*,
+ * it stopped with nothing on screen saying it could come back. Every other reason clears
+ * it, because "it finished", "you pressed stop" and "you chose another one" are all
+ * answers rather than accidents.
+ */
 export function stop(reason: 'finished' | 'interrupted' | 'dismissed' | 'replaced'): void {
   if (!snapshot.running && reason !== 'dismissed') return
   token += 1
   cutWait?.()
   cutWait = null
   if (reason === 'dismissed' && snapshot.scenarioId === 'tour') markTourDone()
+  resumable = reason === 'interrupted' ? playing : null
+  playing = null
   releaseDirectorLead()
-  publish({ ...EMPTY, echo: snapshot.echo, press: snapshot.press, showSeq: snapshot.showSeq })
+  publish({
+    ...EMPTY,
+    echo: snapshot.echo,
+    press: snapshot.press,
+    showSeq: snapshot.showSeq,
+    paused: resumable
+      ? { label: resumable.label, index: resumable.index + 1, total: resumable.beats.length }
+      : null,
+  })
+}
+
+/**
+ * Pick an interrupted run back up, from the beat it was on.
+ *
+ * The election is re-run, because stopping released the lead: a frame that resumed
+ * without claiming it would drive a fixture another frame believes it owns.
+ */
+export async function resume(): Promise<boolean> {
+  const target = resumable
+  if (!target || snapshot.running) return false
+  const scenario = scenarioById(target.scenarioId)
+  if (!scenario) return false
+  if (!(await requestDirectorLead(narrow()))) return false
+  resumable = null
+  token += 1
+  publish({
+    ...EMPTY,
+    running: true,
+    scenarioId: scenario.id,
+    blurb: scenario.blurb,
+    total: target.beats.length,
+    press: snapshot.press,
+    showSeq: snapshot.showSeq,
+  })
+  void play(scenario, target.beats, target.index, false)
+  return true
+}
+
+/** Put the offer away without resuming. The run is gone; the demo is theirs. */
+export function dismissResume(): void {
+  if (!resumable) return
+  if (resumable.scenarioId === 'tour') markTourDone()
+  resumable = null
+  publish({ paused: null })
 }
 
 /**
@@ -412,11 +519,27 @@ export function installDirector(): void {
     // The nudge is spent by the first touch whether or not it was playing: a visitor who
     // arrived and started clicking has already answered the question the nudge asks.
     nudgeSpent = true
-    // One rule, for every scenario including the walkthrough: the first touch is the
-    // handover. There used to be an exception for the tour, whose gates *were* real input
-    // so aborting on one would have made it impossible to finish; the tour drives itself
-    // now, so the exception went with the gates.
-    if (snapshot.running) stop('interrupted')
+    if (!snapshot.running) return
+    // A pointer press on the chrome this beat is *about* is joining in, not leaving.
+    // The tour spends two minutes saying "here is a thing you can press", and a rule that
+    // punished pressing it was the one thing about the autoplay that read as fragile.
+    // Keydown is deliberately not forgiven: typing is a takeover wherever it lands, and
+    // the composer sits inside the pane the talking beats point at.
+    if (event.type !== 'keydown' && target && onBeatSubject(target)) return
+    // And the first press into an *embedded* frame is forgiven once, because that press
+    // is usually how you reach anything inside an iframe at all rather than a decision
+    // about the demo, and reading it as a handover made the visitor's very first act on
+    // the landing page end the tour.
+    //
+    // Deliberately a counter and not `document.hasFocus()`: a same-origin frame reports
+    // itself focused before it has ever been clicked (measured), so the reading that
+    // sounds precise is the one that does not work. The counter costs at most one press,
+    // and only a press that was going to stop the run - the check above runs first.
+    if (embedded() && event.type !== 'keydown' && !spentFirstPress) {
+      spentFirstPress = true
+      return
+    }
+    stop('interrupted')
   }
   for (const name of ['pointerdown', 'keydown', 'touchstart']) {
     document.addEventListener(name, onRealInput, { capture: true, passive: true })

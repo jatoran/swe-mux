@@ -16,7 +16,8 @@ import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { placeTutorialCard } from '../tutorial.ts'
 import { DemoShow } from './DemoShow.tsx'
 import {
-  advanceBeat, directorSnapshot, stop, subscribeDirector, type DirectorSnapshot,
+  advanceBeat, directorSnapshot, dismissResume, resume, stop, subscribeDirector,
+  type DirectorSnapshot,
 } from './director.ts'
 import { firstVisible } from './drive.ts'
 
@@ -76,7 +77,22 @@ export function DemoDirector() {
     }
   }, [view.running, key])
 
-  if (!view.running) return null
+  // A run the visitor's own press ended collapses to an offer rather than vanishing. It
+  // is deliberately small and out of the way: they took over on purpose, and the demo has
+  // no business asking them to justify it. The wrapper carries `demo-director` so the
+  // abort listener's own exemption covers these two buttons.
+  if (!view.running) {
+    if (!view.paused) return null
+    return <div class="demo-director demo-director-resume" role="status">
+      <button
+        class="demo-director-next"
+        title={view.paused.label}
+        onClick={() => void resume()}
+      >resume</button>
+      <span class="demo-director-count">{view.paused.index} / {view.paused.total}</span>
+      <button aria-label="Dismiss the demo walkthrough" onClick={dismissResume}>×</button>
+    </div>
+  }
 
   // A card with a body is the walkthrough's, and it follows the chrome it explains. A
   // caption belongs to a scripted run and stays at the foot of the frame - see the CSS.
