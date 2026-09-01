@@ -198,11 +198,14 @@ function tourDesktop(): Beat[] {
       spotlight: ['.sidebar'],
       gate: { kind: 'click', selectors: ['.session-row'] },
       hint: 'Click any session to focus its pane',
-      // The one beat that labels rather than points. A row carries seven facts in about
-      // forty pixels, and naming them one at a time would be seven stops nobody would sit
-      // through; the sweep crosses the column once and each label wakes as it passes.
+      // The one beat that labels rather than points, and it does it one label at a time.
+      // Six at once is six things being pointed at: a visitor reading any of them has to
+      // work out which of six leader lines belongs to it before the label means anything,
+      // and the answer is on the far side of five others. So the band crosses the column
+      // once to say "all of this", and then the labels take turns against a dimmed frame.
+      // It loops, because the beat is gated - it waits for the visitor, not the reverse.
       show: {
-        reveal: 'sweep',
+        reveal: 'walk',
         sweep: ['.sidebar'],
         crt: true,
         notes: [
@@ -215,9 +218,10 @@ function tourDesktop(): Beat[] {
         ],
       },
       body: [
-        'Projects group sessions; each row carries live state, the model, how long the'
-        + ' current turn has been running, and what its checkout looks like.',
-        'Click one - the workspace focuses that pane.',
+        'Projects group sessions, and each row is scanned here one part at a time: live'
+        + ' state with the context left around it, what it started, how long the current'
+        + ' turn has been running, its checkout, and the model.',
+        'Click any session - the workspace focuses that pane.',
       ],
     },
     {
@@ -338,6 +342,7 @@ function tourMobile(): Beat[] {
       // a monitor does.
       show: {
         reveal: 'walk',
+        sweep: ['.sidebar'],
         crt: true,
         notes: [
           { at: rowPart('s-working', '.state-indicator'), label: 'state', sub: 'and context left' },
