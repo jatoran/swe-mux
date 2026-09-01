@@ -382,6 +382,11 @@ The guard is also not a substitute for choosing targets that fit: the phone rail
 `data-row-field` in `SessionRowBody.tsx` is what makes the naming possible at all: the only other handle on a row's model or worktree was a `title` string, which is copy, so a reworded tooltip would silently break whatever selected on it.
 `data-settings-tab` and `data-keymap-preset` exist for the same reason on the surfaces the keymap scenario drives, as do `data-file-path` on a File Explorer tree row and `data-provider-account` on a saved-account row - the latter especially, because the only other handle on that row is the `active` class, which is exactly what the act being demonstrated changes.
 
+**One stop writes a setting instead of pressing a control, and it is the only one.**
+The sidebar section ends by applying the row layout's three presets to the *live* column - Minimal, Detailed, then the visitor's own back - so the claim "these are the same nine sessions drawn differently" is made by the nine sessions rather than by a screenshot of them.
+Driving the editor would have been the usual rule, and here it defeats the beat: the editor is inside a modal that would cover the sidebar the stop exists to show changing.
+`saveSessionRowConfig` is the app's own persistence path, byte for byte what the editor's preset button calls, so the settings store, the PUT and the redraw are all the real ones; what is skipped is the navigation, not the mechanism.
+
 **The rail stop runs before the split, and the order is load-bearing.**
 Detaching a pane halves the workspace, which halves the rail, and half of what that beat names scrolls off the right edge; the off-screen guard above then drops those labels silently.
 The same beat also produced a product change, because the demo is the first place anybody looks at the *default* rail rather than their own: `approveOnce` sat fourth in `DEFAULT_RAIL_ROWS.desktop`, which is the wrong reading of "important" - it matters while a turn is asking and is inert the rest of the time, so it was spending one of the eight visible slots on a control that is usually disabled.
@@ -391,7 +396,7 @@ The eight scenarios, and why those:
 
 | Scenario | What it demonstrates |
 |---|---|
-| `tour` | The interface itself, and the layout it explains: the Project seeds as **one pane** with every session in it as a tab, and the tour produces the split and the side panel with `pane.detach` and the panel's own tabs. Showing a workspace and showing how one is made are different things. |
+| `tour` | The interface itself, and the layout it explains: the Project seeds as **one pane** with every session in it as a tab, and the tour produces the split and the side panel with `pane.detach` and the panel's own tabs. Showing a workspace and showing how one is made are different things. Its rail section runs to the end of the strip before it opens anything, so the two pickers and the overflow come first and Branch - the one chip whose point is the surface it opens - comes last. |
 | `queue` | A turn ends, a prompt queued behind it delivers itself as keystrokes, and an alert fires. The cheapest, and it shows the control plane rather than the terminal - the part that is not commodity. Also the idle nudge. |
 | `orchestrate` | One session drafts two spawn requests, a human approves, the two report back into the requester's queue. The highest pitch value, and it draws the boundary: an agent can ask, only a person can start. |
 | `preview` | A shell starts a dev server and its listener opens as a preview pane. The most visual, and it now produces the pane rather than finding it: the seed carries no preview at all, because a served page on screen before anything served one is the thing this scenario exists to show happening. |
