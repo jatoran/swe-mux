@@ -387,9 +387,11 @@ class SessionRecord:
     spawn_backend: Backend | None = None
     spawn_native_session_id: str | None = None
     # The provider account mux had selected when this process started, stamped
-    # once and never updated. A provider CLI reads its credential file at
-    # startup, so a switch made afterwards does not move a running session; the
-    # only moment this is knowable for a given process is the moment it spawns.
+    # once and never updated. Whether a switch made afterwards moves a running
+    # session is the provider's own behaviour (Claude Code re-reads its credential
+    # file, Codex keeps the token it read at startup - see
+    # `provider_accounts._ProviderProfile.switch_reaches_live`), and the moment
+    # of spawn is the only one mux can vouch for either way.
     #
     # This is what mux *selected*, not proof of what the process authenticates
     # as - a ``/login`` typed inside the pane is invisible here - so every

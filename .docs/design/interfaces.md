@@ -2588,9 +2588,11 @@ lets reconciliation move credentials into a saved account; a weaker match is rep
 re-derives every saved account's owner. Saved accounts resolving to one provider account carry
 `conflict`, and every non-primary duplicate stops being polled and reports quota status
 `conflict`. Selection is never refused and never confirmed, including while live sessions of
-that provider are running: those processes re-read the shared credential file when its mtime
-changes, and a selection guard defends the switch against a token rotation that was already in
-flight from the outgoing login. `GET
+that provider are running. Whether those processes follow the switch is the CLI's behaviour and
+the payload declares it per provider as `switch_reaches_live` (Claude Code re-reads the shared
+credential file when its mtime changes; Codex keeps the token it read at startup until
+restarted), and a selection guard defends the switch against a token rotation that was already
+in flight from the outgoing login. `GET
 /provider-accounts/audit` returns the append-only record of credential-affecting decisions
 (action, matched-by, truncated digests) and never credential contents. Quota samples carry
 `provider_account_uuid`, the verified account a sample describes independent of the slot it was

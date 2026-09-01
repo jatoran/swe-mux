@@ -160,6 +160,11 @@ class _ProviderProfile:
     system_auth_dir: str
     login_args: tuple[str, ...]
     usage_url: str
+    #: Whether a CLI already running follows a credential switch, or keeps the
+    #: login it read at startup until it is restarted. A fact about the vendor's
+    #: process, not about mux, and one every surface that counts live sessions
+    #: per account has to know before it can say what the count means.
+    switch_reaches_live: bool
 
 
 def _provider_profile(provider: ManagedProvider) -> _ProviderProfile:
@@ -169,6 +174,15 @@ def _provider_profile(provider: ManagedProvider) -> _ProviderProfile:
             system_auth_dir=".claude",
             login_args=("auth", "login", "--claudeai"),
             usage_url=CLAUDE_USAGE_URL,
+            # Read out of the Claude Code binary (2.1.257): its credential cache
+            # records the file's `mtimeMs`, and the refresh check that runs ahead
+            # of each request stats `.credentials.json` and drops the cached token
+            # when the mtime moved. `select()` replaces the file atomically, so a
+            # pane started before a switch sends its next request as the new
+            # account. Only the CLI's own `/status` line stays stale, because the
+            # profile block it prints from is held in memory (see
+            # `_restore_oauth_account`).
+            switch_reaches_live=True,
         )
     if provider == "codex":
         return _ProviderProfile(
@@ -176,6 +190,10 @@ def _provider_profile(provider: ManagedProvider) -> _ProviderProfile:
             system_auth_dir=".codex",
             login_args=("login",),
             usage_url=CODEX_USAGE_URL,
+            # Observed by the operator: the Codex CLI reads `auth.json` at startup
+            # and keeps the token in memory, so a session started before a switch
+            # keeps spending the outgoing account until it is restarted.
+            switch_reaches_live=False,
         )
     assert_never(provider)
 
@@ -1169,6 +1187,15 @@ class ProviderAccountManager:
             "refreshing": self._refresh_lock.locked(),
             "login": {provider: self._login_state(provider) for provider in PROVIDERS},
             "login_commands": {provider: self._login_command(provider) for provider in PROVIDERS},
+            # Whether a switch reaches the sessions already running, per provider.
+            # Declared here, on the profile, rather than spelled per provider in
+            # the browser: the count below means "still spending the outgoing
+            # login" for one CLI and "will follow on its next request" for the
+            # other, and the surface printing it must not guess which.
+            "switch_reaches_live": {
+                provider: _provider_profile(provider).switch_reaches_live
+                for provider in PROVIDERS
+            },
             # Computed here rather than joined in the browser, so the phone, the
             # popover and Settings cannot disagree about how many sessions are
             # still on the outgoing login.
@@ -1365,9 +1392,10 @@ class ProviderAccountManager:
 
         Not "sessions using this account", and the distinction is the whole of
         why it is worth reporting. mux records what it had selected the moment
-        the process started; it cannot see a `/login` typed inside a pane, and a
-        CLI already running may hold the credential it read at startup rather
-        than following a later switch. Every surface drawing these numbers says
+        the process started; it cannot see a `/login` typed inside a pane, and
+        whether a CLI already running follows a later switch is the provider's
+        own behaviour (`_ProviderProfile.switch_reaches_live`, carried on the
+        snapshot beside these counts). Every surface drawing these numbers says
         "spawned under" for that reason.
 
         Resolved through the provider's own account id before the local slot,
@@ -1413,19 +1441,20 @@ class ProviderAccountManager:
         }
 
     async def select(self, provider_value: str, account_id: str) -> dict[str, Any]:
-        """Switch the live login. Never refused, and never retroactive.
+        """Switch the live login. Never refused; whether it reaches sessions
+        already running is the provider's behaviour, not mux's.
 
-        Every process started after this reads the new credential. A process
-        already running may not: a CLI that read its auth file at startup and
-        holds the token in memory keeps spending the outgoing account until it
-        is restarted, which is observed behaviour for Codex. This used to claim
-        the opposite - that live sessions re-read the file on an mtime change -
-        and nothing ever measured it.
+        Every process started after this reads the new credential. Whether a
+        process already running follows is `_ProviderProfile.switch_reaches_live`:
+        Claude Code re-reads its credential file when the mtime moves, so a live
+        pane spends the new account from its next request; Codex reads
+        `auth.json` at startup and keeps the outgoing token until restarted. The
+        audit line says which of the two the live sessions got.
 
-        It is still never refused and never confirmed, because the operator
-        asking for a switch is not helped by a dialog: what they need is to be
-        able to see which sessions stayed behind, which is `session_counts`.
-        The selection guard remains for the narrower case it was written for, an
+        It is never refused and never confirmed, because the operator asking for
+        a switch is not helped by a dialog: what they need is to see which
+        sessions were started under which login, which is `session_counts`. The
+        selection guard remains for the narrower case it was written for, an
         outgoing refresh already in flight when the swap lands.
         """
         provider = _provider(provider_value)
@@ -1435,6 +1464,7 @@ class ProviderAccountManager:
                 raise ProviderAccountError("account provider does not match")
             active = _record(self._manifest.get("selected")).get(provider)
             live = self.live_sessions(provider)
+            reaches_live = _provider_profile(provider).switch_reaches_live
             content, _ = self._read_json_auth(self._managed_auth_path(provider, account_id))
             previous_digest = _string(account.get("auth_digest"))
             _atomic_write(self._system_auth_path(provider), content)
@@ -1451,9 +1481,26 @@ class ProviderAccountManager:
                 matched_by="user",
                 old_digest=previous_digest,
                 new_digest=_string(account.get("auth_digest")),
-                detail=f"{len(live)} live session(s)" if live else None,
+                detail=(
+                    f"{len(live)} live session(s), "
+                    + (
+                        "reached on their next request"
+                        if reaches_live
+                        else "kept on the outgoing login until restarted"
+                    )
+                )
+                if live
+                else None,
             )
             if live and active != account_id:
+                log.info(
+                    "provider account switched under live sessions: provider=%s account=%s "
+                    "live=%d switch_reaches_live=%s",
+                    provider,
+                    account_id,
+                    len(live),
+                    reaches_live,
+                )
                 self._arm_selection_guard(provider, account_id)
             else:
                 self._selection_guard.pop(provider, None)
