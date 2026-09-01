@@ -107,6 +107,17 @@ export type Scenario = {
   label: string
   /** One line, shown while it plays. */
   blurb: string
+  /**
+   * Which card this run draws.
+   *
+   * `anchored` follows the chrome each beat explains and carries a counter and Next;
+   * `caption` (the default) is a strip at the foot of the frame. It is a property of the
+   * *run* rather than of a beat - a walkthrough is a walkthrough at every stop - and it
+   * is stated here because the view used to infer it from "does this beat have a body",
+   * which stopped being true the moment a stop had nothing left to say beyond its
+   * headline.
+   */
+  card?: 'anchored' | 'caption'
   /** Put the fleet into the state this scenario opens on. Deliberately not a full reset:
    *  a visitor who has been playing keeps their panes, notes and layout. */
   prepare?: () => void
@@ -192,16 +203,13 @@ function tourDesktop(): Beat[] {
     {
       at: 0,
       eyebrow: 'THE REAL INTERFACE',
-      say: 'This is the actual app, running on a fake daemon.',
-      body: [
-        'Every pane, panel and menu is the shipped frontend. The sessions are invented and'
-        + ' the agents only tell jokes; nothing else is a mock-up.',
-      ],
+      say: 'The real app. Nothing here is a mock-up.',
+      body: ['Invented sessions, shipped frontend.'],
     },
     {
       at: 3_200,
       eyebrow: 'THE FLEET',
-      say: 'Every session, in one column.',
+      say: 'Every agent, at a glance.',
       spotlight: ['.sidebar'],
       // The one beat that labels rather than points, and it does it one label at a time.
       // Nine at once is nine things being pointed at: a visitor reading any of them has to
@@ -228,16 +236,12 @@ function tourDesktop(): Beat[] {
           { at: rowPart('s-shell', '.row-title'), label: 'a plain shell' },
         ],
       },
-      body: [
-        'The dot is live state and the ring around it is how much of the context window'
-        + ' has gone, so a conversation running out of room says so before it stops making'
-        + ' sense.',
-      ],
+      body: ['State, context left, and what it started.'],
     },
     {
       at: 21_700,
       eyebrow: 'THE COMMAND RAIL',
-      say: 'The things a mouse cannot type.',
+      say: 'The acts a terminal has no key for.',
       spotlight: ['.terminal-action-rail'],
       // This stop comes *before* the split, and the order is load-bearing: splitting the
       // workspace halves the pane, which halves the rail, and half of what this beat names
@@ -266,12 +270,11 @@ function tourDesktop(): Beat[] {
           { at: railItem('skills'), label: 'skills, by name' },
         ],
       },
-      body: ['Not a keyboard. The acts a terminal has no key for.'],
     },
     {
       at: 36_100,
       eyebrow: 'BRANCHING',
-      say: 'And the last one forks the conversation.',
+      say: 'Fork the conversation from any turn.',
       click: railItem('branch'),
       spotlight: ['[aria-label="Choose where to branch this conversation"]'],
       // The real dialog, on the real transcript: the point list is this session's own
@@ -286,20 +289,17 @@ function tourDesktop(): Beat[] {
           { at: ['.modal-footer span'], label: 'and exactly what it will carry' },
         ],
       },
-      body: [
-        'A branch is a new session carrying the conversation up to a point you choose, so'
-        + ' a wrong turn costs one fork rather than the whole thread.',
-      ],
+      body: ['A wrong turn costs one branch, not the thread.'],
     },
     {
       at: 43_600,
       eyebrow: 'ALL OF THEM',
-      say: 'The rail is a ranking, not the whole set.',
+      say: 'Nothing was branched.',
       // Escape on a beat of its own, and this is the reason: `perform` runs a beat's
       // `key` *after* its `click`, so a beat that closed one surface and opened another
       // would open it and then shut it again.
       key: 'Escape',
-      body: ['Nothing was branched. What fits on the strip is what a pane this wide has room for.'],
+      body: ['The strip is a ranking, not the whole set.'],
     },
     {
       at: 46_600,
@@ -313,21 +313,20 @@ function tourDesktop(): Beat[] {
           { at: ['.rail-overflow-configure'], label: 'and where you rebuild it' },
         ],
       },
-      body: ['Every action in the row, in the order you put them, on every pane.'],
+      body: ['In the order you put them, on every pane.'],
     },
     {
       at: 51_600,
       eyebrow: 'ONE PANE, OR SEVERAL',
-      say: 'Right now every session is a tab in one pane.',
+      say: 'One pane, every session a tab.',
       key: 'Escape',
       spotlight: ['.sidebar'],
-      body: ['Which is where a workspace starts, not where it stays.'],
     },
     {
       at: 54_600,
       click: sessionRow(talker),
       spotlight: sessionRow(talker),
-      body: ['Picking one in the column brings it to the front of the workspace.'],
+      body: ['Picking one brings it to the front.'],
     },
     {
       at: 57_400,
@@ -338,18 +337,15 @@ function tourDesktop(): Beat[] {
       command: 'pane.detach',
       spotlight: ['.workspace'],
       show: { arrive: [['.terminal-pane.focused']] },
-      body: [
-        'Panes split, stack, zoom and swap, and the arrangement belongs to the Project'
-        + ' rather than to this browser.',
-      ],
+      body: ['The arrangement belongs to the Project, not this browser.'],
     },
     {
       at: 61_000,
       eyebrow: 'TALK TO IT',
-      say: 'The composer is the CLI\'s own, drawn by the CLI.',
+      say: 'The composer is the CLI\'s own.',
       type: { session: talker, text: 'is the cart endpoint still slow?', pace: 42 },
       spotlight: ['.terminal-pane.focused', '.terminal-pane'],
-      body: ['swe-mux is the multiplexer around it, not a chat window bolted on top.'],
+      body: ['A multiplexer around it, not a chat window.'],
     },
     {
       at: 64_400,
@@ -365,28 +361,24 @@ function tourDesktop(): Beat[] {
           ],
         })
       },
-      body: ['Every keystroke goes to the real process; nothing here is replayed video.'],
+      body: ['A real process, not replayed video.'],
     },
     {
       at: 71_900,
       eyebrow: 'THE SIDE PANEL',
-      say: 'Notes that outlive the conversation.',
+      say: 'Notes that outlive the context window.',
       command: 'drawer.show:notes',
       spotlight: DRAWER_TAB('Notes'),
       show: { arrive: [DRAWER_TAB('Notes')] },
-      body: [
-        'A scratchpad per Project and one for the machine, editable here and openable as a'
-        + ' pane. A context window is gone at the end of a turn; this is where the things'
-        + ' it must not forget live.',
-      ],
+      body: ['One per Project, one for the machine.'],
     },
     {
       at: 77_500,
       eyebrow: 'THE FILES',
-      say: 'The checkout, browsable beside the terminal.',
+      say: 'The checkout, beside the terminal.',
       command: 'drawer.show:files',
       spotlight: ['.drawer-files-browser'],
-      body: ['The real tree, search over names and contents, and a Recent view fed by Git.'],
+      body: ['Search names or contents; Recent is fed by Git.'],
     },
     {
       at: 81_500,
@@ -409,18 +401,15 @@ function tourDesktop(): Beat[] {
           { at: ['.code-editor'], label: 'highlighted, editable, saved back' },
         ],
       },
-      body: ['Ctrl-click opens it as a pane instead, beside the session that is working on it.'],
+      body: ['Ctrl-click opens it as a pane instead.'],
     },
     {
       at: 90_100,
       eyebrow: 'THE CONVERSATION',
-      say: 'The turn you just watched, as messages.',
+      say: 'That turn, as readable messages.',
       command: 'drawer.show:transcript',
       spotlight: DRAWER_TAB('Transcript'),
-      body: [
-        'Merged into readable messages with the tool calls between them - searchable,'
-        + ' copyable, never scrolled away.',
-      ],
+      body: ['Searchable, copyable, never scrolled away.'],
     },
     {
       at: 95_100,
@@ -428,10 +417,7 @@ function tourDesktop(): Beat[] {
       say: 'Worktrees, commits, and who made them.',
       command: 'drawer.show:git',
       spotlight: DRAWER_TAB('Git'),
-      body: [
-        'One row per checkout with the sessions standing in it, the real commit graph, and'
-        + ' each commit traced back to the run that produced it.',
-      ],
+      body: ['Every commit traced to the run that wrote it.'],
     },
     {
       at: 100_100,
@@ -442,7 +428,6 @@ function tourDesktop(): Beat[] {
       command: 'drawer.close',
       click: ['.resource-usage-summary'],
       spotlight: ['.resource-usage-popover', '.resource-usage-summary'],
-      body: ['System CPU, the whole process tree\'s RAM, and how many processes that is.'],
     },
     {
       at: 103_700,
@@ -466,18 +451,17 @@ function tourDesktop(): Beat[] {
     {
       at: 109_900,
       eyebrow: 'WHOSE QUOTA',
-      say: 'Every window, on every saved account.',
+      say: 'Every quota window, always in view.',
       key: 'Escape',
       spotlight: ['.account-summary'],
       show: {
         reveal: 'blueprint',
         notes: [{ at: ['.account-summary button'], label: 'three windows', sub: 'five-hour, weekly, and the big model' }],
       },
-      body: ['The sidebar carries the reading; the panel behind it carries the accounts.'],
     },
     {
       at: 114_100,
-      say: 'Several accounts, and the sessions each one is carrying.',
+      say: 'Several accounts, and what each is carrying.',
       click: ['.account-summary button'],
       spotlight: ['.account-popover'],
       show: {
@@ -487,30 +471,27 @@ function tourDesktop(): Beat[] {
           { at: ['.account-popover .account-refresh-age'], label: 'and when that was last true' },
         ],
       },
-      body: ['Quotas are polled, not guessed, and every account says how old its reading is.'],
+      body: ['Polled, not guessed.'],
     },
     {
       at: 119_500,
-      say: 'Switching is a choice about which saved credential is current.',
+      say: 'Switch which credential is current.',
       click: ['.account-popover [data-provider-account$="-work"]'],
       show: { shimmer: [['.account-popover [data-provider-account$="-work"]']] },
-      body: ['New sessions spawn under it; the ones already running keep the account they started on.'],
+      body: ['Running sessions keep the one they started on.'],
     },
     {
       at: 123_100,
       click: ['.account-popover [data-provider-account$="-personal"]'],
       show: { shimmer: [['.account-popover [data-provider-account$="-personal"]']] },
-      body: ['And back. Nothing was signed in or out - both credentials were already there.'],
+      body: ['And back. Nothing was signed in or out.'],
     },
     {
       at: 126_700,
       eyebrow: 'IT IS YOURS NOW',
-      say: 'Break it however you like.',
+      say: 'It is yours. Break it.',
       key: 'Escape',
-      body: [
-        'Everything persists in this browser and nowhere else. The menu above the frame'
-        + ' replays this and plays seven more.',
-      ],
+      body: ['Everything persists in this browser and nowhere else.'],
     },
   ]
 }
@@ -529,21 +510,20 @@ function tourMobile(): Beat[] {
     {
       at: 0,
       eyebrow: 'THE REAL INTERFACE',
-      say: 'The phone layout, not a screenshot of one.',
-      body: ['The same frontend the desktop runs, laid out for a thumb.'],
+      say: 'The phone layout, not a picture of one.',
+      body: ['The same frontend, laid out for a thumb.'],
     },
     {
       at: 2_800,
       eyebrow: 'GESTURE',
-      say: 'Swipe right to reach the fleet.',
+      say: 'Swipe right for the fleet.',
       command: 'sidebar.open',
       gesture: 'right',
-      body: ['Both panels live off the edges of the screen.'],
     },
     {
       at: 6_200,
       eyebrow: 'THE FLEET',
-      say: 'Every row says this much.',
+      say: 'Every agent, at a glance.',
       // A walk rather than the desktop's swept column: an open panel covers most of a
       // phone, so there is no gutter to lay six labels out in, and the targets that stay
       // narrow enough to point at individually are the ones worth naming anyway. The
@@ -564,7 +544,6 @@ function tourMobile(): Beat[] {
           { at: rowField('s-rage', 'model'), label: 'model' },
         ],
       },
-      body: ['The desktop\'s row at a width that has to earn every token.'],
     },
     {
       at: 18_800,
@@ -593,7 +572,7 @@ function tourMobile(): Beat[] {
           { at: railItem('prompts'), label: 'send a saved prompt', sub: 'no typing at all' },
         ],
       },
-      body: ['This strip is why a phone can drive an agent rather than watch one.'],
+      body: ['No arrows and no control key on a phone.'],
     },
     {
       at: 29_400,
@@ -601,10 +580,7 @@ function tourMobile(): Beat[] {
       say: 'A real turn, in a real process.',
       type: { session: talker, text: 'is the checkout test still flaky?', pace: 42 },
       spotlight: ['.terminal-pane.focused', '.terminal-pane'],
-      body: [
-        'This frame refuses the phone keyboard on purpose - it is an embed, so it cannot'
-        + ' measure one. Open it full screen for the real thing.',
-      ],
+      body: ['This frame refuses the soft keyboard; open it full screen.'],
     },
     {
       at: 32_600,
@@ -628,15 +604,12 @@ function tourMobile(): Beat[] {
       say: 'Swipe left for the side panel.',
       command: 'drawer.toggle',
       gesture: 'left',
-      body: [
-        'Notes that outlive the turn, the checkout\'s own files, the transcript, Git and'
-        + ' alerts. Two fingers moves between tabs, and every gesture is rebindable.',
-      ],
+      body: ['Notes, files, transcript, Git, alerts.'],
     },
     {
       at: 45_000,
       eyebrow: 'IT IS YOURS NOW',
-      say: 'Have a look around.',
+      say: 'It is yours. Have a look.',
       command: 'drawer.close',
       body: ['Everything persists in this browser and nowhere else.'],
     },
@@ -1304,6 +1277,10 @@ export const SCENARIOS: Scenario[] = [
     id: 'tour',
     label: 'Take the tour of the whole interface',
     blurb: 'A hands-off walk around the whole app. Touch anything to take over.',
+    // The one run whose card follows the chrome and counts its stops. Every other entry
+    // is a caption at the foot of the frame: they narrate a thing happening rather than
+    // walk somebody through a surface.
+    card: 'anchored',
     beats: tourDesktop(),
     mobileBeats: tourMobile(),
   },

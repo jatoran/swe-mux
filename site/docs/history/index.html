@@ -473,31 +473,11 @@ a:focus-visible, button:focus-visible { outline: 2px solid var(--green); outline
   .demo-stage { padding: 0; }
 }
 
-/* ------------------------------------------------------------- hero visual */
-/* Two real captures rather than the dashed frames that stood here: the desktop
-   workspace at full width, with the phone overlapping its lower right. Both are
-   solid-bordered, because a dashed frame around a real screenshot reads as "not
-   done yet" and this is the first thing anyone sees. */
-.herovis { position: relative; margin-top: clamp(30px, 5vw, 52px); margin-bottom: clamp(26px, 4vw, 46px); }
-.herovis .frame {
-  border: 1px solid var(--line-2); background: var(--panel-2); overflow: hidden;
-}
-.herovis .phone {
-  position: absolute; right: clamp(14px, 4vw, 58px); bottom: clamp(-46px, -7%, -20px);
-  width: clamp(84px, 15%, 186px);
-  border: 1px solid var(--line-2); border-radius: 11px; overflow: hidden;
-  box-shadow: 0 0 0 7px var(--bg); background: var(--panel);
-}
-.herovis img { display: block; width: 100%; height: auto; }
-@media (max-width: 620px) {
-  .herovis { padding-right: 0; }
-  .herovis .phone { position: static; width: 96px; margin: 10px 0 0 auto; }
-}
-/* Whatever follows the hero visual has to clear the phone overlay, which above
-   620px hangs up to 46px below `.herovis`. Below 620px the phone is back in
-   flow and the same margin is dead space, so it drops back to the normal one. */
-.shotgap { margin-top: clamp(56px, 8vw, 80px); }
-@media (max-width: 620px) { .shotgap { margin-top: clamp(34px, 5vw, 56px); } }
+/* --------------------------------------------------------- after the demo */
+/* `.shotgap` used to clear a phone screenshot that overhung the composite above it.
+   The composite is gone (see the markup) and the class stays as plain breathing room
+   between the demo and the first pair of halves, which is all the number ever was. */
+.shotgap { margin-top: clamp(40px, 6vw, 64px); }
 
 /* --------------------------------------------------------------- two halves */
 .halves { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1px;

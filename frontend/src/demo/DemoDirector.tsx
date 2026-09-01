@@ -94,9 +94,12 @@ export function DemoDirector() {
     </div>
   }
 
-  // A card with a body is the walkthrough's, and it follows the chrome it explains. A
-  // caption belongs to a scripted run and stays at the foot of the frame - see the CSS.
-  const anchored = view.body.length > 0
+  // The walkthrough's card follows the chrome it explains and carries a counter; a
+  // scripted run's caption stays at the foot of the frame. This used to be inferred from
+  // "does this beat have a body", which was a proxy that happened to hold - and stopped
+  // holding the moment the tour's copy was cut back to a headline, since a stop with
+  // nothing left to say is exactly the one that should still show its progress.
+  const anchored = view.card === 'anchored'
   const placed = placeTutorialCard(rect, { width: innerWidth, height: innerHeight }, cardSize)
   // A gesture step has no anchor, so the card would centre itself - directly over the
   // glyph that is the whole instruction. It sits at the foot of the screen instead,

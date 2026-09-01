@@ -930,10 +930,12 @@ unused.
 The table below is where each slot is used and what it shows.
 It remains the specification for a re-shoot.
 
+Two rows left it when the hero composite did (`desktop-workspace.webp` and `mobile-session.webp`).
+The interactive demo sits where they did, running the real interface with a toggle that puts the phone layout on screen for real, so a still of the thing you can already drive is a second copy rather than evidence.
+The slots are gone from `tools/placeholders.py` as well: leaving them would put the orphans back the next time it runs, and `check.mjs` fails on an asset under `img/` that no page references.
+
 | File | Where it is used | What the capture contains |
 |---|---|---|
-| `img/desktop-workspace.webp` | Hero, the full-width frame | The hero composite: sidebar, a split pane region with a working agent, the utility drawer open. The one shot allowed to include chrome. |
-| `img/mobile-session.webp` | Hero, the phone overlapping its lower right | A live agent mid-turn on a phone: tab rail, status line, context meter, touch key rail. |
 | `img/mobile-nav.webp` | Section 03, the mobile column | The navigation overlay: two projects expanded with session rows, status dots, elapsed times, model names. |
 | `img/desktop-notes.webp` | Section 07, desktop | The note editor body only, cropped out of the drawer: rendered headings, nested lists, a checkbox row. |
 | `img/mobile-notes.webp` | Section 07, mobile | The Markdown editor on a phone with rendered structure. |

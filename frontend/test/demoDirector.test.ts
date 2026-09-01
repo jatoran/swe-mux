@@ -117,15 +117,30 @@ test('the walkthrough drives itself at every beat', () => {
   }
 })
 
-test('every walkthrough beat has a body, so its card is the anchored one', () => {
-  // `DemoDirector` renders the caption form - a strip at the foot of the frame, no
-  // counter and no Next - for any beat with an empty body. That is right for a scripted
-  // run and wrong for the tour, whose card is the thing carrying the progress through it.
+test('a walkthrough card is a headline and at most one short line', () => {
+  // The stops were written when a gated card had a wait to fill. An autoplaying one is
+  // competing with motion on screen, so three paragraphs beside a moving interface is a
+  // choice between reading and watching - and a visitor who has not decided to care yet
+  // makes it by not reading. The limits are deliberately generous enough to phrase a
+  // clause well and tight enough that a paragraph cannot come back.
   const tour = scenarioById('tour')!
-  for (const beats of [tour.beats, tour.mobileBeats ?? []]) {
+  for (const [name, beats] of [['desktop', tour.beats], ['phone', tour.mobileBeats ?? []]] as const) {
     for (const [index, beat] of beats.entries()) {
-      assert.ok(beat.body?.length, `tour beat ${index} has no body`)
+      const where = `${name} tour beat ${index}`
+      assert.ok((beat.say ?? '').length <= 46, `${where}: headline is ${beat.say?.length} chars`)
+      assert.ok((beat.body ?? []).length <= 1, `${where}: ${beat.body?.length} paragraphs`)
+      for (const line of beat.body ?? []) {
+        assert.ok(line.length <= 62, `${where}: body line is ${line.length} chars`)
+      }
     }
+  }
+  // The card that follows the chrome and counts its stops is the walkthrough's, and it is
+  // now stated rather than inferred from "does this beat have a body" - which was a proxy
+  // that stopped holding the moment a stop had nothing to say beyond its headline.
+  assert.equal(tour.card, 'anchored')
+  for (const scenario of SCENARIOS) {
+    if (scenario.id === 'tour') continue
+    assert.equal(scenario.card ?? 'caption', 'caption', scenario.id)
   }
 })
 

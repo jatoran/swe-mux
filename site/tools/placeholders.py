@@ -58,9 +58,6 @@ IMG = SITE / "img"
 # rules those briefs have to satisfy (crop to the feature, never the window;
 # the crop must contain the claim; an empty panel is not a screenshot).
 SLOTS = [
-    ("desktop-workspace.webp", 2100, 1275, "Desktop workspace",
-     "The hero composite: sidebar, a split pane region with a working agent, and the "
-     "utility drawer open. The one shot allowed to include chrome."),
     ("desktop-alerts.webp", 2100, 1275, "Attention inbox",
      "The ranked inbox cropped to the panel, showing the interrupt budget line and at "
      "least one suppressed item with its reason. Not an empty inbox."),
@@ -73,9 +70,6 @@ SLOTS = [
     ("desktop-notes.webp", 2100, 1275, "Note editor",
      "The note editor body only, cropped out of the drawer: rendered headings, nested "
      "lists, and a checkbox row."),
-    ("mobile-session.webp", 1206, 2622, "Mobile session",
-     "A live agent mid-turn on a phone: tab rail, status line, context meter, and the "
-     "two-row touch key rail."),
     ("mobile-nav.webp", 1206, 2622, "Mobile navigation",
      "The navigation overlay: two projects expanded with session rows, status dots, "
      "elapsed times, and model names."),
