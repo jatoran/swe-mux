@@ -25,11 +25,23 @@ test('the default layout seeds one desktop row and two mobile rows, and they dif
   assert.notEqual(config.layouts.desktop.strip[0].id, config.layouts.mobile.strip[0].id)
 })
 
-test('the default desktop rail keeps the mouse-verbs and drops the keyboard chrome', () => {
+/**
+ * The default desktop row, in order, because the order is what a visitor sees.
+ *
+ * The row is wider than a phone's and still narrower than this list, so everything past
+ * the front of it is behind the row's "all of them" button. The first eight are therefore
+ * the ranking: attach, both clipboard directions, the code fence, the resume command, a
+ * branch, the clipboard history and the skills picker.
+ *
+ * `approveOnce` used to be fourth and is now ninth. It is important *while a turn is
+ * asking* and inert the rest of the time, so it was spending one of the most valuable
+ * slots on a control that is usually disabled.
+ */
+test('the default desktop rail leads with the verbs a mouse cannot type', () => {
   assert.deepEqual(ids(defaultRailConfig(), 'strip'), [
-    'attach', 'copyReply', 'paste', 'approveOnce', 'markdownDivider', 'markdownCodeFence',
-    'copyResume', 'padCopy', 'copyInput', 'rewind', 'branch',
-    'clipboardHistory', 'skills', 'prompts',
+    'attach', 'copyReply', 'paste', 'markdownCodeFence', 'copyResume', 'branch',
+    'clipboardHistory', 'skills',
+    'approveOnce', 'markdownDivider', 'padCopy', 'copyInput', 'rewind', 'prompts',
   ])
 })
 

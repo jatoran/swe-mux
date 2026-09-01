@@ -13,7 +13,11 @@ import { DEMO_PROJECT_ID } from '../src/demo/fixtures.ts'
 import {
   placeCallouts, gutterSide, wirePath, unionBox, sweepAxis, sweepDelays, type Box,
 } from '../src/demo/callouts.ts'
-import { verifyCommandPayload } from '../src/demo/gitFixtures.ts'
+import {
+  demoDirectory, demoFile, demoFileSearch, demoFileTree,
+} from '../src/demo/fileFixtures.ts'
+import { verifyCommandPayload, worktreesPayload } from '../src/demo/gitFixtures.ts'
+import { providerAccountsPayload } from '../src/demo/supportPayloads.ts'
 import { parseLandVerifyCommand } from '../src/gitLand.ts'
 import { railConfigFromBlob, type RailBlob } from '../src/commandRail.ts'
 import { normalizeSessionRowConfig } from '../src/sessionRowConfig.ts'
@@ -372,6 +376,111 @@ test('the walkthrough labels only fields the seeded row config actually draws', 
   assert.ok(named.size > 0, 'the anatomy beat names no row field at all any more')
   for (const field of named) {
     assert.ok(placedFields.has(field), `a callout names "${field}", which the seed does not place`)
+  }
+})
+
+// ------------------------------------------------------------------ the file explorer
+
+type Listing = { path: string; parent: string | null; items: Array<{ name: string; path: string; kind: string }> }
+type FileText = { status: string; text: string; presentation: { kind: string } }
+
+const listing = (path: string): Listing => demoDirectory(DEMO_PROJECT_ID, path) as Listing
+
+test('the file tree lists directories first, and every file in it opens', () => {
+  // The reader does not sort, so a fixture in insertion order would put `README.md` above
+  // `src/` and look wrong in a way nothing else catches.
+  const root = listing('')
+  assert.equal(root.parent, null)
+  const kinds = root.items.map(item => item.kind)
+  assert.deepEqual(kinds, [...kinds].sort((left, right) =>
+    (left === right ? 0 : left === 'directory' ? -1 : 1)))
+  // And every leaf really has content behind it: an empty editor reads as a file
+  // somebody truncated, which is the failure the 404 exists to avoid.
+  const walk = (path: string): void => {
+    for (const item of listing(path).items) {
+      if (item.kind === 'directory') { walk(item.path); continue }
+      const file = demoFile(DEMO_PROJECT_ID, item.path) as FileText | null
+      assert.ok(file, `${item.path} lists but does not open`)
+      assert.equal(file.status, 'ready', item.path)
+      assert.equal(file.presentation.kind, 'text', item.path)
+      assert.ok(file.text.length > 40, `${item.path} is a stub`)
+    }
+  }
+  walk('')
+  assert.equal(demoFile(DEMO_PROJECT_ID, 'src/nope.js'), null)
+})
+
+test('the tree restores the root and an expanded folder in one round trip', () => {
+  const tree = demoFileTree(DEMO_PROJECT_ID, ['', 'src']) as { directories: Record<string, Listing> }
+  assert.deepEqual(Object.keys(tree.directories).sort(), ['', 'src'])
+  assert.equal(tree.directories.src.parent, '')
+  // A folder that is gone comes back missing rather than empty, which is what lets the
+  // reader prune a stale saved set instead of drawing an empty branch forever.
+  const stale = demoFileTree(DEMO_PROJECT_ID, ['', 'src/gone']) as { directories: Record<string, Listing> }
+  assert.deepEqual(Object.keys(stale.directories), [''])
+})
+
+test('the tree carries the files the Git fixture says are changed in it', () => {
+  // Three surfaces, one invented repository. A Files tab that could not open the file the
+  // Git tab says a worktree has modified would demonstrate the opposite of what either
+  // surface is for. Deletions are excluded, because a deleted file is exactly the one the
+  // tree should *not* have.
+  const paths = new Set<string>()
+  const walk = (path: string): void => {
+    for (const item of listing(path).items) {
+      if (item.kind === 'directory') walk(item.path)
+      else paths.add(item.path)
+    }
+  }
+  walk('')
+  // The *main* checkout only. The File Explorer browses the Project root, and a linked
+  // worktree's branch adds files that root has not got yet - `scripts/import-coupons.mjs`
+  // is exactly that, and the tree is right not to list it.
+  const trees = worktreesPayload(DEMO_PROJECT_ID, 'full', '') as {
+    worktrees: Array<{ main: boolean } & Record<string, unknown>>
+  }
+  let checked = 0
+  for (const tree of trees.worktrees) {
+    if (!tree.main) continue
+    for (const group of ['unstaged', 'staged', 'branch_delta']) {
+      const change = tree[group] as { files?: Array<{ path: string; status: string }> } | undefined
+      for (const file of change?.files ?? []) {
+        if (file.status === 'D') continue
+        assert.ok(paths.has(file.path), `the tree has no ${file.path}`)
+        checked += 1
+      }
+    }
+  }
+  assert.ok(checked > 3, 'the Git fixture named nothing, so this asserted nothing')
+})
+
+test('a content search finds a line that is really in the file', () => {
+  const hits = demoFileSearch(DEMO_PROJECT_ID, 'invalidate', 'contents') as {
+    items: Array<{ path: string; line: number; snippet: string }>
+  }
+  assert.ok(hits.items.length, 'no hit for a word the fixture contains')
+  for (const hit of hits.items) {
+    const file = demoFile(DEMO_PROJECT_ID, hit.path) as FileText
+    assert.equal(file.text.split('\n')[hit.line - 1].trim(), hit.snippet)
+  }
+  assert.deepEqual((demoFileSearch(DEMO_PROJECT_ID, '', 'both') as { items: unknown[] }).items, [])
+})
+
+test('exactly one provider section reports the third quota window', () => {
+  // The app draws the Fable column per provider section (`hasFableWindow`), and the demo
+  // used to report none - so the switcher and the Usage overview both showed two columns
+  // where a real install shows three. One section rather than all of them, because a
+  // provider that has no such window must not grow an empty column.
+  const payload = providerAccountsPayload() as {
+    providers: string[]
+    accounts: Array<{ provider: string; quota: { fable: { used_percent: number } | null } }>
+  }
+  const withFable = new Set(payload.accounts.filter(item => item.quota.fable).map(item => item.provider))
+  assert.equal(withFable.size, 1, 'the third window must belong to one provider section')
+  assert.equal([...withFable][0], payload.providers[0])
+  for (const account of payload.accounts) {
+    if (!account.quota.fable) continue
+    assert.ok(account.quota.fable.used_percent > 0 && account.quota.fable.used_percent < 100)
   }
 })
 

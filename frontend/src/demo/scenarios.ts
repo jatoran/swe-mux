@@ -236,14 +236,101 @@ function tourDesktop(): Beat[] {
     },
     {
       at: 21_700,
+      eyebrow: 'THE COMMAND RAIL',
+      say: 'The things a mouse cannot type.',
+      spotlight: ['.terminal-action-rail'],
+      // This stop comes *before* the split, and the order is load-bearing: splitting the
+      // workspace halves the pane, which halves the rail, and half of what this beat names
+      // scrolls off the right edge. A callout whose target is off screen is dropped
+      // (`DemoShow`), so the beat would silently lose four of its seven stops.
+      //
+      // The desktop rail and the phone rail are the opposite trade, and the tour used to
+      // describe the phone's on both. You have a keyboard here: arrows and Ctrl-C are
+      // already under your fingers, and what the rail is for is the things no key sends -
+      // taking a conversation somewhere else, getting back into one, and pasting into a
+      // TUI without it being read as a hundred keystrokes.
+      //
+      // In the rail's own left-to-right order, so a visitor's eye tracks the strip rather
+      // than jumping around it. Branch is the exception and comes last, in a beat of its
+      // own, because it is the one chip whose point is the surface it opens.
+      show: {
+        reveal: 'walk',
+        sweep: ['.terminal-action-rail'],
+        notes: [
+          { at: railItem('attach'), label: 'attach a file', sub: 'by path, into the composer' },
+          { at: railItem('copyReply'), label: 'copy what it just said' },
+          { at: railItem('paste'), label: 'paste, bracketed', sub: 'one block, not 400 keys' },
+          { at: railItem('markdownCodeFence'), label: 'customise your common inserts', sub: 'a code fence, a rule, a signature' },
+          { at: railItem('copyResume'), label: 'the command to resume it elsewhere' },
+          { at: railItem('clipboardHistory'), label: 'everything you have copied' },
+          { at: railItem('skills'), label: 'skills, by name' },
+        ],
+      },
+      body: ['Not a keyboard. The acts a terminal has no key for.'],
+    },
+    {
+      at: 36_100,
+      eyebrow: 'BRANCHING',
+      say: 'And the last one forks the conversation.',
+      click: railItem('branch'),
+      spotlight: ['[aria-label="Choose where to branch this conversation"]'],
+      // The real dialog, on the real transcript: the point list is this session's own
+      // messages (`branchPointsPayload` in `fakeApi.ts`). Nothing is branched - the next
+      // beat closes it - because the claim here is "from any point", and that is a claim
+      // about the list rather than about the act.
+      show: {
+        reveal: 'walk',
+        notes: [
+          { at: ['.branch-point-list'], label: 'every turn, newest first' },
+          { at: ['.branch-point-action'], label: 'before this one, or after it' },
+          { at: ['.modal-footer span'], label: 'and exactly what it will carry' },
+        ],
+      },
+      body: [
+        'A branch is a new session carrying the conversation up to a point you choose, so'
+        + ' a wrong turn costs one fork rather than the whole thread.',
+      ],
+    },
+    {
+      at: 43_600,
+      eyebrow: 'ALL OF THEM',
+      say: 'The rail is a ranking, not the whole set.',
+      // Escape on a beat of its own, and this is the reason: `perform` runs a beat's
+      // `key` *after* its `click`, so a beat that closed one surface and opened another
+      // would open it and then shut it again.
+      key: 'Escape',
+      body: ['Nothing was branched. What fits on the strip is what a pane this wide has room for.'],
+    },
+    {
+      at: 46_600,
+      say: 'The rest are one press away.',
+      click: ['.rail-more'],
+      spotlight: ['.rail-overflow-popover'],
+      show: {
+        reveal: 'blueprint',
+        notes: [
+          { at: ['.rail-overflow-grid'], label: 'the complete row' },
+          { at: ['.rail-overflow-configure'], label: 'and where you rebuild it' },
+        ],
+      },
+      body: ['Every action in the row, in the order you put them, on every pane.'],
+    },
+    {
+      at: 51_600,
       eyebrow: 'ONE PANE, OR SEVERAL',
       say: 'Right now every session is a tab in one pane.',
+      key: 'Escape',
+      spotlight: ['.sidebar'],
+      body: ['Which is where a workspace starts, not where it stays.'],
+    },
+    {
+      at: 54_600,
       click: sessionRow(talker),
       spotlight: sessionRow(talker),
       body: ['Picking one in the column brings it to the front of the workspace.'],
     },
     {
-      at: 24_500,
+      at: 57_400,
       say: 'Any of them can have its own.',
       // `pane.detach` rather than a split: splitting spawns a *new* session, which would
       // put a session in the fleet that the tour never mentions. Detaching moves the tab
@@ -257,30 +344,7 @@ function tourDesktop(): Beat[] {
       ],
     },
     {
-      at: 28_100,
-      eyebrow: 'THE COMMAND RAIL',
-      say: 'The things a mouse cannot type.',
-      spotlight: ['.terminal-action-rail'],
-      // The desktop rail and the phone rail are the opposite trade, and the tour used to
-      // describe the phone's on both. You have a keyboard here: arrows and Ctrl-C are
-      // already under your fingers, and what the rail is for is the things no key sends -
-      // taking a conversation somewhere else, getting back into one, and pasting into a
-      // TUI without it being read as a hundred keystrokes.
-      show: {
-        reveal: 'walk',
-        sweep: ['.terminal-action-rail'],
-        notes: [
-          { at: railItem('branch'), label: 'branch this conversation', sub: 'from any point' },
-          { at: railItem('copyResume'), label: 'the command to resume it elsewhere' },
-          { at: railItem('rewind'), label: 'rewind to an earlier turn' },
-          { at: railItem('paste'), label: 'paste, bracketed', sub: 'one block, not 400 keys' },
-          { at: railItem('prompts'), label: 'your saved prompts' },
-        ],
-      },
-      body: ['Not a keyboard. The acts a terminal has no key for.'],
-    },
-    {
-      at: 38_700,
+      at: 61_000,
       eyebrow: 'TALK TO IT',
       say: 'The composer is the CLI\'s own, drawn by the CLI.',
       type: { session: talker, text: 'is the cart endpoint still slow?', pace: 42 },
@@ -288,7 +352,7 @@ function tourDesktop(): Beat[] {
       body: ['swe-mux is the multiplexer around it, not a chat window bolted on top.'],
     },
     {
-      at: 41_600,
+      at: 64_400,
       say: 'It answers badly, on purpose.',
       mutate: () => {
         scriptedTurn({
@@ -304,19 +368,62 @@ function tourDesktop(): Beat[] {
       body: ['Every keystroke goes to the real process; nothing here is replayed video.'],
     },
     {
-      at: 49_200,
+      at: 71_900,
       eyebrow: 'THE SIDE PANEL',
-      say: 'The conversation, beside the terminal.',
-      command: 'drawer.show:transcript',
-      spotlight: DRAWER_TAB('Transcript'),
-      show: { arrive: [DRAWER_TAB('Transcript')] },
+      say: 'Notes that outlive the conversation.',
+      command: 'drawer.show:notes',
+      spotlight: DRAWER_TAB('Notes'),
+      show: { arrive: [DRAWER_TAB('Notes')] },
       body: [
-        'The turn you just watched, merged into readable messages with the tool calls'
-        + ' between them - searchable, copyable, never scrolled away.',
+        'A scratchpad per Project and one for the machine, editable here and openable as a'
+        + ' pane. A context window is gone at the end of a turn; this is where the things'
+        + ' it must not forget live.',
       ],
     },
     {
-      at: 54_400,
+      at: 77_500,
+      eyebrow: 'THE FILES',
+      say: 'The checkout, browsable beside the terminal.',
+      command: 'drawer.show:files',
+      spotlight: ['.drawer-files-browser'],
+      body: ['The real tree, search over names and contents, and a Recent view fed by Git.'],
+    },
+    {
+      at: 81_500,
+      click: ['.file-tree-row.directory[data-file-path="src"]'],
+      spotlight: ['.file-tree'],
+      body: ['Folders expand in place.'],
+    },
+    {
+      at: 84_100,
+      say: 'A file opens where you are looking.',
+      click: ['.file-tree-row.file[data-file-path="src/coupons.js"]'],
+      spotlight: ['.project-resource.file-editor'],
+      // Both halves at once, and they are far apart: the tree down one side of the panel
+      // and the editor filling the rest. A walk holds the eye on each in turn rather than
+      // drawing a leader line the width of the drawer.
+      show: {
+        reveal: 'walk',
+        notes: [
+          { at: ['.file-tree-row.file[data-file-path="src/coupons.js"]'], label: 'the file you picked' },
+          { at: ['.code-editor'], label: 'highlighted, editable, saved back' },
+        ],
+      },
+      body: ['Ctrl-click opens it as a pane instead, beside the session that is working on it.'],
+    },
+    {
+      at: 90_100,
+      eyebrow: 'THE CONVERSATION',
+      say: 'The turn you just watched, as messages.',
+      command: 'drawer.show:transcript',
+      spotlight: DRAWER_TAB('Transcript'),
+      body: [
+        'Merged into readable messages with the tool calls between them - searchable,'
+        + ' copyable, never scrolled away.',
+      ],
+    },
+    {
+      at: 95_100,
       eyebrow: 'THE REPOSITORY',
       say: 'Worktrees, commits, and who made them.',
       command: 'drawer.show:git',
@@ -327,17 +434,76 @@ function tourDesktop(): Beat[] {
       ],
     },
     {
-      at: 59_600,
+      at: 100_100,
       eyebrow: 'THE MACHINE',
       say: 'What the fleet is actually consuming.',
       // The summary button by its own class rather than "a button in the footer": the
       // footer carries several now, and any of them would have satisfied the step.
+      command: 'drawer.close',
       click: ['.resource-usage-summary'],
-      spotlight: ['.resource-usage-summary', '.sidebar-footer'],
-      body: ['Processes, listeners, bandwidth, disk - per session, per Project, and for swe-mux itself.'],
+      spotlight: ['.resource-usage-popover', '.resource-usage-summary'],
+      body: ['System CPU, the whole process tree\'s RAM, and how many processes that is.'],
     },
     {
-      at: 64_400,
+      at: 103_700,
+      say: 'And the full accounting behind it.',
+      // The popover's own footer route rather than the menu command that opens the same
+      // modal: the point of the beat is that the small reading is a door into the large
+      // one, which is a thing about the surface rather than about the command bus.
+      click: ['.resource-usage-popover footer button:last-child'],
+      spotlight: ['[role="dialog"][aria-label="Resources"]'],
+      show: {
+        reveal: 'walk',
+        crt: true,
+        notes: [
+          { at: ['[role="dialog"][aria-label="Resources"] [role="tab"]:nth-child(1)'], label: 'every process, per session' },
+          { at: ['[role="dialog"][aria-label="Resources"] [role="tab"]:nth-child(2)'], label: 'what is listening, and on which port' },
+          { at: ['[role="dialog"][aria-label="Resources"] [role="tab"]:nth-child(4)'], label: 'and the durable telemetry behind both' },
+        ],
+      },
+      body: ['Per session, per Project, and for swe-mux itself.'],
+    },
+    {
+      at: 109_900,
+      eyebrow: 'WHOSE QUOTA',
+      say: 'Every window, on every saved account.',
+      key: 'Escape',
+      spotlight: ['.account-summary'],
+      show: {
+        reveal: 'blueprint',
+        notes: [{ at: ['.account-summary button'], label: 'three windows', sub: 'five-hour, weekly, and the big model' }],
+      },
+      body: ['The sidebar carries the reading; the panel behind it carries the accounts.'],
+    },
+    {
+      at: 114_100,
+      say: 'Several accounts, and the sessions each one is carrying.',
+      click: ['.account-summary button'],
+      spotlight: ['.account-popover'],
+      show: {
+        reveal: 'walk',
+        notes: [
+          { at: ['.account-popover .quota-row.has-fable'], label: 'the same three, per account' },
+          { at: ['.account-popover .account-refresh-age'], label: 'and when that was last true' },
+        ],
+      },
+      body: ['Quotas are polled, not guessed, and every account says how old its reading is.'],
+    },
+    {
+      at: 119_500,
+      say: 'Switching is a choice about which saved credential is current.',
+      click: ['.account-popover [data-provider-account$="-work"]'],
+      show: { shimmer: [['.account-popover [data-provider-account$="-work"]']] },
+      body: ['New sessions spawn under it; the ones already running keep the account they started on.'],
+    },
+    {
+      at: 123_100,
+      click: ['.account-popover [data-provider-account$="-personal"]'],
+      show: { shimmer: [['.account-popover [data-provider-account$="-personal"]']] },
+      body: ['And back. Nothing was signed in or out - both credentials were already there.'],
+    },
+    {
+      at: 126_700,
       eyebrow: 'IT IS YOURS NOW',
       say: 'Break it however you like.',
       key: 'Escape',
@@ -463,8 +629,8 @@ function tourMobile(): Beat[] {
       command: 'drawer.toggle',
       gesture: 'left',
       body: [
-        'Notes, the transcript, Git and alerts. Two fingers moves between tabs, and every'
-        + ' gesture is rebindable.',
+        'Notes that outlive the turn, the checkout\'s own files, the transcript, Git and'
+        + ' alerts. Two fingers moves between tabs, and every gesture is rebindable.',
       ],
     },
     {

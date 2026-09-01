@@ -746,6 +746,17 @@ export const BUILTIN_RAIL: RailItem[] = [
  * the thumb. Both layouts were lifted from a long-lived daily-driver install
  * rather than designed on a whiteboard.
  *
+ * **Order is a ranking, because the row overflows.** A desktop rail is wider than a
+ * phone's and still narrower than this list, so what sits at the front is what a
+ * visitor sees and everything after it is behind the row's own "all of them"
+ * button. The front eight are therefore the acts that earn a permanent place -
+ * attach, the two clipboard directions, the code fence, the resume command, a
+ * branch, the clipboard history and the skills picker - and the long tail follows.
+ *
+ * `approveOnce` used to sit fourth, which was the wrong reading of "important":
+ * it is important *while a turn is asking*, and dead the rest of the time, so it
+ * spent one of the most valuable slots on a control that is usually disabled.
+ *
  * Only ids that exist in `BUILTIN_RAIL`; asserted in `railPadModel.test.ts` so a
  * rename cannot silently shorten a default rail.
  */
@@ -754,16 +765,16 @@ export const DEFAULT_RAIL_ROWS: Record<RailDevice, readonly (readonly string[])[
     'attach',
     'copyReply',
     'paste',
-    'approveOnce',
-    'markdownDivider',
     'markdownCodeFence',
     'copyResume',
-    'padCopy',
-    'copyInput',
-    'rewind',
     'branch',
     'clipboardHistory',
     'skills',
+    'approveOnce',
+    'markdownDivider',
+    'padCopy',
+    'copyInput',
+    'rewind',
     'prompts',
   ]],
   mobile: [

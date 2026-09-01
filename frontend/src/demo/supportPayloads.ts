@@ -372,6 +372,18 @@ type DemoAccount = {
    *  Varied per account so the column does not read as one figure repeated. */
   resetsIn: number
   weeklyResetsIn: number
+  /**
+   * Percent used of the separate weekly window the largest model draws from, or null
+   * where the provider reports no such window.
+   *
+   * The app has drawn this third column since it existed (`hasFableWindow`,
+   * `quotaRowCells`, `tightestQuota`), per provider section rather than per account - and
+   * the demo reported none, so the switcher and the Usage overview both showed two
+   * columns where a real install shows three. Set on the first provider's accounts only,
+   * because that is the one that has such a window; the list is indexed by position
+   * rather than named, for the same reason as everything else here.
+   */
+  fable: number | null
   verified: boolean
 }
 
@@ -380,24 +392,28 @@ const ACCOUNTS: DemoAccount[][] = [
     {
       suffix: 'personal', label: 'personal', email: 'demo@example.invalid',
       organization: 'Personal', plan: 'Max 20x',
-      session: 62, weekly: 41, resetsIn: 94, weeklyResetsIn: 4 * 24 * 60, verified: true,
+      session: 62, weekly: 41, resetsIn: 94, weeklyResetsIn: 4 * 24 * 60,
+      fable: 12, verified: true,
     },
     {
       suffix: 'work', label: 'rocket-shop work', email: 'demo@rocket-shop.invalid',
       organization: 'Rocket Shop', plan: 'Team',
-      session: 18, weekly: 77, resetsIn: 212, weeklyResetsIn: 2 * 24 * 60 + 9 * 60, verified: true,
+      session: 18, weekly: 77, resetsIn: 212, weeklyResetsIn: 2 * 24 * 60 + 9 * 60,
+      fable: 68, verified: true,
     },
   ],
   [
     {
       suffix: 'personal', label: 'personal', email: 'demo@example.invalid',
       organization: 'Personal', plan: 'Pro',
-      session: 35, weekly: 22, resetsIn: 41, weeklyResetsIn: 6 * 24 * 60 + 2 * 60, verified: true,
+      session: 35, weekly: 22, resetsIn: 41, weeklyResetsIn: 6 * 24 * 60 + 2 * 60,
+      fable: null, verified: true,
     },
     {
       suffix: 'team', label: 'meme-garden team', email: 'bots@meme-garden.invalid',
       organization: 'Meme Garden', plan: 'Business',
-      session: 88, weekly: 53, resetsIn: 17, weeklyResetsIn: 24 * 60 + 15 * 60, verified: false,
+      session: 88, weekly: 53, resetsIn: 17, weeklyResetsIn: 24 * 60 + 15 * 60,
+      fable: null, verified: false,
     },
   ],
 ]
@@ -437,6 +453,10 @@ export function providerAccountsPayload(): unknown {
       quota: {
         session: window(row.session, 300, row.resetsIn),
         weekly: window(row.weekly, 10_080, row.weeklyResetsIn),
+        // Absent rather than zero where a provider has no such window: the app decides
+        // whether to draw the column from whether *any* account in the section reports
+        // one, and a zeroed window is a report.
+        fable: row.fable === null ? null : window(row.fable, 10_080, null),
         status: 'ok',
         error: null,
         refreshed_at: now - 240,
@@ -606,26 +626,6 @@ export function historyProjectsPayload(): unknown {
     items: state.projects.map(project => ({
       project_id: project.id, label: project.name, root: project.root, runs: project.history_count,
     })),
-  }
-}
-
-export function filesTreePayload(projectId: string): unknown {
-  const project = state.projects.find(item => item.id === projectId)
-  const entry = (path: string, directory: boolean) => ({
-    name: path.split('/').pop() || path,
-    path,
-    is_dir: directory,
-    size: directory ? 0 : 2_400,
-    mtime: nowSeconds() - 3600,
-  })
-  return {
-    root: project?.root ?? '',
-    path: '',
-    truncated: false,
-    entries: [
-      entry('src', true), entry('tests', true), entry('site', true),
-      entry('README.md', false), entry('package.json', false),
-    ],
   }
 }
 

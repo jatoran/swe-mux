@@ -43,17 +43,6 @@ export const SelectTextIcon = () => <svg {...stroke}>
   <path d="M8 4h8M8 20h8M12 4v16" />
 </svg>
 
-/** The copy mark over an input rule: copy, but of the line being typed.
- *
- * A bare copy glyph is already spent on Copy reply, and the two sit close enough
- * on a full rail to be confused. The rule underneath is the composer, which is the
- * whole difference between them. */
-export const CopyInputIcon = () => <svg {...stroke}>
-  <rect x="10" y="2" width="12" height="12" rx="2" />
-  <path d="M6 10a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h4" />
-  <line x1="2" y1="20" x2="16" y2="20" />
-</svg>
-
 /** A clipboard, which is what every toolbar in the world uses for paste. */
 export const PasteIcon = () => <svg {...stroke}>
   <rect x="8" y="2" width="8" height="4" rx="1" />
@@ -106,7 +95,6 @@ export const RailSettingsIcon = () => <svg {...stroke}>
 const RAIL_ITEM_ICON_COMPONENTS: Readonly<Record<string, () => VNode>> = {
   attach: AttachIcon,
   branch: BranchIcon,
-  copyInput: CopyInputIcon,
   copyReply: CopyIcon,
   paste: PasteIcon,
 }
@@ -527,7 +515,7 @@ export const SpeakerIcon = () => <svg {...stroke}>
 </svg>
 
 /** The copy mark over a folder: copy the *path*, not the session's identifier. Split from
- *  `CopyIcon` for the same reason `CopyInputIcon` was — the two sit adjacent in one menu. */
+ *  `CopyIcon` for the same reason `CopyIcon` is not reused — the two sit adjacent in one menu. */
 export const CopyPathIcon = () => <svg {...stroke}>
   <path d="M3 8a2 2 0 0 1 2-2h2.6a2 2 0 0 1 1.7.9L10.2 8H13a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
   <rect x="11" y="11" width="10" height="10" rx="2" />

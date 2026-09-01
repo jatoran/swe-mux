@@ -53,6 +53,10 @@ const TOUR_START_MS = 2_600
 /** How long a visible, untouched demo waits before the nudge. */
 const IDLE_NUDGE_MS = 10_000
 
+/** How long the closing card stays up before the run ends. Long enough to read a
+ *  sentence, and skippable like every other beat. */
+const FINISH_MS = 6_000
+
 /** The ghost cursor's travel, then the pause on the control before the act. Long enough
  *  to read as a deliberate press, short enough not to pad a twenty-second scenario. */
 const TRAVEL_MS = 420
@@ -277,6 +281,10 @@ async function play(scenario: Scenario, beats: Beat[]): Promise<void> {
     })
     if (!(await perform(beat))) return
   }
+  // The last beat needs a dwell of its own, because the loop's dwell belongs to the beat
+  // *after* it. Without this the closing card is published and the run stops in the same
+  // frame, so the one stop that says "it is yours now" is the one nobody ever reads.
+  if (!(await dwell(FINISH_MS))) return
   if (mine !== token) return
   if (scenario.id === 'tour') markTourDone()
   stop('finished')
