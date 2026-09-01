@@ -69,6 +69,43 @@ export function firstVisible(selectors: readonly string[] | undefined): HTMLElem
   return null
 }
 
+/**
+ * The first visible text field matching these selectors, focused.
+ *
+ * A scripted act that types into the app's own chrome - the command palette is the one
+ * that matters - cannot go through the terminal's keystroke path, because the field is a
+ * controlled input in the app rather than a pane. It still must not go through app
+ * internals: the rule the whole layer follows is that a scripted act can only do what a
+ * visitor could, and a visitor focuses the field and types into it.
+ */
+export function focusField(selectors: readonly string[]): HTMLInputElement | null {
+  const field = firstVisible(selectors)
+  if (!(field instanceof HTMLInputElement)) return null
+  field.focus()
+  return field
+}
+
+/**
+ * One character into a focused field, as the keyboard would deliver it.
+ *
+ * `value` then a bubbling `input` event, because that is exactly the pair a real
+ * keystroke produces and it is what a controlled component listens for. Setting `value`
+ * alone updates the pixels and tells the app nothing, which is the failure that looks
+ * like the palette typing to itself and never filtering.
+ */
+/** Empty a field the same way, for a beat that types a second query into it. */
+export function clearField(field: HTMLInputElement): void {
+  field.value = ''
+  field.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'deleteContentBackward' }))
+}
+
+export function typeCharacter(field: HTMLInputElement, character: string): void {
+  field.value += character
+  field.dispatchEvent(new InputEvent('input', {
+    bubbles: true, inputType: 'insertText', data: character,
+  }))
+}
+
 /** Press the first visible match and hand it back, so a caller can draw at it. */
 export function clickFirst(selectors: readonly string[]): HTMLElement | null {
   const target = firstVisible(selectors)

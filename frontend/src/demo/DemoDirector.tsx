@@ -14,6 +14,7 @@
  */
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { placeTutorialCard } from '../tutorial.ts'
+import { DemoShow } from './DemoShow.tsx'
 import {
   advanceGate, directorSnapshot, stop, subscribeDirector, type DirectorSnapshot,
 } from './director.ts'
@@ -98,6 +99,10 @@ export function DemoDirector() {
     : { bottom: 18, top: 'auto' as const }
 
   return <div class={`demo-director ${rect ? 'targeted' : 'centered'}`} role="dialog" aria-label="Demo walkthrough">
+    {/* The beat's own show layer. Keyed by the sequence number so a new beat mounts a
+        fresh one rather than reusing the previous beat's elements, which would inherit
+        their finished animations and draw nothing. */}
+    {view.show && <DemoShow key={`show-${view.showSeq}`} show={view.show} seq={view.showSeq} />}
     {ring && <div class="demo-director-flash" style={ring} aria-hidden="true" />}
     {view.pointer && <svg
       class="demo-director-ghost"

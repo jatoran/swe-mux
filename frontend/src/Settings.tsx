@@ -1725,7 +1725,11 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           const expanded=expandedTabs.has(tab.id)&&entries.length>0
           return <Fragment key={tab.id}>
             <div class="settings-tab-row" role="presentation">
-              <button role="tab" aria-selected={activeTab===tab.id} class={activeTab===tab.id?'active':''} onClick={()=>selectTab(tab.id)}>{tab.label}</button>
+              {/* `data-settings-tab` is the tab's id in the DOM. The only other handle on
+                  one is its visible label, which is copy: a renamed tab silently breaks
+                  whatever selected on it, and the demo drives this nav to show the keymap
+                  presets. */}
+              <button role="tab" data-settings-tab={tab.id} aria-selected={activeTab===tab.id} class={activeTab===tab.id?'active':''} onClick={()=>selectTab(tab.id)}>{tab.label}</button>
               {!!entries.length&&<button type="button" class="settings-tab-expand" aria-label={`${expanded?'Collapse':'Expand'} ${tab.label} pages`} aria-expanded={expanded} onClick={()=>toggleTabExpanded(tab.id)}>{expanded?'▾':'▸'}</button>}
             </div>
             {expanded&&<div class="settings-subtabs" role="group" aria-label={`${tab.label} pages`}>
@@ -2313,12 +2317,12 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <div class="keybinding-heading" data-setting="keymap_preset"><div><h3>Keyboard preset</h3>
             <p>The starting point for every shortcut below. Applying one replaces the whole keymap, including anything edited by hand.</p></div></div>
           <div class="keymap-presets">
-            {keymapPresets.map(preset=><article key={preset.id} class={preset.id===keymapPreset?'active':''}>
+            {keymapPresets.map(preset=><article key={preset.id} data-keymap-preset={preset.id} class={preset.id===keymapPreset?'active':''}>
               <div><strong>{preset.title}</strong>{preset.id===keymapPreset&&<span class="keymap-current">in use</span>}
-                <small>{preset.bindings} bindings · leader {displayChord(preset.leader,keymapHost.platform)}{preset.prefix?` · prefix ${displayChord(preset.prefix,keymapHost.platform)}`:''}</small></div>
+                <small class="keymap-preset-count">{preset.bindings} bindings · leader {displayChord(preset.leader,keymapHost.platform)}{preset.prefix?` · prefix ${displayChord(preset.prefix,keymapHost.platform)}`:''}</small></div>
               <p>{preset.description}</p>
               {preset.warning&&<p class="keymap-warning">⚠ {preset.warning}</p>}
-              <button type="button" disabled={!!presetApplying} onClick={()=>setPresetIntent(preset)}>
+              <button type="button" class="keymap-preset-apply" disabled={!!presetApplying} onClick={()=>setPresetIntent(preset)}>
                 {presetApplying===preset.id?'applying…':preset.id===keymapPreset?'Re-apply':'Use this preset'}</button>
             </article>)}
             {keymapPreset==='custom'&&<p class="keymap-custom">These shortcuts have been edited by hand, so they no longer match any preset. Applying one below discards those edits.</p>}

@@ -20,6 +20,7 @@ import { installDirector } from './director.ts'
 import { DemoDirector } from './DemoDirector.tsx'
 import '../style.css'
 import './demoDirector.css'
+import './demoShow.css'
 
 installFakeFetch()
 installFakeWebSocket()

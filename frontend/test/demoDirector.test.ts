@@ -10,7 +10,9 @@ import {
 import { SCENARIOS, scenarioById, NUDGE_SCENARIO_ID } from '../src/demo/scenarios.ts'
 import { apply, state } from '../src/demo/store.ts'
 import { DEMO_PROJECT_ID } from '../src/demo/fixtures.ts'
+import { placeCallouts, gutterSide, wirePath, unionBox, sweepDelays, type Box } from '../src/demo/callouts.ts'
 import { railConfigFromBlob, type RailBlob } from '../src/commandRail.ts'
+import { normalizeSessionRowConfig } from '../src/sessionRowConfig.ts'
 import { normalizeSessionTopbarConfig } from '../src/sessionTopbarConfig.ts'
 
 /**
@@ -128,6 +130,132 @@ test('no scenario writes a harness name', () => {
   })))
   for (const name of ['claude', 'codex', 'opencode']) {
     assert.equal(source.toLowerCase().includes(name), false, `a scenario names ${name}`)
+  }
+})
+
+// --------------------------------------------------------------------- callouts
+
+/** A box, from the four numbers that actually vary. */
+const box = (left: number, top: number, width = 60, height = 16): Box => ({
+  left, top, width, height,
+  right: left + width, bottom: top + height,
+  cx: left + width / 2, cy: top + height / 2,
+})
+
+const entry = (target: Box, label = 'x', width = 90, height = 20) =>
+  ({ callout: { at: ['.x'], label }, target, width, height })
+
+const VIEWPORT = { width: 1280, height: 800 }
+
+test('labels stack rather than overlap, however close their targets are', () => {
+  // The whole reason this is a function rather than `top: target.cy`: a session row is
+  // about 40px tall and carries seven facts, so the naive placement puts four labels in
+  // the same twenty pixels and the beat reads as one smudge.
+  const placed = placeCallouts(
+    [30, 38, 46, 54, 62].map(top => entry(box(20, top))),
+    VIEWPORT,
+  )
+  assert.equal(placed.length, 5)
+  for (let index = 1; index < placed.length; index += 1) {
+    assert.ok(
+      placed[index].top >= placed[index - 1].top + 20,
+      `label ${index} at ${placed[index].top} overlaps the one above it`,
+    )
+  }
+})
+
+test('a label is placed in target order, not in the order the beat wrote them', () => {
+  // The deconfliction pass is only correct on a sorted list, and a scenario ordering its
+  // notes by importance is a reasonable thing to do.
+  const placed = placeCallouts(
+    [entry(box(20, 400), 'lower'), entry(box(20, 100), 'upper')],
+    VIEWPORT,
+  )
+  assert.deepEqual(placed.map(item => item.callout.label), ['upper', 'lower'])
+})
+
+test('the gutter goes on the side away from the chrome', () => {
+  // Left-hand chrome (the fleet column) labels to its right; right-hand chrome (the side
+  // panel) labels to its left. Measured from the targets, because one beat shape has to
+  // serve both.
+  assert.equal(gutterSide([box(20, 100)], VIEWPORT), 'right')
+  assert.equal(gutterSide([box(1_100, 100)], VIEWPORT), 'left')
+  // A spread that straddles the middle is treated as left-hand chrome, which is the
+  // common case and never draws off screen.
+  assert.equal(gutterSide([box(20, 100), box(700, 100)], VIEWPORT), 'right')
+})
+
+test('a label stays inside the viewport on both axes', () => {
+  // A wide chip beside chrome near the right edge, and a target below the fold: both
+  // clamp, because the two things most worth labelling sit on the frame's edges.
+  const [wide] = placeCallouts([entry(box(700, 790), 'edge', 600, 40)], VIEWPORT)
+  assert.equal(wide.side, 'right')
+  assert.ok(wide.x + 600 <= VIEWPORT.width, 'ran off the right edge')
+  assert.ok(wide.top + 40 <= VIEWPORT.height, 'ran off the bottom edge')
+  // And on the other side the clamp is the mirror: `x` is the chip's right edge there.
+  const [mirrored] = placeCallouts([entry(box(1_240, 40), 'edge', 300, 20)], VIEWPORT)
+  assert.equal(mirrored.side, 'left')
+  assert.ok(mirrored.x - 300 >= 0, 'ran off the left edge')
+})
+
+test('the leader line is orthogonal, so nine of them do not cross', () => {
+  const [item] = placeCallouts([entry(box(20, 300))], VIEWPORT)
+  const path = wirePath(item)
+  assert.match(path, /^M [\d.]+ [\d.]+ H [\d.]+ V [\d.]+ H [\d.]+$/)
+})
+
+test('the sweep wakes each label as the band reaches it', () => {
+  // The band is one element crossing the column once and the labels are scheduled
+  // against its position; deriving the delay from the target is what makes the two read
+  // as one effect rather than two that happen to overlap.
+  const column = unionBox([box(0, 0, 300, 400)])!
+  const delays = sweepDelays([box(20, 40), box(20, 200), box(20, 380)], column, 1_500)
+  assert.ok(delays[0] < delays[1] && delays[1] < delays[2], 'delays must follow the band')
+  assert.ok(delays[2] <= 1_500, 'nothing may wake after the band has gone')
+  // The band leads the labels slightly, so the topmost target has already been passed
+  // when its label arrives rather than the other way round.
+  assert.equal(sweepDelays([box(20, 0, 60, 8)], column, 1_500)[0], 0)
+})
+
+test('every callout names chrome, and every scenario that has one is playable', () => {
+  // A callout with no selectors would measure nothing and draw a label pointing at the
+  // origin; an empty label would draw an empty chip. Both are silent in a browser.
+  for (const scenario of SCENARIOS) {
+    for (const beats of [scenario.beats, scenario.mobileBeats ?? []]) {
+      for (const [index, beat] of beats.entries()) {
+        const show = typeof beat.show === 'function' ? beat.show() : beat.show
+        for (const note of show?.notes ?? []) {
+          assert.ok(note.at.length, `${scenario.id} beat ${index} has a callout with no target`)
+          assert.ok(note.label.trim(), `${scenario.id} beat ${index} has an empty label`)
+        }
+      }
+    }
+  }
+})
+
+test('the walkthrough labels only fields the seeded row config actually draws', () => {
+  fresh()
+  const config = normalizeSessionRowConfig(state.deviceSettings.desktop.sessionRows)
+  const placedFields = new Set<string>([
+    ...config.top.left, ...config.top.right, ...config.bottom.left, ...config.bottom.right,
+  ].map(slot => slot.id))
+  const named = new Set<string>()
+  for (const scenario of SCENARIOS) {
+    for (const beats of [scenario.beats, scenario.mobileBeats ?? []]) {
+      for (const beat of beats) {
+        const show = typeof beat.show === 'function' ? beat.show() : beat.show
+        for (const note of show?.notes ?? []) {
+          for (const selector of note.at) {
+            const field = selector.match(/data-row-field="([a-zA-Z]+)"/)?.[1]
+            if (field) named.add(field)
+          }
+        }
+      }
+    }
+  }
+  assert.ok(named.size > 0, 'the anatomy beat names no row field at all any more')
+  for (const field of named) {
+    assert.ok(placedFields.has(field), `a callout names "${field}", which the seed does not place`)
   }
 })
 

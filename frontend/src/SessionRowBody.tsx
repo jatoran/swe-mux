@@ -141,8 +141,18 @@ function SectionView({ section, session, config }: { section: RowSection; sessio
     {/* The separator is emitted between tokens that are actually in this list —
         which is why width shedding happens in the token engine and never as a
         CSS `display:none`, whose hidden token would leave its separator here. */}
+    {/* `data-row-field` is the token's own field id, in the DOM.
+        A row is the densest thing the app draws and the only handle on any one of its
+        facts used to be a `title` string, which is copy rather than structure: a reworded
+        tooltip silently broke whatever selected on it. The attribute is what lets the
+        demo's callouts point at "the model" and "the worktree" by name, and what lets a
+        renderer test assert a field is drawn without matching prose. */}
     {section.tokens.map((token, index) =>
-      <span key={`${token.id}:${index}`} class={`row-token${token.shared ? ' shared' : ''}`}>
+      <span
+        key={`${token.id}:${index}`}
+        data-row-field={token.id}
+        class={`row-token${token.shared ? ' shared' : ''}`}
+      >
         {index > 0 && section.separator ? <span class="row-sep" aria-hidden="true">{section.separator}</span> : null}
         <RowTokenView token={token} session={session} config={config} />
       </span>)}
