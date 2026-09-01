@@ -253,7 +253,7 @@ and the declared minimum observation capability.
   the 7-day window rather than by today, because the decision is about a habit rather than a
   day, and each carries its share of the window as a bar.
   Several features bill that budget without being rules — Scan timeline, Read aloud, Project
-  card, attention narration, the Mux assistant, adaptive titles — so the daemon labels every row
+  card, attention narration, the Mux assistant, scope re-titling — so the daemon labels every row
   and tags it `observer`, `custom`, `feature`, or `retired` (billed under an id the page has no
   control for). Before this they were visible only inside the aggregate.
 - **The prompt-cache hit rate is measured beside the spend it explains.** Every ledger row
@@ -321,6 +321,14 @@ and the declared minimum observation capability.
 - Each built-in row exposes trigger, bounded input slice, model tier, result destination, and
   owning config setting. The titler toggles on `observer_titler_enabled`; stall, approval, and
   context observers share the `attention_observers_enabled` attention setting.
+  **The Session titler is install-wide and gated by no per-Project opt-in.** Its built-in rules
+  are a pure function of `automation_enabled` and `observer_titler_enabled`, so it names panes
+  in every Project including one that opted into nothing. Worth saying out loud because the
+  `continuous_title` automation sits in the enablement registry beside it and was labelled
+  "Adaptive session title" until 2026-08-31 - two features whose names both began "session
+  title", only one of them per-Project, which made declining the model-backed starting set
+  read as declining session titles. That one is now "Re-title on scope change", and it
+  broadens an already-named run's title on a scan-detected scope pivot.
   That setting was named `phase7_observers_enabled` before config schema 31 and is migrated by
   value on load, because `load_config` copies only known dataclass fields: an unmigrated rename
   would silently drop an enabled switch and re-save the config without it, turning three

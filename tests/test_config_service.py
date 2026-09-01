@@ -615,6 +615,38 @@ def test_a_retired_registry_id_in_a_stored_config_does_not_brick_startup(
     assert loaded.automation_global_allow == {"doc_debt": False}
 
 
+def test_the_automation_default_template_refuses_typos_and_scrubs_retired_ids(
+    tmp_path: Path,
+) -> None:
+    """The same loud-on-write, quiet-on-load asymmetry the ceiling beside it uses.
+
+    It keeps the dedicated-switch ids the ceiling refuses, deliberately: the
+    switch is that automation's ceiling, and "what does an undecided Project do"
+    is a different question the switch does not answer.
+    """
+    path = tmp_path / "config.toml"
+    config = load_config(path)
+    with pytest.raises(ValueError, match="unknown automations"):
+        update_config(config, {"automation_project_defaults": {"doc_debtt": True}})
+    with pytest.raises(ValueError, match="automation ids to booleans"):
+        update_config(config, {"automation_project_defaults": {"doc_debt": "yes"}})
+    with pytest.raises(ValueError, match="not implemented yet"):
+        update_config(config, {"automation_project_defaults": {"cross_session_interlocks": True}})
+
+    hot, restart = update_config(
+        config, {"automation_project_defaults": {"doc_debt": True, "scan_timeline": True}}
+    )
+    assert "automation_project_defaults" in hot | restart
+    assert config.automation_project_defaults == {"doc_debt": True, "scan_timeline": True}
+
+    stale = tmp_path / "stale.toml"
+    stale.write_text(
+        "schema_version = 21\n[automation_project_defaults]\nretired_id = true\ndoc_debt = true\n",
+        encoding="utf-8",
+    )
+    assert load_config(stale).automation_project_defaults == {"doc_debt": True}
+
+
 def test_invalid_update_changes_neither_memory_nor_disk(tmp_path: Path) -> None:
     path = tmp_path / "config.toml"
     config = load_config(path)

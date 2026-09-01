@@ -99,6 +99,95 @@ def test_an_explicit_false_beats_the_default_on_template() -> None:
     assert registry.resolve_config({}).is_enabled("session_control")
 
 
+# ---- The install-wide default template ----------------------------------------
+
+
+def test_an_install_with_no_opinion_resolves_exactly_as_the_registry_does() -> None:
+    # The upgrade case, and the one that has to be exactly true: an existing
+    # install has an empty map, so nothing about what its Projects run may move
+    # because this layer now exists.
+    assert registry.install_defaults(None) == registry.DEFAULT_ON_AUTOMATIONS
+    assert registry.install_defaults({}) == registry.DEFAULT_ON_AUTOMATIONS
+
+
+def test_an_install_default_reaches_only_projects_that_never_decided() -> None:
+    defaults = registry.install_defaults({"doc_debt": True})
+    # A Project that said nothing inherits it, closure and all.
+    assert registry.resolve_config({}, defaults).is_enabled("doc_debt")
+    # A Project that said no keeps saying no. This is the whole safety property:
+    # layer 2 can never contradict a decision somebody wrote down.
+    assert not registry.resolve_config({"doc_debt": False}, defaults).is_enabled("doc_debt")
+
+
+def test_an_install_default_pulls_its_whole_closure_in() -> None:
+    # A default naming a consumer without its substrate would resolve to
+    # `blocked` and do nothing - a switch that reads on and has no effect, which
+    # is the exact outcome the enablement design exists to prevent.
+    defaults = registry.install_defaults({"doc_debt": True})
+    assert defaults["tier0"] is True
+    assert defaults["raw_store"] is True
+    assert registry.resolve_config({}, defaults).blocked == {}
+
+
+def test_an_explicit_false_in_the_template_stops_the_closure_rather_than_losing() -> None:
+    # "Run doc debt but never capture Tier 0" is a contradiction, and the honest
+    # reading is that doc debt is blocked - not that Tier 0 comes back on. The
+    # narrower statement wins, and nothing under it is switched on behind it.
+    defaults = registry.install_defaults({"doc_debt": True, "tier0": False})
+    assert defaults["tier0"] is False
+    assert defaults.get("raw_store") is not True
+    assert not registry.resolve_config({}, defaults).is_enabled("doc_debt")
+
+
+def test_the_template_can_withdraw_a_registry_default() -> None:
+    # Layer 2 says `false` as well as `true`. Withdrawing a built-in default
+    # install-wide is not the same act as the ceiling's "not anywhere": it does
+    # not cascade and it does not grey the Project cell, it just means an
+    # undecided Project stays off.
+    defaults = registry.install_defaults({"session_control": False})
+    assert not registry.resolve_config({}, defaults).is_enabled("session_control")
+    assert registry.resolve_config({"session_control": True}, defaults).is_enabled(
+        "session_control"
+    )
+
+
+def test_the_template_drops_what_this_build_cannot_run() -> None:
+    # Same asymmetry the ceiling uses: a stored config that outlived a registry
+    # change must still load, while a typo written over the API fails loudly in
+    # `config._validate`. An unimplemented id defaulted *on* is dropped too - a
+    # template entry that reads as on and does nothing is the failure again.
+    unimplemented = next(
+        item.id for item in registry.REGISTRY.values() if not item.implemented
+    )
+    defaults = registry.install_defaults(
+        {"not_a_real_automation": True, unimplemented: True, "doc_debt": True}
+    )
+    assert "not_a_real_automation" not in defaults
+    assert unimplemented not in defaults
+    assert defaults["doc_debt"] is True
+
+
+def test_the_ceiling_still_wins_over_an_install_default() -> None:
+    # Four layers, and the ceiling is the last one for a reason: it is the
+    # operator's "not anywhere", so a default they set earlier does not survive
+    # it, and the Project's stored choice is untouched either way.
+    defaults = registry.install_defaults({"doc_debt": True})
+    resolution = registry.resolve_config({}, defaults, global_allow={"tier0": False})
+    assert resolution.globally_disabled == {"tier0", "doc_debt"}
+    assert not resolution.is_enabled("doc_debt")
+
+
+def test_the_scan_auto_arm_inherits_the_same_way() -> None:
+    # The one Project field that qualifies an opt-in rather than being one, and
+    # the reason it needed a default at all: the creation form used to write it
+    # into every Project it armed, so an operator could never change their mind
+    # about it in one place.
+    assert registry.resolve_scan_auto_enable(None, default=True) is True
+    assert registry.resolve_scan_auto_enable(None, default=False) is False
+    assert registry.resolve_scan_auto_enable(False, default=True) is False
+    assert registry.resolve_scan_auto_enable(True, default=False) is True
+
+
 # ---- The install-wide ceiling -------------------------------------------------
 
 
@@ -940,14 +1029,18 @@ async def test_automation_toggle_surface_reports_the_dependency_graph(tmp_path: 
 
 
 @pytest.mark.asyncio
-async def test_unticking_a_default_on_automation_persists_an_explicit_false(
+async def test_unticking_an_automation_persists_an_explicit_false(
     tmp_path: Path,
 ) -> None:
-    """For a default-on id, absence means on - so "off" must be written down.
+    """Absence means *inherit*, so "off" has to be written down for every id.
 
-    The write path strips a false entry as noise for an ordinary opt-in, and
-    that exact behaviour would make a default-on automation impossible to turn
-    off: the untick would write nothing and the default would show through.
+    The write path used to strip a false entry as noise wherever absence already
+    meant off, keeping it only for a default-on id. That was true while the
+    registry was the only thing that could default an id on. It stopped being
+    true when the install gained a default template
+    (`Config.automation_project_defaults`): a stripped false is not a Project
+    that is off, it is a Project that comes on by itself the moment the operator
+    defaults that id on - and the Project said no.
     """
     from types import SimpleNamespace
 
@@ -978,12 +1071,13 @@ async def test_unticking_a_default_on_automation_persists_an_explicit_false(
     )
     payload = json.loads(response.body)
     assert "session_control" not in payload["enabled"]
-    # The false survives on disk for the default-on id and is stripped as noise
-    # for the ordinary opt-in, where absence already means off.
+    # Both survive on disk. The default-on id because absence means on there,
+    # and the ordinary one because absence means "follow whatever this install
+    # decides next".
     written = (tmp_path / ".swe-mux" / "config.toml").read_text(encoding="utf-8")
     assert "session_control = false" in written
-    assert "doc_debt" not in written
-    assert project_automations(tmp_path) == {"session_control": False}
+    assert "doc_debt = false" in written
+    assert project_automations(tmp_path) == {"session_control": False, "doc_debt": False}
 
 
 @pytest.mark.asyncio
@@ -1062,6 +1156,136 @@ async def test_the_project_matrix_reports_every_project_including_the_opted_out(
     assert scan_entry["install_switch"] == "scan_timeline_enabled"
     # `scan_timeline_enabled` defaults off, and the resolved ceiling says so.
     assert scan_entry["globally_allowed"] is False
+
+
+@pytest.mark.asyncio
+async def test_the_matrix_serves_the_install_default_beside_the_project_answer(
+    tmp_path: Path,
+) -> None:
+    """A Project that wrote nothing runs what the install decided, and says so.
+
+    Two readings ship, because the surface cannot derive one from the other: the
+    stored template (`project_defaults`, which the Default column writes) and the
+    resolved per-entry `install_default`, which is that map merged over the
+    registry's own with the closure completed. A column rendering only the second
+    could not tell a row the operator set from one the registry ships.
+    """
+    from types import SimpleNamespace
+
+    from swe_mux.routes.automation import automation_project_matrix, put_project_automations
+
+    root_a = tmp_path / "a"
+    root_b = tmp_path / "b"
+    root_a.mkdir()
+    root_b.mkdir()
+    first = SimpleNamespace(id="p1", name="Alpha", root=str(root_a))
+    second = SimpleNamespace(id="p2", name="Beta", root=str(root_b))
+    registry_stub = SimpleNamespace(
+        projects={"p1": first, "p2": second},
+        ordered_projects=lambda: [first, second],
+    )
+
+    class Events:
+        async def emit(self, kind: str, **_payload: object) -> None:
+            del kind
+
+    config = Config(data_dir=tmp_path, automation_project_defaults={"doc_debt": True})
+    app = {keys.PROJECTS: registry_stub, keys.EVENTS: Events(), keys.CONFIG: config}
+
+    async def body() -> dict[str, object]:
+        return {"automations": {"doc_debt": False}}
+
+    # Alpha disagrees explicitly; Beta says nothing at all.
+    await put_project_automations(  # type: ignore[arg-type]
+        SimpleNamespace(match_info={"project_id": "p1"}, app=app, json=body)
+    )
+
+    response = await automation_project_matrix(  # type: ignore[arg-type]
+        SimpleNamespace(app=app)
+    )
+    payload = json.loads(response.body)
+    assert payload["project_defaults"] == {"doc_debt": True}
+    assert payload["scan_timeline_auto_enable_default"] is False
+    entry = next(item for item in payload["automations"] if item["id"] == "doc_debt")
+    assert entry["install_default"] is True
+    # The closure came with it, or the default would resolve to `blocked`.
+    tier0 = next(item for item in payload["automations"] if item["id"] == "tier0")
+    assert tier0["install_default"] is True
+    rows = {row["project_id"]: row for row in payload["projects"]}
+    assert "doc_debt" in rows["p2"]["enabled"], "an undecided Project inherits"
+    assert rows["p2"]["requested"] == {}, "and writes nothing down to do it"
+    assert "doc_debt" not in rows["p1"]["enabled"], "an explicit false still wins"
+    assert rows["p1"]["requested"] == {"doc_debt": False}
+    # The auto-arm field carries the same two readings as the opt-ins.
+    assert rows["p2"]["scan_timeline_auto_enable"] is False
+    assert rows["p2"]["scan_timeline_auto_enable_own"] is None
+
+
+@pytest.mark.asyncio
+async def test_the_scan_auto_arm_can_be_returned_to_the_install_default(
+    tmp_path: Path,
+) -> None:
+    """`null` removes the field; an absent key leaves it alone.
+
+    Three positions need three spellings. Reading `null` as "leave alone" - which
+    is what the route did while the field could only be per-Project - would make
+    returning to the inherited value unsayable over this route, and the field
+    would go on being a write nobody could undo in one place.
+    """
+    from types import SimpleNamespace
+
+    from swe_mux.routes.automation import get_project_automations, put_project_automations
+
+    project = SimpleNamespace(id="p1", name="Main", root=str(tmp_path))
+    registry_stub = SimpleNamespace(
+        projects={"p1": project}, ordered_projects=lambda: [project]
+    )
+
+    class Events:
+        async def emit(self, kind: str, **_payload: object) -> None:
+            del kind
+
+    config = Config(
+        data_dir=tmp_path,
+        scan_timeline_enabled=True,
+        scan_timeline_auto_enable_default=True,
+    )
+    app = {keys.PROJECTS: registry_stub, keys.EVENTS: Events(), keys.CONFIG: config}
+    opted_in = {"scan_timeline": True, "tier0": True, "raw_store": True}
+
+    async def write(body: dict[str, object]) -> object:
+        async def resolved() -> dict[str, object]:
+            return body
+
+        return await put_project_automations(  # type: ignore[arg-type]
+            SimpleNamespace(match_info={"project_id": "p1"}, app=app, json=resolved)
+        )
+
+    # Pinned off against an install that arms by default.
+    payload = json.loads(
+        (await write({"automations": opted_in, "scan_timeline_auto_enable": False})).body  # type: ignore[attr-defined]
+    )
+    assert payload["scan_timeline_auto_enable"] is False
+    assert payload["scan_timeline_auto_enable_own"] is False
+
+    # An unrelated write that does not name the field leaves the pin alone.
+    payload = json.loads((await write({"automations": opted_in})).body)  # type: ignore[attr-defined]
+    assert payload["scan_timeline_auto_enable_own"] is False
+
+    # An explicit null gives the field back to the install.
+    payload = json.loads(
+        (await write({"automations": opted_in, "scan_timeline_auto_enable": None})).body  # type: ignore[attr-defined]
+    )
+    assert payload["scan_timeline_auto_enable_own"] is None
+    assert payload["scan_timeline_auto_enable"] is True
+    read = json.loads(
+        (
+            await get_project_automations(  # type: ignore[arg-type]
+                SimpleNamespace(match_info={"project_id": "p1"}, app=app)
+            )
+        ).body
+    )
+    assert read["scan_timeline_auto_enable"] is True
 
 
 @pytest.mark.asyncio

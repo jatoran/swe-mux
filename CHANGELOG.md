@@ -17,6 +17,12 @@ The release procedure that maintains this file is [`RELEASING.md`](RELEASING.md)
 
 ### Added
 
+- **Automations now have an install-wide default that new and existing Projects inherit.**
+  The Automation → Policy matrix's Global cell gained a `default` checkbox beside the existing "off everywhere" lock, with a line under it saying how many Projects that default actually reaches ("12 inherit · 3 custom") before you click it.
+  A Project that never wrote an automation down follows the default and keeps following it as you change your mind; a Project that wrote one still wins.
+  The per-Project control gained a third position, `Follow global`, so a Project can go back to inheriting instead of being pinned to whatever it was set to once.
+  `scan_timeline_auto_enable` - whether a new conversation arms the timeline by itself - inherits the same way.
+
 - **The plugin marketplace now has one validated public catalog and a real website.**
   `/plugins/` and the in-app browser share exact-commit manifests discovered from the `swe-mux-plugin` GitHub topic, with explicit official/community labeling, release tags, permissions, platforms, runtimes, licenses, and install commands.
   The catalog executes no plugin source, excludes invalid repositories, refreshes through the site deploy workflow, and falls back to the unreviewed live GitHub topic inside the app if swemux.dev is unavailable.
@@ -26,6 +32,14 @@ The release procedure that maintains this file is [`RELEASING.md`](RELEASING.md)
 
 ### Changed
 
+- **Add project inherits your automation defaults instead of asking you to choose again.**
+  The three starting-set checkboxes are now one summary line - what the new Project will run, and that it came from the install - which expands to a per-automation panel for changing individual rows for that Project only.
+  Only a row that actually disagrees with what is inherited is written into the Project, so a form you never expand writes nothing and the Project keeps following your defaults.
+  Where the install has no opinion at all the free analysis set is still pre-ticked, so a fresh install's first Project is not empty; once you have set a default either way, the form stops second-guessing it.
+  The model-backed and agent-autonomy sets stay explicit checkboxes: one can bill and the other hands agents real authority.
+- **"Adaptive session title" is now "Re-title on scope change".**
+  It re-titles a session when its scope changes, and it is not what names a session in the first place - that is the Session titler, an install-wide switch on the Automation dashboard that runs whatever a Project opted into.
+  Both were described as "session titles", which made declining the model-backed automations look like declining session titles.
 - **The Files tab now opens files into itself, as tabs, instead of into a workspace pane.**
   A second rail below `File Explorer | Recent` holds what you have open; a plain click on a tree row, a search hit, or a Recent row lands there, and the side panel stays open over the session you were reading.
   A file moves into a pane on request - `⇥` beside the rail, `Open in a pane` on its tab or on its row in the tree, ctrl/cmd-click on a row, or the row drag that already worked - and it lives in exactly one of the two places at a time.
