@@ -353,13 +353,16 @@ function tourMobile(): Beat[] {
     {
       at: 200,
       eyebrow: 'TALK TO IT',
-      say: 'Type something and send it.',
-      spotlight: ['.terminal-pane'],
+      say: 'Send it a prompt, without a keyboard.',
+      spotlight: ['.terminal-action-rail'],
       gate: { kind: 'event', name: 'mux:turn-ended' },
-      hint: 'Type anything, then send',
+      hint: 'Prompts on the rail, pick one, then send',
       body: [
-        'The agent replies badly, on purpose. The Transcript tab in the side panel will'
-        + ' have the same turn, as readable messages.',
+        'This frame refuses the phone keyboard on purpose: it is an embed, so it cannot'
+        + ' measure one, and a keyboard swe-mux cannot measure is one it cannot get out'
+        + ' of your way. Open it full screen, under the frame, for the real thing.',
+        'The rail is how a phone drives an agent anyway. Press Prompts, choose a saved'
+        + ' one, then press send - the reply is as bad as the ones on the desktop.',
       ],
     },
     {

@@ -96,6 +96,54 @@ function seedPresentation(): void {
 seedPresentation()
 
 /**
+ * Inside the embed, nothing may raise the phone's soft keyboard.
+ *
+ * The app's own policy is right and stays: on a coarse pointer, tapping a terminal pane
+ * is typing intent, so the keyboard comes up, and a rail press preserves whatever state
+ * it found. What breaks here is the premise underneath it. The landing page sizes this
+ * iframe itself, so the OS keyboard never changes the frame's `visualViewport`: the inset
+ * stays zero, the pane never shrinks, the rail never lifts, and the keyboard-peek button
+ * never appears. Every part of swe-mux's soft-keyboard handling is unreachable in here,
+ * and what is left is a keyboard covering a demo that cannot react to it.
+ *
+ * So the embed refuses the keyboard outright, and the real thing is one deliberate tap
+ * away: the landing page's "open full screen" link loads this same page at the top level,
+ * where `visualViewport` does shrink, the app measures it, and the whole adaptation is not
+ * only correct but worth watching.
+ *
+ * The refusal is a property shadow rather than a listener that puts the attribute back,
+ * because the app writes `inputMode` immediately before it focuses: anything reacting
+ * *after* focus gets a keyboard that opens and then dismisses, which is worse than either
+ * outcome. Shadowing makes the app's write a no-op and leaves `inputmode="none"` standing.
+ * Only the terminal's own live input is touched - the Draft composer, the palette and the
+ * settings fields keep their keyboards, because there the keyboard is the point and the
+ * surface is one the app draws above it.
+ */
+function refuseSoftKeyboard(): void {
+  if (window.top === window.self) return
+  const pinned = new WeakSet<HTMLElement>()
+  const pin = (field: HTMLElement): void => {
+    if (pinned.has(field)) return
+    pinned.add(field)
+    field.setAttribute('inputmode', 'none')
+    Object.defineProperty(field, 'inputMode', {
+      configurable: true,
+      get: () => 'none',
+      set: () => { /* the app may ask for a keyboard; in the embed it cannot have one */ },
+    })
+  }
+  const sweep = (): void => {
+    for (const field of document.querySelectorAll<HTMLElement>('.mobile-terminal-live-input')) {
+      pin(field)
+    }
+  }
+  sweep()
+  new MutationObserver(sweep).observe(document.body, { childList: true, subtree: true })
+}
+
+refuseSoftKeyboard()
+
+/**
  * A last line of defence around the real App.
  *
  * A render that throws tears a Preact tree down and leaves the page frozen, with
