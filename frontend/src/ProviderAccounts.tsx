@@ -11,6 +11,7 @@ import { emitTutorialAction } from './tutorial'
 // module used to own them, which is how the two harnesses that have provider accounts came to
 // be the only two with a drawing at all.
 import { harnessMark } from './harnessIcons'
+import { harnessDisplayName } from './harnessRegistry'
 
 export type ProviderName=string
 type QuotaWindow={used_percent:number;window_minutes:number;resets_at?:number|null}
@@ -35,7 +36,7 @@ type LoginState=LoginDisplay
  *  daemon. Not "sessions using this account": mux stamps what it had selected when the
  *  process started, and cannot see a `/login` typed inside a pane. */
 type AccountSessionCounts=SessionCountsDisplay
-export type ProviderAccountsStatus={providers:ProviderName[];selected:Record<ProviderName,string|null>;current:Record<ProviderName,CurrentProviderAccount>;accounts:ProviderAccount[];poll_minutes:number;stale_minutes:number;refreshing:boolean;reset_alert?:ResetAlert;login?:Record<ProviderName,LoginState|null>;login_commands?:Record<ProviderName,string>;sessions?:AccountSessionCounts}
+export type ProviderAccountsStatus={providers:ProviderName[];selected:Record<ProviderName,string|null>;current:Record<ProviderName,CurrentProviderAccount>;accounts:ProviderAccount[];poll_minutes:number;stale_minutes:number;refreshing:boolean;reset_alert?:ResetAlert;login?:Record<ProviderName,LoginState|null>;login_commands?:Record<ProviderName,string>;switch_reaches_live?:Record<ProviderName,boolean>;sessions?:AccountSessionCounts}
 
 const providerEvent='swe-mux:provider-accounts-changed'
 const notifyChanged=()=>window.dispatchEvent(new Event(providerEvent))
@@ -251,7 +252,7 @@ export function AccountSwitcher({variant='full',placement,onManage,promptDismiss
           return <button class={`${status?.selected[provider]===account.id?'active':''} ${account.conflict&&!account.conflict.is_primary?'conflicted':''}`} disabled={!!busy} onClick={()=>void choose(account)} aria-label={`${account.label}: ${state}${spawned?`; ${spawnedTitle}`:''}`} title={account.conflict?conflictDescription(account):quotaTitle(account)}><span>{status?.selected[provider]===account.id?'◆':'◇'}</span><strong>{account.label}</strong>{account.quota?.refreshed_at?<i class="account-refresh-age" title={`Quotas refreshed ${new Date(account.quota.refreshed_at*1000).toLocaleString()}`}>{formatRefreshAge(account.quota.refreshed_at)}</i>:null}<small>{account.conflict&&!account.conflict.is_primary?'duplicate account · polling suspended':<span class={`quota-row${sectionFable?' has-fable':''}`}>
           {account.quota?.status==='error'
             ?<em class="quota-row-note">unavailable</em>
-            :quotaRowCells(account,sectionFable).map((cell,index)=><span class={`quota-cell quota-cell-${cell.key}`} key={cell.key}>{index>0&&<i class="quota-separator" aria-hidden="true"> • </i>}<b>{cell.percent}</b>{' '}{cell.reset&&<i class="quota-reset">{cell.reset}</i>}<i class="quota-window-label">{cell.qualifier}</i></span>)}
+            :quotaRowCells(account,sectionFable).map((cell,index)=><span class={`quota-cell quota-cell-${cell.key}`} key={cell.key}>{index>0&&<i class="quota-separator" aria-hidden="true"></i>}<b>{cell.percent}</b>{' '}{cell.reset&&<i class="quota-reset">{cell.reset}</i>}<i class="quota-window-label">{cell.qualifier}</i></span>)}
         </span>}{spawned>0&&<i class="account-session-count" aria-hidden="true" title={spawnedTitle}>{spawned}×</i>}</small></button>
         })}
         {!saved.length&&!login&&<button class="account-empty-cta" disabled={!!busy} onClick={()=>startLogin(provider)}>No saved accounts — <strong>sign in to {provider}</strong></button>}
@@ -260,7 +261,11 @@ export function AccountSwitcher({variant='full',placement,onManage,promptDismiss
             sentence is on screen rather than in a tooltip: this popover is the phone's
             account surface too, and a phone cannot hover. Keyed by position, because
             two accounts may carry the same label. */}
-        {strandedSessions(status,provider).map((row,index)=><p class="account-session-notice" key={`${provider}-${index}`}>{strandedSessionNotice(row)}</p>)}
+        {/* Amber when those sessions are still spending the login they started on;
+            muted when the CLI follows the switch and the count is only history. The
+            daemon says which (`switch_reaches_live`), because the answer is the
+            vendor's CLI behaviour and differs between the two providers. */}
+        {strandedSessions(status,provider).map((row,index)=>{const reachesLive=status?.switch_reaches_live?.[provider];return <p class={`account-session-notice${reachesLive===true?' follows':''}`} key={`${provider}-${index}`}>{strandedSessionNotice(row,{reachesLive,cli:harnessDisplayName(provider)})}</p>})}
       </section>})}
       {error&&<p class="account-error" role="alert">{error}</p>}
       {resetUnread&&<section class="account-reset-alert"><h4>quota reset evidence</h4><p>{resetItems.length===1?'One confirmed unexpected reset:':`${status?.reset_alert?.count??resetItems.length} confirmed unexpected resets · one provider rollover reaches every account on that plan:`}</p><ul>{resetItems.map(item=><li key={item.id}><strong>{item.provider} {item.window}</strong> · {status?.accounts.find(account=>account.id===item.account_id)?.label||item.account_id} · {item.before_value}% → {item.after_value}%</li>)}</ul><div>{resetProviders.length===1&&resetProviders[0]==='codex'&&<button disabled={!!busy} onClick={()=>void reviewResets('manual_usage')}>{busy==='reset-manual_usage'?'marking…':resetItems.length>1?'all manual Codex usage':'manual Codex usage'}</button>}<button class="danger" disabled={!!busy} onClick={()=>void reviewResets('discarded')}>{busy==='reset-discarded'?'discarding…':resetItems.length>1?'discard all as errors':'discard as error'}</button><button disabled={!!busy} onClick={()=>void reviewResets('seen')}>{busy==='reset-seen'?'marking…':'mark seen'}</button><button disabled={!!busy} onClick={toggleResetSound}>{resetSound?'mute reset sound':'enable reset sound'}</button></div></section>}
@@ -395,7 +400,7 @@ export function AccountSettings() {
     {/* Policy that never changes is reference, not instruction, and it was the first
         thing on the panel every time. Folded away, it is still one click from the
         control it describes. */}
-    <details class="account-explainer"><summary>How switching works</summary><p>Switching replaces only the provider's system authentication file. Global config, skills, projects, and histories remain shared. It is never blocked and never confirmed, but it is not retroactive either: a CLI reads that file when it starts, so a session running from before the switch can keep spending the outgoing account until it is restarted. Codex behaves this way. The account switcher counts live sessions against the account each one was spawned under, so you can see which logins are still in use.</p><p>The switch also restores the account's cached CLI profile, so <code>/status</code> in new sessions names the right account immediately; panes already running keep the old display until restarted.</p><p>swe-mux follows the daemon host credentials; startup never restores an older saved account. Credentials move into a saved account only on a provider-verified identity or an explicit relink.</p></details>
+    <details class="account-explainer"><summary>How switching works</summary><p>Switching replaces only the provider's system authentication file. Global config, skills, projects, and histories remain shared. It is never blocked and never confirmed. Whether it reaches sessions already running is up to the CLI: Claude Code re-reads its credential file when the file changes, so a running pane spends the new account from its next request, while Codex reads its login once at startup and keeps spending the outgoing account until it is restarted. The account switcher counts live sessions against the account each one was spawned under and says, per provider, which of the two applies.</p><p>The switch also restores the account's cached CLI profile, so <code>/status</code> in new sessions names the right account immediately; panes already running keep the old display until restarted, even where their requests already go to the new account.</p><p>swe-mux follows the daemon host credentials; startup never restores an older saved account. Credentials move into a saved account only on a provider-verified identity or an explicit relink.</p></details>
     {providers.map(provider=>{const current=status?.current[provider];const accounts=grouped[provider]||[];const active=accounts.find(account=>account.id===current?.account_id);const login=loginOf(status?.login,provider);return <div class="account-provider-settings"><header><div><strong>{provider.toUpperCase()}</strong><small>{accounts.length} saved · quotas refresh every {status?.poll_minutes||15} minutes</small></div></header>
       {/* Only the states that need explaining, and that carry an action. While the live
           login is a saved account, this block restated the row already marked ◆ active

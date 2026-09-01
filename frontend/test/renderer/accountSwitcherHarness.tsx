@@ -80,6 +80,9 @@ const snapshot = () => ({
   refreshing: false,
   login,
   login_commands: { claude: 'claude auth login --claudeai', codex: 'codex login' },
+  // What the daemon declares per provider: Claude Code re-reads its credential file and
+  // follows a switch, Codex keeps the login it started with.
+  switch_reaches_live: { claude: true, codex: false },
   // Live sessions by the account they were spawned under. `account-claude` is the
   // selected one; the other two rows are what a switch left behind, which is the
   // whole reason the count is drawn.

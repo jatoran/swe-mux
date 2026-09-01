@@ -692,16 +692,33 @@ async def test_switching_proceeds_while_live_sessions_hold_the_current_login(
         sessions={"s1": SimpleNamespace(record=SimpleNamespace(backend="claude", state="working"))}
     )
 
-    # Never refused, live sessions or not. It is not retroactive either - a CLI
-    # already running keeps the credential it read at startup - but a confirmation
-    # dialog does not help with that, and `session_counts` does.
+    # Never refused, live sessions or not. What the switch does to the session
+    # already running is the CLI's behaviour, declared per provider, and a
+    # confirmation dialog would not change it; `session_counts` and the audit
+    # line are what say which behaviour the live sessions got.
     snapshot = await manager.select("claude", first)
     assert json.loads(system_auth.read_text(encoding="utf-8"))["claudeAiOauth"]["accessToken"] == (
         "one"
     )
     assert snapshot["selected"]["claude"] == first
     assert manager._selection_guard["claude"][0] == first
+    selected = [entry for entry in manager.audit_entries() if entry["action"] == "selected"]
+    assert selected[-1]["detail"] == "1 live session(s), reached on their next request"
     await background.stop(f"{SELECTION_GUARD_LOOP}-claude")
+
+
+def test_snapshot_declares_whether_a_switch_reaches_live_sessions(tmp_path: Path) -> None:
+    """The per-account session count means two different things for the two CLIs.
+
+    Claude Code re-reads its credential file when the mtime moves, so a live pane
+    follows a switch on its next request; Codex keeps the token it read at startup
+    until restarted. The surface printing the count has to say which, and it must
+    get the answer from here rather than from a provider name in the browser - the
+    sentence that assumed one answer for both was false for every Claude session.
+    """
+    manager = offline(ProviderAccountManager(tmp_path / "mux", EventBus(), home=tmp_path / "home"))
+    manager._status_identity = MethodType(no_status, manager)  # type: ignore[method-assign]
+    assert manager.snapshot()["switch_reaches_live"] == {"claude": True, "codex": False}
 
 
 @pytest.mark.asyncio

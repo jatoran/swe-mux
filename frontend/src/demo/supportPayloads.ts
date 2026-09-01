@@ -466,6 +466,9 @@ export function providerAccountsPayload(): unknown {
     reset_alert: { count: 0, items: [] },
     login: Object.fromEntries(providers.map(provider => [provider, null])),
     login_commands: Object.fromEntries(providers.map(provider => [provider, `${provider} login`])),
+    // Indexed like `ACCOUNTS`: the first fixture provider's CLI follows a switch on its
+    // next request, the second keeps the login it started with until restarted.
+    switch_reaches_live: Object.fromEntries(providers.map((provider, index) => [provider, index === 0])),
     // What each account was spawned under, which is what the daemon can honestly count:
     // it stamps the selection at spawn and cannot see a `/login` typed inside a pane.
     sessions: {

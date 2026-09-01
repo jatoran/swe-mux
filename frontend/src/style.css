@@ -268,13 +268,18 @@ kbd { padding:1px 3px;margin-left:4px;border:1px solid #334a39;border-bottom-col
 .account-list article.conflicted{box-shadow:inset 3px 0 var(--red)}
 .account-popover button.conflicted strong{color:var(--red)}
 /* Each quota value names its own period, so the provider sections need no detached heading
-   row. Fixed tracks keep stacked accounts comparable while the visible bullets let a row
-   read naturally as one compact line. */
-.account-popover .quota-row{display:grid;grid-template-columns:12ch 14ch minmax(0,1fr);gap:0 2ch;align-items:baseline;font:9px 'Cascadia Mono',Consolas,monospace}
-.account-popover .quota-row.has-fable{grid-template-columns:12ch 14ch minmax(8ch,1fr)}
-.account-popover .quota-cell{position:relative;display:flex;align-items:baseline;min-width:0;white-space:nowrap}
-.account-popover .quota-separator{position:absolute;right:calc(100% + .1ch);color:var(--muted);opacity:.55}
-.account-popover .quota-cell b{flex:0 0 4ch;color:var(--text);font-weight:400;text-align:right}
+   row. Fixed tracks keep stacked accounts comparable: every row is its own grid, so only
+   a fixed width lands `5%` and `100%` on the same x across accounts. The tracks are sized
+   to the widest figure each can hold in this monospace font - a 4ch percentage, a .35ch
+   breath, the longest reset (`4h59m` for the 5h window, `23h59m` for the weekly one) and
+   its qualifier - plus, from the second column on, the hairline separator and its .55ch
+   either side. A wider gap and a floating bullet were what made the row read as three
+   sentences and left nothing beside them. */
+.account-popover .quota-row{display:grid;grid-template-columns:12.5ch 14.5ch minmax(0,1fr);gap:0;align-items:baseline;font:9px 'Cascadia Mono',Consolas,monospace}
+.account-popover .quota-row.has-fable{grid-template-columns:12.5ch 14.5ch minmax(10.5ch,1fr)}
+.account-popover .quota-cell{display:flex;align-items:baseline;min-width:0;white-space:nowrap}
+.account-popover .quota-separator{flex:none;align-self:center;width:1px;height:1.15em;margin:0 .55ch;background:color-mix(in srgb,var(--muted) 45%,transparent)}
+.account-popover .quota-cell b{flex:0 0 4ch;margin-right:.35ch;color:var(--text);font-weight:400;text-align:right}
 .account-popover .quota-cell i{overflow:hidden;color:var(--muted);font-style:normal;white-space:nowrap}
 .account-popover .quota-window-label{opacity:.55}
 /* A failed poll invalidates the whole account, so it replaces every window in the row. */
@@ -291,6 +296,9 @@ kbd { padding:1px 3px;margin-left:4px;border:1px solid #334a39;border-bottom-col
 .account-popover .account-session-count{justify-self:end;padding:0 4px;border:1px solid var(--line);color:var(--muted);font-style:normal;white-space:nowrap}
 .account-popover section>button.active .account-session-count{border-color:color-mix(in srgb,var(--green) 45%,var(--line));color:var(--green)}
 .account-popover .account-session-notice{margin:5px 2px 2px;padding:5px 7px;border-left:3px solid var(--amber,#e5c07b);background:#735f3722;color:var(--amber,#e5c07b);font-size:8px;line-height:1.5}
+/* The same sentence in the muted tone when the CLI follows the switch: the count is then a
+   record of where each session started, not a login still being spent. */
+.account-popover .account-session-notice.follows{border-left-color:var(--line);background:var(--panel2);color:var(--muted)}
 /* The empty state of the sidebar's status block: an invitation, not a row of dashes
    for a provider this machine has never signed in to. It is the expanded sidebar's
    alone - the 40px rail and the phone's toolbar render nothing at all rather than a

@@ -229,7 +229,14 @@ test('stranded sessions name the accounts a switch left behind, and only those',
   assert.equal(spawnedSessionCount(status.sessions,'nobody'),0)
   assert.equal(spawnedSessionCount(undefined,'a'),0)
   // The sentence says what the number means, because "2 sessions on Work" alone
-  // reads as a claim about what those processes authenticate as.
-  assert.match(strandedSessionNotice(claude[0]),/^2 live sessions on Work\. Switching is not retroactive/)
-  assert.match(strandedSessionNotice({label:'Work',count:1}),/^1 live session on Work\./)
+  // reads as a claim about what those processes authenticate as - and what it means
+  // is the CLI's behaviour, which the daemon declares and the sentence never guesses.
+  const follows={reachesLive:true,cli:'Claude Code'}
+  const keeps={reachesLive:false,cli:'Codex'}
+  assert.equal(strandedSessionNotice(claude[0],follows),'2 live sessions started under Work. Claude Code picks up a credential change on its next request, so they are spending the selected account now; only their own /status keeps the old name until restarted.')
+  assert.equal(strandedSessionNotice({label:'Work',count:1},follows),'1 live session started under Work. Claude Code picks up a credential change on its next request, so it is spending the selected account now; only its own /status keeps the old name until restarted.')
+  assert.equal(strandedSessionNotice(claude[0],keeps),'2 live sessions on Work. Codex reads its login at startup, so they keep spending Work until restarted.')
+  assert.equal(strandedSessionNotice({label:'Work',count:1},keeps),'1 live session on Work. Codex reads its login at startup, so it keeps spending Work until restarted.')
+  // A daemon that predates the field gets a hedge, not a side.
+  assert.equal(strandedSessionNotice({label:'Work',count:1},{cli:'Codex'}),'1 live session started under Work. Whether it followed the switch depends on Codex; restart to be sure.')
 })

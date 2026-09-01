@@ -139,26 +139,41 @@ the last good reading and changes no state.
 - Selection atomically replaces only the normal system auth file. Provider config,
   skills, sessions, projects, and histories remain shared. It is never refused and never asks
   for confirmation, including while live sessions of that provider are running.
-- **A switch is not retroactive, and this passage used to claim it was.** It said live
-  sessions re-read the credential file when its mtime changes and therefore follow a switch
-  without being restarted. Nothing ever measured that; the operator observed the opposite for
-  Codex, whose CLI reads `auth.json` at startup and keeps the token in memory. So the honest
-  statement is the narrower one: every process started **after** a switch authenticates as the
-  new account, and a process started before it may keep spending the outgoing one until it is
-  restarted.
-  It stays unrefused and unconfirmed anyway, because a dialog does not help - what the operator
-  needs is to see which sessions stayed behind, which is what the session counts below are.
-  Two consequences are worth chasing separately and are **not** addressed here:
+- **Whether a switch reaches sessions already running is the CLI's behaviour, declared per
+  provider** (`_ProviderProfile.switch_reaches_live`, carried on the accounts payload as
+  `switch_reaches_live`) **and it differs between the two.** This passage has been wrong in
+  both directions: it first claimed every live session re-reads the file on an mtime change,
+  then, on an observation about Codex alone, that no live session follows a switch. Read from
+  the binaries rather than assumed:
+  - **Claude Code follows the switch.** Its credential cache records the file's `mtimeMs`, and
+    the refresh check that runs ahead of each request stats `.credentials.json` and drops the
+    cached token when the mtime moved (Claude Code 2.1.257, the `lastCredentialsMtimeMs`
+    check). `select()` replaces the file atomically, so a pane started before the switch sends
+    its next request as the new account. Only its own `/status` line stays stale, for the
+    profile-block reason under cached-profile restore. Consistent with the audit trail: four
+    Claude switches on 2026-09-01 under four to five live sessions each produced no
+    `selection_reasserted`, which a pane holding and refreshing the old token would have.
+  - **Codex does not.** Observed by the operator: the CLI reads `auth.json` at startup and
+    keeps the token in memory, so a session started before the switch keeps spending the
+    outgoing account until it is restarted.
+  A switch stays unrefused and unconfirmed either way, because a dialog does not help - what
+  the operator needs is to see which sessions started under which login and what that means
+  for them, which is the session count below and its per-provider sentence. The `selected`
+  audit line records which of the two the live sessions got.
+  Two Codex-only consequences are worth chasing separately and are **not** addressed here:
   the selection guard's `SELECTION_GUARD_SECONDS` (60s) is sized for a refresh already in
-  flight, and an outgoing CLI that rotates its own token an hour later would revert the switch
-  well outside that window; and quota polling attributes a window to the *selected* account,
-  which a straggling session is not spending against.
+  flight, and an outgoing Codex CLI that rotates its own token an hour later would revert the
+  switch well outside that window; and quota polling attributes a window to the *selected*
+  account, which a straggling Codex session is not spending against.
   The measurement that would settle both: two saved Codex accounts, one live Codex session,
   switch, then watch the `auth.json` digest for an hour while that session works.
 - Live sessions are counted against the account they were **spawned under**, per saved slot,
   in the popover and on the accounts payload (`session_counts`). The stamp is taken once, at
-  spawn (`SessionRecord.spawn_provider*`), because a provider CLI reads its credential file
-  when the process starts and no later moment can answer the question for that process.
+  spawn (`SessionRecord.spawn_provider*`), because spawn is the one moment mux can vouch for:
+  what the process does with a later switch is the CLI's behaviour (`switch_reaches_live`),
+  and the popover's sentence under the count says which - muted "spending the selected
+  account now" for a CLI that follows, amber "keeps spending X until restarted" for one that
+  does not, and a hedge when the daemon predates the field.
   It records what mux had *selected*, not what the process authenticates as: a `/login` typed
   inside a pane is invisible, so every surface says "spawned under" and never "using".
   Resolution goes through the provider's own account id before the local slot - the rule the
