@@ -14,6 +14,9 @@ import type { Session } from '../types.ts'
 import {
   assistantDialogId, assistantDialogPayload, assistantStatusPayload,
 } from './assistantFixture.ts'
+import {
+  demoDirectory, demoFile, demoFileSave, demoFileSearch, demoFileTree, demoRecentFiles,
+} from './fileFixtures.ts'
 import { hashText, PREVIEW_PAGE_IDS } from './fixtures.ts'
 import {
   commitChangesPayload, graphPayload, provenancePayload,
@@ -24,7 +27,7 @@ import {
 } from './fleetFixtures.ts'
 import {
   agentEnvironmentPayload, attentionInboxPayload, automationDashboardPayload,
-  automationMatrixPayload, clipboardPayload, filesTreePayload, grantsPayload,
+  automationMatrixPayload, clipboardPayload, grantsPayload,
   historyProjectsPayload, injectionSafetyPayload, lastReplyPayload, projectAutomationsPayload,
   pluginDevelopmentPayload, pluginsPayload, projectConfigPayload, promptsPayload,
   providerAccountsPayload, schedulesPayload, skillsPayload, updatePayload, usagePayload,
@@ -287,6 +290,55 @@ function transcriptPayload(sessionId: string): unknown {
     trailing_tool_calls: [],
     hidden: reason ? 0 : 4,
     abandoned_messages: 0,
+    truncated: false,
+    reason,
+  }
+}
+
+/**
+ * `GET /api/sessions/{id}/branch-points`.
+ *
+ * Derived from the same transcript the Transcript tab draws, so the Branch dialog offers
+ * the conversation the visitor just watched rather than an invented list. It was not
+ * answered at all before, which meant the rail's Branch button opened a picker onto the
+ * unmatched-route `{}` - the shape with no `points` array, and the failure mode
+ * `supportPayloads.ts` exists to prevent.
+ *
+ * Eligibility is real rather than uniform: a reply that resumed after tool calls cannot be
+ * cut *before*, because the conversation up to that point ends on a call whose result
+ * never arrived, and no provider will load it. That is the one refusal the picker knows
+ * how to explain, and a demo where every row is available would never show it.
+ */
+function branchPointsPayload(sessionId: string): unknown {
+  const target = session(sessionId)
+  const messages = state.transcripts[sessionId] ?? []
+  const reason = !target ? 'no_transcript'
+    : target.backend === 'shell' ? 'not_agent'
+      : messages.length ? null : 'no_transcript'
+  const points = reason ? [] : messages.map(message => {
+    const afterTools = (message.preceding_tool_calls ?? 0) > 0
+    return {
+      message_id: message.message_id,
+      ordinal: message.ordinal,
+      role: message.role,
+      ts: message.ts ?? null,
+      text: message.text,
+      default_mode: message.role === 'user' ? 'before' : 'after',
+      modes: {
+        before: afterTools
+          ? { eligible: false, reason: 'unanswered_tool_calls' }
+          : { eligible: true, reason: null },
+        after: { eligible: true, reason: null },
+      },
+    }
+  })
+  return {
+    session_id: sessionId,
+    backend: target?.backend ?? '',
+    conversation_id: target?.agent_run_id ?? `conv-${sessionId}`,
+    strategy: reason ? null : 'resume_from_message',
+    from_message: true,
+    points,
     truncated: false,
     reason,
   }
@@ -843,6 +895,10 @@ const ROUTES: Route[] = [
     handler: match => transcriptPayload(decodeURIComponent(match[1])),
   },
   {
+    method: 'GET', pattern: /^\/api\/sessions\/([^/]+)\/branch-points$/,
+    handler: match => branchPointsPayload(decodeURIComponent(match[1])),
+  },
+  {
     method: 'GET', pattern: /^\/api\/sessions\/([^/]+)\/scan-timeline$/,
     handler: match => scanTimelinePayload(decodeURIComponent(match[1])),
   },
@@ -1025,11 +1081,58 @@ const ROUTES: Route[] = [
   },
   { method: 'GET', pattern: /^\/api\/projects\/([^/]+)\/automations$/, handler: () => projectAutomationsPayload() },
   { method: 'GET', pattern: /^\/api\/projects\/([^/]+)\/schedules$/, handler: () => schedulesPayload() },
+  // The File Explorer, answered off `fileFixtures.ts`. Five routes rather than one,
+  // because the tab is five readers: the tree restores the root plus every expanded
+  // folder in one round trip, expanding one folder is its own request, opening a file is
+  // a third, and Recent and search are separate views of the same set. It used to have
+  // one of the five, answering the wrong shape, so the tab drew an error.
   {
     method: 'GET', pattern: /^\/api\/projects\/([^/]+)\/files\/tree$/,
-    handler: match => filesTreePayload(decodeURIComponent(match[1])),
+    handler: (match, _body, url) =>
+      demoFileTree(decodeURIComponent(match[1]), url.searchParams.getAll('path')),
   },
-  { method: 'GET', pattern: /^\/api\/projects\/([^/]+)\/files\/recent$/, handler: () => ({ items: [] }) },
+  {
+    method: 'GET', pattern: /^\/api\/projects\/([^/]+)\/files\/recent$/,
+    handler: match => demoRecentFiles(decodeURIComponent(match[1])),
+  },
+  {
+    method: 'GET', pattern: /^\/api\/projects\/([^/]+)\/files$/,
+    handler: (match, _body, url) => {
+      const listing = demoDirectory(decodeURIComponent(match[1]), url.searchParams.get('path') ?? '')
+      return listing ?? error(404, 'No such directory in this Project.')
+    },
+  },
+  {
+    method: 'GET', pattern: /^\/api\/projects\/([^/]+)\/file$/,
+    handler: (match, _body, url) => {
+      const found = demoFile(decodeURIComponent(match[1]), url.searchParams.get('path') ?? '')
+      return found ?? error(404, 'No such file in this Project.')
+    },
+  },
+  {
+    method: 'PUT', pattern: /^\/api\/projects\/([^/]+)\/file$/,
+    handler: (match, body) => {
+      const input = (body ?? {}) as { path?: unknown; text?: unknown }
+      const saved = demoFileSave(
+        decodeURIComponent(match[1]), String(input.path ?? ''), String(input.text ?? ''),
+      )
+      return saved ?? error(404, 'No such file in this Project.')
+    },
+  },
+  {
+    method: 'GET', pattern: /^\/api\/projects\/([^/]+)\/search$/,
+    handler: (match, _body, url) => demoFileSearch(
+      decodeURIComponent(match[1]),
+      url.searchParams.get('q') ?? '',
+      url.searchParams.get('mode') ?? 'names',
+    ),
+  },
+  // Creating one is the one act here the demo will not perform: a file the tree has no
+  // content for would open empty, which reads as a file somebody truncated.
+  {
+    method: 'POST', pattern: /^\/api\/projects\/([^/]+)\/resources$/,
+    handler: () => error(501, 'This demo has a read-only checkout.'),
+  },
   { method: 'GET', pattern: /^\/api\/projects\/([^/]+)\/observations$/, handler: () => ({ items: [] }) },
 ]
 

@@ -245,10 +245,14 @@ export function AccountSwitcher({variant='full',placement,onManage,promptDismiss
           // CLI already running holds the credential it read at startup. It joins the
           // accessible name because `aria-label` replaces the row's content outright,
           // so a badge left out of it is a badge no screen reader can reach.
+          // `data-provider-account` carries the account's id. The only other handle on
+          // one row is the `active` class, which is exactly what choosing it changes - so
+          // anything selecting on that (the site demo's walkthrough switches accounts and
+          // switches back) would be naming a moving target.
           const spawned=spawnedSessionCount(status?.sessions,account.id)
           const spawnedTitle=`${spawned} live session${spawned===1?'':'s'} spawned under this account. That is what mux had selected when each started, not proof of what it authenticates as now.`
           const state=account.conflict&&!account.conflict.is_primary?'duplicate account, polling suspended':quotaTitle(account)
-          return <button class={`${status?.selected[provider]===account.id?'active':''} ${account.conflict&&!account.conflict.is_primary?'conflicted':''}`} disabled={!!busy} onClick={()=>void choose(account)} aria-label={`${account.label}: ${state}${spawned?`; ${spawnedTitle}`:''}`} title={account.conflict?conflictDescription(account):quotaTitle(account)}><span>{status?.selected[provider]===account.id?'◆':'◇'}</span><strong>{account.label}</strong>{account.quota?.refreshed_at?<i class="account-refresh-age" title={`Quotas refreshed ${new Date(account.quota.refreshed_at*1000).toLocaleString()}`}>{formatRefreshAge(account.quota.refreshed_at)}</i>:null}<small>{account.conflict&&!account.conflict.is_primary?'duplicate account · polling suspended':<span class={`quota-row${sectionFable?' has-fable':''}`}>
+          return <button class={`${status?.selected[provider]===account.id?'active':''} ${account.conflict&&!account.conflict.is_primary?'conflicted':''}`} disabled={!!busy} data-provider-account={account.id} onClick={()=>void choose(account)} aria-label={`${account.label}: ${state}${spawned?`; ${spawnedTitle}`:''}`} title={account.conflict?conflictDescription(account):quotaTitle(account)}><span>{status?.selected[provider]===account.id?'◆':'◇'}</span><strong>{account.label}</strong>{account.quota?.refreshed_at?<i class="account-refresh-age" title={`Quotas refreshed ${new Date(account.quota.refreshed_at*1000).toLocaleString()}`}>{formatRefreshAge(account.quota.refreshed_at)}</i>:null}<small>{account.conflict&&!account.conflict.is_primary?'duplicate account · polling suspended':<span class={`quota-row${sectionFable?' has-fable':''}`}>
           {account.quota?.status==='error'
             ?<em class="quota-row-note">unavailable</em>
             :quotaRowCells(account,sectionFable).map((cell,index)=><span class={`quota-cell quota-cell-${cell.key}`} key={cell.key}>{index>0&&<i class="quota-separator" aria-hidden="true"> • </i>}<b>{cell.percent}</b>{' '}{cell.reset&&<i class="quota-reset">{cell.reset}</i>}<i class="quota-window-label">{cell.qualifier}</i></span>)}

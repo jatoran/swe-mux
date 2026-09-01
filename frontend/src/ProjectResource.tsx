@@ -1423,13 +1423,17 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
     }catch(cause){setError(cause instanceof Error?cause.message:String(cause))}
   }
 
+  // `data-file-path` carries the row's project-relative path into the DOM. It is the only
+  // handle on one row that is not its visible name, which is content: the site demo's
+  // walkthrough names `src/coupons.js` with it, and a renamed fixture would otherwise
+  // break by silently matching nothing.
   const tree=(folder:string,depth=0)=>{
     const directory=directories[folder]
     if(!directory)return expanded.has(folder)?<p class="file-tree-loading" style={{paddingLeft:`${12+depth*15}px`}}>loading…</p>:null
     return <>{directory.items.map(item=>item.kind==='directory'?<div class="file-tree-branch" key={item.path}>
-      <button class="file-tree-row directory" style={{paddingLeft:`${9+depth*15}px`}} title="Open folder · right-click or long-press for actions" onPointerDown={event=>beginTreePress(item,event)} onPointerMove={trackTreePress} onPointerUp={finishTreePress} onPointerCancel={finishTreePress} onPointerLeave={finishTreePress} onClick={()=>runTreeClick(()=>toggleDirectory(item.path))} onContextMenu={event=>openTreeMenu(item,event)} aria-expanded={expanded.has(item.path)}><span>{expanded.has(item.path)?'▾':'▸'}</span><strong>{item.name}/</strong></button>
+      <button class="file-tree-row directory" data-file-path={item.path} style={{paddingLeft:`${9+depth*15}px`}} title="Open folder · right-click or long-press for actions" onPointerDown={event=>beginTreePress(item,event)} onPointerMove={trackTreePress} onPointerUp={finishTreePress} onPointerCancel={finishTreePress} onPointerLeave={finishTreePress} onClick={()=>runTreeClick(()=>toggleDirectory(item.path))} onContextMenu={event=>openTreeMenu(item,event)} aria-expanded={expanded.has(item.path)}><span>{expanded.has(item.path)?'▾':'▸'}</span><strong>{item.name}/</strong></button>
       {expanded.has(item.path)&&tree(item.path,depth+1)}
-    </div>:<button class="file-tree-row file" key={item.path} style={{paddingLeft:`${9+depth*15}px`}} title={`Open file · ${ROW_HINT}`} onPointerDown={event=>beginTreePress(item,event)} onPointerMove={trackTreePress} onPointerUp={finishTreePress} onPointerCancel={finishTreePress} onPointerLeave={finishTreePress} onClick={event=>openRow(item.path,event)} onContextMenu={event=>openTreeMenu(item,event)}><span>·</span><strong>{item.name}</strong></button>)}{directory.truncated&&<p class="file-tree-loading" style={{paddingLeft:`${12+depth*15}px`}}>Showing the first 2,000 entries.</p>}</>
+    </div>:<button class="file-tree-row file" key={item.path} data-file-path={item.path} style={{paddingLeft:`${9+depth*15}px`}} title={`Open file · ${ROW_HINT}`} onPointerDown={event=>beginTreePress(item,event)} onPointerMove={trackTreePress} onPointerUp={finishTreePress} onPointerCancel={finishTreePress} onPointerLeave={finishTreePress} onClick={event=>openRow(item.path,event)} onContextMenu={event=>openTreeMenu(item,event)}><span>·</span><strong>{item.name}</strong></button>)}{directory.truncated&&<p class="file-tree-loading" style={{paddingLeft:`${12+depth*15}px`}}>Showing the first 2,000 entries.</p>}</>
   }
 
   const searchModes:SearchMode[]=['names','contents','both']
