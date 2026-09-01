@@ -15,8 +15,13 @@ The release procedure that maintains this file is [`RELEASING.md`](RELEASING.md)
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-09-01
+
 ### Added
 
+- **swemux.dev now carries an interactive demo of the real app.**
+  The landing page runs the unmodified frontend against an in-page fake daemon, on a desktop frame and a phone frame that mirror one fleet, with a guided walkthrough and seven further scenarios - the prompt queue, orchestration, previews, landing a branch, the command palette, keymap presets, and the assistant - that label the parts of the screen they are talking about.
+  Nothing in it listens, speaks, or reaches a real daemon.
 - **Automations now have an install-wide default that new and existing Projects inherit.**
   The Automation → Policy matrix's Global cell gained a `default` checkbox beside the existing "off everywhere" lock, with a line under it saying how many Projects that default actually reaches ("12 inherit · 3 custom") before you click it.
   A Project that never wrote an automation down follows the default and keeps following it as you change your mind; a Project that wrote one still wins.
@@ -49,6 +54,13 @@ The release procedure that maintains this file is [`RELEASING.md`](RELEASING.md)
   The row opens plugin management directly, while Project-scoped plugin tools remain in each Project's Run menu.
 - **Plugin marketplace selection now fills an immutable release tag, and manual installation exposes an optional ref field.**
   Expanded plugin details show the selected channel and resolved revision, while acquisition, approval, and enablement remain separate.
+- **The account switcher's quota rows are narrower.**
+  Each account's `5h`, weekly, and Fable figures sit closer together, divided by a hairline instead of a bullet in a wide gap, with a small breath between a percentage and its reset time, which there was none of before.
+  Percentages still line up across stacked accounts.
+- **The default desktop command rail leads with what a terminal has no key for.**
+  Approve-once sat fourth, spending a visible slot on a control that is inert except while a turn is asking; the front of the row is now attach, both clipboard directions, the code fence, the resume command, Branch, clipboard history, and the skills picker.
+  Copy-input renders its label rather than an icon that shared a silhouette with Copy reply.
+  Your own rail configuration is untouched.
 
 ### Fixed
 
@@ -61,6 +73,11 @@ The release procedure that maintains this file is [`RELEASING.md`](RELEASING.md)
   swe-mux now recognizes its own shell, daemon and PTY supervisor by identity rather than by descent, and the terminate actions refuse a process that is swe-mux itself regardless of what the fleet believes owns it.
 - **The "swe-mux runtime" row now reports swe-mux's whole footprint.**
   It counted only the daemon and its descendants, so the desktop window, its embedded browser, and the supervisor were reported as nothing at all.
+- **Switching Claude accounts no longer tells you that your running sessions kept the old login.**
+  The account switcher put the same sentence under every non-selected account's session count: "Switching is not retroactive - a session keeps the login it started with until it is restarted."
+  That is true of Codex, whose CLI reads its login once at startup, and false of Claude Code, which re-reads its credential file when the file changes and sends its next request as the new account.
+  The daemon now declares per provider whether a switch reaches sessions already running, and the notice says which: a muted "started under X, spending the selected account now" for Claude Code, whose only stale surface is its own `/status` line, and the amber "keeps spending X until restarted" for Codex.
+  The Settings disclosure says the same, and the `selected` audit entry records which of the two the live sessions got.
 
 ## [0.2.0] - 2026-08-31
 
@@ -752,7 +769,8 @@ macOS is implemented and typechecked but has never been executed.
   resolved dependency closure that runs in the test suite, and a payload check over the built
   desktop bundle. No GPL or AGPL code ships; the two LGPL libraries ship as replaceable source.
 
-[Unreleased]: https://github.com/jatoran/swe-mux/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/jatoran/swe-mux/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/jatoran/swe-mux/releases/tag/v0.2.1
 [0.2.0]: https://github.com/jatoran/swe-mux/releases/tag/v0.2.0
 [0.1.5]: https://github.com/jatoran/swe-mux/releases/tag/v0.1.5
 [0.1.4]: https://github.com/jatoran/swe-mux/releases/tag/v0.1.4
