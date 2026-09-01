@@ -151,6 +151,9 @@ const rowField = (id: string, field: string): string[] =>
 const rowPart = (id: string, selector: string): string[] =>
   [`[data-sidebar-session-id="${id}"] ${selector}`]
 
+/** One chip on the command rail, by its catalog id (`data-rail-item`, TerminalPane). */
+const railItem = (id: string): string[] => [`.terminal-action-rail [data-rail-item="${id}"]`]
+
 /** A backend name read off the fleet rather than written down. */
 const backendOf = (sessionId: string): string => session(sessionId)?.backend ?? 'shell'
 
@@ -209,7 +212,10 @@ function tourDesktop(): Beat[] {
         sweep: ['.sidebar'],
         crt: true,
         notes: [
-          { at: rowPart('s-working', '.state-indicator'), label: 'state', sub: 'and context left' },
+          { at: rowPart('s-working', '.ind-core'), label: 'working', sub: 'this one is mid-turn' },
+          { at: rowPart('s-claude', '.ind-core'), label: 'idle', sub: 'waiting on you' },
+          { at: rowPart('s-working', '.ind-fill'), label: 'the ring is context used' },
+          { at: rowPart('s-rage', '.ind-fill'), label: 'and this one is nearly full' },
           { at: rowField('s-working', 'badges'), label: 'subagents it started' },
           { at: rowField('s-working', 'duration'), label: 'this turn, still running' },
           { at: rowField('s-working', 'worktree'), label: 'its own checkout' },
@@ -218,23 +224,42 @@ function tourDesktop(): Beat[] {
         ],
       },
       body: [
-        'Projects group sessions, and each row is scanned here one part at a time: live'
-        + ' state with the context left around it, what it started, how long the current'
-        + ' turn has been running, its checkout, and the model.',
+        'Projects group sessions, and this scans one row part at a time. The dot is the'
+        + ' state; the ring around it is how much of the context window has gone, so a'
+        + ' conversation running out of room says so before it stops making sense.',
+        'Then what the session started, how long its turn has been running, which checkout'
+        + ' it is standing in, and the model.',
         'Click any session - the workspace focuses that pane.',
       ],
     },
     {
       at: 200,
       eyebrow: 'THE COMMAND RAIL',
-      say: 'The keys a terminal cannot send.',
+      say: 'The things a mouse cannot type.',
       spotlight: ['.terminal-action-rail'],
       gate: { kind: 'click', selectors: ['.terminal-action-rail'] },
       hint: 'Press anything on the rail',
+      // The desktop rail and the phone rail are the opposite trade, and the tour used to
+      // describe the phone's on both. You have a keyboard here: arrows and Ctrl-C are
+      // already under your fingers, and what the rail is for is the things no key sends -
+      // taking a conversation somewhere else, getting back into one, and pasting into a
+      // TUI without it being read as a hundred keystrokes.
+      show: {
+        reveal: 'walk',
+        sweep: ['.terminal-action-rail'],
+        notes: [
+          { at: railItem('branch'), label: 'branch this conversation', sub: 'from any point' },
+          { at: railItem('copyResume'), label: 'the command to resume it elsewhere' },
+          { at: railItem('rewind'), label: 'rewind to an earlier turn' },
+          { at: railItem('paste'), label: 'paste, bracketed', sub: 'one block, not 400 keys' },
+          { at: railItem('prompts'), label: 'your saved prompts' },
+        ],
+      },
       body: [
-        'Escape, Ctrl-C, arrow keys, paste, approve, the model picker, the prompt'
-        + ' library - one editable strip under every pane, on desktop and on a phone.',
-        'Press one. Nothing here can break anything.',
+        'You already have a keyboard, so this strip is not one: it is the acts a terminal'
+        + ' has no key for. Branch a conversation, copy the command that resumes it, rewind'
+        + ' to an earlier turn, paste a block as a block, insert a saved prompt.',
+        'Press anything. Nothing here can break anything.',
       ],
     },
     {
@@ -345,7 +370,9 @@ function tourMobile(): Beat[] {
         sweep: ['.sidebar'],
         crt: true,
         notes: [
-          { at: rowPart('s-working', '.state-indicator'), label: 'state', sub: 'and context left' },
+          { at: rowPart('s-working', '.ind-core'), label: 'working' },
+          { at: rowPart('s-claude', '.ind-core'), label: 'idle' },
+          { at: rowPart('s-rage', '.ind-fill'), label: 'context nearly full' },
           { at: rowField('s-working', 'badges'), label: 'subagents' },
           { at: rowField('s-working', 'duration'), label: 'this turn' },
           { at: rowField('s-working', 'model'), label: 'model' },
@@ -372,13 +399,28 @@ function tourMobile(): Beat[] {
     {
       at: 200,
       eyebrow: 'THE COMMAND RAIL',
-      say: 'The keys a phone keyboard does not have.',
+      say: 'Here, the rail is the keyboard.',
       spotlight: ['.terminal-action-rail'],
       gate: { kind: 'click', selectors: ['.terminal-action-rail'] },
       hint: 'Press anything on the rail',
+      // The opposite trade from the desktop stop, and the reason the two now say
+      // different things: a phone keyboard has no arrows, no Escape, no control key, and
+      // those are most of what driving an agent CLI is.
+      show: {
+        reveal: 'walk',
+        sweep: ['.terminal-action-rail'],
+        notes: [
+          { at: railItem('padArrows'), label: 'arrows', sub: 'drag a direction' },
+          { at: railItem('esc'), label: 'escape' },
+          { at: railItem('ctrlC'), label: 'interrupt the turn' },
+          { at: railItem('ctrlU'), label: 'clear the line' },
+          { at: railItem('tab'), label: 'complete' },
+        ],
+      },
       body: [
-        'Escape, Ctrl-C, arrows, approve, paste. This strip is the reason a phone can'
-        + ' actually drive an agent CLI rather than just watch one.',
+        'A phone keyboard has no arrows, no Escape and no control key, and those are most'
+        + ' of what driving an agent CLI is. This strip is why a phone can drive one'
+        + ' rather than watch one.',
       ],
     },
     {

@@ -667,16 +667,16 @@ function demoDeviceSettings(): Record<string, Record<string, unknown>> {
           mobile: {
             strip: rail.layouts.mobile.strip.slice(0, 1).map(row => ({
               ...row,
-              // `prompts` is a second-row item in the product and is pulled up here,
-              // because the second row is the one this seed drops and this is the phone's
-              // only keyboard-free way to say anything to an agent: the embed refuses the
-              // soft keyboard (`main.tsx`), and the pickers pad reaches Prompts only
-              // through a directional drag, which is not something a walkthrough can ask
-              // for in one line.
-              // First, not appended: the row is 26 items long and scrolls horizontally on
-              // a phone, so the end of it is off-screen and a walkthrough that says "press
-              // Prompts" would be pointing at something the visitor cannot see.
-              items: ['prompts', ...row.items],
+              // Four second-row items pulled up, because the second row is the one this
+              // seed drops and these four are what the phone stop is about: the rail *is*
+              // the keyboard there, so the arrows and the two control keys are the
+              // argument rather than the long tail. `prompts` doubly so - the embed
+              // refuses the soft keyboard (`main.tsx`), and this is then the only
+              // keyboard-free way to say anything to an agent.
+              // At the front, not appended: the row is 26 items long and scrolls
+              // horizontally on a phone, so its end is off-screen and a walkthrough that
+              // says "press Prompts" would be pointing at something invisible.
+              items: ['prompts', 'padArrows', 'ctrlC', 'ctrlU', ...row.items],
             })),
           },
         },
@@ -690,7 +690,7 @@ function demoDeviceSettings(): Record<string, Record<string, unknown>> {
 export const DEMO_DIALOG_ID = 'dlg-demo'
 
 /** Bump when the seed shape changes so persisted visitor state is discarded. */
-export const DEMO_STATE_VERSION = 15
+export const DEMO_STATE_VERSION = 16
 
 export function initialDemoState(): DemoState {
   return {

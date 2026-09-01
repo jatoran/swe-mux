@@ -481,6 +481,7 @@ export function RailPad({ controller, item, slots, className, content, modifierP
   return <button
     ref={buttonRef}
     type="button"
+    data-rail-item={item.id}
     class={`${className || 'term-key'} rail-pad rail-pad-w${wedges} rail-pad-r${rings}${dial ? ' rail-pad-pressed' : ''}`}
     title={item.title || 'Drag a wedge, or tap to open'}
     aria-label={accessible}
