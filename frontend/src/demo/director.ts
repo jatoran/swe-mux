@@ -457,7 +457,25 @@ export function installDirector(): void {
   window.addEventListener('swemux-demo:visible', () => {
     if (!visibleSince) visibleSince = Date.now()
   })
-  window.addEventListener('swemux-demo:hidden', () => { visibleSince = 0 })
+  /**
+   * A frame nobody can see gives the lead back.
+   *
+   * The election is what stops two frames driving one fixture, and it works by the leader
+   * answering every rival claim with "taken" for as long as it is running. That is right
+   * while both frames are on screen and wrong the moment one of them is not: switching the
+   * embed from the desktop view to the phone view leaves the desktop frame alive,
+   * `display: none`, still mid-scenario and still answering - so the phone frame claims,
+   * loses, and the visitor's scenario silently does nothing. Measured on the live site:
+   * the desktop frame ran on to `queue 5/8` while the phone frame sat at `0/0`.
+   *
+   * Stopping is the whole fix, because `stop` releases the lead. It also covers the second
+   * shape of the same bug, which is worse to debug: the channel is per origin, not per
+   * page, so a forgotten second tab of the site held the lead over the tab being used.
+   */
+  window.addEventListener('swemux-demo:hidden', () => {
+    visibleSince = 0
+    stop('interrupted')
+  })
 
   const requested = params().get('scenario')
   if (requested) {

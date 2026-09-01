@@ -458,6 +458,14 @@ a:focus-visible, button:focus-visible { outline: 2px solid var(--green); outline
    frame is offered. */
 @media (max-width: 700px) {
   .demo-tabs { display: none; }
+  /* One row, on a 360px screen. The kick label is the only thing here that says nothing a
+     visitor needs, the scenarios menu is the widest control and is capped rather than
+     dropped, and the two trailing controls lose their longer wording. Wrapping is left on:
+     it is the safety net for a very small screen or a large font, not the layout. */
+  .demo-head { gap: 6px; padding: 6px 8px; font-size: 11px; }
+  .demo-kick { display: none; }
+  .demo-pick select { max-width: 40vw; text-overflow: ellipsis; padding: 3px 4px; }
+  .demo-full, .demo-reset { padding: 3px 5px; }
   .demo-stage .demo-desktop { display: none !important; }
   /* A drawn handset, on a handset, at 74% of its height, is the worst of both: smaller
      than the device it is standing in for and still not it. Here the bezel, the lens and
@@ -779,8 +787,8 @@ footer .social svg { width: 15px; height: 15px; fill: currentColor; display: blo
             <option value="keymap">bring your own keymap</option>
             <option value="voice">ask the fleet a question</option>
           </select></label>
-        <a class="demo-full" href="demo/" title="Open the demo as its own page. On a phone that is the only place the keyboard behaves, because an embedded frame cannot measure one.">open full screen ⤢</a>
-        <button class="demo-reset" type="button" id="demoreset" title="Discard everything you changed in the demo and start it fresh">reset demo</button>
+        <a class="demo-full" href="demo/" title="Open the demo as its own page. On a phone that is the only place the keyboard behaves, because an embedded frame cannot measure one.">full screen ⤢</a>
+        <button class="demo-reset" type="button" id="demoreset" title="Discard everything you changed in the demo and start it fresh">reset</button>
       </div>
       <div class="demo-stage" id="demostage" data-view="desktop">
         <div class="demo-frame demo-desktop"><iframe title="Interactive swe-mux demo, desktop layout. Simulated sessions; nothing connects to a real daemon." data-src="demo/" loading="lazy"></iframe></div>
@@ -1677,6 +1685,8 @@ footer .social svg { width: 15px; height: 15px; fill: currentColor; display: blo
     tabs.forEach(function (tab) { tab.setAttribute('aria-selected', String(tab.getAttribute('data-view') === view)); });
     promote();
     fitDemoFrames();
+    // The frame that just went out of view has to hear about it: see `reportPresence`.
+    reportPresence();
   }
   tabs.forEach(function (tab) {
     tab.addEventListener('click', function () { armed = true; setView(tab.getAttribute('data-view')); });
@@ -1698,16 +1708,25 @@ footer .social svg { width: 15px; height: 15px; fill: currentColor; display: blo
      out for itself: an IntersectionObserver inside an iframe measures against the
      iframe's own viewport, so it would report "visible" for a demo eight screens below
      the fold - and the in-demo idle nudge is armed off exactly this signal. */
-  function announce(name) {
-    stage.querySelectorAll('iframe').forEach(function (frame) {
-      if (!frame.src || !frame.contentWindow) return;
-      try {
-        frame.contentWindow.dispatchEvent(new frame.contentWindow.Event(name));
-      } catch (error) { /* a frame still loading has nothing to hear it yet */ }
-    });
+  function tell(frame, name) {
+    if (!frame || !frame.src || !frame.contentWindow) return;
+    try {
+      frame.contentWindow.dispatchEvent(new frame.contentWindow.Event(name));
+    } catch (error) { /* a frame still loading has nothing to hear it yet */ }
   }
   var onScreen = false;
-  function reportPresence() { announce(onScreen ? 'swemux-demo:visible' : 'swemux-demo:hidden'); }
+  /* Per frame, not per stage. A frame the view toggle has hidden is still alive and, if it
+     was mid-scenario, still holds the director's lead - so the frame the visitor is now
+     looking at claims it, loses, and their scenario does nothing at all. Telling each frame
+     whether *it* is on screen is what releases that, and it is the same signal the idle
+     nudge already arms off. */
+  function reportPresence() {
+    var live = visibleFrames();
+    ['.demo-desktop', '.demo-phone'].forEach(function (sel) {
+      var visible = onScreen && live.indexOf(sel) !== -1;
+      tell(stage.querySelector(sel + ' iframe'), visible ? 'swemux-demo:visible' : 'swemux-demo:hidden');
+    });
+  }
   if ('IntersectionObserver' in window) {
     var presence = new IntersectionObserver(function (entries) {
       entries.forEach(function (entry) { onScreen = entry.isIntersecting; });

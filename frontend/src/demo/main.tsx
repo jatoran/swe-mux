@@ -17,10 +17,12 @@ import { installFakeFetch } from './fakeApi.ts'
 import { installFakeWebSocket } from './fakeSocket.ts'
 import { installViewMirror } from './mirror.ts'
 import { installDirector } from './director.ts'
+import { DemoBar } from './DemoBar.tsx'
 import { DemoDirector } from './DemoDirector.tsx'
 import '../style.css'
 import './demoDirector.css'
 import './demoShow.css'
+import './demoBar.css'
 
 installFakeFetch()
 installFakeWebSocket()
@@ -183,8 +185,14 @@ async function boot(): Promise<void> {
   initialize({ wasm: wasm.default }).catch((error: unknown) => {
     reportContinuityFailure(error instanceof Error ? error.message : String(error))
   })
+  // Full screen the demo is the whole page, so it has to carry the way back, the scenarios
+  // menu and the reset that the landing page carries above the embed. Inside the frame
+  // that page already has them, and a second copy would be chrome over chrome.
+  const framed = window.top === window.self
+  if (framed) document.body.classList.add('demo-framed')
   render(
     <DemoBoundary>
+      {framed && <DemoBar />}
       <App />
       {/* Beside the app rather than inside it: the director points at the real chrome
           and must never be something the product build could accidentally ship. */}
