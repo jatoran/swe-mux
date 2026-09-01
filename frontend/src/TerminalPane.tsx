@@ -4104,12 +4104,17 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     }
     if(item.type==='key'&&isRepeatableRailKey(item.id)){
       const label=railItemDisplayLabel(item)
-      return <RailRepeatKey key={key} repeat={railKeyRepeat} sequence={modifiedSequence(item)} label={label} title={`${modifierPrefix?`${modifierPrefix}+`:''}${item.title||label}`} className={item.className||'term-key'}/>
+      return <RailRepeatKey key={key} railItem={item.id} repeat={railKeyRepeat} sequence={modifiedSequence(item)} label={label} title={`${modifierPrefix?`${modifierPrefix}+`:''}${item.title||label}`} className={item.className||'term-key'}/>
     }
     const view=railItemView(item)
     if(!view)return null
+    // `data-rail-item` is the catalog id in the DOM, on all three chip shapes. Without it
+    // the only handles on a particular key are its label and its tooltip, both of which are
+    // copy - so anything selecting on them (a walkthrough that names Branch, a test that
+    // presses Paste) breaks on a rewording rather than on a change of behaviour.
     return <button
       key={key}
+      data-rail-item={item.id}
       class={view.className}
       disabled={view.disabled}
       aria-label={view.ariaLabel}

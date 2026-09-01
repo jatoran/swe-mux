@@ -78,20 +78,35 @@ test('the walkthrough labels the parts of a session row', async ({ page }) => {
   await page.waitForSelector('.demo-director-next', { timeout: START_TIMEOUT })
   await page.click('.demo-director-next')
   const chips = page.locator('.demo-show-chip:not(.measuring)')
-  await expect(chips).toHaveCount(6, { timeout: 15_000 })
-  // Each label has a leader line and a mark, or it is a floating word.
-  await expect(page.locator('.demo-show-wires path')).toHaveCount(6)
-  await expect(page.locator('.demo-show-mark')).toHaveCount(6)
-  // And they are a column beside the fleet rather than scattered over it: one x, six ys.
-  const boxes = await page.evaluate(() =>
-    [...document.querySelectorAll('.demo-show-chip:not(.measuring)')]
-      .map(chip => chip.getBoundingClientRect())
-      .map(rect => ({ left: Math.round(rect.left), top: Math.round(rect.top) })))
-  expect(new Set(boxes.map(box => box.left)).size).toBe(1)
-  expect(new Set(boxes.map(box => box.top)).size).toBe(6)
-  const sidebar = await page.evaluate(() =>
-    document.querySelector('.sidebar')!.getBoundingClientRect().right)
-  for (const box of boxes) expect(box.left).toBeGreaterThan(sidebar)
+  await expect(chips).toHaveCount(1, { timeout: 15_000 })
+
+  // One at a time is the claim, and it is the whole point of the beat: this used to draw
+  // all six at once, and a visitor reading any one label had to work out which of six
+  // leader lines belonged to it before the label meant anything. So the assertion is not
+  // "six labels appear" but "never more than one, and eventually all of them".
+  const seen = new Set<string>()
+  for (let sample = 0; sample < 24; sample += 1) {
+    const drawn = await page.evaluate(() =>
+      [...document.querySelectorAll('.demo-show-chip:not(.measuring)')]
+        .map(chip => chip.textContent || ''))
+    expect(drawn.length).toBe(1)
+    seen.add(drawn[0])
+    // A label without its leader line and its mark is a floating word.
+    expect(await page.locator('.demo-show-wires path').count()).toBe(1)
+    expect(await page.locator('.demo-show-mark').count()).toBe(1)
+    await page.waitForTimeout(700)
+  }
+  // The walk really advances, and it covers the row rather than sticking on one part.
+  expect(seen.size).toBeGreaterThan(4)
+
+  // Each label is placed beside its own target rather than parked somewhere generic.
+  const placement = await page.evaluate(() => {
+    const chip = document.querySelector('.demo-show-chip:not(.measuring)')!.getBoundingClientRect()
+    const mark = document.querySelector('.demo-show-mark')!.getBoundingClientRect()
+    return { gap: Math.abs(chip.top - mark.top), inside: chip.left > 0 && chip.right < innerWidth }
+  })
+  expect(placement.inside).toBe(true)
+  expect(placement.gap).toBeLessThan(40)
   expect(failures).toEqual([])
 })
 

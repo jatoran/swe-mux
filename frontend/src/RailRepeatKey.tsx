@@ -78,6 +78,8 @@ export interface RailRepeatKeyProps {
   label: string
   title: string
   className: string
+  /** The catalog id, published as `data-rail-item` like every other chip shape. */
+  railItem?: string
 }
 
 /**
@@ -92,8 +94,9 @@ export interface RailRepeatKeyProps {
  * the rail uses — because the click is now load-bearing, and cancelling the pointer's
  * default would leave the tap to each browser's touch-compatibility rules.
  */
-export function RailRepeatKey({repeat,sequence,label,title,className}:RailRepeatKeyProps) {
+export function RailRepeatKey({repeat,sequence,label,title,className,railItem}:RailRepeatKeyProps) {
   return <button
+    data-rail-item={railItem}
     class={`${className} rail-key-repeat`}
     title={`${title} (hold to repeat)`}
     onMouseDown={event=>event.preventDefault()}

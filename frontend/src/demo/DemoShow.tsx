@@ -32,11 +32,13 @@ const SWEEP_MS = 1_500
 /**
  * How long the walk holds on each target before moving to the next.
  *
- * Long enough to read a two-word label and look at what it points at, which is the whole
+ * Long enough to read a two-word label *and* look at what it points at, which is the whole
  * job: six labels on screen together are six things being pointed at, and a visitor
- * reading any one of them has to work out which line belongs to it first.
+ * reading any one of them has to work out which line belongs to it first. The number has
+ * been raised twice from a first guess of a second, both times because the eye has to
+ * travel from the label to a target somewhere else on the screen and back.
  */
-const WALK_MS = 1_450
+const WALK_MS = 1_800
 /** The gap between one chip's reveal and the next, when they all arrive together. */
 const STAGGER_MS = 95
 
