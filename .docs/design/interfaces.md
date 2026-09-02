@@ -2203,6 +2203,9 @@ GET    /history/{id}/handoff
 ```
 
 Resume/review confirmation must target an existing Project and starts at its root.
+Every route that reads a run row's conversation - `GET /history/{id}/transcript`, `GET /history/{id}/branch-points`, `POST /history/{id}/resume` and a fork - resolves the conversation by id when the row's recorded `transcript_path` no longer exists, and writes the corrected path back to the row (`features/history.md`).
+A `409 transcript_unavailable` from any of them therefore means no file answers to that conversation id, not that mux lost track of where the CLI moved it.
+`GET /sessions/{id}/transcript` does the same search for a session in a terminal state and never for a live one.
 Resume returns `409 conversation_live` (with the owning `session_id`) when a live session currently claims the row's native conversation; Branch, not resume, is the flow for forking a live conversation.
 It returns `409 conversation_held` (with `holder: {kind, pid, job_id, name}`) when a CLI process mux does not own holds the conversation — a Claude background agent is the case that occurs — because that CLI answers a second opener by exiting rather than by refusing to start.
 It returns `503 resume_failed` (with `attempts` and the pane's own cleaned last output in `detail`) when the resumed pane died inside its settle window; the pane is discarded rather than returned.

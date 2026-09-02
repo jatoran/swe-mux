@@ -139,16 +139,69 @@
   has no undo, so no daemon start or migration does it. Records outside the history index that
   key on a removed run id (Tier 0 facts, the status timeline) are left as they are, exactly as
   a manual entry deletion leaves them.
-- **Resuming lands you in the resumed pane.** The daemon attaches it and makes it its stack's
-  active tab; the browser also focuses it, closing the History overlay (and, on a phone, the
-  sidebar) so the pane it just focused is actually on screen. Focus is *requested* rather than
-  set, because the client learns the new leaf's id from the response but learns where it sits
-  only on the next layout refresh — see `ui.md` for why a plain focus in that gap is undone,
-  and which other flows share the mechanism.
+- **A recorded `transcript_path` is where the file *was*, and `transcript_repair.py` is what
+  makes that survivable.**
+  The CLI owns these files and moves them: Claude re-homes a conversation into the project slug
+  for a new working directory when a session enters or leaves a native worktree, reports the move
+  through its hook, and the daemon follows it - correctly, with the file's own first record
+  proving the identity.
+  What the row keeps afterwards is that moment's address, so a file that moves once more on the
+  way out leaves the row wrong forever, with the follower that would have noticed dead alongside
+  the pane.
+  Measured on the development host on 2026-09-02: 301 of 1420 mux-owned agent rows named a file
+  that was not there, 131 of them a `--claude-worktrees-` slug, and all 132 recoverable ones still
+  on disk under their own conversation id.
+  Three layers now keep the row honest, and no layer makes another redundant:
+  - **Session end settles the address**, because that is the moment it stops moving, and the same
+    resolution decides what the final index reads.
+  - **Every row-based read resolves before it refuses** — the transcript route, Resume (so the
+    scheduler's resume too), branch points, and a fork — and writes the repair back, so one miss
+    on any surface heals the row for all of them.
+    A dead pane's own reader (`GET /sessions/{id}/transcript`) searches too, since its observer
+    died with its process; a live pane's does not, because an agent that has not written its first
+    record yet is the ordinary early state of every agent session and its observer is already
+    resolving the binding.
+  - **The History scan repairs the row it finds**, rather than walking past a mux-owned row whose
+    file it is holding the location of.
+  The search is `Adapter.locate_transcript` and is safe for the reason that method is safe: mux
+  dictates the conversation id at spawn, so a file named after it is that conversation's by
+  construction.
+  It is also the expensive answer (a directory probe per project slug), so it runs only after the
+  recorded path has already missed, and a located path is verified before it is believed — Codex's
+  implementation computes rather than searches, and an unchecked answer would record a second dead
+  path as a repair.
+  A repair clears every watermark on the row and its transcript-index cursor, because each of them
+  measured a file the row can no longer see and a stale cursor lets the next pass conclude that
+  nothing changed; the indexed messages stay, being the same conversation at a new address.
+  It emits `history_transcript_repaired`.
+- **Resuming lands you in the resumed pane, from the click rather than from the answer.**
+  A resume is proved rather than reported (2.5 s, up to about six with the retry), and awaiting
+  that before touching anything left the overlay open over a workspace where nothing was
+  happening.
+  So the browser places a **pending pane** for the conversation immediately, focuses it, and
+  closes the History overlay (and, on a phone, the sidebar) on the press; the real session
+  replaces the placeholder when the daemon answers, and a refusal removes it and hands focus back.
+  This is the same placeholder mechanism a spawn and a worktree launch use (`ui.md`), with one
+  difference: the daemon attaches the resumed pane in its own layout, so the browser never writes
+  a layout back for a resume - it swaps the placeholder locally and the refresh that carries the
+  daemon's layout finds the same pane already in place.
+  Placing the pane is also what makes the *phone* land on it: the mobile projection has no
+  equivalent of the desktop reconciler's outstanding focus request, so a focused id no layout held
+  yet fell through to whatever tab the pane was already showing.
+  The daemon still attaches the pane and makes it its stack's active tab, and desktop focus is
+  still *requested* rather than set, because the client learns the new leaf's id from the response
+  but learns where it sits only on the next layout refresh — see `ui.md` for why a plain focus in
+  that gap is undone, and which other flows share the mechanism.
+  A **retained pane's** own Resume gets no placeholder: that pane is already on screen and
+  focused, and replacing its retained scrollback with a splash would take a readable post-mortem
+  away for the seconds the proof takes. Its banner button reports the attempt and refuses a
+  second one instead (`session-recovery.md`).
 - **Another surface can open History on one conversation.**
   The overlay accepts an entry id and loads that conversation directly instead of a filtered list, which is how a surface that already knows *which* session it means (the Git tab's session links and a recovered pane's transcript action) reaches an ended one.
   The request is unscoped on purpose: the row is named by id, and pre-filtering to a Project would hide a conversation that belongs to another one.
   Two misses are expected rather than exceptional and are reported as themselves, leaving the browser open on its list so the reader can still search by hand: a deleted row answers 404, and a harness that kept no readable transcript answers 409 `transcript_unavailable`.
+  That 409 says something definite: the route searches for a conversation whose recorded path went stale before it answers, so reaching it means no file on disk answers to that conversation id at all.
+  The overlay clears its deep-linked entry when it closes, or the next plain "Session history" open would land on a conversation nobody asked for.
 - Transcript controls occupy a dedicated non-shrinking action bar before verbose run metadata.
   The controls wrap at narrow widths, while metadata wraps inside a bounded scroll region, so
   provider, token, context, and compaction details cannot displace Resume or the transcript.
@@ -306,6 +359,7 @@
 - `src/swe_mux/history_scan.py`
 - `src/swe_mux/transcript_view.py` (branch linearization: `transcript-branches.md`)
 - `src/swe_mux/transcript_fork.py`
+- `src/swe_mux/transcript_repair.py` (finding a conversation the CLI moved, and repairing its row)
 - `frontend/src/TranscriptTab.tsx`, `frontend/src/transcriptView.ts`
 - `src/swe_mux/operational_telemetry.py`
 - `frontend/src/HistoryBrowser.tsx`, `frontend/src/historyDetail.ts`

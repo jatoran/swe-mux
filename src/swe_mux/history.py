@@ -1722,6 +1722,36 @@ class HistoryIndex:
 
         await self._run(op)
 
+    async def repair_transcript_path(self, run_id: str, path: str) -> None:
+        """Point a run row at the file its conversation actually lives in now.
+
+        The CLI owns these files and moves them (`transcript_repair`), so a recorded
+        path is a fact about the moment it was written. This writes the corrected one
+        down, which is what makes a single miss enough: the surface that noticed heals
+        the row for Resume, Branch, the reindexer and the next reader alike.
+
+        Every watermark goes with it, because each of them measured a file this row can
+        no longer see - and a stale cursor is worse than none, since it lets the next
+        pass conclude that nothing changed and leave the index frozen where it stopped.
+        The indexed *messages* stay: this is the same conversation at a new address, so
+        they are still its own and still worth finding in search until the next open
+        re-reads them.
+        """
+
+        def op() -> None:
+            with self._db:
+                self._db.execute(
+                    "UPDATE history SET transcript_path=?,transcript_mtime_ns=NULL,"
+                    "transcript_size=NULL,time_summary_mtime_ns=NULL,time_summary_size=NULL "
+                    "WHERE id=?",
+                    (path, run_id),
+                )
+                self._db.execute(
+                    "DELETE FROM history_transcript_index WHERE history_id=?", (run_id,)
+                )
+
+        await self._run(op)
+
     async def reconcile_historical_provider_collisions(
         self,
     ) -> list[tuple[str, str, str]]:
@@ -1883,10 +1913,38 @@ class HistoryIndex:
 
         def op() -> None:
             exists = self._db.execute(
-                "SELECT 1 FROM history WHERE backend=? AND native_id=? AND external=0",
+                "SELECT id,transcript_path FROM history "
+                "WHERE backend=? AND native_id=? AND external=0",
                 (backend, native_id),
             ).fetchone()
-            if not exists:
+            if exists:
+                # A conversation mux ran owns its row, and the scan must never open a
+                # second one over the same file. It may still repair the one that is
+                # there: the scan has just *found* this conversation, so when the row's
+                # own path no longer exists the scan is holding the answer the row is
+                # missing (`transcript_repair`). Without this the scanner walked past
+                # every relocated row it found - it saw the file and dropped it on the
+                # floor, which is why 132 of them stayed broken on the development host.
+                recorded = str(exists["transcript_path"] or "")
+                if recorded != transcript_path and not Path(recorded).is_file():
+                    self._db.execute(
+                        "UPDATE history SET transcript_path=?,transcript_mtime_ns=NULL,"
+                        "transcript_size=NULL,time_summary_mtime_ns=NULL,"
+                        "time_summary_size=NULL WHERE id=?",
+                        (transcript_path, exists["id"]),
+                    )
+                    self._db.execute(
+                        "DELETE FROM history_transcript_index WHERE history_id=?",
+                        (exists["id"],),
+                    )
+                    log.info(
+                        "history scan repaired run %s transcript: %s -> %s",
+                        exists["id"],
+                        recorded or "<unrecorded>",
+                        transcript_path,
+                    )
+                    self._db.commit()
+            else:
                 self._db.execute(
                     "INSERT INTO history"
                     "(id,native_id,backend,name,cwd,project_id,note_id,spawned_at,transcript_path,external,"
