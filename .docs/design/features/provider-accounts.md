@@ -170,10 +170,11 @@ the last good reading and changes no state.
 - Live sessions are counted against the account they were **spawned under**, per saved slot,
   in the popover and on the accounts payload (`session_counts`). The stamp is taken once, at
   spawn (`SessionRecord.spawn_provider*`), because spawn is the one moment mux can vouch for:
-  what the process does with a later switch is the CLI's behaviour (`switch_reaches_live`),
-  and the popover's sentence under the count says which - muted "spending the selected
-  account now" for a CLI that follows, amber "keeps spending X until restarted" for one that
-  does not, and a hedge when the daemon predates the field.
+  what the process does with a later switch is the CLI's behaviour (`switch_reaches_live`).
+  The popover draws a sentence under the count only for a provider whose CLI does not
+  follow - "keeps spending X until restarted" - and nothing for one that does, or when the
+  daemon predates the field: a paragraph saying "these sessions are fine" under every Claude
+  count was noise, and the operator asked for it to go.
   It records what mux had *selected*, not what the process authenticates as: a `/login` typed
   inside a pane is invisible, so every surface says "spawned under" and never "using".
   Resolution goes through the provider's own account id before the local slot - the rule the

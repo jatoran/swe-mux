@@ -364,19 +364,18 @@ def test_the_popover_counts_sessions_per_account_without_claiming_identity() -> 
     # popover and Settings cannot disagree about the number.
     assert "sessions?:AccountSessionCounts" in source
     assert "spawnedSessionCount(status?.sessions,account.id)" in source
-    assert "strandedSessions(status,provider).map" in source
     assert "not proof of what it authenticates as now" in source
-    # Three sentences, chosen by the daemon's per-provider fact and never by a
-    # provider name in the browser: follows, does not, and unknown.
+    # One sentence, drawn only where the daemon's per-provider fact says the CLI
+    # keeps the login it started with, and never chosen by a provider name in the
+    # browser. A CLI that follows the switch gets no paragraph at all: the operator
+    # asked for the "spending the selected account now" one to go, and it was noise.
     assert "switch_reaches_live?:Record<ProviderName,boolean>" in source
-    assert "reachesLive=status?.switch_reaches_live?.[provider]" in source
-    assert "cli:harnessDisplayName(provider)" in source
-    assert "if(reach.reachesLive===true)" in display
-    assert "if(reach.reachesLive===false)" in display
-    assert "spending the selected account now" in display
+    assert "strandedSessionRows(status,provider).map" in source
+    assert "strandedSessionNotice(row,harnessDisplayName(provider))" in source
+    assert "switch_reaches_live?.[provider]===false?strandedSessions(status,provider):[]" in display
     assert "until restarted." in display
-    assert "restart to be sure." in display
+    assert "spending the selected account now" not in display
     assert "not retroactive" not in display
     assert ".account-popover .account-session-count{" in css
     assert ".account-popover .account-session-notice{" in css
-    assert ".account-popover .account-session-notice.follows{" in css
+    assert ".account-session-notice.follows" not in css
