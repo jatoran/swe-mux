@@ -84,6 +84,21 @@ A canary that has not woken yet when `explain()` runs counts as starved by how o
 The loop measures the duration itself and calls `explain()` off the loop afterwards, which is what turns the dump into one `loop_stall` log line, one `loop_stalls` row, and one entry under `stall_watchdog.recent` on `/api/diagnostics/background`.
 The dump is not filtered - faulthandler cannot - so the trace file rotates at 4 MiB and the report is what filters parked executor threads out.
 
+### A subprocess is spawned on the spawn loop, never on the daemon's
+
+asyncio spawns a child synchronously on the loop that asks: the Windows proactor transport calls `CreateProcess` inside its constructor, and the POSIX fork-and-exec is the same shape.
+On 2026-09-02 the watchdog caught the daemon's loop inside that call for 23.5 s while a `cargo test` saturated the disk the `git` image lives on, and every terminal waited behind one `git status`.
+`CreateProcess` releases the GIL, so the same call on another thread costs the loop nothing - but asyncio's public API offers no way to move only the spawn, because the transport owns the `Popen`.
+`bounded_subprocess.run_bounded` therefore runs the whole bounded command on `_SpawnLoop`, one event loop on its own thread, and the caller's loop only awaits a future: output observers are marshalled back to the caller's loop in order, the caller's context (request correlation) is carried across with the task, and cancelling the caller cancels the run over there, which is what reaps the tree.
+The daemon stops that loop at teardown after every service that could still spawn on it.
+The raw `asyncio.create_subprocess_exec` sites that remain (`git_operations.py`, `git_review.py`, `tailscale.py`, `provider_accounts.py`, `mcp_tools.py`, `meta_hooks.py`, `windows_firewall.py`) are user-triggered or rare and still spawn on the daemon's loop; a poller that grows a spawn goes through `run_bounded`.
+
+### A served-tree stat is answered from the last reading
+
+`ui_build.ui_build_id_cached` is what a request handler asks for the served frontend's identity; `read_ui_build_id` is the synchronous stat-and-parse behind it and is for threads and the doctor.
+The health endpoint is polled every few seconds by the tray, the stall banner and every open tab, and the same morning's dumps showed its `index.html` stat holding the loop for up to 15 s, thirteen times.
+The reading is trusted for `UI_BUILD_FRESH_SECONDS` and refreshed in a thread after that; a redeploy or an overlay install restarts the daemon, so the staleness is never visible.
+
 ### The fleet runs below the daemon, and only ever gets lowered
 
 `process_priority.py` holds every session-owned process at or below `session_process_priority` (below normal by default) and raises the daemon once to `daemon_process_priority` (above normal by default).

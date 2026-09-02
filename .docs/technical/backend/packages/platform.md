@@ -74,6 +74,10 @@ It reaps the process tree on the timeout **and** on `CancelledError`, drains the
 `run_bounded` raises `OSError` from the spawn rather than folding it into an outcome, because "install ccusage" and "could not start codex" are the callers' diagnostics to phrase.
 It returns bytes and never decodes: `git cat-file blob` needs the bytes git stores, and `errors="replace"` would digest a repaired string.
 
+The run executes on `_SpawnLoop`, an event loop on its own thread, because asyncio spawns synchronously on the loop that asks and a saturated disk held that call on the daemon's loop for 23.5 s (`runtime-rules.md`).
+The caller's loop awaits a future; observers are marshalled back to it in order, the caller's context travels with the task, and cancelling the caller cancels the run there.
+`stop_spawn_loop` is called at daemon teardown and at interpreter exit.
+
 Callers: `usage.py`, `provider_accounts.py`, `git_monitor.py`, and `worktree_exec.py` (whose pattern this is).
 Migrating the first three closed three real gaps - `usage.py` buffered ccusage to completion through `communicate()` and only then compared it against its own 10 MiB limit, the other two had no cap at all, and none of the three reaped on cancellation despite all of them running inside supervised background loops.
 

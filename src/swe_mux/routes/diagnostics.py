@@ -52,7 +52,7 @@ from ..tier0_store import Tier0Store
 from ..transcript_view import (
     conversation_is_readable,
 )
-from ..ui_build import read_ui_build_id
+from ..ui_build import ui_build_id_cached
 from ..windows_firewall import (
     firewall_supported,
     inspect_firewall,
@@ -681,7 +681,7 @@ async def _doctor_report(app: web.Application) -> dict[str, Any]:
         "ok": True,
         "version": __version__,
         "live_sessions": live,
-        "ui_build_id": read_ui_build_id(app[keys.FRONTEND_DIR]),
+        "ui_build_id": await ui_build_id_cached(app[keys.FRONTEND_DIR]),
         "supervisor_state": supervisor_state,
         "supervisor_unadopted": int(
             getattr(sessions, "unadopted_supervisor_sessions", 0) or 0

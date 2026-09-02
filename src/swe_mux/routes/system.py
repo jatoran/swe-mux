@@ -55,7 +55,7 @@ from ..tailscale import (
     tailscale_status,
 )
 from ..tool_locations import refresh_search_path
-from ..ui_build import read_ui_build_id
+from ..ui_build import ui_build_id_cached
 from ..windows_firewall import (
     firewall_supported,
     inspect_firewall,
@@ -136,7 +136,7 @@ async def health(request: web.Request) -> web.Response:
             "ok": True,
             "live_sessions": live,
             "version": "0.2.1",
-            "ui_build_id": read_ui_build_id(request.app[keys.FRONTEND_DIR]),
+            "ui_build_id": await ui_build_id_cached(request.app[keys.FRONTEND_DIR]),
             "supervisor": connected,
             "supervisor_state": "connected" if connected else ("lost" if lost else "absent"),
             # Which process holds this daemon's sessions, as the *daemon* knows

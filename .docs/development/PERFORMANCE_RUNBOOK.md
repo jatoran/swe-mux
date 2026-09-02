@@ -213,6 +213,12 @@ concurrent cargo builds.
 `canary_starved` was false, which is what said "move this call off the loop" rather than "look
 in a worker".
 That read now runs in a thread.
+The next morning it named two more of the same shape, twenty stalls between them: the health
+endpoint's `stat` of the served `index.html` (up to 15 s, thirteen times) and asyncio's
+synchronous `CreateProcess` under the git monitor's `run_bounded` (23.5 s, six times), both with
+the canary running, both during a `cargo test`.
+The first is now answered from a cached reading, the second runs on the spawn loop
+(`runtime-rules.md`).
 
 ### 4. Profile, if the first three did not name the culprit
 
