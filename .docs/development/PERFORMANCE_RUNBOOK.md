@@ -206,6 +206,13 @@ worktree agents ran cargo concurrently - left no trace anywhere: `daemon.log` wa
 duration, a profiler attached afterwards saw a healthy daemon, and every loop's `slowest_seconds`
 read the same 51 s because they had all measured the same stall from inside it.
 `loop_lag` could say 49.8 s and nothing could say why.
+Twelve minutes after the watchdog shipped it named the path: a 6.6 s stall with the main thread in
+`read_bytes` under `read_project_config`, called once per registered Project by every
+`GET /api/projects` poll, on the loop thread - a small file on a disk saturated by three
+concurrent cargo builds.
+`canary_starved` was false, which is what said "move this call off the loop" rather than "look
+in a worker".
+That read now runs in a thread.
 
 ### 4. Profile, if the first three did not name the culprit
 

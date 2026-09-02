@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import fnmatch
 import hashlib
 import io
@@ -1750,11 +1751,24 @@ def serialize_project_config(values: dict[str, Any]) -> bytes:
 async def read_project_config(
     cwd: str | Path, *, project: ProjectIdentity | None = None
 ) -> dict[str, Any]:
+    """The Project's committed config file, read off the event loop.
+
+    Every Project snapshot reads this, so a `GET /api/projects` poll is one file
+    read per registered Project. That read used to run on the loop thread, and on
+    2026-09-01 the stall watchdog caught it there for 6.6 s under a fleet-wide
+    cargo build wave: a small file on a saturated disk is a small file that takes
+    seconds, and for those seconds every terminal, request and keystroke waited
+    behind it. The 46 s and 53 s freezes earlier that evening began on exactly this
+    path. Anything that touches the filesystem here goes through the thread.
+    """
     if project is None:
         project, mux_dir = await project_status(cwd)
     else:
         mux_dir = Path(project.root) / ".swe-mux"
-    path = mux_dir / "config.toml"
+    return await asyncio.to_thread(_read_project_config_sync, mux_dir / "config.toml", project)
+
+
+def _read_project_config_sync(path: Path, project: ProjectIdentity) -> dict[str, Any]:
     if not path.exists():
         return {
             "project": asdict(project),
