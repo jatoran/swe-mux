@@ -42,7 +42,7 @@ import time
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import IO, Any
 
 log = logging.getLogger(__name__)
@@ -129,8 +129,19 @@ class StallRecord:
         }
 
 
+def _basename(file: str) -> str:
+    """The file's last component under either separator.
+
+    faulthandler prints the host's own paths, but the trace file is read by the
+    diagnostics export and by tests on hosts that are not the one that wrote
+    it, and ``os.path.basename`` on POSIX leaves ``C:\\py\\x.py`` whole. A
+    Windows path accepts both separators, so its ``name`` is right for both.
+    """
+    return PureWindowsPath(file).name
+
+
 def _frame_text(file: str, line: str, func: str) -> str:
-    return f"{func} ({os.path.basename(file)}:{line})"
+    return f"{func} ({_basename(file)}:{line})"
 
 
 def parse_faulthandler_dumps(text: str) -> list[dict[int, list[tuple[str, str, str]]]]:
@@ -169,7 +180,7 @@ def _is_idle(frames: list[tuple[str, str, str]]) -> bool:
     if not frames:
         return True
     file, _line, func = frames[0]
-    return (os.path.basename(file), func) in IDLE_LEAVES
+    return (_basename(file), func) in IDLE_LEAVES
 
 
 def describe_dump(
@@ -238,6 +249,9 @@ class StallWatchdog:
         self._rearm_interval = threshold / 2
         self._canary_late: deque[tuple[float, float]] = deque(maxlen=CANARY_HISTORY)
         self._canary_worst = 0.0
+        #: When the canary's current sleep began, or None between sleeps. A wake
+        #: that is overdue *now* is a starvation the history cannot show yet.
+        self._canary_sleeping_since: float | None = None
         self._canary_stop = threading.Event()
         self._canary_thread: threading.Thread | None = None
         self._recent: deque[StallRecord] = deque(maxlen=RECENT_STALLS)
@@ -299,11 +313,14 @@ class StallWatchdog:
     def _canary(self) -> None:
         while not self._canary_stop.is_set():
             before = self._monotonic()
+            with self._lock:
+                self._canary_sleeping_since = before
             time.sleep(CANARY_INTERVAL_SECONDS)
             after = self._monotonic()
             late = after - before - CANARY_INTERVAL_SECONDS
-            if late >= CANARY_RECORD_SECONDS:
-                with self._lock:
+            with self._lock:
+                self._canary_sleeping_since = None
+                if late >= CANARY_RECORD_SECONDS:
                     self._canary_late.append((after, late))
                     self._canary_worst = max(self._canary_worst, late)
 
@@ -312,11 +329,22 @@ class StallWatchdog:
 
         ``started`` is a monotonic time; a late wake that ended after it and was
         late by at least ``minimum`` means this thread was as stuck as the loop.
+
+        A wake that has not happened yet counts too. ``explain()`` runs the
+        moment the loop resumes, and a canary that was starved by the stall is
+        still waiting for the GIL then - the loop thread keeps winning it back
+        after each syscall until a drop request forces a switch, which on macOS
+        was reliably later than this call. Its lateness is known without it: the
+        sleep began at a known time and was due an interval later.
         """
         with self._lock:
-            return any(
-                ended >= started and late >= minimum for ended, late in self._canary_late
-            )
+            if any(ended >= started and late >= minimum for ended, late in self._canary_late):
+                return True
+            sleeping_since = self._canary_sleeping_since
+        if sleeping_since is None:
+            return False
+        overdue = self._monotonic() - sleeping_since - CANARY_INTERVAL_SECONDS
+        return overdue >= minimum
 
     # -- after the stall ---------------------------------------------------------
 
