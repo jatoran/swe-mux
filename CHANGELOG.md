@@ -20,6 +20,8 @@ The release procedure that maintains this file is [`RELEASING.md`](RELEASING.md)
 - **A stalled daemon now says where it was stuck, and the fleet no longer outranks it.**
   When the event loop stops for three seconds or more, every thread's stack is dumped to `<data_dir>/loop-stalls.log` from a thread that needs no GIL, and the stall is explained once in `daemon.log`, kept in `mux.db`, and shown under `stall_watchdog` on `/api/diagnostics/background` - including whether a canary thread was starved too, which separates synchronous work on the loop from a native call holding the GIL.
   Session process trees run below normal priority and the daemon runs above it (`session_process_priority`, `daemon_process_priority`), so a wave of concurrent builds slows the builds rather than the person at the keyboard.
+- **Reading a Project's config file no longer blocks the daemon.**
+  Every Projects poll read each Project's `.swe-mux/config.toml` on the event loop; the stall watchdog caught that read blocking for 6.6 s on a disk saturated by concurrent builds, and it now runs in a thread.
 - **The UI says when the daemon is not answering.**
   A slim banner appears after two missed health probes, counts the seconds, and clears on the first answer, so a stalled daemon reads as stalled rather than as a crashed app.
 
