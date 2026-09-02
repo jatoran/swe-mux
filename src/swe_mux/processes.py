@@ -711,10 +711,12 @@ class ProcessInspector:
     def _enforce_priority(self, process: Any, pid: int, executable: str) -> None:
         """Hold one session-owned process at or below the configured class.
 
-        Runs on the sampling thread beside the reads that already touch the
-        process, so the cost is one `GetPriorityClass` per process per pass and a
-        set only when something is above target. A refusal is remembered per pid
-        so it is logged once rather than every five seconds.
+        Runs on the sampling thread, after the pass has resolved the pid to a session
+        and rejected every infrastructure fingerprint - never inside the walk, where
+        the daemon's own successor can appear as a session descendant. The cost is
+        one `GetPriorityClass` per owned process per pass and a set only when
+        something is above target. A refusal is remembered per pid so it is logged
+        once rather than every five seconds.
         """
         if self.session_priority == "normal":
             return
@@ -1097,6 +1099,13 @@ class ProcessInspector:
             session_seen.add(key)
             self.owned[key] = winner
             result.append(winner)
+            # Only now: the pid is session-owned and not infrastructure. Enforcing
+            # inside the walk lowered the daemon itself on 2026-09-01, because a
+            # redeploy launched from a session's shell put the new app under that
+            # session's tree and the infrastructure fingerprint had not yet spoken.
+            handle_entry = self._handles.get(key[0])
+            if handle_entry is not None and not self._is_own_image(key[0]):
+                self._enforce_priority(handle_entry[0], key[0], winner.executable)
         attributed_pids = {item.pid for item in result}
         self._daemon_resources = self._collect_daemon_resources(
             attributed_pids, daemon_seen, conn_map, candidates=daemon_candidates
@@ -1490,7 +1499,6 @@ class ProcessInspector:
             # command line are fixed for the life of a process, so they come from the
             # identity cache instead of a per-tick remote-PEB read.
             executable, command, identity_hash = self._identity(process, pid)
-            self._enforce_priority(process, pid, executable)
             try:
                 with process.oneshot():
                     started_at = float(process.create_time())
