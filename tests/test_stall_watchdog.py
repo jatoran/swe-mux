@@ -134,6 +134,31 @@ def test_a_blocked_loop_is_dumped_without_the_gil_and_explained_afterwards(
     assert watchdog.snapshot()["armed"] is False
 
 
+def test_a_canary_still_asleep_past_its_due_time_counts_as_starved(tmp_path: Path) -> None:
+    """The record the history cannot hold yet: the canary has not woken.
+
+    ``explain()`` runs as soon as the loop resumes, and the canary the stall
+    starved is still queued for the GIL at that moment (macOS CI hit exactly
+    this: a real 1.0s GIL hold, ``canary_starved=False``). Its current sleep's
+    start is enough to know how late it already is.
+    """
+    now = 100.0
+    watchdog = StallWatchdog(tmp_path / "loop-stalls.log", threshold=60.0, monotonic=lambda: now)
+    # No thread: the sleep-start is set by hand, as the canary would have just
+    # before the stall took the GIL, and never cleared because it has not run.
+    watchdog._canary_sleeping_since = 99.0
+    assert watchdog.canary_starved_since(started=99.0, minimum=0.5) is True, (
+        "due at 99.25, still asleep at 100.0: 0.75s overdue"
+    )
+    assert watchdog.canary_starved_since(started=99.0, minimum=0.8) is False, (
+        "not yet overdue by the minimum the stall's length demands"
+    )
+    watchdog._canary_sleeping_since = None
+    assert watchdog.canary_starved_since(started=99.0, minimum=0.5) is False, (
+        "between sleeps, only the recorded history speaks"
+    )
+
+
 def test_a_stall_that_blocks_only_the_loop_leaves_the_canary_running(
     tmp_path: Path,
 ) -> None:

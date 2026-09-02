@@ -80,6 +80,7 @@ The rule for any periodic psutil work: take **one** system-wide snapshot per pas
 `stall_watchdog.py` re-arms `faulthandler.dump_traceback_later` from the loop-lag probe, so a loop that stops probing for `threshold` seconds has every thread's stack written to `<data_dir>/loop-stalls.log` by faulthandler's C thread while the stall is still in progress.
 A Python watchdog thread could never do that: it needs the GIL the stall is holding, and it would wake after the stall and see a healthy process.
 A second Python thread, the canary, does nothing but sleep a quarter second and record its own lateness; whether it was starved across the stall window is the bit that separates "synchronous Python on the loop thread" (canary ran; read the main thread's frames) from "native call holding the GIL, or the process descheduled" (canary starved; read the busy worker frames).
+A canary that has not woken yet when `explain()` runs counts as starved by how overdue its current sleep already is, because the loop thread keeps winning the GIL back after each syscall until a drop request forces a switch, and on macOS that switch reliably came after the explanation had been written.
 The loop measures the duration itself and calls `explain()` off the loop afterwards, which is what turns the dump into one `loop_stall` log line, one `loop_stalls` row, and one entry under `stall_watchdog.recent` on `/api/diagnostics/background`.
 The dump is not filtered - faulthandler cannot - so the trace file rotates at 4 MiB and the report is what filters parked executor threads out.
 
