@@ -748,7 +748,11 @@ person with no shortcut, no tray, and no idea where anything went.
   the portable archive and the installer as the `desktop` artifact; `github-release` and
   `update-manifest` download it into the
   same `dist/` the wheel lands in, so the manifest step's directory enumeration picks both up
-  with real hashes and no name list to keep in step. Inno Setup ships on the runner image
+  with real hashes and no name list to keep in step. Both `dist` and `desktop` are handoffs
+  within one run and expire after three days (`retention-days`), not the 90-day default: the
+  published bytes live on the Release and PyPI, and at the default seven releases had parked
+  1.3 GB against the account's 500 MB/month Actions storage allowance by 2026-09-02, which is
+  account-wide and blocks every repo's Actions when exhausted. Inno Setup ships on the runner image
   (its own image test asserts `Get-Command iscc` resolves); the workflow installs it only if
   a future image drops it.
 - Clients are told about a redeploy rather than discovering it as failed requests.

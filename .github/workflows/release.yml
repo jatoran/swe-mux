@@ -162,12 +162,20 @@ jobs:
       # published, attached to the Release, and hashed into the update manifest
       # are provably the same bytes. Rebuilding per job would give three
       # artifacts that only probably agree.
+      #
+      # Three days, not the 90-day default: this is a handoff between jobs of
+      # one run, and the bytes that matter are attached to the Release and on
+      # PyPI minutes later. At the default every release parked ~145 MiB here
+      # for three months against a 500 MB/month included allowance, and GitHub
+      # warned at 90% on 2026-09-02. Three rather than one so a "re-run failed
+      # jobs" the next day still finds what it downloads.
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: dist
           path: dist/
           if-no-files-found: error
+          retention-days: 3
 
   # The desktop artifacts, on Windows because they are Windows binaries and
   # PyInstaller cross-compiles nothing. Independent of `build` rather than
@@ -295,6 +303,7 @@ jobs:
           name: desktop
           path: dist/release/
           if-no-files-found: error
+          retention-days: 3  # same reasoning as `dist` above
 
   # Two publish jobs rather than one with a computed index URL. The URL decides
   # where a package permanently lands, so it is written literally in the job that
