@@ -1273,6 +1273,7 @@ async def test_retention_compacts_old_quota_samples_and_bounds_process_evidence(
     )
     deleted = await store.prune(process_retention_days=1)
     assert deleted == {
+        "loop_stalls": 0,
         "quota_samples": 2,
         "processes": 1,
         "notification_decisions": 0,

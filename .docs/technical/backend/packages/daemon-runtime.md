@@ -43,6 +43,20 @@ The rules callers must follow are in `runtime-rules.md`.
 
 **Not:** PTY host processes (that is `supervisor.py`), or any domain logic.
 
+### `stall_watchdog.py`
+
+Where the event loop was during a stall, captured from outside it: the loop-lag probe re-arms `faulthandler.dump_traceback_later`, a C thread that needs no GIL dumps every thread to `<data_dir>/loop-stalls.log` when the probe stops, a canary thread records its own lateness, and `explain()` turns the dump into one bounded `StallRecord` after the loop resumes.
+`server._loop_lag_loop` owns the beat, the log line, and the telemetry write; the rules are in `runtime-rules.md`.
+
+**Not:** the lag measurement itself (`loop_lag.py`), and never a filter on what faulthandler writes - the report filters, the file does not.
+
+### `process_priority.py`
+
+Scheduling-class policy: lower a session tree at spawn and on every inspector pass, raise the daemon once at start, and report an outcome rather than raise.
+Windows classes and POSIX nice values behind one vocabulary (`normal`, `below_normal`, `above_normal`).
+
+**Not:** I/O priority, job-object limits, or anything that raises a session process.
+
 ### `lifecycle.py`
 
 Daemon death forensics: the rewritten heartbeat record, the append-only lifecycle ledger, unclean-death detection at startup, clean-exit marking, and `planned_handoff`.

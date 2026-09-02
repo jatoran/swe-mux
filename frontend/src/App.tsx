@@ -28,6 +28,7 @@ import { LazyChangeMap } from './LazyChangeMap'
 import { editQueueMessage, enqueueMessage, fetchAutoStatus, fetchQueueSummary, sendQueueMessage, setAutoPaused, type QueueAutoStatus, type QueueTargetSummary } from './queueApi'
 import { FleetQueue } from './FleetQueue'
 import { ContinuityBanner } from './ContinuityBanner'
+import { DaemonStallBanner } from './DaemonStallBanner'
 import { UpdateBanner } from './UpdateBanner'
 import { DirectoryPicker } from './DirectoryPicker'
 import { Dropdown } from './Dropdown'
@@ -8101,6 +8102,13 @@ export function App() {
         redeploy. Non-blocking: during the build stage there is a working app underneath. */}
     {!mobileWorkspace&&<RedeployChip state={redeploy} />}
 
+    {/* The daemon has stopped answering, which from here looks exactly like a crash
+        and is not one: the supervisor owns the PTYs, and the daemon comes back by
+        itself. First in the banner row because it is the one that explains why every
+        other thing on screen has stopped moving. Suppressed during a deliberate
+        outage (redeploy's down stage, a session-preserving restart), which already
+        has its own surface. */}
+    <DaemonStallBanner suppressed={suppressTransientErrors} />
     <ContinuityBanner />
     {/* A release update, which is a different thing from the UI-build strip below:
         that one says this browser tab is behind the daemon it is already talking to

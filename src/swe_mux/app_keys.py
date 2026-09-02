@@ -86,6 +86,7 @@ if TYPE_CHECKING:
     from .session_recovery import SessionRecoveryStore
     from .session_watch import SessionWatchService
     from .settings_store import SettingsStore
+    from .stall_watchdog import StallWatchdog
     from .startup_phases import StartupTimeline
     from .status_timeline import StatusTimelineStore
     from .storage_usage import StorageUsage
@@ -152,6 +153,7 @@ SUPERVISOR: web.AppKey[SupervisorClient] = web.AppKey("supervisor")
 REAPER: web.AppKey[ProcessReaper] = web.AppKey("reaper")
 MCP: web.AppKey[McpService] = web.AppKey("mcp")
 LOOP_LAG: web.AppKey[LoopLagMonitor] = web.AppKey("loop_lag")
+STALL_WATCHDOG: web.AppKey[StallWatchdog] = web.AppKey("stall_watchdog")
 
 # --- stores and services -----------------------------------------------------
 

@@ -841,6 +841,12 @@ class Config:
     new_project_parent: str = ""
     process_poll_seconds: float = 5.0
     process_orphan_grace_seconds: float = 15.0
+    # Scheduling classes, so the person at the keyboard beats the fleet when the
+    # host is saturated (process_priority.py). Session trees are lowered at spawn
+    # and re-enforced by the process inspector; the daemon raises itself once at
+    # start. Both are no-ops on an idle host and apply at the next daemon start.
+    session_process_priority: str = "below_normal"
+    daemon_process_priority: str = "above_normal"
     # Windows-only sweep for headless-browser windows that DWM composites even
     # though Win32 reports them hidden (ghost_windows.py). Off by config only
     # when an operator deliberately wants such a window left on screen.
@@ -1959,6 +1965,16 @@ _CHOICE_RULES: tuple[_Choice, ...] = (
         "direct tailnet listening uses the detected Tailscale address automatically",
     ),
     _Choice("terminal_renderer", ("auto", "dom", "webgl"), "must be auto, dom, or webgl"),
+    _Choice(
+        "session_process_priority",
+        ("normal", "below_normal"),
+        "must be normal or below_normal",
+    ),
+    _Choice(
+        "daemon_process_priority",
+        ("normal", "above_normal"),
+        "must be normal or above_normal",
+    ),
     _Choice(
         "experience_tier",
         ("", "terminal", "deterministic", "automations"),

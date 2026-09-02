@@ -9,7 +9,7 @@ import sqlite3
 import time
 import uuid
 from bisect import bisect_left
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, TypeVar, assert_never
@@ -41,7 +41,7 @@ log = logging.getLogger(__name__)
 TELEMETRY_EVENT_LOOP = "operational-telemetry"
 TELEMETRY_RETENTION_LOOP = "telemetry-retention"
 
-TELEMETRY_SCHEMA_VERSION = 6
+TELEMETRY_SCHEMA_VERSION = 7
 TOOL_PARSER_VERSION = "phase2-v1"
 # Parser revisions, keyed by transcript *dialect* rather than by harness.
 #
@@ -369,6 +369,19 @@ CREATE INDEX IF NOT EXISTS idx_notification_decisions_time_category
   ON notification_decisions(decided_at,category);
 CREATE INDEX IF NOT EXISTS idx_notification_decisions_candidate
   ON notification_decisions(candidate_id,id);
+CREATE TABLE IF NOT EXISTS loop_stalls (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  started_at REAL NOT NULL,
+  duration_seconds REAL NOT NULL,
+  canary_starved INTEGER NOT NULL,
+  dumps INTEGER NOT NULL,
+  main_leaf TEXT,
+  main_frames_json TEXT NOT NULL,
+  busy_threads_json TEXT NOT NULL,
+  host_json TEXT NOT NULL,
+  trace_path TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_loop_stalls_started ON loop_stalls(started_at);
 """
 
 
@@ -2219,6 +2232,9 @@ class OperationalTelemetryStore:
             deleted_notification_decisions = self._db.execute(
                 "DELETE FROM notification_decisions WHERE decided_at<?", (quota_cutoff,)
             ).rowcount
+            deleted_loop_stalls = self._db.execute(
+                "DELETE FROM loop_stalls WHERE started_at<?", (quota_cutoff,)
+            ).rowcount
             rollup_cutoff = time.strftime(
                 "%Y-%m-%d",
                 time.gmtime(now - min(3650, self.retention_days * 10) * 86400),
@@ -2236,7 +2252,83 @@ class OperationalTelemetryStore:
                 "quota_samples": deleted_samples,
                 "processes": deleted_processes,
                 "notification_decisions": deleted_notification_decisions,
+                "loop_stalls": deleted_loop_stalls,
             }
+
+        return await self._run(op)
+
+    async def record_loop_stall(self, record: Mapping[str, Any]) -> None:
+        """Keep one explained event-loop stall (`stall_watchdog.StallRecord.as_dict`).
+
+        Bounded on the way in: frames and busy threads are already capped by the
+        watchdog, and the JSON columns are truncated to a fixed budget so a
+        pathological dump cannot grow the row. The trace file holds the full text.
+        """
+        started_at = float(record.get("started_at") or time.time())
+        duration = float(record.get("duration_seconds") or 0.0)
+        if duration <= 0:
+            raise ValueError("duration_seconds must be positive")
+        main_frames = [str(frame) for frame in list(record.get("main_thread") or [])[:40]]
+        busy = [
+            {
+                "name": str(item.get("name", "?"))[:64],
+                "ident": int(item.get("ident") or 0),
+                "frames": [str(frame) for frame in list(item.get("frames") or [])[:40]],
+            }
+            for item in list(record.get("busy_threads") or [])[:12]
+            if isinstance(item, Mapping)
+        ]
+        main_leaf = main_frames[0][:256] if main_frames else None
+        row = (
+            started_at,
+            duration,
+            1 if record.get("canary_starved") else 0,
+            int(record.get("dumps") or 0),
+            main_leaf,
+            json.dumps(main_frames)[:16_000],
+            json.dumps(busy)[:32_000],
+            json.dumps(dict(record.get("host") or {}), default=str)[:2_000],
+            str(record.get("trace_path") or "")[:512] or None,
+        )
+
+        def op() -> None:
+            self._db.execute(
+                "INSERT INTO loop_stalls(started_at,duration_seconds,canary_starved,dumps,"
+                "main_leaf,main_frames_json,busy_threads_json,host_json,trace_path) "
+                "VALUES(?,?,?,?,?,?,?,?,?)",
+                row,
+            )
+            self._db.commit()
+
+        await self._run(op)
+
+    async def recent_loop_stalls(self, *, limit: int = 20) -> list[dict[str, Any]]:
+        """The most recent explained stalls, newest first."""
+        bounded = max(1, min(int(limit), 200))
+
+        def op() -> list[dict[str, Any]]:
+            rows = self._db.execute(
+                "SELECT started_at,duration_seconds,canary_starved,dumps,main_leaf,"
+                "main_frames_json,busy_threads_json,host_json,trace_path FROM loop_stalls "
+                "ORDER BY started_at DESC LIMIT ?",
+                (bounded,),
+            ).fetchall()
+            result: list[dict[str, Any]] = []
+            for row in rows:
+                result.append(
+                    {
+                        "started_at": float(row["started_at"]),
+                        "duration_seconds": float(row["duration_seconds"]),
+                        "canary_starved": bool(row["canary_starved"]),
+                        "dumps": int(row["dumps"]),
+                        "main_leaf": row["main_leaf"],
+                        "main_thread": _json_list(row["main_frames_json"]),
+                        "busy_threads": _json_list(row["busy_threads_json"]),
+                        "host": _json_dict(row["host_json"]),
+                        "trace_path": row["trace_path"],
+                    }
+                )
+            return result
 
         return await self._run(op)
 
@@ -2599,6 +2691,24 @@ def scan_native_telemetry(
         "unknown": unknown,
         "diagnostic": "tail_32_mib_only" if truncated else None,
     }
+
+
+def _json_list(text: object) -> list[Any]:
+    """A JSON array column read back, or an empty list for anything else."""
+    try:
+        value = json.loads(str(text or "[]"))
+    except (TypeError, ValueError):
+        return []
+    return value if isinstance(value, list) else []
+
+
+def _json_dict(text: object) -> dict[str, Any]:
+    """A JSON object column read back, or an empty dict for anything else."""
+    try:
+        value = json.loads(str(text or "{}"))
+    except (TypeError, ValueError):
+        return {}
+    return value if isinstance(value, dict) else {}
 
 
 def _finite(value: object) -> float | None:

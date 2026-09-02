@@ -192,6 +192,8 @@ export const SETTINGS_CONFIG_FIXTURE = {
   "process_evidence_retention_days": 30,
   "process_orphan_grace_seconds": 15.0,
   "process_poll_seconds": 5.0,
+  "session_process_priority": "below_normal",
+  "daemon_process_priority": "above_normal",
   "project_card_daily_budget": {
     "mode": "usd",
     "tokens": null,

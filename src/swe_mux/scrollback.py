@@ -34,6 +34,11 @@ class ScrollbackBuffer:
         self._size = 0
         self._written = 0
 
+    @property
+    def written(self) -> int:
+        """Bytes ever appended; a cheap version stamp for anything derived from the tail."""
+        return self._written
+
     def append(self, data: bytes) -> None:
         self._written += len(data)
         if self.max_bytes <= 0:

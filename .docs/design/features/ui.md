@@ -615,6 +615,16 @@ Its rules, and what each one is defending:
   A rollback republishes the old identity and therefore does not reload other clients.
   The first release of this protocol cannot update clients still running the preceding UI because those clients do not yet perform the comparison; each such client needs one manual reload.
   "Reload UI" is a plain page reload for picking up freshly built frontend assets.
+- **A daemon that has stopped answering is said out loud** (`DaemonStallBanner.tsx`, `daemonLiveness.ts`, `data-testid="daemon-stall-banner"`).
+  The daemon's event loop can freeze for tens of seconds under host load, and while it does every request and every socket frame hangs, so terminals stop moving and clicks do nothing.
+  From the browser that is indistinguishable from a crash, and it is not one: the supervisor owns the PTYs, the sessions keep running, and the daemon recovers by itself.
+  The page probes `/api/health` about every 4 seconds with a 2.5 second deadline, uncached; a timeout, a network error, or a non-2xx answer is a miss.
+  Two consecutive misses raise an amber strip in the banner row reading "swe-mux daemon is not responding (12s). Sessions keep running; the UI will catch up on its own.", with the seconds counting up from the first missed probe's send time.
+  One success clears it.
+  A single slow probe never shows it, for the reason the redeploy wait loop needs two failed probes: a phone waking or one request queued behind a slow endpoint is not a stall.
+  It is a row of chrome rather than an overlay, so it covers no terminal, takes no focus, and has no buttons, because there is nothing correct to press: a reload during a stall hangs on its first request.
+  It is a symptom display and not a health check: it reports that the daemon is not answering in time and draws no conclusion about why, restarts nothing, and is suppressed while a redeploy's daemon-down stage or a session-preserving restart is in flight, since those already have a surface.
+  A hidden tab sends no probes, and hiding drops the observation rather than freezing it, so a banner never claims a silence nobody measured; showing the tab probes at once.
 
 ## Every dropdown is the app's own
 
@@ -3614,4 +3624,6 @@ Colour still arrives through the existing `.state-dot` state classes, so themes 
 - `frontend/src/ProjectRunMenu.tsx`
 - `frontend/src/DirectoryPicker.tsx`
 - `frontend/src/terminalRenderDiagnostics.ts`
+- `frontend/src/daemonLiveness.ts`
+- `frontend/src/DaemonStallBanner.tsx`
 - `frontend/src/style.css`

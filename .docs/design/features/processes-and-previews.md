@@ -327,6 +327,12 @@ forever and lands on the daemon's event loop. Two properties keep it cheap:
   single session, and since the supervisor parents *every* session, that session absorbed the
   whole fleet (34 processes, three `claude.exe`, another session's listeners) while its
   siblings reported zero. Any future change to this walk must keep the creation-time guard.
+- **The walk is also where the fleet is kept below the daemon.** Each session-owned process
+  the pass touches is held at or below `session_process_priority` (`process_priority.py`), one
+  `GetPriorityClass` read per process and a set only when something is above target. The spawn
+  path lowers a new root so its children inherit the class; the pass is what reaches a tree
+  adopted from a previous daemon and a child that raised itself. Nothing is ever raised, and
+  `/api/diagnostics/background` reports the counts under `process_priority`.
 - **Handles and identity are cached, not rebuilt.** Constructing a `psutil.Process` is the
   most expensive single operation available (it re-queries the process to validate identity),
   and `cmdline()` is a remote-PEB read. Neither a process's name nor its command line changes
