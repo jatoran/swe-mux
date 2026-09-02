@@ -115,30 +115,11 @@ test('the popover counts live sessions per account and names the ones a switch l
   const counts = page.locator('.account-popover .account-session-count')
   await expect(counts).toHaveText(['5×', '2×'])
 
-  // The point of the count. Each non-selected login sessions were started under is
-  // named - and the unsaved one is named too, or the numbers would not add up. What
-  // the switch did to them is the daemon's per-provider fact, and this harness declares
-  // Claude Code as one that follows: the sentence says so in the muted tone, not the
-  // amber one a login still being spent gets.
-  const notices = page.locator('.account-popover .account-session-notice')
-  await expect(notices).toHaveCount(2)
-  await expect(notices.nth(0)).toContainText('2 live sessions started under personal')
-  await expect(notices.nth(0)).toContainText('Claude Code picks up a credential change on its next request')
-  await expect(notices.nth(0)).toHaveClass(/follows/)
-  await expect(notices.nth(1)).toContainText('1 live session started under a login that is not saved here')
-  const tones = await notices.nth(0).evaluate(node => {
-    const style = getComputedStyle(node)
-    return { color: style.color, border: style.borderLeftColor }
-  })
-  const amber = await page.locator('.account-popover .account-session-notice').first().evaluate(node => {
-    node.classList.remove('follows')
-    const style = getComputedStyle(node)
-    const tone = { color: style.color, border: style.borderLeftColor }
-    node.classList.add('follows')
-    return tone
-  })
-  expect(tones.color).not.toBe(amber.color)
-  expect(tones.border).not.toBe(amber.border)
+  // What a switch did to them is the daemon's per-provider fact, and this harness
+  // declares Claude Code as a CLI that follows the switch - so no sentence is drawn
+  // under these counts. The paragraph only exists for a provider whose CLI keeps the
+  // login it started with.
+  await expect(page.locator('.account-popover .account-session-notice')).toHaveCount(0)
 
   // The badge rides in the row's own `small`, so the quota columns above it keep the
   // geometry `quota-row` depends on: adding it must not move a percentage.

@@ -199,12 +199,12 @@ export type StrandedSessions={label:string;count:number}
 /** Live sessions of a provider that were **not** started under the account selected
  *  right now.
  *
- *  The reason the count is worth drawing at all. What the number means depends on the
- *  provider's CLI, which is why `strandedSessionNotice` takes that fact from the daemon
- *  rather than assuming it: one CLI re-reads its credential file and follows the switch
- *  on its next request, another keeps the login it read at startup and goes on spending
- *  the outgoing account until it is restarted. Named per account rather than totalled,
- *  because "3 elsewhere" does not say which login they started on.
+ *  What the number means depends on the provider's CLI, which is why `strandedSessionRows`
+ *  takes that fact from the daemon rather than assuming it: one CLI re-reads its credential
+ *  file and follows the switch on its next request, another keeps the login it read at
+ *  startup and goes on spending the outgoing account until it is restarted. Only the second
+ *  is worth a sentence. Named per account rather than totalled, because "3 elsewhere" does
+ *  not say which login they started on.
  *
  *  Sessions started on a login mux had not saved are one unnamed row: there is no slot
  *  to name them by, and leaving them out would make the numbers not add up on exactly
@@ -227,20 +227,19 @@ export function strandedSessions(
   return rows
 }
 
-/** What a switch did to sessions already running, as the daemon declares it per
- *  provider (`switch_reaches_live` on the accounts payload) and the CLI's own name.
- *  `reachesLive` is absent when the daemon predates the field, and the sentence says
- *  so rather than picking a side. */
-export type SwitchReach={reachesLive?:boolean;cli:string}
+/** The sessions a switch actually left behind: only drawn for a provider whose CLI
+ *  keeps the login it started with (`switch_reaches_live === false` on the accounts
+ *  payload). Where the CLI follows the switch there is nothing to warn about, and a
+ *  paragraph saying so under every count was noise the operator asked to have removed.
+ *  A daemon predating the field is treated the same way: no claim is made. */
+export const strandedSessionRows=(
+  status:Parameters<typeof strandedSessions>[0]&{switch_reaches_live?:Record<string,boolean>}|null|undefined,
+  provider:string,
+):StrandedSessions[]=>status?.switch_reaches_live?.[provider]===false?strandedSessions(status,provider):[]
 
-export const strandedSessionNotice=(row:StrandedSessions,reach:SwitchReach):string=>{
+export const strandedSessionNotice=(row:StrandedSessions,cli:string):string=>{
   const one=row.count===1
-  const sessions=`${row.count} live session${one?'':'s'}`
-  if(reach.reachesLive===true)
-    return `${sessions} started under ${row.label}. ${reach.cli} picks up a credential change on its next request, so ${one?'it is':'they are'} spending the selected account now; only ${one?'its':'their'} own /status keeps the old name until restarted.`
-  if(reach.reachesLive===false)
-    return `${sessions} on ${row.label}. ${reach.cli} reads its login at startup, so ${one?'it keeps':'they keep'} spending ${row.label} until restarted.`
-  return `${sessions} started under ${row.label}. Whether ${one?'it':'they'} followed the switch depends on ${reach.cli}; restart to be sure.`
+  return `${row.count} live session${one?'':'s'} on ${row.label}. ${cli} reads its login at startup, so ${one?'it keeps':'they keep'} spending ${row.label} until restarted.`
 }
 
 // A `chipUsageBand` once banded a chip by its *hottest* window so the border could escalate on
