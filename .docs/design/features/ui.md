@@ -2238,6 +2238,11 @@ The app-wide answer to "what is this", and the recovery path for the tour.
   Synthetic terminal writes restore the dedicated IME bridge with `inputmode="none"` when needed, preserving physical-keyboard routing without turning DOM focus into typing intent.
   A terminal typing tap, returning explicitly to Live mode, opening Draft, and the manual Paste fallback remain the paths that intentionally request a soft keyboard.
   The fixed Send end-cap carries the same focus-preserving press guard as the scrolling rail.
+- **A hold is a press too, and the press guard cannot cover one.**
+  That guard cancels the focus move on `mousedown`, which a phone delivers only once a gesture has *resolved* - so it covers a tap and can never cover a hold, because Android answers a stationary touch over non-editable content itself by moving focus for a selection or a callout.
+  A hold anywhere on the rail therefore closed the keyboard and left it closed, and because only slow presses did it, the behaviour read as random rather than broken.
+  Two things fix it and both are needed: no chip offers the platform a text selection or a callout to begin with, and every pointer gesture anywhere in the toolbar - not just the pan on a row wide enough to overflow, and not just outside the popover, which is all that was armed before - hands the keyboard back to the field it was taken from on the frame after the finger lifts.
+  A gesture that lost nothing restores nothing, and a deliberate dismissal during the gesture still wins.
 - **Nothing raises the soft keyboard just because a surface opened.**
   The Queue tab's composer takes focus on open only where `hasSoftKeyboard()` is false - a physical keyboard is already there, so a caret costs nothing.
   Where the only keyboard is on-screen, focusing a field is a layout change rather than a convenience: it covers most of the drawer, so a tab opened to *read* a queue arrives with the list already hidden and a dismissal to perform.
@@ -2261,6 +2266,33 @@ The app-wide answer to "what is this", and the recovery path for the tour.
 - Layouts always keep at least one row, so the editor always has a drop target and a newly shipped built-in always has somewhere to land.
   Deleting the last row empties it instead of removing it.
   A built-in introduced after a config was saved is appended to the first row on both devices; cataloguing it without placing it would leave it permanently invisible to anyone with an existing layout.
+- **The rail is rearranged in place, and arrangement is a mode - that is the one decision everything else here follows from.**
+  These chips are the production buttons: a pad opens its fan from the first pixel of a drag and an arrow starts repeating on a hold, so the two presses a rearranging gesture would want are both already spent, and the surface they are spent on writes bytes to a pty.
+  An ambient long-press-to-reorder would therefore be a gesture that sometimes moves a chip and sometimes sends `Ctrl+C`, which is not a trade this rail can make.
+  While the mode is on the chips take no pointer events at all - including the fixed Send end-cap, which is not arrangeable but is still live - so a pad cannot open a fan it never receives a press for.
+  The press lands on the row instead and the chip under it is found by rectangle, which is also what lets a drop be aimed at the gap between two chips.
+  The mode is entered by holding a row's drawer control (or right-clicking it, or pressing the context-menu key on it), and from `Arrange` in the row popover's footer.
+  The drawer control is the right press to spend: it is the one control on a row that runs nothing.
+- **The scope is stated, never asked.** A hand already holding a chip cannot reach a scope picker, so the panel says what the drop will write to before anything is dragged: *Editing the global rail* everywhere except a detached Project, which says *Editing this Project's rail*.
+  The write itself is the ordinary scope routing the Settings editor uses, so a shared row lands in the global scope and is visible in every Project that has not detached - which is what a rail edit means - while a delta Project's own rows and actions stay project state.
+- **Two surfaces, and the panel's is the one a phone needs.**
+  The rail's own rows stay droppable, so dragging an action out of the catalog straight onto the live rail is the shortest version of the gesture; but a row scrolls horizontally, and moving the eighteenth chip to the second slot on a strip means dragging into an auto-scrolling edge and waiting.
+  The panel therefore restates every row as a wrap grid, where both ends of the move are on screen at once.
+  The same row is drawn twice, so a drop resolves against the copy under the pointer rather than the one behind it.
+- **A drop has three targets, and two of them appear only while a chip is in the air.**
+  A row inserts; the bin removes; the new-row target makes a row and puts the chip in it.
+  A bin standing over the terminal at all times is a control nobody asked for, while one that appears under the thing being dragged is the gesture stating its own options.
+  Removing is destructive and a drag is cheap to make, so the panel carries an Undo for the arrange session - bounded, and dropped when the mode closes, because it is an undo for the *gesture* rather than a history of the configuration, which is durable and editable in Settings either way.
+- **A row a drag empties goes with it, and one emptied by backend filtering does not.**
+  The first is somebody clearing a row; the second still holds actions for another session and is not this session's to delete.
+  A row carrying a label is kept as well, because the label is authored state and pruning it would lose something nobody dropped.
+  While arranging, every row is drawn - including the ones this session filters out entirely - because a row you cannot see is a row you cannot drop into.
+- **The rendered rail is a filtered projection, so a drop index is translated before it may touch a layout.**
+  Backend gating, the mutually exclusive built-ins that resolve to nothing, and the mobile Enter end-cap each remove a chip the row still holds, so an index measured against pixels is not an index into the stored row.
+  This is the only part of the feature whose failure is invisible - the drag looks right and the layout saves wrong - which is why the translation is a pure function with its own tests and is exercised end to end against a deliberately filtered row.
+  Dropping past the last visible chip appends to the *row*, not after the last visible slot, so a trailing filtered action stays trailing.
+- **Escape unwinds one layer at a time.** A drag in flight puts its chip back and the mode stays open; a second Escape closes the mode. A press outside the rail closes it too.
+- A drop that changes nothing writes nothing: an identical layout still costs a settings round trip and a broadcast to every other device.
 - Saves predating the layout model are migrated on read, per scope and by shape rather than by a version field, so a rewritten global scope and a still-legacy project override coexist.
   The old list is resolved once for each device and becomes its rail row, so an upgrade renders identically on both devices and only then diverges by hand.
   Legacy `drawer` and `both` placements become one ordinary rail placement, while `enabled: false` alongside an explicit placement remains a genuine hide.
@@ -2337,6 +2369,7 @@ The app-wide answer to "what is this", and the recovery path for the tour.
   "Copy from *other device*" seeds one layout from the other as a one-shot; it deliberately does not keep tracking.
   Dragging a catalog row into a layout places it exactly.
 - Chips drag within and between rows, on mouse and on touch, through the shared controller (`railDrag.ts`) mounted by the modal editor.
+  The rail's own in-place arrangement is a **sibling** controller rather than this one (`railArrangeDrag.ts`), because the editor draws every configured chip while a live rail draws a filtered projection of it, and because these rows are inert list items while a rail's chips are the production buttons.
   Activation reuses the workspace contract (`dragReorder.ts`, `pointerDragClaim.ts`): a 5px movement threshold for pointers and the shared `MOBILE_HOLD_DRAG` hold-to-lift for touch (350 ms, 16px slop), so a finger that moves first scrolls the modal instead of dragging.
   The lift is announced with the same short haptic the sidebar gives, because until the finger moves nothing on screen says the chip became draggable.
   The live preview is the config a drop would commit, recomputed from the committed config on every move rather than from the previous preview, so a long drag cannot accumulate drift.

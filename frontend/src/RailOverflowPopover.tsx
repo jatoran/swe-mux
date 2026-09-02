@@ -47,10 +47,13 @@ type Props = {
   onClose: () => void
   /** Opens the full editor in Settings → Actions. */
   onConfigure: () => void
+  /** Puts the rail into arrange mode. The panel it opens restates every row as a grid, so
+   *  this control closes the popover rather than becoming a second arrangeable copy of it. */
+  onArrange: () => void
   children: ComponentChildren
 }
 
-export function RailOverflowPopover({ label, anchor, onClose, onConfigure, children }: Props) {
+export function RailOverflowPopover({ label, anchor, onClose, onConfigure, onArrange, children }: Props) {
   const root = useRef<HTMLDivElement>(null)
   const [style, setStyle] = useState<Record<string, string>>({})
 
@@ -106,6 +109,13 @@ export function RailOverflowPopover({ label, anchor, onClose, onConfigure, child
     <button type="button" class="rail-overflow-close" aria-label="Close actions" title="Close" onClick={onClose}>×</button>
     <div class="rail-overflow-grid">{children}</div>
     <footer class="rail-overflow-actions">
+      <button
+        type="button"
+        class="rail-overflow-arrange"
+        aria-label="Arrange actions"
+        title="Arrange actions - drag chips between rows"
+        onClick={() => { onClose(); onArrange() }}
+      >Arrange</button>
       <button
         type="button"
         class="rail-overflow-configure"

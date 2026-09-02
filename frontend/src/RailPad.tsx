@@ -179,6 +179,13 @@ export interface RailPadProps {
   /** Modifier prefix currently applying, e.g. `Ctrl`. The dial shows it, so a live modifier
    *  is legible on the things it is about to change. */
   modifierPrefix?: string
+  /** This chip's position in the *stored* row, published as `data-rail-slot` so an arrange
+   *  drag can translate a hit test back into a config index. A live rail draws a filtered
+   *  projection, so its rendered order is not its stored order (`railArrange.ts`). */
+  slot?: number
+  /** The occurrence key, published as `data-reorder-id`: unique per placement, because the
+   *  same Action may legitimately sit in two rows and twice within one. */
+  reorderId?: string
 }
 
 type Dial = {
@@ -232,7 +239,7 @@ function wedgePath(inner: number, outer: number, from: number, to: number): stri
  * pad, and the navigation cluster's own spatial arrangement (Home/PageUp near, End/PageDown
  * far) on a diagonal one.
  */
-export function RailPad({ controller, item, slots, className, content, modifierPrefix }: RailPadProps) {
+export function RailPad({ controller, item, slots, className, content, modifierPrefix, slot, reorderId }: RailPadProps) {
   const buttonRef = useRef<HTMLButtonElement>(null)
   const [dial, setDial] = useState<Dial>(null)
   const dialTimer = useRef<number | null>(null)
@@ -482,6 +489,8 @@ export function RailPad({ controller, item, slots, className, content, modifierP
     ref={buttonRef}
     type="button"
     data-rail-item={item.id}
+    data-rail-slot={slot}
+    data-reorder-id={reorderId}
     class={`${className || 'term-key'} rail-pad rail-pad-w${wedges} rail-pad-r${rings}${dial ? ' rail-pad-pressed' : ''}`}
     title={item.title || 'Drag a wedge, or tap to open'}
     aria-label={accessible}

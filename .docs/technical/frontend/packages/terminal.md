@@ -107,8 +107,13 @@ Each is expressed as a focus move, because Android exposes no keyboard API:
 - `shouldHoldBridgeFocus` refuses the platform's own focus move while a terminal touch gesture is in flight.
 - `restoreSoftKeyboard` hands it back to the field a gesture took it from.
   It is gated on `softKeyboardLost` so focus that moved to another text field stands, and abandoned outright when `softKeyboardDismissals` moved during the gesture, so a deliberate dismissal always wins.
+- `preserveSoftKeyboardAcross(root, within?)` arms that repair for **every** pointer gesture in a subtree, rather than for the one gesture a caller happened to be tracking.
+  `holdSoftKeyboard` cannot cover a hold at all: a phone delivers the compat `mousedown` only once the gesture has *resolved*, and Android answers a stationary touch over non-editable content itself by moving focus, so prevention arrives after the keyboard is already down.
+  Until this existed the Action rail reached the repair only through `OverflowRail`'s pan bookkeeping - armed only when the strip actually overflows, and absent from the overflow popover entirely - so a slow press on a chip closed the keyboard and a quick one did not, which is what made the behaviour read as random rather than broken.
+  `within` narrows an always-present root to the subtree that wants it, because a surface running its own gesture bookkeeping (the terminal) must not acquire a second repair racing the first.
+  The rail pairs it with `user-select:none` and `-webkit-touch-callout:none` on every chip, which stops the platform selection that moves the focus in the first place.
 
-The ordering of the last three is the design.
+The ordering of the last four is the design.
 A repair is visible: between the platform lowering the keyboard and the next frame putting it back, the layout has moved twice, which is what makes a long-press selection hard to aim.
 So prevention comes first and `restoreSoftKeyboard` is the backstop.
 `shouldHoldBridgeFocus` is deliberately narrow - it arms only when the bridge *itself* held the keyboard as the finger landed - which makes it incapable of raising a keyboard that was down, and stands it down in read mode and with the draft composer open for free, because the bridge is blurred in both.

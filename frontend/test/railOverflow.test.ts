@@ -219,7 +219,9 @@ test('the row scrolls end to end while the trailing cluster stays pinned outside
   // Every chip remains in the scroller, while the drawer stays fixed beside it.
   const strip = readFileSync(new URL('../src/RailStrip.tsx', import.meta.url), 'utf8')
   const scroller = strip.slice(strip.indexOf('<OverflowRail'), strip.indexOf('</OverflowRail>'))
-  assert.match(scroller, /\{chips\}/)
+  // `arrangeChildren` is the identity on `chips` with no caret, so this still says "every
+  // chip, and nothing else, is in the scroller" (`railArrangeChips.tsx`).
+  assert.match(scroller, /\{arrangeChildren\(chips, caretAt\)\}/)
   assert.ok(!scroller.includes('rail-row-trailing'), 'the cluster must sit outside the scroller')
   const styles = readFileSync(new URL('../src/style.css', import.meta.url), 'utf8')
   const rule = declarations(styles, /\.rail-row>\.rail-row-trailing\{([^}]*)\}/)
@@ -245,7 +247,21 @@ test('the borderless popover footer opens the full configuration modal', () => {
 
 test('the terminal rail keeps the scroller that owns its touch-drag click suppression', () => {
   const strip = readFileSync(new URL('../src/RailStrip.tsx', import.meta.url), 'utf8')
-  assert.match(strip, /<OverflowRail className="terminal-action-scroll" wrapperClassName="terminal-action-scroller" touchDrag touchDragGain=\{1\.75\} preserveSoftKeyboard>/)
+  const opening = strip.slice(strip.indexOf('<OverflowRail'), strip.indexOf('>', strip.indexOf('<OverflowRail')))
+  for (const prop of [
+    'className="terminal-action-scroll"',
+    'wrapperClassName="terminal-action-scroller"',
+    'touchDrag',
+    'touchDragGain={1.75}',
+    'preserveSoftKeyboard',
+  ]) assert.ok(opening.includes(prop), `the scroller lost ${prop}`)
+})
+
+test('a row publishes its stored identity, so a drop can be resolved against a config', () => {
+  // The rendered rail is a filtered projection of its row, so a drag has to be able to name
+  // the row it landed in and the *stored* slot each chip occupies (`railArrange.ts`).
+  const strip = readFileSync(new URL('../src/RailStrip.tsx', import.meta.url), 'utf8')
+  assert.match(strip, /stripProps=\{\{ 'data-rail-row': `\$\{device\}\|strip\|\$\{rowId\}` \}\}/)
 })
 
 test('command rail edge wedges align to the strip, not to a guessed trailing width', () => {

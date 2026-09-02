@@ -1157,9 +1157,21 @@ export interface RailRenderRow {
   entries: RailEntry[]
 }
 
-/** The rows to render for a device/backend on one surface. Rows left empty by
- *  backend filtering are dropped so a shell session shows no blank strip row. */
-export function resolveRailRows(config: RailConfig, surface: RailSurface, ctx: RailContext): RailRenderRow[] {
+/**
+ * The rows to render for a device/backend on one surface. Rows left empty by backend
+ * filtering are dropped so a shell session shows no blank strip row.
+ *
+ * `keepEmpty` is for arrangement, and only for it: a row a drag has just emptied, or one
+ * this session filters out entirely, is somewhere a chip has to be droppable while the
+ * rail is being rearranged, and a row that vanishes the moment its last chip leaves is a
+ * row nothing can be put back into. Every reading path wants the default.
+ */
+export function resolveRailRows(
+  config: RailConfig,
+  surface: RailSurface,
+  ctx: RailContext,
+  keepEmpty = false,
+): RailRenderRow[] {
   const byId = new Map(config.items.map(item => [item.id, item]))
   const rows: RailRenderRow[] = []
   for (const row of config.layouts[ctx.device]?.[surface] || []) {
@@ -1169,7 +1181,7 @@ export function resolveRailRows(config: RailConfig, surface: RailSurface, ctx: R
       if (!item || !railItemVisible(item, ctx.backend)) return
       entries.push({ key: `${row.id}:${index}:${id}`, item, rowId: row.id, index })
     })
-    if (entries.length) rows.push({ id: row.id, label: row.label, entries })
+    if (entries.length || keepEmpty) rows.push({ id: row.id, label: row.label, entries })
   }
   return rows
 }
