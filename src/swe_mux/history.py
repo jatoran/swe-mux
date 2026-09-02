@@ -71,6 +71,37 @@ def _public_history_row(row: sqlite3.Row) -> dict[str, Any]:
     )
     return item
 
+# Which timestamp a history listing is organised by. One control in the browser picks
+# it, and it decides two different things, which is why there are two tables.
+#
+# The **filter** answers "does this row's chosen timestamp fall in the window", and a row
+# that has no such timestamp answers *no*: a range on last-message must not admit a run
+# with no messages, and an external row that never reported a native start has no known
+# start to compare (its `spawned_at` is when the file was found, not when the
+# conversation began - the browser's own `historyStart` draws the same distinction).
+#
+# The **order** cannot answer no, because every row on the page needs a position, so it
+# falls back through what is known. Ordering on a nullable column instead would collect
+# every unindexed conversation at one end of a listing it belongs in the middle of.
+#
+# Measured 2026-09-02 on the development host's 5578-row table: 9.3 ms for a 50-row page,
+# against an indexed `spawned_at` order that needs no sort at all. The expression cannot
+# use `idx_history_agent_filters`, so this buys a temp B-tree - worth it for a listing
+# that is meant to be in activity order, and far inside the search box's 220 ms debounce.
+_HISTORY_FILTER_COLUMNS = {
+    "started": (
+        "CASE WHEN h.external=1 THEN h.native_started_at "
+        "ELSE COALESCE(h.native_started_at,h.spawned_at) END"
+    ),
+    "last_message": "h.last_message_at",
+}
+_HISTORY_ORDER_COLUMNS = {
+    "started": "COALESCE(h.native_started_at,h.spawned_at)",
+    "last_message": "COALESCE(h.last_message_at,h.exited_at,h.native_started_at,h.spawned_at)",
+}
+#: The ordering value, carried on each row so the cursor is the ORDER BY's own answer.
+_HISTORY_ORDER_KEY = "_order_at"
+
 # Exit reasons that mark a run as deliberately hidden because it was proven to be
 # a cross-attribution artifact. No migration or backfill may make these visible
 # again; only an explicit repair path may.
@@ -3283,12 +3314,23 @@ class HistoryIndex:
         external: bool | None = None,
         date_from: float | None = None,
         date_to: float | None = None,
-        time_basis: str = "started",
+        time_basis: str = "last_message",
         cursor: str | None = None,
         limit: int = 50,
         budget_ms: int | None = None,
     ) -> dict[str, Any]:
-        """One page of history.
+        """One page of history, newest first by ``time_basis``.
+
+        ``time_basis`` orders the page and scopes the date range, and the two use
+        different expressions on purpose (`_HISTORY_ORDER_COLUMNS`,
+        `_HISTORY_FILTER_COLUMNS`). It used to do only the filtering, so the browser's
+        control appeared to do nothing at all unless a date range was also set.
+
+        It defaults to last activity because every caller means "the most recent
+        conversations": the browser opens on them, and the MCP listing scans a bounded
+        window of ended runs to rank beside live ones. A run's recency is when it last
+        said something, not when its process started - a long conversation spawned
+        yesterday outranks a short one spawned an hour ago and abandoned.
 
         `budget_ms` bounds the SQLite work and raises `HistorySearchBudgetExceeded`
         rather than running to completion. It exists for callers that are not a
@@ -3299,12 +3341,13 @@ class HistoryIndex:
         limit = max(1, min(limit, 200))
         if search_scope not in {"all", "user", "assistant", "metadata"}:
             raise ValueError("history search scope must be all, user, assistant, or metadata")
-        if time_basis not in {"started", "last_message"}:
+        if time_basis not in _HISTORY_ORDER_COLUMNS:
             raise ValueError("history time basis must be started or last_message")
         search_index_ready = bool((await self.message_search_status())["ready"])
+        order_column = _HISTORY_ORDER_COLUMNS[time_basis]
         sql = (
-            "SELECT h.* FROM history h WHERE h.agent_visible=1 "
-            f"AND h.backend IN ({_AGENT_BACKEND_SQL})"
+            f"SELECT h.*, {order_column} AS {_HISTORY_ORDER_KEY} FROM history h "
+            f"WHERE h.agent_visible=1 AND h.backend IN ({_AGENT_BACKEND_SQL})"
         )
         args: list[Any] = list(_AGENT_BACKEND_ARGS)
         match_query = _fts_query(query)
@@ -3318,24 +3361,37 @@ class HistoryIndex:
                 " OR COALESCE(h.project_label,'') LIKE ? ESCAPE '\\')"
             )
             metadata_args: list[Any] = [_like_pattern(query)] * 3
-            if search_index_ready:
+            message_args: list[Any] = []
+            if not match_query:
+                # No word characters at all, so no indexed message can match: `MATCH ''`
+                # is an FTS syntax error and the LIKE fallback says the same thing with
+                # `0`. Matching nothing is the honest answer for a message-scoped search;
+                # this used to fall through to a *metadata* search instead, so asking for
+                # "User prompts" containing `???` silently answered a different question
+                # about names and paths.
+                message_sql = "0"
+            elif search_index_ready:
                 message_sql = (
                     "EXISTS (SELECT 1 FROM history_messages hm "
                     "JOIN history_messages_fts ON history_messages_fts.rowid=hm.id "
                     "WHERE hm.history_id=h.id AND history_messages_fts MATCH ?"
                 )
-                message_args: list[Any] = [match_query]
+                message_args = [match_query]
+                if search_scope in {"user", "assistant"}:
+                    message_sql += " AND hm.role=?"
+                    message_args.append(search_scope)
+                message_sql += ")"
             else:
                 predicate, message_args = _like_query_predicate(query, "all_terms")
                 message_sql = (
                     "EXISTS (SELECT 1 FROM history_messages hm WHERE hm.history_id=h.id AND "
                     f"{predicate}"
                 )
-            if search_scope in {"user", "assistant"}:
-                message_sql += " AND hm.role=?"
-                message_args.append(search_scope)
-            message_sql += ")"
-            if search_scope == "metadata" or not match_query:
+                if search_scope in {"user", "assistant"}:
+                    message_sql += " AND hm.role=?"
+                    message_args.append(search_scope)
+                message_sql += ")"
+            if search_scope == "metadata":
                 sql += f" AND {metadata_sql}"
                 args.extend(metadata_args)
             elif search_scope == "all":
@@ -3357,12 +3413,7 @@ class HistoryIndex:
         if external is not None:
             sql += " AND h.external=?"
             args.append(int(external))
-        time_column = (
-            "CASE WHEN h.external=1 THEN h.native_started_at "
-            "ELSE COALESCE(h.native_started_at,h.spawned_at) END"
-            if time_basis == "started"
-            else "h.last_message_at"
-        )
+        time_column = _HISTORY_FILTER_COLUMNS[time_basis]
         if date_from is not None:
             sql += f" AND {time_column}>=?"
             args.append(date_from)
@@ -3370,17 +3421,27 @@ class HistoryIndex:
             sql += f" AND {time_column}<=?"
             args.append(date_to)
         if cursor:
+            # Keyed on the same expression the page is ordered by. Keyed on `spawned_at`
+            # while the order came from somewhere else, "Load more" would skip and repeat
+            # rows rather than continue the list.
             stamp, row_id = cursor.split(":", 1)
-            sql += " AND (h.spawned_at<? OR (h.spawned_at=? AND h.id<?))"
+            sql += f" AND ({order_column}<? OR ({order_column}=? AND h.id<?))"
             args.extend([float(stamp), float(stamp), row_id])
-        sql += " ORDER BY h.spawned_at DESC,h.id DESC LIMIT ?"
+        sql += f" ORDER BY {order_column} DESC,h.id DESC LIMIT ?"
         args.append(limit + 1)
 
         def op() -> dict[str, Any]:
             rows = self._db.execute(sql, args).fetchall()
             has_more = len(rows) > limit
             page = rows[:limit]
-            items = [_public_history_row(row) for row in page]
+            items = []
+            for row in page:
+                item = _public_history_row(row)
+                # The ordering value rides along on the row so the cursor cannot be
+                # computed from a second copy of the expression and drift from it. It is
+                # not part of the row's public shape.
+                item.pop(_HISTORY_ORDER_KEY, None)
+                items.append(item)
             if query and match_query:
                 role = search_scope if search_scope in {"user", "assistant"} else None
                 for item in items:
@@ -3425,7 +3486,9 @@ class HistoryIndex:
                     item["matches"] = public_matches
                     item["match_count"] = len(matches) if len(matches) < 4 else 4
             next_cursor = (
-                f"{page[-1]['spawned_at']}:{page[-1]['id']}" if has_more and page else None
+                f"{page[-1][_HISTORY_ORDER_KEY]}:{page[-1]['id']}"
+                if has_more and page
+                else None
             )
             return {"items": items, "next_cursor": next_cursor}
 

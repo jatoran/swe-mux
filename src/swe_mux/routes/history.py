@@ -43,7 +43,7 @@ async def list_history(request: web.Request) -> web.Response:
         external=(external_value.lower() == "true") if external_value is not None else None,
         date_from=float(request.query["date_from"]) if request.query.get("date_from") else None,
         date_to=float(request.query["date_to"]) if request.query.get("date_to") else None,
-        time_basis=request.query.get("time_basis", "started"),
+        time_basis=request.query.get("time_basis", "last_message"),
         cursor=request.query.get("cursor"),
         limit=int(request.query.get("limit", min(50, request.app[keys.CONFIG].history_limit))),
     )

@@ -985,10 +985,15 @@ def test_history_filters_fit_narrow_split_panes() -> None:
     assert "flex:0 1 auto;min-width:min(7rem,100%);max-width:100%" in css
     assert ".history-search { display:grid" not in css
     assert "@container (max-width:620px)" in css
-    # The time filter chooses which of the two stamps a row is ranked by, so the row
-    # has to show both for the choice to mean anything.
+    # The control chooses which of the two stamps a row is ranked by, so the row has to
+    # show both for the choice to mean anything. It is named as a sort because it now is
+    # one: it used to scope only the date range, so toggling it changed nothing at all
+    # unless a range happened to be set (`design/features/history.md`).
     assert "time_basis" in history
-    assert "Time: last message" in history
+    assert "Sort: last activity" in history
+    assert "Sort: session started" in history
+    # And it opens on last activity, which is what "the most recent conversations" means.
+    assert "useState<'started'|'last_message'>('last_message')" in history
     assert "Started {timestampLabel(historyStart(entry))}" in history
     assert "Last {entry.last_message_role" in history
 
