@@ -8051,7 +8051,7 @@ export function App() {
       <button class="nav-toggle mobile-nav-toggle" aria-label="Open navigation sidebar" title="Navigation" onClick={() => setSidebarOpen(value => !value)}><NavPanelIcon/></button>
       {/* Quota sits beside nav, at the start of the bar: it is glanced at constantly, and the
           two edges are where a thumb reaching for a toggle lands, so it takes neither. */}
-      <AccountSwitcher variant="compact" onManage={()=>openSettings('Accounts')}/>
+      <AccountSwitcher variant="compact" onManage={()=>openSettings('Accounts')} onViewUsage={()=>openUsage('agents')}/>
       {/* The toolbar title is the Project menu's trigger. Single tap opens it on
           touch: a long-press was the only way in, and holding a text node is what
           raised the selection UI. Long-press/right-click still work for parity.
@@ -8305,7 +8305,7 @@ export function App() {
               it back while the harness panel or the tour is on screen: the tour has an
               account step of its own, and two invitations to the same thing at once is
               the overwhelm the first-run work exists to remove. */}
-          <AccountSwitcher onManage={()=>openSettings('Accounts')} promptDismissed={accountPromptDismissed!==false} promptSuppressed={firstRun!=='none'} onDismissPrompt={dismissAccountPrompt}/>
+          <AccountSwitcher onManage={()=>openSettings('Accounts')} onViewUsage={()=>openUsage('agents')} promptDismissed={accountPromptDismissed!==false} promptSuppressed={firstRun!=='none'} onDismissPrompt={dismissAccountPrompt}/>
           <ResourceUsageSummary snapshot={processFleet} sessions={sessions} onRefresh={()=>void loadProcesses()} onOpenFleet={()=>openProcessViewer()}/>
         </div>
         <div class="sidebar-footer"><button
@@ -8343,7 +8343,7 @@ export function App() {
             sidebar where menu and projects are the last rows. */}
         <div class="rail-status">
           <ResourceUsageSummary compact snapshot={processFleet} sessions={sessions} onRefresh={()=>void loadProcesses()} onOpenFleet={()=>openProcessViewer()}/>
-          <AccountSwitcher variant="rail" placement="up" onManage={()=>openSettings('Accounts')}/>
+          <AccountSwitcher variant="rail" placement="up" onManage={()=>openSettings('Accounts')} onViewUsage={()=>openUsage('agents')}/>
         </div>
         {/* Run stays reachable while the sidebar is collapsed, including before a Project
             has any pane tabs whose local + could open it. */}

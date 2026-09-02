@@ -283,6 +283,16 @@ the last good reading and changes no state.
   state is the daemon's rather than either component's.
 - The popover does not close on an outside click while a request it started is still out: a
   switch or a dismissal that lands on an unmounted popover takes its error with it.
+- The footer holds three controls, split by whether they leave.
+  Refresh acts on what is already on screen and keeps the popover open, so it is an icon
+  (a circular arrow, named on `aria-label`/`title`, spinning while the poll is out) pinned
+  to the left of the row.
+  `view usage` and `manage…` are destinations, both close the popover, and both hand off
+  through the host rather than navigating themselves - `onViewUsage` and `onManage`, wired
+  at every call site in `App.tsx` to the Usage dialog's agents segment and to
+  Settings -> Accounts.
+  A quota percentage answers how much is left, which reliably provokes the question of where
+  it went; before this the popover had no way to follow it.
 - Each provider section in the popover draws its accounts' quota as columns, headed once
   above the rows: 5h, weekly, and Fable where the provider reports it.
   The same figures joined into a sentence read fine for one account and stop reading at all

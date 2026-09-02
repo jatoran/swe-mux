@@ -134,6 +134,7 @@ function Harness() {
       <div class="sidebar-status">
         <AccountSwitcher
           onManage={() => { calls.push({ method: 'UI', url: 'manage' }) }}
+          onViewUsage={() => { calls.push({ method: 'UI', url: 'view-usage' }) }}
           promptDismissed={dismissed}
           onDismissPrompt={() => { calls.push({ method: 'UI', url: 'dismiss-prompt' }); setDismissed(true) }}
         />
