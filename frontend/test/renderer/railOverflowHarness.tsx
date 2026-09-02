@@ -124,15 +124,27 @@ function Harness() {
     <div class="terminal-host" id="buffer" style={`background:${buffer}`} />
     <div ref={rail} class="terminal-action-rail" role="toolbar" aria-label="Terminal keys and clipboard actions">
       <div class="terminal-action-rows">
+        {/* Not arranging: this harness is about the overflow popover and the glass, and the
+            arrange mode has a harness of its own (`railArrangeHarness.tsx`). */}
         <RailStrip
           chips={chips}
           label="Actions"
           onConfigure={() => { window.railOverflowFires.push('configure') }}
+          device="desktop"
+          rowId="one"
+          arranging={false}
+          caretAt={null}
+          onArrange={() => { window.railOverflowFires.push('arrange') }}
         />
         {multipleRows && <RailStrip
           chips={secondRow}
           label="Actions, row 2"
           onConfigure={() => { window.railOverflowFires.push('configure') }}
+          device="desktop"
+          rowId="two"
+          arranging={false}
+          caretAt={null}
+          onArrange={() => { window.railOverflowFires.push('arrange') }}
         />}
       </div>
     </div>

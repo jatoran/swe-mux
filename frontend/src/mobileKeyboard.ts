@@ -411,6 +411,63 @@ export function restoreSoftKeyboard(
 }
 
 /**
+ * Keep the soft keyboard across every pointer gesture inside a subtree, holds included.
+ *
+ * `holdSoftKeyboard` is the prevention half and it is bound to `mousedown`, which a phone
+ * delivers only once the gesture has *resolved*. That covers a tap and cannot cover a hold:
+ * Android answers a stationary touch over non-editable content itself, moving focus for a
+ * selection or a callout, and the compat `mousedown` arrives long after there is anything
+ * left to cancel. So a hold anywhere on the Action rail lowered the keyboard and left it
+ * down, which reads as the rail closing the keyboard at random - the presses it happened to
+ * on were the slow ones.
+ *
+ * `restoreSoftKeyboard` is the repair for exactly that, and until now the rail reached it
+ * only through `OverflowRail`'s pan bookkeeping - which is armed only when the strip
+ * actually overflows, and does not exist at all in the overflow popover. This arms it for
+ * every press in the subtree instead, whatever the gesture turns out to be, which is the
+ * only version of the rule that cannot have holes in it.
+ *
+ * A gesture that lost nothing restores nothing (`softKeyboardLost`), and a deliberate
+ * dismissal during the gesture outranks the repair (`restoreSoftKeyboard` reads the
+ * dismissal counter), so arming this everywhere costs nothing where it does not apply.
+ */
+export function preserveSoftKeyboardAcross(root: HTMLElement, within?: string): () => void {
+  let holder: HTMLElement | null = null
+  let dismissalsAtStart = 0
+  let pointer: number | null = null
+  const down = (event: PointerEvent) => {
+    if (!event.isPrimary) return
+    // `within` narrows an always-present root to the subtree that actually wants this. A
+    // surface that already runs its own gesture bookkeeping - the terminal does - must not
+    // acquire a second repair racing the first.
+    if (within && !(event.target instanceof Element && event.target.closest(within))) return
+    pointer = event.pointerId
+    holder = softKeyboardHolder()
+    dismissalsAtStart = softKeyboardDismissals()
+  }
+  const end = (event: PointerEvent) => {
+    if (pointer === null || event.pointerId !== pointer) return
+    const held = holder
+    const mark = dismissalsAtStart
+    pointer = null
+    holder = null
+    // A frame later, because the platform's own focus move can still be in flight when the
+    // pointer ends - the same ordering `OverflowRail` uses for the pan it already repaired.
+    if (held) requestAnimationFrame(() => restoreSoftKeyboard(held, mark))
+  }
+  // Capture on the root so a chip that stops propagation cannot hide the press, and on the
+  // window for the release, because a drag ends wherever the finger happens to be.
+  root.addEventListener('pointerdown', down, true)
+  window.addEventListener('pointerup', end, true)
+  window.addEventListener('pointercancel', end, true)
+  return () => {
+    root.removeEventListener('pointerdown', down, true)
+    window.removeEventListener('pointerup', end, true)
+    window.removeEventListener('pointercancel', end, true)
+  }
+}
+
+/**
  * How long after a touch gesture ends its synthesized mouse events may still arrive.
  *
  * A phone delivers a press to code that does not consume the touch by replaying it as
