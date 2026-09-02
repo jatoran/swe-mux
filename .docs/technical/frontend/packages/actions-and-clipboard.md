@@ -9,9 +9,10 @@ Design: `../../../design/features/ui.md`, `../../../design/features/prompt-libra
 `ActionEditorModal.tsx`, `ActionsTab.tsx`, `PromptsTab.tsx`,
 `PromptTemplateEditor.tsx`, `promptRail.ts`, `promptTitles.ts`,
 `railKeyRepeat.ts`, `RailRepeatKey.tsx`, `railPadGesture.ts`, `RailPad.tsx`, `railModifiers.ts`,
-`railVoice.ts`
+`railVoice.ts`, `railArrange.ts`, `railArrangeDrag.ts`, `railArrangeChips.tsx`,
+`useRailArrange.ts`, `RailArrangePanel.tsx`
 
-The model modules do not touch the DOM outside the editors and `railDrag.ts`.
+The model modules do not touch the DOM outside the editors, `railDrag.ts`, and `railArrangeDrag.ts`.
 Rendering stays with the hosts: `TerminalPane.tsx` for the Action rail, `ActionsTab.tsx` for Actions.
 
 ### `commandRail.ts` - catalog and layout model
@@ -53,6 +54,32 @@ Floating (hide plus splice) is chosen per id from a count check and an LCS over 
 The plan **verifies itself** against `resolveDeltaScope` and re-does any row that did not come back identical with every id floated, which always reproduces a row at the cost of no longer tracking global changes to it.
 `issues` names what a delta cannot express and which global value wins: a renamed shared row, reordered shared rows, a project row interleaved between them, an action whose definition the fork edited.
 Nothing calls it on its own - it is reached only from the fork scope's "Reattach to global…" control.
+
+### In-place arrangement
+
+`railArrange.ts` (rules), `railArrangeDrag.ts` (pointer), `useRailArrange.ts` (wiring),
+`RailArrangePanel.tsx` + `railArrangeChips.tsx` (surface).
+
+A sibling of `railDrag.ts` rather than a reuse of it, and the two differences are the reason.
+
+**The editor draws every configured chip; a live rail draws a filtered projection.**
+Backend gating (`railItemVisible`), the mutually exclusive built-ins that resolve to nothing at render time, and the mobile Enter end-cap each remove a chip the row still holds, so an index measured against pixels is not an index into the stored row.
+`storedInsertIndex` translates one into the other against the stored slots the rendered chips occupy, `slotsWithoutDragged` renumbers those slots when the dragged chip is leaving that same row, and `caretPosition` steps the drawn marker over the dragged chip, which stays in the flow.
+This is the only part of the feature whose failure is invisible: the drag looks right and the layout saves wrong, so it is pure, unit-tested, and exercised end to end against a deliberately filtered row (`test/renderer/command-rail-arrange.spec.ts`).
+
+**The editor's rows are inert list items; these chips are the production buttons.**
+A pad fires from the first pixel of a drag and an arrow repeats on a hold, so arrangement is a **mode** and the chips are made inert by CSS (`pointer-events:none` under `.rail-arranging`, which also covers the fixed mobile Send end-cap) rather than by a gesture that has to out-argue them.
+The press therefore lands on the row container and the chip under it is found by rectangle (`railChipAtPoint`), which is also what lets a drop be aimed at the gap between two chips.
+
+`chipBandY` holds the measuring point inside the band the chips occupy before `dropIndexForPoint` reads it: that function is written for the editor's wrapped rows, where below every chip legitimately means past the last line, and on a single-line strip the same rule turns a drop into the strip's own padding into an end of the row.
+
+Three further rules the module owns.
+`pruneEmptyRailRows` drops a row a drag emptied, but never one emptied only by backend filtering (it still holds items for another session) and never one carrying a label.
+`applyRailArrange` returns `null` rather than an unchanged config when a drop means nothing, so an "edit" that saves an identical layout never costs a settings broadcast to every other device.
+And the scope is *stated*, never asked: `railArrangeScopeLabel` reads the resolved scope kind, because a hand already holding a chip cannot reach a picker.
+
+`useRailArrange` owns the mode, the preview, the bounded undo stack, and the pointer entry points; it does not own where an edit is persisted, which is the caller's - `TerminalPane` routes every save through `applyScopedRail`, so a shared row lands in the global scope, a detached Project's layout stays with it, and a delta Project's own rows and actions stay project state.
+The DOM contract it reads is `[data-rail-arrange-surface]` (a container that owns rows, which scopes the forgiveness search so the panel and the rail drawing the same row cannot answer for each other), `[data-rail-row]`, `[data-rail-slot]` + `[data-reorder-id]` on every chip shape, `[data-rail-arrange-zone]`, and `[data-rail-catalog-item]`.
 
 ### The rest of the layer
 

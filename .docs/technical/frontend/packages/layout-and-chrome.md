@@ -39,6 +39,12 @@ Positioned from `.rail-row` instead, the right wedge had to name the trailing cl
 `RailStrip` takes no message prop at all, which is why every row's cluster is now the same width and the wedges align: the trailing cluster is `flex:0 0 auto`, so anything living beside the drawer control takes its width straight out of the scrolling strip, and the selection readout that used to sit there was capped in `vw` - it swallowed a pane narrower than the cap whole.
 Terminal messages go to `.terminal-clip-toast` over the buffer instead, where the cap is a percentage of the pane.
 
+The drawer control is also the way into arranging the rail, and it is the right press to spend on that: it is the one control on the row that runs nothing, so a hold on it cannot race a pad opening its fan or an arrow starting to repeat.
+It uses `railLongPress.ts` for all three routes at once - a touch hold, a right-click, and the context-menu key - which is what gives arrangement a keyboard route without a binding of its own.
+While arranging, that control stands down and the popover cannot be opened: the arrange panel restates every row as a grid, and a popover would be a third copy of a row with only one of the copies under the pointer.
+The popover's footer offers `Arrange` beside the configuration control, and taking it closes the popover for the same reason.
+`RailStrip` publishes its row's stored identity through `stripProps` as `data-rail-row`, which is what a drop resolves against (`actions-and-clipboard.md`).
+
 `railClearance.ts` keeps app-level floating messages off that rail.
 `.interaction-hud`, `.notification-toast`, and `.toast-stack` are pinned to the viewport's bottom-right corner, which on a maximised window is precisely where the rail is; the latter two take pointer events, so the overlap stole taps rather than only obscuring chips.
 Each `TerminalPane` registers its rail element, a single `ResizeObserver` (watching every registered rail plus `document.body`, since splitting a pane moves a sibling's rail without resizing it) recomputes on a coalesced frame, and `railClearancePx` publishes `--rail-clearance` on the root element for the stylesheet to add to each message's `bottom`.

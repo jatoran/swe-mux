@@ -2650,7 +2650,10 @@ body {
 }
 /* The rail owns one scrolling column plus an optional fixed mobile Send end-cap.
    Overflow belongs only to the inner strip so Send never moves with its siblings. */
-.terminal-action-rail{grid-row:2;grid-column:1;min-width:0;min-height:var(--rail-row-h);display:grid;grid-template-columns:minmax(0,1fr);align-items:stretch;border-top:1px solid var(--line);background:var(--panel)}
+/* `relative` so the arrange panel can hang off the rail's own top edge. It is clipped by
+   `.terminal-surface`'s `overflow:hidden`, which is what keeps it inside its own pane in a
+   split rather than over a neighbour. */
+.terminal-action-rail{position:relative;grid-row:2;grid-column:1;min-width:0;min-height:var(--rail-row-h);display:grid;grid-template-columns:minmax(0,1fr);align-items:stretch;border-top:1px solid var(--line);background:var(--panel)}
 .terminal-action-rail.mobile-pinned-send{grid-template-columns:minmax(0,1fr) auto}
 /* Configured rows stack without wrapping. Each keeps a fixed drawer route to its complete
    button list, while the strip itself remains horizontally scrollable. */
@@ -2774,9 +2777,11 @@ body {
 .rail-overflow-popover{position:fixed;z-index:95;display:grid;grid-template-rows:minmax(0,1fr) auto;overflow:hidden;border:1px solid var(--line);background:color-mix(in srgb,var(--panel) var(--rail-glass-field),transparent);-webkit-backdrop-filter:blur(14px) saturate(1.15);backdrop-filter:blur(14px) saturate(1.15);box-shadow:8px 10px 0 #0009;color:var(--text)}
 .rail-overflow-popover .rail-overflow-close{position:absolute;z-index:2;top:2px;right:2px;width:18px;height:18px;min-width:0;padding:0;border:0;background:color-mix(in srgb,var(--panel2) 68%,transparent);color:var(--muted);font:13px/1 'Cascadia Mono',Consolas,monospace;cursor:pointer}
 .rail-overflow-actions{display:flex;justify-content:flex-end;padding:3px 4px;border-top:1px solid color-mix(in srgb,var(--line) 62%,transparent);background:color-mix(in srgb,var(--panel2) var(--rail-glass),transparent)}
+.rail-overflow-popover .rail-overflow-actions{display:flex;align-items:center;justify-content:flex-end;gap:4px}
 .rail-overflow-popover .rail-overflow-configure{width:26px;height:24px;min-width:0;display:grid;place-items:center;padding:0;border:0;background:transparent;color:var(--muted);cursor:pointer}
 .rail-overflow-popover .rail-overflow-configure svg{width:15px;height:15px}
-@media(hover:hover){.rail-overflow-popover .rail-overflow-close:hover,.rail-overflow-popover .rail-overflow-configure:hover{color:var(--text);background:color-mix(in srgb,var(--text) 8%,transparent)}}
+.rail-overflow-popover .rail-overflow-arrange{height:24px;min-width:0;padding:0 9px;border:0;background:transparent;color:var(--muted);font:10px 'Cascadia Mono',Consolas,monospace;cursor:pointer}
+@media(hover:hover){.rail-overflow-popover .rail-overflow-close:hover,.rail-overflow-popover .rail-overflow-configure:hover,.rail-overflow-popover .rail-overflow-arrange:hover{color:var(--text);background:color-mix(in srgb,var(--text) 8%,transparent)}}
 .rail-overflow-grid{min-height:0;display:flex;flex-wrap:wrap;align-content:flex-start;gap:var(--rail-gap);padding:var(--rail-pad-y) var(--rail-pad-x);overflow-y:auto;overscroll-behavior:contain}
 .rail-overflow-grid>*{flex:0 0 auto}
 /* Specificity has to beat `.terminal-action-rail button`, which is later in the sheet. The
@@ -2989,6 +2994,59 @@ body {
 .terminal-action-rail button.rail-danger{color:var(--muted)}
 @media(hover:hover){.terminal-action-rail button.rail-danger:hover:not(:disabled){border-color:var(--red);color:var(--red)}}
 .terminal-action-rail button.rail-danger.confirming{border-color:var(--red);background:color-mix(in srgb,var(--red) 22%,var(--panel2));color:var(--red)}
+/* A hold over a rail chip is a gesture, never a text selection or a platform callout. Both
+   of those move focus, and on Android a focus move is exactly what lowers the soft keyboard -
+   so until this covered every chip, a slow press anywhere on the rail closed the keyboard and
+   a quick one did not, which is what made the behaviour read as random. Only the repeating
+   arrow keys used to say it (`.rail-key-repeat`). */
+.terminal-action-rail button,.rail-arrange-catalog-chip{user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}
+
+/* --- Arranging the rail in place (`railArrange.ts`) -----------------------------------
+   Arrangement is a mode, and the mode is expressed by taking the chips' pointer events
+   away rather than by asking each of them to behave differently. These are the production
+   buttons: a pad opens its fan from the first pixel of a drag and an arrow repeats on a
+   hold, so a rearranging gesture that had to out-argue them would eventually lose and send
+   bytes to a pty. With the chips inert the press lands on the row container, which is also
+   the only element that can see a drop aimed at the gap between two chips. */
+.rail-arranging .terminal-action-scroll>*,.rail-arranging .rail-arrange-grid>*,.rail-arrange-catalog-chip>*{pointer-events:none}
+.rail-arranging .terminal-action-scroll,.rail-arranging .rail-arrange-grid{cursor:grab}
+/* The fixed mobile Send end-cap is not arrangeable - it is deliberately not configurable at
+   all - but it is still a live control inside the toolbar, so it stands down with the rest
+   rather than staying the one thing on an arranging rail that writes to a pty. */
+.rail-arranging .terminal-mobile-send{pointer-events:none;opacity:.45}
+.rail-arranging .terminal-action-scroll{outline:1px dashed color-mix(in srgb,var(--green) 45%,transparent);outline-offset:-2px}
+/* The insertion point. Drawn between chips rather than by reflowing them: a row that
+   rearranged itself live would move the target out from under the finger aiming at it. */
+.rail-arrange-caret{flex:0 0 auto;align-self:stretch;width:3px;min-height:var(--rail-chip-h);margin:1px 0;background:var(--green);box-shadow:0 0 7px color-mix(in srgb,var(--green) 70%,transparent);pointer-events:none}
+.rail-arrange{position:absolute;left:0;right:0;bottom:100%;z-index:18;display:flex;flex-direction:column;max-height:min(52vh,340px);border:1px solid var(--green);border-bottom:0;background:color-mix(in srgb,var(--panel) 96%,transparent);-webkit-backdrop-filter:blur(12px) saturate(1.1);backdrop-filter:blur(12px) saturate(1.1);box-shadow:0 -6px 18px #0009;color:var(--text);font:10px 'Cascadia Mono',Consolas,monospace}
+.rail-arrange-head{flex:0 0 auto;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:4px 8px;border-bottom:1px solid color-mix(in srgb,var(--line) 70%,transparent)}
+.rail-arrange-scope{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--green);font-weight:700}
+.rail-arrange-head-actions{flex:0 0 auto;display:flex;gap:5px}
+.terminal-action-rail .rail-arrange-head-actions button{min-width:0;height:26px;padding:0 10px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:10px 'Cascadia Mono',Consolas,monospace;cursor:pointer}
+.terminal-action-rail .rail-arrange-head-actions button:disabled{color:var(--muted);cursor:default}
+.terminal-action-rail .rail-arrange-head-actions button.rail-arrange-on{border-color:var(--green);color:var(--green)}
+.terminal-action-rail .rail-arrange-head-actions button.rail-arrange-done{border-color:color-mix(in srgb,var(--green) 60%,var(--line));background:color-mix(in srgb,var(--green) 12%,var(--panel2));color:var(--green);font-weight:700}
+.rail-arrange-catalog{flex:0 0 auto;max-height:104px;display:flex;flex-wrap:wrap;align-content:flex-start;gap:var(--rail-gap);padding:6px 8px;overflow-y:auto;overscroll-behavior:contain;border-bottom:1px solid color-mix(in srgb,var(--line) 70%,transparent)}
+/* `touch-action:none` because a tray entry's whole purpose is to be dragged out: leaving the
+   browser free to answer the same finger with a scroll of the tray loses the gesture. */
+.rail-arrange-catalog-chip{flex:0 0 auto;display:inline-flex;cursor:grab;touch-action:none}
+.rail-arrange-empty{color:var(--muted)}
+.rail-arrange-rows{flex:1 1 auto;min-height:0;padding:5px 8px 6px;overflow-y:auto;overscroll-behavior:contain;touch-action:pan-y}
+.rail-arrange-row+.rail-arrange-row{margin-top:7px}
+.rail-arrange-row-label{display:block;margin-bottom:3px;color:var(--muted);font-size:9px;letter-spacing:.06em;text-transform:uppercase}
+/* A dashed box, so a row emptied by a drag is still visibly a place to drop into. That is
+   the whole reason `resolveRailRows` keeps empty rows while arranging. */
+.rail-arrange-grid{display:flex;flex-wrap:wrap;gap:var(--rail-gap);min-height:calc(var(--rail-chip-h) + 8px);padding:3px;border:1px dashed color-mix(in srgb,var(--line) 85%,transparent)}
+.rail-arrange-grid>*{flex:0 0 auto}
+/* Drawn only while a chip is in the air. A bin standing over the terminal at all times is a
+   control nobody asked for; one that appears under the thing being dragged is the gesture
+   stating its own options. */
+.rail-arrange-zones{flex:0 0 auto;display:flex;gap:6px;padding:5px 8px;border-top:1px solid color-mix(in srgb,var(--line) 70%,transparent);opacity:0;visibility:hidden}
+.rail-arrange-zones-live{opacity:1;visibility:visible}
+.rail-arrange-zone{flex:1 1 0;min-height:40px;display:flex;align-items:center;justify-content:center;gap:7px;border:1px dashed var(--line);color:var(--muted);font-weight:700}
+.rail-arrange-zone-text{font-weight:400}
+.rail-arrange-remove.rail-arrange-zone-over{border-style:solid;border-color:var(--red);background:color-mix(in srgb,var(--red) 18%,transparent);color:var(--red)}
+.rail-arrange-new-row.rail-arrange-zone-over{border-style:solid;border-color:var(--green);background:color-mix(in srgb,var(--green) 18%,transparent);color:var(--green)}
 /* Pads. One chip holding four actions plus a centre, reached by dragging a direction.
 
    Three pieces, and the first two are the reason a pad costs no space at all:
