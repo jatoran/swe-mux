@@ -91,7 +91,10 @@ On 2026-09-02 the watchdog caught the daemon's loop inside that call for 23.5 s 
 `CreateProcess` releases the GIL, so the same call on another thread costs the loop nothing - but asyncio's public API offers no way to move only the spawn, because the transport owns the `Popen`.
 `bounded_subprocess.run_bounded` therefore runs the whole bounded command on `_SpawnLoop`, one event loop on its own thread, and the caller's loop only awaits a future: output observers are marshalled back to the caller's loop in order, the caller's context (request correlation) is carried across with the task, and cancelling the caller cancels the run over there, which is what reaps the tree.
 The daemon stops that loop at teardown after every service that could still spawn on it.
-The raw `asyncio.create_subprocess_exec` sites that remain (`git_operations.py`, `git_review.py`, `tailscale.py`, `provider_accounts.py`, `mcp_tools.py`, `meta_hooks.py`, `windows_firewall.py`) are user-triggered or rare and still spawn on the daemon's loop; a poller that grows a spawn goes through `run_bounded`.
+The raw `asyncio.create_subprocess_exec` sites that remain are `provider_accounts.py` and `mcp_tools.py`, the Codex app-server, which holds stdin open and must stay raw.
+`tailscale.py`, `windows_firewall.py`, `meta_hooks.py` and `git_projects.py` now go through `run_bounded`, so a one-shot command anywhere else in the daemon has no reason to spawn on its own loop.
+There are two lanes, each a loop on its own thread: `LANE_BACKGROUND` for pollers, and `LANE_INTERACTIVE` for a command a person is waiting on - the git mutations in `git_operations.py` and the queries in `git_review.py` - because a spawn the kernel is holding blocks every spawn queued behind it on the same loop, and a Land or a commit must not sit behind a monitor sweep.
+A query whose output would exceed its cap is refused as `too_large` rather than handed on clipped, because every caller parses what comes back and a clipped `worktree list` parses into something confidently wrong.
 
 ### A served-tree stat is answered from the last reading
 

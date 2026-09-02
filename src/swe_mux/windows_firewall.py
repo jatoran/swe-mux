@@ -22,7 +22,6 @@ must cover the whole ``100.64.0.0/10`` range, never just this desktop.
 
 from __future__ import annotations
 
-import asyncio
 import base64
 import ipaddress
 import json
@@ -32,7 +31,12 @@ from collections.abc import Awaitable, Callable
 from pathlib import PureWindowsPath
 from typing import Any
 
-from .subprocess_flags import background_creation_flags
+from .bounded_subprocess import run_bounded
+
+#: The inspection script prints one JSON document describing a handful of rules.
+_POWERSHELL_OUTPUT_LIMIT = 1024 * 1024
+#: stderr is only ever surfaced as the failure message.
+_POWERSHELL_STDERR_LIMIT = 64 * 1024
 
 # The tailnet range every phone address falls inside. A firewall Allow rule is
 # only sufficient if its remote-address scope covers this whole network.
@@ -385,21 +389,19 @@ def _windows_powershell_path() -> str:
 async def _run_powershell(script: str, timeout: float) -> str:  # noqa: ASYNC109
     powershell = _windows_powershell_path()
     encoded = _encode_powershell(script)
-    process = await asyncio.create_subprocess_exec(
-        powershell,
-        "-NoProfile",
-        "-NonInteractive",
-        "-EncodedCommand",
-        encoded,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        creationflags=background_creation_flags(),
+    outcome = await run_bounded(
+        [powershell, "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded],
+        label="powershell-firewall",
+        timeout_seconds=timeout,
+        output_limit=_POWERSHELL_OUTPUT_LIMIT,
+        stderr_limit=_POWERSHELL_STDERR_LIMIT,
     )
-    stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
-    if process.returncode != 0:
-        message = stderr.decode("utf-8", "replace").strip()
+    if outcome.timed_out:
+        raise TimeoutError("PowerShell timed out")
+    if outcome.exit_code != 0:
+        message = outcome.stderr.decode("utf-8", "replace").strip()
         raise RuntimeError(message or "PowerShell exited non-zero")
-    return stdout.decode("utf-8", "replace")
+    return outcome.stdout.decode("utf-8", "replace")
 
 
 async def inspect_firewall(

@@ -95,6 +95,27 @@ async def test_the_callers_context_is_carried_across(monkeypatch: pytest.MonkeyP
     assert observed == ["request-42"]
 
 
+async def test_the_interactive_lane_has_its_own_thread(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A spawn the kernel holds for a sweep must not hold a person's commit too."""
+    threads: list[str] = []
+    real_exec = asyncio.create_subprocess_exec
+
+    async def recording_exec(*args: Any, **kwargs: Any) -> asyncio.subprocess.Process:
+        threads.append(threading.current_thread().name)
+        return await real_exec(*args, **kwargs)
+
+    monkeypatch.setattr(bounded_subprocess.asyncio, "create_subprocess_exec", recording_exec)
+    await run_bounded(
+        python_argv("pass"), label="a", timeout_seconds=30, output_limit=64, lane="interactive"
+    )
+    await run_bounded(python_argv("pass"), label="b", timeout_seconds=30, output_limit=64)
+    assert threads == [f"{SPAWN_THREAD_NAME}-interactive", SPAWN_THREAD_NAME]
+    with pytest.raises(ValueError, match="unknown spawn lane"):
+        await run_bounded(
+            python_argv("pass"), label="c", timeout_seconds=30, output_limit=64, lane="fast"
+        )
+
+
 async def test_a_program_that_cannot_start_still_raises_to_the_caller() -> None:
     with pytest.raises(OSError):
         await run_bounded(

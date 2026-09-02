@@ -13,11 +13,26 @@ mobile access on 2026-08-17, which is why it is tested rather than commented.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any
 
 import pytest
 
 from swe_mux import tailscale
+from swe_mux.bounded_subprocess import ProcessOutcome
+
+
+def _ok() -> ProcessOutcome:
+    """What a `tailscale serve --bg` that succeeded quietly reports."""
+    return ProcessOutcome(
+        exit_code=0,
+        stdout=b"",
+        stderr=b"",
+        stdout_truncated=False,
+        stderr_truncated=False,
+        duration_ms=1.0,
+        timed_out=False,
+    )
 
 
 def _serve(port: int, https_port: int = 443) -> dict[str, Any]:
@@ -87,19 +102,12 @@ async def test_an_abandoned_route_is_still_reclaimable(monkeypatch: pytest.Monke
 
     configured: list[tuple[str, ...]] = []
 
-    async def fake_exec(*args: str, **_kwargs: Any) -> Any:
-        configured.append(args)
+    async def fake_run_bounded(argv: Sequence[str], **_kwargs: Any) -> ProcessOutcome:
+        configured.append(tuple(argv))
         state["port"] = 8765
+        return _ok()
 
-        class Process:
-            returncode = 0
-
-            async def communicate(self) -> tuple[bytes, bytes]:
-                return b"", b""
-
-        return Process()
-
-    monkeypatch.setattr(tailscale.asyncio, "create_subprocess_exec", fake_exec)
+    monkeypatch.setattr(tailscale, "run_bounded", fake_run_bounded)
 
     async def ipv4(_exe: str | None = None) -> str | None:
         return "100.64.1.2"
@@ -144,16 +152,10 @@ async def test_a_daemon_reconfiguring_its_own_route_is_not_blocked(
 
     monkeypatch.setattr(tailscale, "_swemux_daemon_alive", alive)
 
-    async def fake_exec(*_args: str, **_kwargs: Any) -> Any:
-        class Process:
-            returncode = 0
+    async def fake_run_bounded(_argv: Sequence[str], **_kwargs: Any) -> ProcessOutcome:
+        return _ok()
 
-            async def communicate(self) -> tuple[bytes, bytes]:
-                return b"", b""
-
-        return Process()
-
-    monkeypatch.setattr(tailscale.asyncio, "create_subprocess_exec", fake_exec)
+    monkeypatch.setattr(tailscale, "run_bounded", fake_run_bounded)
 
     async def ipv4(_exe: str | None = None) -> str | None:
         return "100.64.1.2"
