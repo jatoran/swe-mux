@@ -436,6 +436,12 @@ async def get_background_health(request: web.Request) -> web.Response:
             # tells you whether anything is blocking the thread every request, frame
             # and keystroke shares.
             "loop_lag": loop_lag.snapshot(),
+            # Where the loop was during each stall the monitor counted, from the
+            # GIL-free dump the loop arms itself. `loop_lag` says how long; this says
+            # what, and whether a starved canary thread makes it a native-code stall.
+            "stall_watchdog": request.app[keys.STALL_WATCHDOG].snapshot(),
+            # What the inspector has lowered to keep the fleet below this process.
+            "process_priority": request.app[keys.PROCESS_INSPECTOR].priority_stats(),
             "event_bus": events.drop_stats(),
             "tier0_capture": tier0.capture_stats(),
             "git_provenance": request.app[keys.GIT_PROVENANCE].status(),

@@ -75,6 +75,23 @@ The observable symptom was terminal keystrokes lagging and then arriving in a bu
 
 The rule for any periodic psutil work: take **one** system-wide snapshot per pass (`_ppid_map()`, not `children(recursive=True)` per root), cache process handles across passes, and re-read only attributes that actually change per tick - never name, command line, or creation time.
 
+### A stall is dumped from a thread that needs no GIL, and the canary says which kind it was
+
+`stall_watchdog.py` re-arms `faulthandler.dump_traceback_later` from the loop-lag probe, so a loop that stops probing for `threshold` seconds has every thread's stack written to `<data_dir>/loop-stalls.log` by faulthandler's C thread while the stall is still in progress.
+A Python watchdog thread could never do that: it needs the GIL the stall is holding, and it would wake after the stall and see a healthy process.
+A second Python thread, the canary, does nothing but sleep a quarter second and record its own lateness; whether it was starved across the stall window is the bit that separates "synchronous Python on the loop thread" (canary ran; read the main thread's frames) from "native call holding the GIL, or the process descheduled" (canary starved; read the busy worker frames).
+The loop measures the duration itself and calls `explain()` off the loop afterwards, which is what turns the dump into one `loop_stall` log line, one `loop_stalls` row, and one entry under `stall_watchdog.recent` on `/api/diagnostics/background`.
+The dump is not filtered - faulthandler cannot - so the trace file rotates at 4 MiB and the report is what filters parked executor threads out.
+
+### The fleet runs below the daemon, and only ever gets lowered
+
+`process_priority.py` holds every session-owned process at or below `session_process_priority` (below normal by default) and raises the daemon once to `daemon_process_priority` (above normal by default).
+The spawn path lowers a new root so its tree inherits the class; the process inspector's pass lowers anything the root already had, anything adopted from a previous daemon, and anything a child raised itself to, at the cost of one `GetPriorityClass` per process per pass.
+It never raises a session process, so an agent that put its own gate at idle keeps it there.
+The supervisor stays at normal on purpose: a session root inherits the supervisor's class at spawn, and at normal the supervisor already beats a below-normal fleet.
+I/O priority is untouched, because Windows' background I/O class is far harsher than one CPU step.
+Both knobs are no-ops on an idle host; they decide who waits when the host is saturated, which is the condition under which the person at the keyboard was losing.
+
 ### `Process.ppid()` is that same snapshot, and `oneshot()` does not cache it
 
 On Windows psutil implements it as `ppid_map()[pid]`, rebuilding the whole parent table per call, and it carries no `@memoize_when_activated` unlike the `name`, `cmdline`, and `memory_info` calls beside it in the same `oneshot()` block.

@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, cast
 
+from . import process_priority
 from .adapters import BackendAdapter, SpawnOptions
 from .adapters.claude import claude_data_home
 from .agent_environment import capture_config_baseline
@@ -2046,6 +2047,10 @@ class Session:
     ) -> None:
         self.record, self.pty, self.adapter = record, pty, adapter
         self.scrollback = ScrollbackBuffer(max_scrollback)
+        # The last screen explanation and every input it was derived from, so the
+        # several readers that ask per status pass share one regex pass over the
+        # tail (`SessionManager._pty_tail_explanation`).
+        self._pty_tail_explanation_cache: tuple[tuple[Any, ...], dict[str, Any]] | None = None
         # What a fresh attach or a resync replays, as distinct from what is
         # retained above. Carried on the session rather than read per-request so
         # every attach path (browser, adopted supervisor session, tests) is bound
@@ -2810,6 +2815,10 @@ class SessionManager:
         # are surfaced at /health so a recovery that fires is never only a log line.
         self.cold_sessions_restored = 0
         self.max_scrollback = max_scrollback
+        # Scheduling class a new root is lowered to right after spawn, so its whole
+        # tree inherits it (process_priority.py). The server sets it from config;
+        # "normal" leaves spawned processes at whatever the supervisor gave them.
+        self.session_process_priority = "normal"
         # Retention budget above, replay budget here: every Session this manager
         # builds is bound by it, whether spawned or adopted from the supervisor.
         self.attach_replay_bytes = attach_replay_bytes
@@ -3222,6 +3231,13 @@ class SessionManager:
             await asyncio.to_thread(pty.spawn)
         startup_timing_ms["pty_spawn"] = round((time.perf_counter() - pty_started_at) * 1000, 1)
         record.pid = pty.pid
+        # Lowered before anything else looks at the tree, so the shell's own first
+        # children inherit the class; the inspector's pass catches any that slipped
+        # through the window between the spawn and this call.
+        if self.session_process_priority != "normal":
+            await asyncio.to_thread(
+                process_priority.apply_session_root, record.pid, self.session_process_priority
+            )
         record.root_started_at = await asyncio.to_thread(process_started_at, record.pid)
         record.process_job_assignment = pty.reaper_assignment
         registration_started_at = time.perf_counter()
@@ -6774,7 +6790,8 @@ class SessionManager:
                 "rules": [],
             }
         try:
-            tail = scrollback.tail_bytes(SCREEN_TAIL_BYTES).decode("utf-8", "replace")
+            raw = scrollback.tail_bytes(SCREEN_TAIL_BYTES)
+            tail = raw.decode("utf-8", "replace")
         except (OSError, ValueError):
             return {
                 "outcome": "unknown",
@@ -6784,13 +6801,38 @@ class SessionManager:
                 "rules": [],
             }
         osc_signals = getattr(session, "osc_signals", None)
-        return pty_tail_explain(
+        cli_state_status = session_cli_state_status(session)
+        osc_title = getattr(osc_signals, "title", None)
+        osc_progress = getattr(osc_signals, "progress", None)
+        # Every input is on the key, so a hit is exactly the answer a recompute would
+        # give. The explanation is regex work over 32 KiB of screen, on the loop, and
+        # it is asked for several times per status pass per session - the profile of
+        # the 2026-09-01 stall investigation put it first among the loop's own
+        # non-idle frames. A quiet session's screen does not change between asks.
+        # The key is the screen's *content* (a hash of the bytes is a C loop, far
+        # cheaper than the regexes) plus the buffer it came from: a byte count alone
+        # would let a swapped-in buffer of the same length answer for a different one.
+        key = (
+            id(scrollback),
+            getattr(scrollback, "written", None),
+            hash(raw),
+            session.record.backend,
+            cli_state_status,
+            osc_title,
+            osc_progress,
+        )
+        cached = getattr(session, "_pty_tail_explanation_cache", None)
+        if cached is not None and cached[0] == key:
+            return dict(cached[1])
+        explanation = pty_tail_explain(
             tail,
             backend=session.record.backend,
-            cli_state_status=session_cli_state_status(session),
-            osc_title=getattr(osc_signals, "title", None),
-            osc_progress=getattr(osc_signals, "progress", None),
+            cli_state_status=cli_state_status,
+            osc_title=osc_title,
+            osc_progress=osc_progress,
         )
+        session._pty_tail_explanation_cache = (key, explanation)
+        return dict(explanation)
 
     @staticmethod
     def _note_pty_tail_readings(

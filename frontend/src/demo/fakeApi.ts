@@ -1134,6 +1134,9 @@ const ROUTES: Route[] = [
     handler: () => error(501, 'This demo has a read-only checkout.'),
   },
   { method: 'GET', pattern: /^\/api\/projects\/([^/]+)\/observations$/, handler: () => ({ items: [] }) },
+  // The stall banner probes this every few seconds for the life of the page; the
+  // unmatched-GET fallback would answer it correctly and log each one.
+  { method: 'GET', pattern: /^\/api\/health$/, handler: () => ({ ok: true, ready: true }) },
 ]
 
 // ------------------------------------------------------------------ install

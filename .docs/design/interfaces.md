@@ -2096,6 +2096,22 @@ one thread, so a single synchronous call delays every terminal write, websocket 
 response behind it, and no per-subsystem metric reports that. Investigation procedure:
 `development/PERFORMANCE_RUNBOOK.md`.
 
+`stall_watchdog` answers *where* the loop was for each stall of `threshold_seconds` (3 s) or
+more: `recent[]` carries one record per explained stall with `duration_seconds`, the main
+thread's frames leaf first (`main_thread`, `main_leaf`), every worker thread that was not parked
+(`busy_threads[]`), a host reading at explanation time (`host.cpu_percent`,
+`host.memory_percent`, `host.process_count`), how many dumps fired (`dumps`), and
+`canary_starved`. The frames come from `faulthandler`, which the loop re-arms on every lag probe
+and which dumps every thread to `<data_dir>/loop-stalls.log` from a C thread that needs no GIL, so
+a stall whose cause is a native call holding the GIL in a worker is still captured.
+`canary_starved` is the discriminator: `false` means a Python thread kept running and the main
+thread's own frames name the synchronous work; `true` means the canary thread was as stuck as the
+loop, so the cause was native code holding the GIL or the process being descheduled, and the busy
+worker frames are the ones to read. The same records persist to `mux.db` (`loop_stalls`,
+`design/features/operational-telemetry.md`) and each is logged once as `loop_stall` in
+`daemon.log`. `process_priority` reports what the process inspector has lowered to keep the fleet
+below this process (`target`, `lowered_total`, `lowered_last_pass`, `denied_pids`).
+
 This is the surface that makes a poller which died — the
 audited failure mode where a feature silently stops for the rest of the process lifetime —
 visible instead of merely absent.

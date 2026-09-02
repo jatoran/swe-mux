@@ -42,6 +42,12 @@ SQLite connection:
   duration when available, backend/model/Project/run, parser version, and explicit skill.
 - `transcript_telemetry_coverage`: provider-specific reconciliation version, recognized and
   unknown counts, extracted event counts, coverage status, and bounded diagnostics.
+- `loop_stalls`: one row per explained event-loop stall (`stall_watchdog.py`): start, duration,
+  whether the canary thread was starved too, how many stack dumps fired, the main thread's frames
+  leaf first, the worker threads that were not parked, a host reading at explanation time, and
+  the trace file the full dumps live in.
+  Frames are capped at 40 per thread and 12 threads per row; the trace file holds the rest.
+  Pruned on `operational_telemetry_retention_days` with the other evidence.
 
 Creating the store on an existing mux database is additive. History migrations add the
 compaction summary columns without replacing existing history rows.
@@ -204,6 +210,10 @@ Its `interpretation` is `quota_utilization_not_token_usage`.
 
 - `process_poll_seconds = 5`
 - `process_orphan_grace_seconds = 15`
+- `session_process_priority = "below_normal"` (`normal` turns enforcement off; applies at the
+  next daemon start)
+- `daemon_process_priority = "above_normal"` (`normal` leaves the daemon where the OS put it;
+  applies at the next daemon start)
 - `process_evidence_retention_days = 30`
 - `operational_telemetry_retention_days = 180`
 - `provider_quota_poll_minutes = 15`
@@ -217,6 +227,8 @@ or session lifecycle.
 
 - Store and native reconciliation: `src/swe_mux/operational_telemetry.py`
 - Process reconciliation/actions: `src/swe_mux/processes.py`
+- Event-loop stall explanation: `src/swe_mux/stall_watchdog.py`
+- Scheduling-class policy: `src/swe_mux/process_priority.py`
 - Provider polling: `src/swe_mux/provider_accounts.py`
 - Native event parsing: `src/swe_mux/observation.py`
 - History summaries/migrations: `src/swe_mux/history.py`

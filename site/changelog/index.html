@@ -1067,7 +1067,17 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
         <h2><a href="https://github.com/jatoran/swe-mux/compare/v0.2.1...HEAD">Unreleased</a></h2>
         <span class="fill"></span>
       </div>
-      <p class="prose">Nothing yet.</p>
+      <div class="relgroups">
+        <div><span class="k">Added</span> <span class="sep">2 entries</span></div>
+      </div>
+      <details class="relmore">
+        <summary>all 2 entries</summary>
+        <div class="changetype">Added</div>
+        <ul class="bullets">
+          <li><span><b>A stalled daemon now says where it was stuck, and the fleet no longer outranks it.</b> When the event loop stops for three seconds or more, every thread's stack is dumped to <code>&lt;data_dir&gt;/loop-stalls.log</code> from a thread that needs no GIL, and the stall is explained once in <code>daemon.log</code>, kept in <code>mux.db</code>, and shown under <code>stall_watchdog</code> on <code>/api/diagnostics/background</code> - including whether a canary thread was starved too, which separates synchronous work on the loop from a native call holding the GIL. Session process trees run below normal priority and the daemon runs above it (<code>session_process_priority</code>, <code>daemon_process_priority</code>), so a wave of concurrent builds slows the builds rather than the person at the keyboard.</span></li>
+          <li><span><b>The UI says when the daemon is not answering.</b> A slim banner appears after two missed health probes, counts the seconds, and clears on the first answer, so a stalled daemon reads as stalled rather than as a crashed app.</span></li>
+        </ul>
+      </details>
     </div>
     <div class="rel">
       <div class="relhead">

@@ -133,6 +133,7 @@ from .path_identity import same_path
 from .plugins import PluginManager
 from .preview_store import PreviewStore
 from .preview_transport import PREVIEW_HTTP_CONCURRENCY, PREVIEW_WS_CONCURRENCY
+from .process_priority import raise_self as raise_process_priority
 from .process_reaper import create_reaper
 from .processes import PreviewRegistry, ProcessInspector
 from .project_actions import (
@@ -207,6 +208,7 @@ from .sqlite_store import (
     run_full_verification,
     verification_record_path,
 )
+from .stall_watchdog import STALL_TRACE_FILENAME, StallWatchdog
 from .startup_phases import StartupTimeline
 from .status_timeline import StatusTimelineStore
 from .storage_usage import ProjectFootprintTarget, StorageUsage
@@ -1119,6 +1121,14 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
     # every start after that. In a thread because it is CPU-bound and this path
     # must not block the event loop the health endpoint answers on.
     timeline.mark("static-precompress")
+    # Before anything else runs: the person at the keyboard is waiting on this
+    # process, and at normal priority a saturated host has no reason to prefer it
+    # over the fleet's compilers (process_priority.py). One syscall, logged either way.
+    log.info(
+        "daemon_process_priority target=%s outcome=%s",
+        config.daemon_process_priority,
+        raise_process_priority(config.daemon_process_priority),
+    )
     await asyncio.to_thread(_precompress_frontend, app[keys.FRONTEND_DIR])
     # `PRAGMA quick_check` reads every page of the database and eleven stores
     # share `mux.db`, so this used to be paid eleven times, on the event loop,
@@ -1478,12 +1488,17 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
     # session manager, so a session asking it for the current account at spawn
     # has to arrive as a callable rather than as a second reference.
     sessions.provider_attribution = provider_accounts.spawn_attribution
+    # The spawn path lowers a new root; the inspector's pass lowers everything the
+    # root already had, everything adopted from a previous daemon, and anything a
+    # child raised itself to. Both read the same policy.
+    sessions.session_process_priority = config.session_process_priority
     process_inspector = ProcessInspector(
         sessions,
         events,
         cadence=config.process_poll_seconds,
         telemetry=telemetry,
         orphan_grace_seconds=config.process_orphan_grace_seconds,
+        session_priority=config.session_process_priority,
     )
     ghost_windows = GhostWindowSweeper(
         cadence=config.ghost_window_poll_seconds,
@@ -2373,8 +2388,15 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
     # the same moment everything that can stall it begins running.
     timeline.mark("background-loops")
     loop_lag = LoopLagMonitor()
-    publish(app, {keys.LOOP_LAG: loop_lag})
-    background.start(LOOP_LAG_LOOP, lambda: _loop_lag_loop(loop_lag))
+    # The lag monitor says how long the loop was gone; the watchdog says where it
+    # was, from a C thread that needs no GIL (stall_watchdog.py). Armed by the same
+    # probe, so a loop that stops probing is exactly a loop that gets dumped.
+    stall_watchdog = StallWatchdog(config.data_dir / STALL_TRACE_FILENAME)
+    stall_watchdog.start()
+    publish(app, {keys.LOOP_LAG: loop_lag, keys.STALL_WATCHDOG: stall_watchdog})
+    background.start(
+        LOOP_LAG_LOOP, lambda: _loop_lag_loop(loop_lag, stall_watchdog, telemetry)
+    )
     background.start(CONFIG_WATCH_LOOP, lambda: watch_config(app))
     background.start(MEDIA_CLEANUP_LOOP, lambda: _media_cleanup_loop(config.data_dir, projects))
     background.start(
@@ -2684,6 +2706,7 @@ async def _teardown_runtime(app: web.Application) -> None:  # noqa: PLR0912, PLR
         keys.GHOST_WINDOWS,
         keys.GIT_MONITOR,
         keys.GIT_PROVENANCE,
+        keys.STALL_WATCHDOG,
     ):
         await _stop_handle(app, key)
     # Shutdown intent (SESSION_PRESERVING_RELOAD §5.3): "quit" reaps everything
@@ -2779,19 +2802,59 @@ def _close_handle(app: web.Application, key: web.AppKey[Any]) -> None:
         log.exception("could not close %s at shutdown", key)
 
 
-async def _loop_lag_loop(monitor: LoopLagMonitor) -> None:
+async def _loop_lag_loop(
+    monitor: LoopLagMonitor,
+    watchdog: StallWatchdog,
+    telemetry: OperationalTelemetryStore | None,
+) -> None:
     """Record how late this event loop is running its own scheduled work.
 
     The sleep stays outside the supervisor's `iteration()` guard on purpose: timing it
     would measure this probe's sleep rather than anything blocking the loop. Only the
     recording is guarded, which is what makes a dead lag monitor visible in the same
     place as every other stalled loop.
+
+    Every probe also re-arms the stall watchdog, and a probe that comes back late by
+    more than its threshold is a stall that just ended: the explanation (which
+    frames the dump caught, whether the canary thread was starved too, what the host
+    looked like) is gathered off the loop, logged once, and kept durably so the
+    incident is answerable from `daemon.log` and `mux.db` after the fact.
     """
     # unsupervised-loop-ok: supervised by `background.start(LOOP_LAG_LOOP, ...)`.
     while True:
         lag = await monitor.sample()
         with background.iteration(LOOP_LAG_LOOP):
             monitor.observe(lag)
+            watchdog.beat()
+        if lag < watchdog.threshold:
+            continue
+        try:
+            record = await asyncio.to_thread(watchdog.explain, lag)
+        except Exception:  # noqa: BLE001 - the probe must outlive its own reporting
+            log.exception("loop_stall duration_s=%.2f explanation failed", lag)
+            continue
+        busy = "; ".join(
+            f"{item['name']}:{item['frames'][0] if item['frames'] else '-'}"
+            for item in record.busy_threads[:4]
+        )
+        log.warning(
+            "loop_stall duration_s=%.2f canary_starved=%s dumps=%d main=%s busy=[%s] "
+            "cpu=%s mem=%s procs=%s trace=%s",
+            record.duration_seconds,
+            record.canary_starved,
+            record.dumps,
+            " <- ".join(record.main_thread[:4]) or "-",
+            busy or "-",
+            record.host.get("cpu_percent"),
+            record.host.get("memory_percent"),
+            record.host.get("process_count"),
+            record.trace_path,
+        )
+        if telemetry is not None:
+            try:
+                await telemetry.record_loop_stall(record.as_dict())
+            except Exception:  # noqa: BLE001 - a full store must not stop the probe
+                log.exception("loop_stall record failed")
 
 
 async def _media_cleanup_loop(data_dir: Path, projects: ProjectManager) -> None:

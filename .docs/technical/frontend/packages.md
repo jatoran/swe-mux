@@ -51,6 +51,7 @@ Three rules the existing boundaries follow, each of which has a failure mode:
 ## Domain maps
 
 - [`packages/composition.md`](packages/composition.md) - workspace composition, UI state boundaries, connection liveness, server clock, redeploy progress, shared interaction primitives.
+  `daemonLiveness.ts` and `DaemonStallBanner.tsx` sit beside connection liveness: a pure two-miss/one-success state machine over `/api/health` probes, the injectable scheduler that pauses while the tab is hidden, and the non-blocking banner row it drives (`../../design/features/ui.md`, "A daemon that has stopped answering").
 - [`packages/terminal.md`](packages/terminal.md) - the terminal viewport, multi-device input arbitration, mobile keyboard and IME, preview links, ended and recovered panes.
 - [`packages/layout-and-chrome.md`](packages/layout-and-chrome.md) - layout algebra, the mobile projection, the utility drawer and its segments, overflow rails, the pinned rail and its overflow popover, theme, scale and rail density, icon sets.
 - [`packages/sidebar-and-projects.md`](packages/sidebar-and-projects.md) - session rows, the sidebar filter, the Projects registry, Project actions, session display names.

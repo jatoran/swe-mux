@@ -16,6 +16,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 from aiohttp import ClientError, ClientSession, ClientTimeout
 
+from . import process_priority
 from .background_tasks import background
 from .errors import NotFound
 from .event_bus import EventBus
@@ -194,12 +195,21 @@ class ProcessInspector:
         *,
         telemetry: Any | None = None,
         orphan_grace_seconds: float = 15.0,
+        session_priority: str = "normal",
     ) -> None:
         self.sessions = sessions
         self.events = events
         self.cadence = cadence
         self.telemetry = telemetry
         self.orphan_grace_seconds = orphan_grace_seconds
+        # Scheduling class every session-owned process is held at or below
+        # (process_priority.py). Enforced on the walk rather than only at spawn,
+        # because a child can raise itself and a session adopted from a previous
+        # daemon was spawned before the policy existed. "normal" turns it off.
+        self.session_priority = session_priority
+        self._priority_lowered_total = 0
+        self._priority_denied: set[int] = set()
+        self._priority_last_pass = 0
         self.owned: dict[tuple[int, float], OwnedProcess] = {}
         self._task: asyncio.Task[None] | None = None
         self._listeners: set[tuple[str, int, str]] = set()
@@ -698,6 +708,46 @@ class ProcessInspector:
             self._handles[pid] = (handle, captured_parent)
         return handle
 
+    def _enforce_priority(self, process: Any, pid: int, executable: str) -> None:
+        """Hold one session-owned process at or below the configured class.
+
+        Runs on the sampling thread beside the reads that already touch the
+        process, so the cost is one `GetPriorityClass` per process per pass and a
+        set only when something is above target. A refusal is remembered per pid
+        so it is logged once rather than every five seconds.
+        """
+        if self.session_priority == "normal":
+            return
+        outcome = process_priority.lower_process(process, self.session_priority)
+        if outcome == process_priority.LOWERED:
+            self._priority_lowered_total += 1
+            self._priority_last_pass += 1
+            log.info(
+                "session_process_priority pid=%d executable=%s target=%s outcome=%s "
+                "source=inspector",
+                pid,
+                executable,
+                self.session_priority,
+                outcome,
+            )
+        elif outcome == process_priority.DENIED and pid not in self._priority_denied:
+            self._priority_denied.add(pid)
+            log.warning(
+                "session_process_priority pid=%d executable=%s target=%s outcome=denied",
+                pid,
+                executable,
+                self.session_priority,
+            )
+
+    def priority_stats(self) -> dict[str, Any]:
+        """What the enforcement has done, for `/api/diagnostics/background`."""
+        return {
+            "target": self.session_priority,
+            "lowered_total": self._priority_lowered_total,
+            "lowered_last_pass": self._priority_last_pass,
+            "denied_pids": len(self._priority_denied),
+        }
+
     def _forget(self, pid: int) -> None:
         self._handles.pop(pid, None)
         self._static.pop(pid, None)
@@ -963,6 +1013,7 @@ class ProcessInspector:
         result: list[OwnedProcess] = []
         session_seen: set[tuple[int, float]] = set()
         daemon_seen: set[tuple[int, float]] = set()
+        self._priority_last_pass = 0
         # Enumerate the whole OS socket table once and bucket by owning PID. Calling
         # net_connections() per process would rescan the entire table for every one of
         # potentially hundreds of descendants each tick.
@@ -1439,6 +1490,7 @@ class ProcessInspector:
             # command line are fixed for the life of a process, so they come from the
             # identity cache instead of a per-tick remote-PEB read.
             executable, command, identity_hash = self._identity(process, pid)
+            self._enforce_priority(process, pid, executable)
             try:
                 with process.oneshot():
                     started_at = float(process.create_time())
