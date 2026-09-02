@@ -327,6 +327,24 @@ Measured 2026-08-29 over two real consecutive builds of this project: 2874 of 29
 **Not** a refusal, ever: every failure path is "extract the whole archive instead", which is what shipped before, so an unreadable installed tree, a manifest that disagrees with its archive, or a filesystem with no hard links costs the saving and never the install.
 And **not** a structural fallback: Phase 21 asked for a full replacement when the Python version or the dependency set moves, and the measurement refuted the reasoning (the same pair removed 101 MB of `playwright/driver` and still shared 92.3% of its bytes), so the trigger is `DELTA_REUSE_FLOOR` on the measured share and those facts are recorded as observations instead.
 
+### `bundle_swap.py`
+
+The gate that keeps short-lived helpers out of the window in which `dist/swe-mux` is being renamed, and the generator for the shims that honour it.
+The swap is two renames and the app's own processes are stopped first, so the window looked for years like it belonged to nobody; it does not, because every instrumented Claude session runs `dist/swe-mux/swe-mux.exe -m swe_mux.hook_client <event>` on every hook and those helpers are deliberately *spared* by the stop.
+A helper launched between the renames never starts; one launched just before them and still inside the PyInstaller bootloader dies against a `sys._MEIPASS` that is an absolute path to a directory now called something else - observed 2026-09-02 as a modal `Failed to execute script 'pyi_rth_multiprocessing' ... No module named '_socket'`, which is simply the first runtime hook in the startup sequence that imports an extension module.
+
+**The consequence is a lost event and not a cosmetic dialog.** `hook_client` spools its durable events when the daemon is down, which is exactly what makes a redeploy safe for a live fleet; a helper that dies in the bootloader never reaches that code, so a `Stop` or a `PermissionRequest` is lost rather than deferred and the session reads as "working" until the 900 s no-evidence alarm.
+
+`hold_bundle_swap` writes `<data_dir>/bundle-swap.hold`, settles for `SETTLE_SECONDS` so bootloaders already in flight can finish starting, and removes it in a `finally`; `packaging/redeploy_desktop.py` holds it across both renames and across the rollback's two.
+`ensure_exec_launcher` writes `<data_dir>/bin/swemux-exec[.cmd]`, which waits while that file exists and then runs its target - a **drop-in for `sys.executable`** rather than a hook-specific entrypoint, so every caller keeps the `-m swe_mux.<helper> ...` argv it already had and only the program in front changes.
+The same gate opens each agent shim `launchers._write_shim` writes.
+A wedged hold is bounded twice: the shims give up after `WAIT_SECONDS`, and `clear_stale_hold` deletes one older than `STALE_SECONDS`.
+
+**Not** for source installs. `ensure_exec_launcher` returns `None` unless `sys.frozen`, because a virtualenv interpreter is renamed by nothing and gating it would buy a `cmd.exe` per `PreToolUse` for no window; `MUX_HOOK_LAUNCHER` is then simply absent from the session environment and every caller falls back to `sys.executable`.
+**Not** the Codex `notify` program, which is the one delivery path left ungated on purpose: Codex spawns it with no shell and appends the notification JSON as a trailing argument, so on Windows the gate's `.cmd` would have to go through `cmd.exe` - the one documented way to corrupt exactly that JSON.
+It carries only `agent-turn-complete`, and every durable sibling travels the Codex lifecycle hooks, which are gated.
+**Not** a fix that can live inside the bundle: by the time any of our code runs, including a PyInstaller runtime hook, the process is already committed to the `_MEIPASS` the rename is about to invalidate, so the decision has to be made before the executable is launched at all.
+
 ### `redeploy_launch.py`
 
 How `packaging/redeploy_desktop.py` gets started, shared by `POST /api/daemon/redeploy` and the updater's handoff.
