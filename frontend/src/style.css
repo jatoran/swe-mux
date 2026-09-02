@@ -38,7 +38,7 @@ input[type=checkbox],input[type=radio] { flex:none;width:var(--check-size);heigh
 .state-dot.working.interrupting { background:var(--amber);box-shadow:0 0 7px #e7c76888;animation:none }
 .session-copy { display:flex;flex-direction:column;gap:4px;min-width:0 }.session-copy strong { font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis }.session-copy small { font:9px 'JetBrains Mono';color:#697381;white-space:nowrap;overflow:hidden;text-overflow:ellipsis }.row-actions { display:none;position:absolute;right:7px;bottom:6px }.session-row:hover .row-actions { display:block }.row-actions button { border:0;background:#262d35;border-radius:4px;color:#aeb5bf;cursor:pointer }.row-actions button:hover { color:var(--red) }
 .row-actions button.confirming,.pane-tools button.confirming,.context-menu button.confirming { width:auto;min-width:43px;padding:0 6px;background:#4b2025;color:#ff9da4 }
-.empty-list { text-align:center;padding:52px 20px;color:#737d8a;display:flex;flex-direction:column;gap:8px;font-size:11px;line-height:1.5 }.empty-list strong { color:#b5bcc6;font-size:12px }.empty-glyph { font:18px 'JetBrains Mono';color:#586357 }.sidebar-footer { flex:none;height:calc(46px*var(--ui-scale));padding:7px;border-top:1px solid var(--line);display:flex;gap:6px }.sidebar-footer button { border:1px solid #2a3038;background:#14181d;border-radius:6px;cursor:pointer;font-size:11px }.sidebar-footer button:first-child { flex:1;text-align:left;padding-left:9px }.sidebar-footer button:first-child span { color:var(--green);margin-right:6px }.sidebar-footer button:not(:first-child) { width:32px }.sidebar-footer button:hover,.sidebar-footer button.on { border-color:#526143;background:#1a2118 }
+.empty-list { text-align:center;padding:52px 20px;color:#737d8a;display:flex;flex-direction:column;gap:8px;font-size:11px;line-height:1.5 }.empty-list strong { color:#b5bcc6;font-size:12px }.empty-glyph { font:18px 'JetBrains Mono';color:#586357 }.sidebar-footer { flex:none;height:calc(46px*var(--ui-scale));padding:7px;border-top:1px solid var(--line);display:flex;gap:6px }.sidebar-footer button { border:1px solid #2a3038;background:#14181d;border-radius:6px;cursor:pointer;font-size:11px }.sidebar-footer button:hover,.sidebar-footer button.on { border-color:#526143;background:#1a2118 }
 .main-stage { min-width:0;min-height:0;display:grid;grid-template-rows:calc(37px*var(--ui-scale)) minmax(0,1fr);background:#0a0c0f }.pane-bar { display:grid;grid-template-columns:fit-content(35%) minmax(50px,1fr) auto;align-items:center;padding:0 8px 0 12px;border-bottom:1px solid #242931;background:#111419;font-size:11px }.pane-bar>div { display:flex;align-items:center;gap:7px }.pane-bar .state-dot { margin:0 }.pane-path { justify-content:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#636d7a;font:9px 'JetBrains Mono' }.pane-tools { color:#68727f;font:9px 'JetBrains Mono' }.pane-tools button { background:transparent;border:0;border-radius:4px;width:25px;height:calc(23px*var(--ui-scale));cursor:pointer;color:#7d8692 }.pane-tools button:hover { background:#252b32;color:var(--text) }.terminal-host { min-height:0;padding:7px 7px 3px 10px;overflow:hidden }.terminal-host .xterm { height:100% }
 /* Baseline for the fixed pending-session header. Live sessions use `.session-topbar` near
    the end of this file, where persistent configured rows replace this one-row template. */
@@ -136,7 +136,7 @@ input[type=checkbox],input[type=radio] { flex:none;width:var(--check-size);heigh
 .messages article pre{margin:0}
 .messages .history-transcript-content{display:grid;gap:8px;overflow-wrap:anywhere}
 .messages .history-transcript-content.clamped{max-height:280px;overflow:hidden;mask-image:linear-gradient(180deg,#000 70%,transparent)}
-@media(max-width:760px) { .topbar { grid-template-columns:auto 1fr }.top-context,.top-actions { display:none }.workspace { grid-template-columns:72px minmax(0,1fr) }.sidebar-heading { justify-content:center }.sidebar-heading span { display:none }.project-row { grid-template-columns:12px minmax(0,1fr) }.project-row small,.project-row button { display:none }.session-row { height:calc(45px*var(--ui-scale));grid-template-columns:8px 1fr;padding:6px }.session-copy small,.sidebar-footer button:first-child { display:none }.session-copy strong { font-size:9px }.sidebar-footer button:not(:first-child) { width:100% }.pane-path { display:none }.pane-bar { grid-template-columns:fit-content(45%) minmax(0,1fr) auto }.pane-grid.count-2,.pane-grid.count-3,.pane-grid.count-4 { grid-template-columns:1fr;grid-template-rows:1fr }.terminal-pane:not(.focused) { display:none }.mobile-paste { display:block;position:absolute;right:12px;bottom:12px;z-index:8;height:calc(32px*var(--ui-scale));border:1px solid #46513f;border-radius:6px;background:#192117;color:#b9d7ac;font-size:10px }.quick-launcher { left:78px;width:calc(100% - 90px) }.history-body { grid-template-columns:120px minmax(0,1fr) } }
+@media(max-width:760px) { .topbar { grid-template-columns:auto 1fr }.top-context,.top-actions { display:none }.workspace { grid-template-columns:72px minmax(0,1fr) }.sidebar-heading { justify-content:center }.sidebar-heading span { display:none }.project-row { grid-template-columns:12px minmax(0,1fr) }.project-row small,.project-row button { display:none }.session-row { height:calc(45px*var(--ui-scale));grid-template-columns:8px 1fr;padding:6px }.session-copy small { display:none }.session-copy strong { font-size:9px }.pane-path { display:none }.pane-bar { grid-template-columns:fit-content(45%) minmax(0,1fr) auto }.pane-grid.count-2,.pane-grid.count-3,.pane-grid.count-4 { grid-template-columns:1fr;grid-template-rows:1fr }.terminal-pane:not(.focused) { display:none }.mobile-paste { display:block;position:absolute;right:12px;bottom:12px;z-index:8;height:calc(32px*var(--ui-scale));border:1px solid #46513f;border-radius:6px;background:#192117;color:#b9d7ac;font-size:10px }.quick-launcher { left:78px;width:calc(100% - 90px) }.history-body { grid-template-columns:120px minmax(0,1fr) } }
 
 /* Terminal chrome: visual only. Interaction and layout behavior stay unchanged. */
 :root {
@@ -643,9 +643,15 @@ kbd { padding:1px 3px;margin-left:4px;border:1px solid #334a39;border-bottom-col
 .pane-bar .git-chip:before { content:'[' }.pane-bar .git-chip:after { content:']' }
 .project-empty { display:none }
 .sidebar-footer { height:calc(36px*var(--ui-scale));padding:0 8px;border-top:1px solid #26372b;background:#080c09;align-items:center }
-.sidebar-footer .menu-trigger { width:auto!important;height:calc(28px*var(--ui-scale));flex:0 0 auto;padding:0 5px!important;border:0;background:transparent;color:#6f9277;text-align:left;font:9px 'Cascadia Mono',Consolas,monospace }
+/* The footer is four class-addressed controls: configurator and bell on the left,
+   menu and Settings on the right. Positional `:first-child` rules from when the menu
+   led the row are gone - they stretched whichever button came first (the configurator,
+   to 95px with its icon adrift in the middle) and hid it outright on the phone. */
+.sidebar-footer .menu-trigger { width:auto!important;height:calc(28px*var(--ui-scale));flex:0 0 auto;display:flex;align-items:center;padding:0 5px!important;border:0;background:transparent;color:#6f9277;text-align:left;font:9px 'Cascadia Mono',Consolas,monospace }
 .sidebar-footer .menu-trigger:hover { border:0;background:transparent;color:#a8eab3 }
-.sidebar-footer .menu-trigger span { margin:0 6px 0 0;color:#8ee69a }
+/* Flex drops the JSX whitespace between the glyph and the word, so this margin is the
+   whole gap on every width. */
+.sidebar-footer .menu-trigger span { margin:0 3px 0 0;color:#8ee69a }
 .main-menu { left:7px;bottom:39px;top:auto;width:calc(235px*var(--ui-scale)) }
 .menu-hint { float:right;margin-left:auto;color:#4f6f57;font-size:8px }
 @media(max-width:760px) {
@@ -1700,6 +1706,9 @@ body {
 .sidebar-footer .notify-trigger svg{display:block}
 .sidebar-footer .settings-trigger:hover{border:0;background:transparent;color:#a8eab3}
 .sidebar-footer .settings-trigger svg{display:block;width:15px;height:15px}
+/* A little more air between the two right-hand controls than the row's 8px gap gives,
+   so menu and Settings read as neighbours rather than one word with a gear on it. */
+.sidebar-footer .settings-trigger{margin-left:6px}
 @media(max-width:760px){.sidebar-footer :is(.configurator-trigger,.notify-trigger,.settings-trigger){min-height:44px}}
 /* The configurator launcher leads the bell in the footer's left control group.
    Both are chromeless app-wide controls; the menu and Settings form the right
