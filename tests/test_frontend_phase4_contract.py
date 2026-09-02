@@ -1012,13 +1012,20 @@ def test_daemon_spawned_panes_request_focus_rather_than_setting_it() -> None:
     # `confirmSecondOpinion` was a fourth flow until the cross-vendor review lost its
     # frontend (`test_frontend_control_plane_contract.py`); a handler that does not exist
     # cannot owe a focus request.
+    # The rule is about *which* id, not about which setter appears. A flow may focus a
+    # placeholder leaf directly, because the client put that leaf in the layout in the
+    # same tick and there is no gap for reconciliation to read as stale - that is how the
+    # History resume shows a pane from the press rather than from the answer. What must
+    # never be set directly is an id the daemon just handed back.
     for flow in ("resumeHistoryEntry", "runBranch", "resumeSession"):
         body = re.search(rf"const {flow} = ?async[^\n]*\n(.*?)\n  \}}\n", app, re.DOTALL)
         assert body, f"{flow} is no longer a recognisable handler"
         assert "requestFocusView(" in body.group(1), f"{flow} must request focus, not set it"
-        assert "setFocusedViewId(" not in body.group(1), (
-            f"{flow} sets focus directly, which the layout refresh will undo"
-        )
+        for target in re.findall(r"setFocusedViewId\(([^\n]*)", body.group(1)):
+            assert "pendingId" in target, (
+                f"{flow} sets focus on {target.strip()}, which the layout refresh will undo; "
+                "only a placeholder this flow placed itself may be focused directly"
+            )
 
     # The request is held in a ref and consulted by the reconciliation effect, or it
     # would be dropped by the very render it exists to survive.

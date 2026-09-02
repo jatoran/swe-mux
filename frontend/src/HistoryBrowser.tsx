@@ -254,10 +254,15 @@ export function HistoryBrowser({projects,initialProjectId,initialEntryId,onClose
     }catch(cause){
       const error=cause as ApiError
       setTranscript(null)
+      // The 409 says something definite now. The daemon searches for a conversation whose
+      // recorded path went stale before it answers with this - the CLI re-homes these
+      // files when a session enters or leaves a worktree - so reaching here means the file
+      // is not on disk under this conversation's id at all, rather than that mux lost
+      // track of where it went.
       setError(error?.status===404
         ? 'That session has no History row any more, so its conversation cannot be opened. Search below for it by name.'
         : error?.detail?.code==='transcript_unavailable'
-          ? 'That session kept no readable transcript, so there is no conversation to open.'
+          ? 'That conversation’s transcript is no longer on disk. The agent CLI prunes its own history on its own timer, and mux does not own that file.'
           : cause instanceof Error?cause.message:String(cause))
     }
   }

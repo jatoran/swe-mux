@@ -53,6 +53,7 @@ from .transcript_fork import (
     mint_conversation_id,
     write_fork,
 )
+from .transcript_repair import resolve_row_transcript
 from .transcript_view import (
     CONVERSATION_MAX_LIMIT,
     conversation_cut_points,
@@ -284,6 +285,19 @@ async def resume_run(
     genuinely differ on: the route attaches beside the pane the operator was looking
     at, and a schedule has no such pane.
     """
+    # Before the structural guards, not after: `transcript_unavailable` is the refusal a
+    # moved file produces, and it is the one refusal here that can be wrong. The CLI
+    # re-homes a conversation when a session enters or leaves a worktree, so the row can
+    # name a path that stopped existing while the conversation itself is intact one slug
+    # away. Resolving first means the guards judge where the conversation *is*
+    # (`transcript_repair`), and the repair reaches the scheduler's resume too, because
+    # both callers come through here.
+    await resolve_row_transcript(
+        row,
+        adapters=sessions.adapters,
+        history=getattr(sessions, "history", None),
+        events=getattr(sessions, "events", None),
+    )
     refusal = resumable_refusal(
         row, projects=projects, adapters=sessions.adapters, target_project_id=target_project_id
     )
@@ -399,6 +413,14 @@ async def fork_run(
     adapter = sessions.adapters.get(str(row.get("backend") or ""))
     if adapter is None:
         raise ResumeRefused("adapter_missing", f"no adapter for {row.get('backend')!r}", status=422)
+    # A fork reads the source file directly, so it fails on a moved conversation exactly
+    # the way an open does, and for the same wrong reason (`transcript_repair`).
+    await resolve_row_transcript(
+        row,
+        adapters=sessions.adapters,
+        history=getattr(sessions, "history", None),
+        events=getattr(sessions, "events", None),
+    )
     source_path = Path(str(row["transcript_path"])) if row.get("transcript_path") else None
     if source_path is None or not source_path.is_file():
         raise ResumeRefused(

@@ -208,9 +208,21 @@ makes an ended session's pane survive.
   Session selection means "being viewed"; input eligibility remains a separate terminal-state predicate.
 - The recovered pane's `Read transcript` action opens History directly on that session's run id.
   It never resolves through whichever live session was previously active.
+- **A retained pane can still find a conversation the CLI moved.**
+  Both of its transcript surfaces - the History deep link and the drawer's own reader - key on a
+  path recorded while the pane was alive, and the observer that followed the file when the CLI
+  re-homed it died with the process.
+  Both therefore fall back to a search by conversation id (`features/history.md`), which is what
+  makes "that session's transcript doesn't exist" stop being the answer for a conversation sitting
+  one project slug away.
 - `Resume` is an in-place replacement from a retained pane.
   The replacement is proved first, the old layout identity and recovery data are removed second, and the browser focuses the replacement.
   A failed resume leaves the ended pane intact.
+  The banner's button reports the attempt (`Resuming…`, disabled) for as long as the proof takes,
+  and refuses a second press while one is in flight.
+  Deliberately no placeholder pane, unlike History's Resume: this pane is on screen and focused
+  already, and swapping its retained scrollback for a splash would take the readable post-mortem
+  away for exactly the seconds the operator is waiting.
 - The pane is read-only on both sides.
   The daemon refuses input for a terminal-state session (`server.session_accepts_input`) rather than
   letting `PtyHost.write` raise into a 500 or a dropped socket; the client stops sending it, and does

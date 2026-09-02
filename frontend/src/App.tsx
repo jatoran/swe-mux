@@ -682,6 +682,10 @@ export function App() {
   const [pendingOptions, setPendingOptions] = useState<TrieOption[]>([])
   const host = hostProfile()
   const [confirmKillId, setConfirmKillId] = useState<string | null>(null)
+  // The retained pane whose in-place resume is in flight. A resume is proved rather than
+  // reported (`session_resume.RESUME_SETTLE_SECONDS`), so this window is seconds long and
+  // has to be visible in the pane that started it.
+  const [resumingId, setResumingId] = useState<string | null>(null)
   const [confirmHideId, setConfirmHideId] = useState<string | null>(null)
   const [collapsedProjects, setCollapsedProjects] = useState<Set<string>>(() => loadCollapsedProjects(localStorage.getItem(COLLAPSED_PROJECTS_KEY)))
   const [mainMenuOpen, setMainMenuOpen] = useState(false)
@@ -5185,23 +5189,90 @@ export function App() {
     } catch(cause){setError(cause instanceof Error?cause.message:String(cause))}
   }
 
+  /** Reopen a conversation from History, in a pane that exists from the click.
+   *
+   *  A resume is not a fast call and must not be: the daemon spawns the pane and then
+   *  *proves* it stayed up, because a CLI handed a conversation somebody else holds
+   *  prints one line and exits about a second later
+   *  (`session_resume.RESUME_SETTLE_SECONDS`). Two and a half seconds, up to about six
+   *  with the retry. Awaiting that before touching anything is what made the browser sit
+   *  open over a workspace with nothing happening in it, and then jump.
+   *
+   *  So this borrows the shape `spawnTerminal` and `startWorktreeSession` already use: a
+   *  placeholder leaf goes in immediately and takes focus, and the real session replaces
+   *  it when the daemon answers. The overlay closes on the click rather than on the
+   *  answer, because the pane the operator is being sent to is on screen from that
+   *  moment. The daemon attaches its own leaf server-side, so unlike a spawn nothing here
+   *  writes the layout back - the swap below is local, and the refresh that carries the
+   *  daemon's layout finds the same pane already in place (`openTab` is idempotent). */
   const resumeHistoryEntry = async (entry: HistoryEntry) => {
+    const targetProject = entry.project_id || projectId
+    const target = projectsRef.current.find(item => item.id === targetProject)
+    if (!target) { setError('That conversation belongs to a Project that is no longer available.'); return }
+    const pendingId = `pending-${browserUuid()}`
+    const currentLayout = layoutValues.current[targetProject] || layoutMap[targetProject] || parseLayout(target.layout)
+    // The focused *view*, not the active terminal: with a note or a file in front of you
+    // the resumed pane used to land beside a tab you were not looking at.
+    const anchor = targetProject === projectId
+      ? openAnchorId(currentLayout, focusedViewId || activeId)
+      : spawnAnchorId(currentLayout)
+    const placement: PendingSpawnPlacement = { split: false, targetId: anchor, position: 'after' }
+    pendingSpawns.current[pendingId] = { projectId: targetProject, placement }
+    const optimisticLayout = placePendingTerminal(currentLayout, pendingId, placement)
+    layoutValues.current[targetProject] = optimisticLayout
+    setSessions(items => [...items, pendingTerminal(pendingId, target, entry.backend, {
+      cwd: entry.cwd,
+      name: historyName(entry),
+      label: 'Reopening conversation…',
+      detail: `Waiting for ${harnessDisplayName(entry.backend)} to take this conversation back.`,
+    })])
+    setLayoutMap(current => ({ ...current, [targetProject]: optimisticLayout }))
+    setProjectId(targetProject)
+    setActiveId(pendingId)
+    setFocusedViewId(pendingId)
+    setHistoryOpen(false)
+    // The workspace is behind a full-screen overlay and, on a phone, possibly a drawer
+    // too. Focusing a pane nobody can see is not focusing it. Mobile-only for the side
+    // panel: on desktop that is a docked column beside the workspace, not over it.
+    setSidebarOpen(false); if(mobileWorkspace)setClipboardOpen(false)
+    // Drop the placeholder and hand focus back to whatever the pane was showing before.
+    const abandon = () => {
+      delete pendingSpawns.current[pendingId]
+      setSessions(items => items.filter(item => item.id !== pendingId))
+      const failedLayout = removeLeaf(layoutValues.current[targetProject] || optimisticLayout, 'terminal', pendingId)
+      layoutValues.current[targetProject] = failedLayout
+      setLayoutMap(current => ({ ...current, [targetProject]: failedLayout }))
+      const fallback = visibleTerminalIds(failedLayout)[0] || terminalIds(failedLayout)[0] || null
+      setActiveId(current => current === pendingId ? fallback : current)
+      setFocusedViewId(current => current === pendingId ? fallback : current)
+    }
     try {
-      const targetProject = entry.project_id || projectId
-      const resumed = await api<Session>('POST', `/api/history/${entry.id}/resume`, { project_id: targetProject, target_session_id: targetProject === projectId ? activeId : undefined })
+      const resumed = await api<Session>('POST', `/api/history/${entry.id}/resume`, { project_id: targetProject, target_session_id: anchor || undefined })
       markProjectRecent(resumed.project_id)
+      // Stamped from the answer, not from the press, exactly as the in-place resume does:
+      // most of the wait was the daemon proving the pane, and folding a deliberate 2.5 s
+      // settle into a startup measurement would make every resumed pane look pathological.
+      startupOrigins.current[resumed.id] = performance.now()
+      pendingSpawns.current[pendingId].resolvedId = resumed.id
+      setSessions(items => [...items.filter(item => item.id !== pendingId && item.id !== resumed.id), resumed])
+      setProjectId(resumed.project_id)
+      setActiveId(resumed.id)
       // `requestFocusView`, not `setFocusedViewId`: the daemon attached the pane and set
       // it active in its own layout, but this client sees that layout only after the
       // refresh below. Plain focus would be reconciled away in the gap and the resumed
       // conversation would open behind whatever tab the History browser was opened from.
-      setSessions(items => [...items, resumed]); setProjectId(resumed.project_id); setActiveId(resumed.id); requestFocusView(resumed.id)
-      setHistoryOpen(false)
-      // The workspace is behind a full-screen overlay and, on a phone, possibly a drawer
-      // too. Focusing a pane nobody can see is not focusing it. Mobile-only for the side
-      // panel: on desktop that is a docked column beside the workspace, not over it.
-      setSidebarOpen(false); if(mobileWorkspace)setClipboardOpen(false)
+      requestFocusView(resumed.id)
+      const latestLayout = layoutValues.current[targetProject] || optimisticLayout
+      const nextLayout = replaceTerminal(latestLayout, pendingId, resumed.id)
+      layoutValues.current[targetProject] = nextLayout
+      setLayoutMap(current => ({ ...current, [targetProject]: nextLayout }))
+      // Protect against an event refresh that began with the pre-resume layout.
+      window.setTimeout(() => { delete pendingSpawns.current[pendingId] }, 500)
       await refresh()
-    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
+    } catch (cause) {
+      abandon()
+      setError(cause instanceof Error ? cause.message : String(cause))
+    }
   }
 
   // "Resume later…": author a schedule that reopens this conversation, seeded from the
@@ -5277,7 +5348,15 @@ export function App() {
   // shared History resume authority, proves the replacement, swaps the layout identity,
   // then removes the dead row. History's own Resume stays additive because it may name
   // a conversation with no retained pane to replace.
+  //
+  // No placeholder pane here, unlike the History resume: this pane is already on screen
+  // and already focused, and swapping its retained scrollback for a splash would take a
+  // readable post-mortem away for the several seconds the daemon spends proving the
+  // replacement. The banner says it is working instead, which is the same promise
+  // without the cost - and it is what stops a second press from racing the first.
   const resumeSession = async (session: Session) => {
+    if (resumingId) return
+    setResumingId(session.id)
     try {
       const { session: resumed } = await api<{session: Session; replaced: string}>(
         'POST', `/api/sessions/${session.id}/resume`, {},
@@ -5293,6 +5372,7 @@ export function App() {
       setSidebarOpen(false)
       await refresh()
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
+    finally { setResumingId(current => current === session.id ? null : current) }
   }
 
   // Delegated rather than reimplemented: the sidebar row and the tab strip resolve
@@ -7569,6 +7649,7 @@ export function App() {
         menu={<button aria-label={`More actions for ${sessionName(session)}`} title="Session actions" onClick={event=>{const rect=event.currentTarget.getBoundingClientRect();openPaneMenu({clientX:rect.right,clientY:rect.bottom,stopPropagation:()=>event.stopPropagation()})}}>⋯</button>}/>
       {isEndedSession(session)&&<EndedPaneBanner
         session={session}
+        resuming={resumingId===session.id}
         onResume={isAgent(session)?()=>void resumeSession(session):undefined}
         onRestart={isInactiveSession(session)&&session.backend==='shell'?()=>void resumeSession(session):canRestartCold(session)?()=>void relaunchSession(session):undefined}
         onOpenTranscript={hasHarnessTranscript(session.backend)?()=>showHistoryEntry(session.agent_run_id||session.id):undefined}
@@ -8970,7 +9051,10 @@ export function App() {
     {redeployDown&&<div class="modal-layer daemon-reload-layer" role="alertdialog" aria-modal="true" aria-label="App restarting"><div class="modal daemon-reload-modal"><h2>Restarting the app…</h2><p>The rebuilt app is being swapped in and restarted around your live sessions, which are held by the PTY supervisor and are not affected. A cold start can take a few minutes; this page reloads by itself when it comes back.</p></div></div>}
     {redeployConfirmOpen&&<div class="modal-layer daemon-reload-layer" role="alertdialog" aria-modal="true" aria-label="Confirm redeploy" onClick={()=>setRedeployConfirmOpen(false)}><div class="modal daemon-reload-modal" onClick={event=>event.stopPropagation()}><h2>Rebuild + redeploy app?</h2><p>Rebuilds the frozen desktop app from source and restarts it around your live sessions. The build takes a few minutes and runs alongside the app you are using now, so you can keep working until it restarts. A failed build leaves the current app running.</p>{interruptionSummary(redeployInterruptions)&&<p class="redeploy-interrupts"><strong>{interruptionSummary(redeployInterruptions)}</strong><span>{redeployInterruptions?.note}</span></p>}{holderWarning(redeployHolders)&&<p class="redeploy-interrupts redeploy-blocked"><strong>{holderWarning(redeployHolders)}</strong><span>Stop those processes (or close the tab or session they belong to) first - the app bundle cannot be replaced while they hold it open.</span></p>}<div class="modal-actions"><button type="button" onClick={()=>setRedeployConfirmOpen(false)}>Cancel</button><button type="button" class="primary" onClick={()=>void startRedeploy()}>Rebuild + redeploy</button></div></div></div>}
 
-    {historyOpen&&<HistoryBrowser projects={orderedProjects} initialProjectId={historyScope} initialEntryId={historyEntry} onClose={()=>setHistoryOpen(false)} onResume={resumeHistoryEntry} onScheduleResume={scheduleResumeFromHistory} onHandoff={openHandoff}/>}
+    {/* The deep-linked entry is cleared with the overlay, not left behind: it is the
+        reason this open happened, and a stale one would make the *next* open - a plain
+        "Session history" from the menu - land on a conversation nobody asked for. */}
+    {historyOpen&&<HistoryBrowser projects={orderedProjects} initialProjectId={historyScope} initialEntryId={historyEntry} onClose={()=>{setHistoryOpen(false);setHistoryEntry('')}} onResume={resumeHistoryEntry} onScheduleResume={scheduleResumeFromHistory} onHandoff={openHandoff}/>}
 
     {/* Opened with no target, the registry lands on the Project in focus rather than on
         whichever one sorts first: "manage Projects" almost always means the one being

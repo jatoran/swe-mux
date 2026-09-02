@@ -32,6 +32,8 @@ from ..http_support import json_response
 from ..project_context import ProjectContext
 from ..scan_consumers import catch_me_up, live_blocker, search_scan_records
 from ..scan_timeline import ScanTimelineService
+from ..session import TERMINAL_SESSION_STATES
+from ..transcript_repair import locate_conversation
 from ..transcript_view import (
     CONVERSATION_DEFAULT_LIMIT,
     CONVERSATION_MAX_LIMIT,
@@ -778,7 +780,22 @@ async def session_transcript(request: web.Request) -> web.Response:
     # no path, and testing one answered "no transcript" for every opencode session.
     native_id = record.native_session_id
     if not conversation_is_readable(path, record.backend, native_id):
-        return json_response({**empty, "reason": "no_transcript"})
+        # A pane with no process behind it cannot re-find its own conversation: the
+        # observer that follows the file when the CLI moves it died with the process,
+        # and an ended, inactive or recovered pane keeps whatever address was true when
+        # it stopped (`transcript_repair`). Searching by conversation id is what makes
+        # its reader work at all. Deliberately not for a live pane: an agent that has
+        # not written its first record yet is the ordinary early state of every agent
+        # session, its observer is already resolving the binding, and a search on every
+        # poll of that window would buy nothing.
+        located = (
+            await locate_conversation(getattr(session, "adapter", None), native_id, record.backend)
+            if record.state in TERMINAL_SESSION_STATES
+            else None
+        )
+        if located is None:
+            return json_response({**empty, "reason": "no_transcript"})
+        path = located
     try:
         view = await asyncio.wait_for(
             asyncio.to_thread(

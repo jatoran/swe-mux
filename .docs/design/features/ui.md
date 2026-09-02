@@ -3275,6 +3275,18 @@ The app-wide answer to "what is this", and the recovery path for the tour.
   (sidebar row, toolbar Run, palette, keybinding, custom launcher) inherits it, and it runs
   with the optimistic state so the pending terminal is visible immediately. Project Actions
   take the same step in `attachActionSessions`.
+- **Any launch the daemon takes seconds to answer places its pane first.** A spawn, a worktree
+  launch, and a History resume all put a labelled placeholder leaf in the layout, focus it, and
+  swap in the real session when the response arrives, removing it and handing focus back on a
+  failure (`pendingSession.ts`). This is not decoration: focus that names a session no layout
+  holds yet is undone by reconciliation on the desktop and falls through to whatever tab was
+  already showing on a phone, so a flow that awaits before placing does not merely feel slow, it
+  lands somewhere else and jumps later. The resume is the one that writes no layout back, because
+  its daemon route attaches the pane itself (`features/history.md`).
+- **Error toasts render above every modal layer.** An error is almost always the answer to
+  something pressed *inside* a modal — a resume the daemon refused, a save that failed — and
+  below the overlay it is a press that appears to have done nothing. The stack takes no pointer
+  events; only each toast does, to dismiss itself.
 - The drawer is deliberately *not* a modal layer. Inserting targets the surface that was focused
   before it opened — terminal or Continuity note, whichever was last focused (`insertTarget.ts`;
   a detached editor loses the routing to the focused terminal) — so the workspace has to stay

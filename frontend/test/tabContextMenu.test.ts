@@ -78,7 +78,9 @@ test('session menus act on the session and expose only the source-appropriate ap
 test('ended-session actions name and target the retained conversation directly',()=>{
   assert.doesNotMatch(app,/Resume as new/)
   assert.doesNotMatch(endedPane,/Resume as new/)
-  assert.match(endedPane,/<button onClick=\{onResume\}>Resume<\/button>/)
+  // The daemon proves a resumed pane came up before it answers, so this press is seconds
+  // long: the button has to say so and refuse a second one, or it reads as a dead button.
+  assert.match(endedPane,/disabled=\{resuming\} onClick=\{onResume\}>\{resuming \? 'Resuming…' : 'Resume'\}/)
   assert.match(
     app,
     /onOpenTranscript=\{hasHarnessTranscript\(session\.backend\)\?\(\)=>showHistoryEntry\(session\.agent_run_id\|\|session\.id\):undefined\}/,

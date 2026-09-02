@@ -91,6 +91,7 @@ from .supervisor_client import (
     liveness_of,
 )
 from .terminal_arbitration import OwnerState, effective_geometry, release_owner
+from .transcript_repair import resolve_row_transcript
 from .transcript_view import conversation_is_readable
 
 log = logging.getLogger(__name__)
@@ -7573,6 +7574,47 @@ class SessionManager:
                 except Exception:
                     log.debug("session meta sink failed", exc_info=True)
 
+    async def _settle_run_transcript(self, session: Session) -> Path | None:
+        """Where this session's conversation finally lives, written down for good.
+
+        A recorded transcript path is a fact about the moment it was written, not a
+        durable address: the CLI re-homes a conversation into the project slug for a new
+        working directory when a session enters or leaves a native worktree, and mux
+        follows that move while the pane is alive. When the pane dies the follower dies
+        with it, so whatever address was true at that instant is the one the row keeps
+        forever - and if the file moves once more on the way out, the row is wrong from
+        then on, with nothing left to notice (`transcript_repair`).
+
+        Session end is the one moment the address stops moving, which makes it the right
+        place to spend a search. It also decides what the final index reads, which is why
+        the caller runs this before indexing rather than after.
+
+        Returns the readable path, or ``None``. ``None`` is *not* "unreadable" on its
+        own: a store-backed harness keeps no file and is readable with no path at all,
+        so the caller re-asks `conversation_is_readable` rather than testing for a path.
+        """
+        record = session.record
+        if not has_observable_transcript(record.backend):
+            return session.transcript_path
+        run_id = record.agent_run_id or record.id
+        try:
+            row = await self.history.history_entry(run_id)
+            if row is None:
+                return session.transcript_path
+            located = await resolve_row_transcript(
+                row, adapters=self.adapters, history=self.history, events=self.events
+            )
+        except Exception:
+            # This runs on the exit path, where the rest of the teardown matters more
+            # than the address does. Falling back to what the pane last knew leaves the
+            # row exactly as it was, which the read-path repair can still fix later.
+            log.warning("could not settle the transcript for run %s", run_id, exc_info=True)
+            return session.transcript_path
+        if located.repaired:
+            # The pane is dead but still readable, and its reader tab reads this field.
+            session.transcript_path = located.path
+        return located.path
+
     async def _mark_ended(self, session: Session, reason: str) -> None:
         if session.record.state in {"exited", "crashed"}:
             return
@@ -7636,15 +7678,16 @@ class SessionManager:
             reason=final_reason,
             exit_code=exit_code,
         )
+        settled = await self._settle_run_transcript(session)
         # Readable rather than "is a file": a store-backed harness has no path, and
         # the file test skipped indexing every opencode conversation mux ran.
         if conversation_is_readable(
-            session.transcript_path, session.record.backend, session.record.native_session_id
+            settled, session.record.backend, session.record.native_session_id
         ):
             try:
                 await self.history.index_transcript(
                     session.record.agent_run_id or session.record.id,
-                    session.transcript_path,
+                    settled,
                     session.record.backend,
                     native_id=session.record.native_session_id,
                 )
