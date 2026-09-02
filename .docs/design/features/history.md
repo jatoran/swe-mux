@@ -27,8 +27,43 @@
 - History is an ordinary workspace pane tab. Desktop panes can split/move it; mobile projects
   it into the unified tab rail without changing desktop layout.
 - History search is cursor-paginated across provider, Project, state, origin, and four text
-  scopes: all content, user prompts, agent replies, or metadata. Date ranges explicitly target
-  either session start or the final timestamped conversational message.
+  scopes: all content, user prompts, agent replies, or metadata.
+- **One control picks the timestamp the listing is organised by, and it both orders the page
+  and scopes the date range.**
+  It used to scope only the range, so toggling it re-ran the query and got the same
+  `spawned_at DESC` page back - a sort control that did nothing unless a date range happened
+  to be set as well.
+  The default is **last activity**, because every caller means "the most recent
+  conversations": a long conversation spawned yesterday outranks a short one spawned an hour
+  ago and abandoned, and the MCP listing scans the same bounded window to rank ended runs
+  beside live ones.
+  The other basis is session start.
+  The two halves use deliberately different expressions (`_HISTORY_ORDER_COLUMNS`,
+  `_HISTORY_FILTER_COLUMNS`), because they answer different questions.
+  A **filter** may answer "no" for a row with no such timestamp, and must: a range on
+  last-message that admitted runs with no messages would not be a range on last-message, and
+  an external row that never reported a native start has no known start to compare.
+  An **order** may not, because every row on the page needs a position, so it falls back
+  through what is known - last message, then exit, then native start, then spawn.
+  Ordering on the nullable column instead would collect every unindexed conversation at one
+  end of a listing it belongs in the middle of.
+  The page's cursor is that order's own answer rather than a second expression, so "Load
+  more" continues the list instead of resuming a differently-ordered one.
+- **The Project headings follow the feed, not the alphabet** (`historyFeed.ts`).
+  A heading appears where its most recent conversation does and its rows stay in the order
+  they arrived in, so changing the sort moves the top of the list.
+  Sorting headings by name was the other half of "changing the sort does nothing": the rows
+  under each heading did reorder, and the alphabetically-first Project stayed pinned above
+  them all. The Project dropdown is how a reader asks for one Project; the headings are
+  orientation. The unassigned bucket still sorts last, being a catch-all rather than a
+  Project.
+- **A search with no word characters matches no messages rather than quietly matching
+  something else.**
+  `MATCH ''` is an FTS syntax error, so a query like `???` has nothing to look for in the
+  message index; a message-scoped search says so by returning nothing. It used to fall
+  through to a *metadata* search, which answered a question about names and paths while the
+  scope said "user prompts". Metadata is a literal `LIKE` and still answers for the scopes
+  that include it.
 - Searchable user/assistant text lives in rebuildable local SQLite FTS5 token-prefix and trigram indexes.
   Native transcripts remain authoritative and are never mutated.
   The ordinary History UI keeps its session-oriented query path and previous/next match navigation.
