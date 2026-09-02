@@ -12,6 +12,7 @@ import { emitTutorialAction } from './tutorial'
 // be the only two with a drawing at all.
 import { harnessMark } from './harnessIcons'
 import { harnessDisplayName } from './harnessRegistry'
+import { RefreshIcon } from './railIcons'
 
 export type ProviderName=string
 type QuotaWindow={used_percent:number;window_minutes:number;resets_at?:number|null}
@@ -147,10 +148,14 @@ function LoginProgress({login,busy,onDismiss}:{login:LoginState|null;busy:boolea
   </div>
 }
 
-export function AccountSwitcher({variant='full',placement,onManage,promptDismissed,promptSuppressed,onDismissPrompt}:{
+export function AccountSwitcher({variant='full',placement,onManage,onViewUsage,promptDismissed,promptSuppressed,onDismissPrompt}:{
   // `variant` picks the trigger; `placement` is independent because the collapsed
   // desktop rail wants a condensed trigger with an upward-opening popover.
   variant?:'full'|'compact'|'rail';placement?:'up'|'down';onManage:()=>void
+  // The footer's middle destination. Quota percentages answer "how much is left"; the
+  // agents segment of Usage answers "where did it go", which is the question this popover
+  // reliably provokes and had no way to follow.
+  onViewUsage:()=>void
   // The empty-state invitation, which belongs to the expanded sidebar alone and
   // is therefore the host's to persist: it is machine config, not this
   // component's state. `promptSuppressed` is the first-run surfaces asking for
@@ -272,7 +277,10 @@ export function AccountSwitcher({variant='full',placement,onManage,promptDismiss
       </section>})}
       {error&&<p class="account-error" role="alert">{error}</p>}
       {resetUnread&&<section class="account-reset-alert"><h4>quota reset evidence</h4><p>{resetItems.length===1?'One confirmed unexpected reset:':`${status?.reset_alert?.count??resetItems.length} confirmed unexpected resets · one provider rollover reaches every account on that plan:`}</p><ul>{resetItems.map(item=><li key={item.id}><strong>{item.provider} {item.window}</strong> · {status?.accounts.find(account=>account.id===item.account_id)?.label||item.account_id} · {item.before_value}% → {item.after_value}%</li>)}</ul><div>{resetProviders.length===1&&resetProviders[0]==='codex'&&<button disabled={!!busy} onClick={()=>void reviewResets('manual_usage')}>{busy==='reset-manual_usage'?'marking…':resetItems.length>1?'all manual Codex usage':'manual Codex usage'}</button>}<button class="danger" disabled={!!busy} onClick={()=>void reviewResets('discarded')}>{busy==='reset-discarded'?'discarding…':resetItems.length>1?'discard all as errors':'discard as error'}</button><button disabled={!!busy} onClick={()=>void reviewResets('seen')}>{busy==='reset-seen'?'marking…':'mark seen'}</button><button disabled={!!busy} onClick={toggleResetSound}>{resetSound?'mute reset sound':'enable reset sound'}</button></div></section>}
-      <footer><button disabled={!!busy} onClick={()=>void refresh()}>{busy==='refresh'?'refreshing…':'refresh quotas'}</button><button onClick={()=>{setOpen(false);onManage()}}>manage…</button></footer>
+      {/* Refresh is an icon because it is the only footer control that acts on this popover
+          rather than leaving it, and the two that leave read better as words. Its label is on
+          `aria-label`/`title`, so the spinning state stays a state rather than a relabelling. */}
+      <footer><button class={`account-refresh${busy==='refresh'?' spinning':''}`} disabled={!!busy} aria-busy={busy==='refresh'?'true':undefined} aria-label="Refresh quotas" title={busy==='refresh'?'refreshing quotas…':'refresh quotas'} onClick={()=>void refresh()}><RefreshIcon/></button><button onClick={()=>{setOpen(false);onViewUsage()}}>view usage</button><button onClick={()=>{setOpen(false);onManage()}}>manage…</button></footer>
     </div>
   const quotas=providerQuotaWindows(status?.accounts||[],status?.selected||{})
   const weeklyTitle=(provider:ProviderName)=>{

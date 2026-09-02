@@ -214,3 +214,28 @@ test('a failed sign-in keeps its reason until it is dismissed', async ({ page })
       .filter(call => call.url.includes('/login/dismiss')))
   expect(dismissals).toHaveLength(1)
 })
+
+test('the footer refreshes in place and otherwise leaves, and only leaving closes the popover', async ({ page }) => {
+  await page.goto('/account-switcher-harness.html?accounts=multi')
+  await page.click('.account-summary > button >> nth=0')
+
+  // Refresh acts on what is on screen, so it keeps the popover open. It is an icon, which
+  // is only legible if its name is somewhere a screen reader and a tooltip can reach.
+  const refresh = page.locator('.account-popover > footer .account-refresh')
+  await expect(refresh).toHaveAttribute('aria-label', 'Refresh quotas')
+  await expect(refresh.locator('svg')).toBeVisible()
+  await refresh.click()
+  await expect(page.locator('.account-popover')).toHaveCount(1)
+  await expect(refresh).not.toHaveClass(/spinning/)
+
+  // The other two are destinations, and both hand off through the host rather than
+  // navigating themselves - so the popover has to be gone once either is taken.
+  await page.click('.account-popover > footer button:has-text("view usage")')
+  await expect(page.locator('.account-popover')).toHaveCount(0)
+
+  const calls = await page.evaluate(() =>
+    (window as unknown as { __calls: { method: string; url: string }[] }).__calls)
+  expect(calls.filter(call => call.url === '/api/provider-accounts/refresh')).toHaveLength(1)
+  expect(calls.filter(call => call.url === 'view-usage')).toHaveLength(1)
+  expect(calls.filter(call => call.url === 'manage')).toHaveLength(0)
+})
