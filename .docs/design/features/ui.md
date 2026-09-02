@@ -359,7 +359,7 @@ Its rules, and what each one is defending:
 ## Menus and overlays
 
 - Scope follows the menu that opened a surface, never a hidden mode.
-  The app menu opens History, Notes, the fleet queue, prompt library, clipboard history, Resources, Usage & spend, and notifications across every Project; right-clicking a Project row opens Session history and the prompt library prefiltered to it.
+  The app menu opens History, Notes, the fleet queue, prompt library, clipboard history, Resources, Usage & spend, and notifications across every Project; right-clicking a Project row opens Session history prefiltered to it, and only that: the prompt library left the Project menu because the Actions drawer's Prompt templates section is already scoped to the selected Project, which made the row a third route to it after that and the palette.
   Right-clicking empty sidebar space is the no-Project case and matches the app menu.
 - **A Project menu row has to earn its place against the drawer.**
   Notes, Processes, the fleet queue, and Browse files each left it, because each is a drawer tab or a dialog that already opens on the *selected* Project - so right-clicking a Project row to reach them was a second route to a place one click away, and the two that stayed are the two with no such home.

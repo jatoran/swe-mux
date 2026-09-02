@@ -8756,18 +8756,21 @@ export function App() {
       {/* Starting work belongs to the Run button (sidebar header, every Project row,
           and the mobile rail), which offers the same backends plus Project tasks —
           duplicating it here left two doors to one action. */}
-      {/* Two surfaces the app menu opens globally, prefiltered to this Project — and only
-          two. The category headers went with the rest: a heading that labels three rows in
+      {/* One surface the app menu opens globally, prefiltered to this Project — and only
+          one. The category headers went with the rest: a heading that labels three rows in
           a menu of nine is a fifth of the height spent saying what each icon now says.
           Notes, Processes, Fleet queue, and Browse files all left because each is a drawer
           tab or a dialog that opens on the *selected* Project anyway, so right-clicking a
-          Project row to reach them was a second route to a place one click away — and the
-          two that stayed are the ones with no such home. Collapse-in-sidebar left because
-          clicking the Project header is the fold, and the two Move rows left because
-          long-press drag is the reorder path and the buttons could only ever step one
-          place at a time. */}
+          Project row to reach them was a second route to a place one click away.
+          Prompt library left for the same reason and last: the Actions drawer's Prompt
+          templates section is already scoped to the selected Project, so the row was a
+          third route to it after that and the palette — and it is the one row here that
+          opens a whole modal rather than acting on the Project, which is what the session
+          menu dropped it for. Only the row went: the Project-scoped command and its
+          leader binding both stay. Collapse-in-sidebar left because clicking the Project
+          header is the fold, and the two Move rows left because long-press drag is the
+          reorder path and the buttons could only ever step one place at a time. */}
       <button class="menu-row" onClick={() => runNamedCommand('history.openProject')}><span class="menu-row-icon" aria-hidden="true"><HistoryIcon/></span><span class="menu-row-label">Session history</span></button>
-      <button class="menu-row" onClick={() => runNamedCommand('prompts.openProject')}><span class="menu-row-icon" aria-hidden="true"><PromptsIcon/></span><span class="menu-row-label">Prompt library</span></button>
       <button class="menu-row" onClick={() => runNamedCommand('project.reveal')}><span class="menu-row-icon" aria-hidden="true"><RevealIcon/></span><span class="menu-row-label">Reveal in Explorer</span></button>
       {/* A Group is a list, so it is a list: a pop-out that scrolls, exactly like the
           Maintenance and Run menus. A `Dropdown` would also do the job now, but a picker
