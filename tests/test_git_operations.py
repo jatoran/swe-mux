@@ -10,34 +10,36 @@ import pytest
 
 from swe_mux import app_keys as keys
 from swe_mux import git_operations, worktree_mutation
+from swe_mux.bounded_subprocess import ProcessOutcome
 from swe_mux.git_operations import GitMutationResult
 from swe_mux.routes import git as git_routes
 
 
+def _outcome(**overrides: Any) -> ProcessOutcome:
+    fields: dict[str, Any] = {
+        "exit_code": 0,
+        "stdout": b"",
+        "stderr": b"",
+        "stdout_truncated": False,
+        "stderr_truncated": False,
+        "duration_ms": 1.0,
+        "timed_out": False,
+    }
+    fields.update(overrides)
+    return ProcessOutcome(**fields)
+
+
 @pytest.mark.asyncio
-async def test_git_mutation_timeout_reaps_the_process(monkeypatch: pytest.MonkeyPatch) -> None:
-    class SlowProcess:
-        returncode: int | None = None
+async def test_git_mutation_timeout_is_reported_as_124(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The reap itself is the bounded runner's contract (`test_bounded_subprocess`);
+    what this module owes is the mapping, on the interactive lane."""
+    seen: list[dict[str, Any]] = []
 
-        async def communicate(self) -> tuple[bytes, bytes]:
-            await asyncio.Event().wait()
-            return b"", b""
+    async def fake_run_bounded(argv: Any, **kwargs: Any) -> ProcessOutcome:
+        seen.append({"argv": tuple(argv), **kwargs})
+        return _outcome(exit_code=None, timed_out=True)
 
-    process = SlowProcess()
-    reaped = 0
-
-    async def spawn(*args: object, **kwargs: object) -> SlowProcess:
-        del args, kwargs
-        return process
-
-    async def reap(target: object) -> None:
-        nonlocal reaped
-        assert target is process
-        reaped += 1
-        process.returncode = -9
-
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn)
-    monkeypatch.setattr(git_operations, "reap_process_tree", reap)
+    monkeypatch.setattr(git_operations, "run_bounded", fake_run_bounded)
     result = await git_operations.run_git_mutation(
         "C:/repo",
         "worktree",
@@ -49,7 +51,34 @@ async def test_git_mutation_timeout_reaps_the_process(monkeypatch: pytest.Monkey
     )
     assert result.timed_out is True
     assert result.code == 124
-    assert reaped == 1
+    assert seen[0]["argv"] == ("git", "-C", "C:/repo", "worktree", "remove", "C:/repo/wt")
+    assert seen[0]["lane"] == "interactive", "a person is waiting on this one"
+    assert seen[0]["operation_id"] == "op-timeout"
+
+
+@pytest.mark.asyncio
+async def test_git_mutation_reads_stderr_on_failure_and_stdout_on_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    answers = iter(
+        [
+            _outcome(exit_code=0, stdout=b"Preparing worktree\n", stderr=b"noise"),
+            _outcome(exit_code=128, stdout=b"", stderr=b"fatal: already exists\n"),
+        ]
+    )
+
+    async def fake_run_bounded(argv: Any, **kwargs: Any) -> ProcessOutcome:
+        return next(answers)
+
+    monkeypatch.setattr(git_operations, "run_bounded", fake_run_bounded)
+    ok = await git_operations.run_git_mutation(
+        "C:/repo", "worktree", "add", "x", operation="worktree_add", operation_id="a"
+    )
+    failed = await git_operations.run_git_mutation(
+        "C:/repo", "worktree", "add", "x", operation="worktree_add", operation_id="b"
+    )
+    assert (ok.code, ok.output) == (0, "Preparing worktree")
+    assert (failed.code, failed.output) == (128, "fatal: already exists")
 
 
 @pytest.mark.asyncio
@@ -59,22 +88,12 @@ async def test_client_cancellation_does_not_cancel_git_mutation(
     release = asyncio.Event()
     finished = asyncio.Event()
 
-    class SlowProcess:
-        returncode: int | None = None
+    async def fake_run_bounded(argv: Any, **kwargs: Any) -> ProcessOutcome:
+        await release.wait()
+        finished.set()
+        return _outcome(stdout=b"done")
 
-        async def communicate(self) -> tuple[bytes, bytes]:
-            await release.wait()
-            self.returncode = 0
-            finished.set()
-            return b"done", b""
-
-    process = SlowProcess()
-
-    async def spawn(*args: object, **kwargs: object) -> SlowProcess:
-        del args, kwargs
-        return process
-
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn)
+    monkeypatch.setattr(git_operations, "run_bounded", fake_run_bounded)
     caller = asyncio.create_task(
         git_operations.run_git_mutation(
             "C:/repo",

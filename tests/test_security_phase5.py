@@ -4,6 +4,7 @@ import asyncio
 import gzip
 import time
 from collections import deque
+from collections.abc import Sequence
 from types import SimpleNamespace
 
 import pytest
@@ -11,6 +12,7 @@ from aiohttp import WSMsgType, web
 from aiohttp.test_utils import TestClient, TestServer
 
 from swe_mux import app_keys as keys
+from swe_mux.bounded_subprocess import ProcessOutcome
 from swe_mux.preview_transport import (
     PREVIEW_HTTP_CONCURRENCY,
     PREVIEW_WS_CONCURRENCY,
@@ -84,6 +86,18 @@ def test_tailscale_status_url_discovery_is_bounded_to_values() -> None:
     assert _funnel_urls(public) == ["https://mux.tail.ts.net:8443"]
 
 
+def _outcome(stdout: bytes = b"", *, exit_code: int = 0) -> ProcessOutcome:
+    return ProcessOutcome(
+        exit_code=exit_code,
+        stdout=stdout,
+        stderr=b"",
+        stdout_truncated=False,
+        stderr_truncated=False,
+        duration_ms=1.0,
+        timed_out=False,
+    )
+
+
 def test_mobile_voice_selects_only_the_dedicated_https_port() -> None:
     # The dedicated port is 443, so a port-less HTTPS authority matches while a
     # non-default HTTPS port and any plain-HTTP authority do not.
@@ -98,17 +112,11 @@ def test_mobile_voice_selects_only_the_dedicated_https_port() -> None:
 async def test_mobile_voice_setup_uses_fixed_private_serve_route(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    calls: list[tuple[object, ...]] = []
+    calls: list[tuple[str, ...]] = []
 
-    class Process:
-        returncode = 0
-
-        async def communicate(self) -> tuple[bytes, bytes]:
-            return b"Available within your tailnet: https://mux.tail.ts.net/", b""
-
-    async def create_process(*args: object, **_: object) -> Process:
-        calls.append(args)
-        return Process()
+    async def fake_run_bounded(argv: Sequence[str], **_: object) -> ProcessOutcome:
+        calls.append(tuple(argv))
+        return _outcome(b"Available within your tailnet: https://mux.tail.ts.net/")
 
     async def status(_: str, command: str) -> tuple[object | None, str]:
         if command == "funnel":
@@ -122,7 +130,7 @@ async def test_mobile_voice_setup_uses_fixed_private_serve_route(
         }, ""
 
     monkeypatch.setattr("swe_mux.tailscale.tailscale_executable", lambda: "tailscale")
-    monkeypatch.setattr("swe_mux.tailscale.asyncio.create_subprocess_exec", create_process)
+    monkeypatch.setattr("swe_mux.tailscale.run_bounded", fake_run_bounded)
     monkeypatch.setattr("swe_mux.tailscale._status", status)
     result = await enable_mobile_voice_serve(8765)
 
@@ -143,19 +151,13 @@ async def test_mobile_voice_setup_takes_over_a_stale_loopback_route(
 ) -> None:
     # The desktop app (8765) must reclaim the single HTTPS route even when a
     # terminal daemon left it pointing at a different loopback port (18765).
-    calls: list[tuple[object, ...]] = []
+    calls: list[tuple[str, ...]] = []
     state = {"target": 18765}
 
-    class Process:
-        returncode = 0
-
-        async def communicate(self) -> tuple[bytes, bytes]:
-            return b"Available within your tailnet: https://mux.tail.ts.net/", b""
-
-    async def create_process(*args: object, **_: object) -> Process:
-        calls.append(args)
+    async def fake_run_bounded(argv: Sequence[str], **_: object) -> ProcessOutcome:
+        calls.append(tuple(argv))
         state["target"] = 8765  # the serve command retargets the route
-        return Process()
+        return _outcome(b"Available within your tailnet: https://mux.tail.ts.net/")
 
     async def status(_: str, command: str) -> tuple[object | None, str]:
         if command == "funnel":
@@ -169,7 +171,7 @@ async def test_mobile_voice_setup_takes_over_a_stale_loopback_route(
         }, ""
 
     monkeypatch.setattr("swe_mux.tailscale.tailscale_executable", lambda: "tailscale")
-    monkeypatch.setattr("swe_mux.tailscale.asyncio.create_subprocess_exec", create_process)
+    monkeypatch.setattr("swe_mux.tailscale.run_bounded", fake_run_bounded)
     monkeypatch.setattr("swe_mux.tailscale._status", status)
     result = await enable_mobile_voice_serve(8765)
 
@@ -188,7 +190,7 @@ async def test_mobile_voice_setup_takes_over_a_stale_loopback_route(
 async def test_mobile_voice_setup_refuses_a_foreign_non_loopback_route(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    async def create_process(*_: object, **__: object) -> object:
+    async def fake_run_bounded(_argv: Sequence[str], **_: object) -> ProcessOutcome:
         raise AssertionError("must not replace a non-loopback Serve route")
 
     async def status(_: str, command: str) -> tuple[object | None, str]:
@@ -201,7 +203,7 @@ async def test_mobile_voice_setup_refuses_a_foreign_non_loopback_route(
         }, ""
 
     monkeypatch.setattr("swe_mux.tailscale.tailscale_executable", lambda: "tailscale")
-    monkeypatch.setattr("swe_mux.tailscale.asyncio.create_subprocess_exec", create_process)
+    monkeypatch.setattr("swe_mux.tailscale.run_bounded", fake_run_bounded)
     monkeypatch.setattr("swe_mux.tailscale._status", status)
     result = await enable_mobile_voice_serve(8765)
 

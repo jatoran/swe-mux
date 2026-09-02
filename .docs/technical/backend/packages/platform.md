@@ -76,7 +76,11 @@ It returns bytes and never decodes: `git cat-file blob` needs the bytes git stor
 
 The run executes on `_SpawnLoop`, an event loop on its own thread, because asyncio spawns synchronously on the loop that asks and a saturated disk held that call on the daemon's loop for 23.5 s (`runtime-rules.md`).
 The caller's loop awaits a future; observers are marshalled back to it in order, the caller's context travels with the task, and cancelling the caller cancels the run there.
-`stop_spawn_loop` is called at daemon teardown and at interpreter exit.
+There are two lanes, each its own loop and thread: `LANE_BACKGROUND` for pollers and `LANE_INTERACTIVE` for a command a person is waiting on (`git_operations.py` mutations, `git_review.py` queries), because a spawn the kernel holds for a sweep blocks every spawn queued behind it on the same loop.
+`stop_spawn_loop` stops both at daemon teardown and at interpreter exit.
+
+Callers since 2026-09-02 also include `git_operations.py`, `git_review.py`, `git_projects.py`, `tailscale.py`, `windows_firewall.py`, and `meta_hooks.py`; the only raw `create_subprocess_exec` left in the daemon is the Codex app-server in `provider_accounts.py` and `mcp_tools.py`, which holds stdin open.
+A query whose output would exceed its cap comes back refused (`git_review.GitResult.too_large`) rather than parsed clipped.
 
 Callers: `usage.py`, `provider_accounts.py`, `git_monitor.py`, and `worktree_exec.py` (whose pattern this is).
 Migrating the first three closed three real gaps - `usage.py` buffered ccusage to completion through `communicate()` and only then compared it against its own 10 MiB limit, the other two had no cap at all, and none of the three reaped on cancellation despite all of them running inside supervised background loops.

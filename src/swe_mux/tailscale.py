@@ -14,8 +14,13 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
+from .bounded_subprocess import run_bounded
 from .shim_paths import which_real
-from .subprocess_flags import background_creation_flags
+
+#: `tailscale status --json` is a few KiB per peer; 1 MiB is far above any real tailnet.
+_OUTPUT_LIMIT = 1024 * 1024
+#: stderr is only ever shown as a one-line diagnostic.
+_STDERR_LIMIT = 64 * 1024
 
 # Tailscale Serve terminates HTTPS on 443 and proxies to the swe-mux loopback
 # port. 443 (not the swe-mux port) is required: swe-mux binds its port directly
@@ -263,42 +268,41 @@ async def _plain_status(executable: str) -> Any | None:
     rather than gate on the return code.
     """
     try:
-        process = await asyncio.create_subprocess_exec(
-            executable,
-            "status",
-            "--json",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            creationflags=background_creation_flags(),
+        outcome = await run_bounded(
+            [executable, "status", "--json"],
+            label="tailscale-status",
+            timeout_seconds=4,
+            output_limit=_OUTPUT_LIMIT,
+            stderr_limit=_STDERR_LIMIT,
         )
-        stdout, _ = await asyncio.wait_for(process.communicate(), timeout=4)
-    except (OSError, TimeoutError):
+    except OSError:
+        return None
+    if outcome.timed_out:
         return None
     try:
-        return json.loads(stdout.decode("utf-8", "replace").strip() or "{}")
+        return json.loads(outcome.stdout.decode("utf-8", "replace").strip() or "{}")
     except json.JSONDecodeError:
         return None
 
 
 async def _status(executable: str, command: str) -> tuple[Any | None, str]:
     try:
-        process = await asyncio.create_subprocess_exec(
-            executable,
-            command,
-            "status",
-            "--json",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            creationflags=background_creation_flags(),
+        outcome = await run_bounded(
+            [executable, command, "status", "--json"],
+            label=f"tailscale-{command}-status",
+            timeout_seconds=4,
+            output_limit=_OUTPUT_LIMIT,
+            stderr_limit=_STDERR_LIMIT,
         )
-        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=4)
-    except (OSError, TimeoutError) as exc:
+    except OSError as exc:
         return None, str(exc)
-    error = stderr.decode("utf-8", "replace").strip()
-    if process.returncode != 0:
+    if outcome.timed_out:
+        return None, f"Tailscale {command} status command timed out."
+    error = outcome.stderr.decode("utf-8", "replace").strip()
+    if outcome.exit_code != 0:
         return None, error or f"Tailscale {command} is not configured."
     try:
-        return json.loads(stdout.decode("utf-8", "replace").strip() or "{}"), ""
+        return json.loads(outcome.stdout.decode("utf-8", "replace").strip() or "{}"), ""
     except json.JSONDecodeError:
         return None, f"Tailscale returned unreadable {command} status."
 
@@ -341,42 +345,32 @@ async def tailscale_ipv4(executable: str | None = None) -> str | None:
     executable = executable or tailscale_executable()
     if not executable:
         return None
-    try:
-        process = await asyncio.create_subprocess_exec(
-            executable,
-            "ip",
-            "-4",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            creationflags=background_creation_flags(),
-        )
-        stdout, _ = await asyncio.wait_for(process.communicate(), timeout=4)
-    except (OSError, TimeoutError):
-        return None
-    lines = stdout.decode("utf-8", "replace").strip().splitlines()
-    candidate = lines[0] if lines else ""
-    return candidate if process.returncode == 0 and is_tailscale_ip(candidate) else None
+    return await _tailscale_ip(executable, "-4", label="tailscale-ip4")
 
 
 async def tailscale_ipv6(executable: str | None = None) -> str | None:
     executable = executable or tailscale_executable()
     if not executable:
         return None
+    return await _tailscale_ip(executable, "-6", label="tailscale-ip6")
+
+
+async def _tailscale_ip(executable: str, family_flag: str, *, label: str) -> str | None:
     try:
-        process = await asyncio.create_subprocess_exec(
-            executable,
-            "ip",
-            "-6",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            creationflags=background_creation_flags(),
+        outcome = await run_bounded(
+            [executable, "ip", family_flag],
+            label=label,
+            timeout_seconds=4,
+            output_limit=_OUTPUT_LIMIT,
+            stderr_limit=_STDERR_LIMIT,
         )
-        stdout, _ = await asyncio.wait_for(process.communicate(), timeout=4)
-    except (OSError, TimeoutError):
+    except OSError:
         return None
-    lines = stdout.decode("utf-8", "replace").strip().splitlines()
+    if outcome.timed_out:
+        return None
+    lines = outcome.stdout.decode("utf-8", "replace").strip().splitlines()
     candidate = lines[0] if lines else ""
-    return candidate if process.returncode == 0 and is_tailscale_ip(candidate) else None
+    return candidate if outcome.exit_code == 0 and is_tailscale_ip(candidate) else None
 
 
 async def tailscale_dns_name(executable: str | None = None) -> str | None:
@@ -384,17 +378,17 @@ async def tailscale_dns_name(executable: str | None = None) -> str | None:
     if not executable:
         return None
     try:
-        process = await asyncio.create_subprocess_exec(
-            executable,
-            "status",
-            "--json",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            creationflags=background_creation_flags(),
+        outcome = await run_bounded(
+            [executable, "status", "--json"],
+            label="tailscale-dns-name",
+            timeout_seconds=6,
+            output_limit=_OUTPUT_LIMIT,
+            stderr_limit=_STDERR_LIMIT,
         )
-        stdout, _ = await asyncio.wait_for(process.communicate(), timeout=6)
-        payload = json.loads(stdout.decode("utf-8", "replace").strip() or "{}")
-    except (OSError, TimeoutError, json.JSONDecodeError):
+        if outcome.timed_out:
+            return None
+        payload = json.loads(outcome.stdout.decode("utf-8", "replace").strip() or "{}")
+    except (OSError, json.JSONDecodeError):
         return None
     value = payload.get("Self", {}).get("DNSName") if isinstance(payload, dict) else None
     return str(value).strip().rstrip(".") if value else None
@@ -421,28 +415,32 @@ async def direct_mobile_voice_tls(
     cert_path = cert_dir / f"mobile-{nonce}.crt"
     key_path = cert_dir / f"mobile-{nonce}.key"
     try:
-        process = await asyncio.create_subprocess_exec(
-            executable,
-            "cert",
-            "--min-validity=24h",
-            "--cert-file",
-            str(cert_path),
-            "--key-file",
-            str(key_path),
-            dns_name,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            creationflags=background_creation_flags(),
+        outcome = await run_bounded(
+            [
+                executable,
+                "cert",
+                "--min-validity=24h",
+                "--cert-file",
+                str(cert_path),
+                "--key-file",
+                str(key_path),
+                dns_name,
+            ],
+            label="tailscale-cert",
+            timeout_seconds=30,
+            output_limit=_OUTPUT_LIMIT,
+            stderr_limit=_STDERR_LIMIT,
         )
-        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=30)
-        if process.returncode != 0:
-            diagnostic = (stderr or stdout).decode("utf-8", "replace").strip()
+        if outcome.timed_out:
+            return None, None, "Could not prepare direct mobile HTTPS: tailscale cert timed out."
+        if outcome.exit_code != 0:
+            diagnostic = (outcome.stderr or outcome.stdout).decode("utf-8", "replace").strip()
             return None, None, diagnostic or "Tailscale certificate generation failed."
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         context.minimum_version = ssl.TLSVersion.TLSv1_2
         context.load_cert_chain(cert_path, key_path)
         return tailnet_ips, f"https://{dns_name}:{https_port}/", context
-    except (OSError, TimeoutError, ssl.SSLError) as exc:
+    except (OSError, ssl.SSLError) as exc:
         return None, None, f"Could not prepare direct mobile HTTPS: {exc}"
     finally:
         cert_path.unlink(missing_ok=True)
@@ -653,32 +651,37 @@ async def enable_mobile_voice_serve(
             "diagnostic": f"Could not inspect Tailscale Serve: {existing_error}",
         }
     try:
-        process = await asyncio.create_subprocess_exec(
-            executable,
-            "serve",
-            "--bg",
-            f"--https={https_port}",
-            f"http://127.0.0.1:{port}",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            creationflags=background_creation_flags(),
+        outcome = await run_bounded(
+            [executable, "serve", "--bg", f"--https={https_port}", f"http://127.0.0.1:{port}"],
+            label="tailscale-serve",
+            timeout_seconds=30,
+            output_limit=_OUTPUT_LIMIT,
+            stderr_limit=_STDERR_LIMIT,
         )
-        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=30)
-    except (OSError, TimeoutError) as exc:
+    except OSError as exc:
         return {
             "status": "error",
             "url": None,
             "authorization_url": None,
             "diagnostic": f"Could not configure Tailscale Serve: {exc}",
         }
+    if outcome.timed_out:
+        return {
+            "status": "error",
+            "url": None,
+            "authorization_url": None,
+            "diagnostic": "Could not configure Tailscale Serve: the serve command timed out.",
+        }
     output = "\n".join(
-        part.decode("utf-8", "replace").strip() for part in (stdout, stderr) if part
+        part.decode("utf-8", "replace").strip()
+        for part in (outcome.stdout, outcome.stderr)
+        if part
     ).strip()
     output_urls = _text_urls(output)
     authorization_url = next(
         (url for url in output_urls if "login.tailscale.com" in url.casefold()), None
     )
-    if process.returncode != 0:
+    if outcome.exit_code != 0:
         return {
             "status": "authorization_required" if authorization_url else "error",
             "url": None,

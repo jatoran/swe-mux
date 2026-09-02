@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal, NotRequired, TypedDict
 
-from .subprocess_flags import background_creation_flags, reap_process_tree
+from .bounded_subprocess import LANE_INTERACTIVE, run_bounded
 
 log = logging.getLogger(__name__)
 
@@ -30,6 +30,12 @@ GIT_CHANGE_FILE_LIMIT = 200
 GIT_UNTRACKED_MEASURE_MAX_BYTES = 16 * 1024 * 1024
 GIT_DIFF_MAX_BYTES = 1024 * 1024
 GIT_DIFF_MAX_LINES = 10_000
+#: What a non-patch query may return before it is refused as too large rather than
+#: parsed truncated: a `log`, a `worktree list`, a `status` of a huge tree. Far above
+#: anything this module renders, and the bound that keeps a runaway command from
+#: holding the daemon's memory.
+GIT_QUERY_OUTPUT_LIMIT = 16 * 1024 * 1024
+GIT_STDERR_LIMIT = 64 * 1024
 GIT_COMPARE_REF_MAX_CHARS = 200
 GIT_COMPARE_CANDIDATE_LIMIT = 200
 # A commit message is prose written to be read, so the whole of it is served rather than a
@@ -141,40 +147,48 @@ def _log_result(
     )
 
 
+def _git_argv(cwd: str | Path, args: Sequence[str]) -> tuple[str, ...]:
+    # Read-only by contract (this module performs no Git mutations), and this is what
+    # makes that true of the *repository* rather than only of the caller's intent:
+    # `status` and `diff` refresh the index and write it back whenever a tracked
+    # file's mtime has moved, taking `.git/index.lock` to do it. See
+    # `git_monitor._git` for the measurement and the stranded-lock failure that
+    # causes. Output is unaffected.
+    return ("git", "--no-optional-locks", "-C", str(cwd), *args)
+
+
 async def _run_git_bytes(
     cwd: str | Path,
     *args: str,
     timeout_seconds: float = GIT_TIMEOUT_SECONDS,
 ) -> GitResult:
+    """One read-only query, on the interactive spawn lane, with its output bounded.
+
+    Output past `GIT_QUERY_OUTPUT_LIMIT` is refused as `too_large` rather than handed
+    on truncated: every caller parses what comes back, and a clipped `worktree list`
+    or `log` would parse into something confidently wrong.
+    """
     try:
-        process = await asyncio.create_subprocess_exec(
-            "git",
-            # Read-only by contract (this module performs no Git mutations), and this
-            # is what makes that true of the *repository* rather than only of the
-            # caller's intent: `status` and `diff` refresh the index and write it back
-            # whenever a tracked file's mtime has moved, taking `.git/index.lock` to do
-            # it. See `git_monitor._git` for the measurement and the stranded-lock
-            # failure that causes. Output is unaffected.
-            "--no-optional-locks",
-            "-C",
-            str(cwd),
-            *args,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            creationflags=background_creation_flags(),
+        outcome = await run_bounded(
+            _git_argv(cwd, args),
+            label="git-review",
+            timeout_seconds=timeout_seconds,
+            output_limit=GIT_QUERY_OUTPUT_LIMIT,
+            stderr_limit=GIT_STDERR_LIMIT,
+            lane=LANE_INTERACTIVE,
         )
     except OSError as exc:
         return GitResult(1, b"", str(exc).encode("utf-8", "replace"))
-    try:
-        try:
-            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout_seconds)
-        except TimeoutError:
-            await reap_process_tree(process)
-            return GitResult(124, b"", b"git command timed out", timed_out=True)
-        return GitResult(process.returncode or 0, stdout, stderr)
-    finally:
-        if process.returncode is None:
-            await reap_process_tree(process)
+    if outcome.timed_out:
+        return GitResult(124, b"", b"git command timed out", timed_out=True)
+    if outcome.stdout_truncated:
+        return GitResult(
+            outcome.exit_code or 0,
+            b"",
+            b"git output exceeded the daemon's limit",
+            too_large=True,
+        )
+    return GitResult(outcome.exit_code or 0, outcome.stdout, outcome.stderr)
 
 
 async def _run_patch(
@@ -182,81 +196,37 @@ async def _run_patch(
     *args: str,
     timeout_seconds: float = GIT_TIMEOUT_SECONDS,
 ) -> GitResult:
-    """Read patch stdout incrementally and stop the child before an oversized allocation."""
+    """A patch query whose body is refused, not clipped, past the diff limits.
+
+    The runner keeps at most one byte over `GIT_DIFF_MAX_BYTES` in memory while the
+    child runs to completion (the cap is on what is held, not on what git writes),
+    and a body over either limit comes back empty with `too_large` set, which is the
+    same answer the reader that used to stop the child mid-stream gave.
+    """
     try:
-        process = await asyncio.create_subprocess_exec(
-            "git",
-            # Read-only by contract (this module performs no Git mutations), and this
-            # is what makes that true of the *repository* rather than only of the
-            # caller's intent: `status` and `diff` refresh the index and write it back
-            # whenever a tracked file's mtime has moved, taking `.git/index.lock` to do
-            # it. See `git_monitor._git` for the measurement and the stranded-lock
-            # failure that causes. Output is unaffected.
-            "--no-optional-locks",
-            "-C",
-            str(cwd),
-            *args,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            creationflags=background_creation_flags(),
+        outcome = await run_bounded(
+            _git_argv(cwd, args),
+            label="git-review-patch",
+            timeout_seconds=timeout_seconds,
+            output_limit=GIT_DIFF_MAX_BYTES + 1,
+            stderr_limit=GIT_STDERR_LIMIT,
+            lane=LANE_INTERACTIVE,
         )
     except OSError as exc:
         return GitResult(1, b"", str(exc).encode("utf-8", "replace"))
-
-    async def collect() -> GitResult:
-        assert process.stdout is not None
-        assert process.stderr is not None
-        stderr_reader = process.stderr
-
-        async def drain_stderr() -> bytes:
-            kept = bytearray()
-            # unsupervised-loop-ok: bounded reader owned by one Git subprocess.
-            while chunk := await stderr_reader.read(16 * 1024):
-                if len(kept) < 64 * 1024:
-                    kept.extend(chunk[: 64 * 1024 - len(kept)])
-            return bytes(kept)
-
-        stderr_task = asyncio.create_task(drain_stderr())
-        try:
-            chunks: list[bytes] = []
-            total = 0
-            lines = 0
-            too_large = False
-            # unsupervised-loop-ok: bounded reader owned by one Git subprocess.
-            while True:
-                chunk = await process.stdout.read(64 * 1024)
-                if not chunk:
-                    break
-                total += len(chunk)
-                lines += chunk.count(b"\n")
-                if total > GIT_DIFF_MAX_BYTES or lines > GIT_DIFF_MAX_LINES:
-                    too_large = True
-                    await reap_process_tree(process)
-                    break
-                chunks.append(chunk)
-            if process.returncode is None:
-                await process.wait()
-            stderr = await stderr_task
-            return GitResult(
-                process.returncode or 0,
-                b"" if too_large else b"".join(chunks),
-                stderr,
-                too_large=too_large,
-            )
-        finally:
-            if not stderr_task.done():
-                stderr_task.cancel()
-                await asyncio.gather(stderr_task, return_exceptions=True)
-
-    try:
-        try:
-            return await asyncio.wait_for(collect(), timeout=timeout_seconds)
-        except TimeoutError:
-            await reap_process_tree(process)
-            return GitResult(124, b"", b"git command timed out", timed_out=True)
-    finally:
-        if process.returncode is None:
-            await reap_process_tree(process)
+    if outcome.timed_out:
+        return GitResult(124, b"", b"git command timed out", timed_out=True)
+    too_large = (
+        outcome.stdout_truncated
+        or len(outcome.stdout) > GIT_DIFF_MAX_BYTES
+        or outcome.stdout.count(b"\n") > GIT_DIFF_MAX_LINES
+    )
+    return GitResult(
+        outcome.exit_code or 0,
+        b"" if too_large else outcome.stdout,
+        outcome.stderr,
+        too_large=too_large,
+    )
 
 
 def _require_success(result: GitResult, operation: str, *, not_found: bool = False) -> bytes:

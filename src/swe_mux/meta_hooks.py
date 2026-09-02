@@ -18,10 +18,10 @@ from urllib.parse import urlparse
 from aiohttp import ClientSession, ClientTimeout
 
 from .background_tasks import background
+from .bounded_subprocess import run_bounded
 from .event_bus import EventBus
 from .models import MuxEvent
 from .session import SessionManager
-from .subprocess_flags import background_creation_flags, reap_process_tree
 
 log = logging.getLogger(__name__)
 
@@ -365,21 +365,20 @@ class MetaHookEngine:
             if shell not in shells:
                 raise HookConfigError(f"unsupported run shell: {shell}")
             command = [*shells[shell], text]
-        process = await asyncio.create_subprocess_exec(
-            *command,
+        # The output is discarded, as it was when all three streams were DEVNULL; the
+        # small cap only keeps a chatty hook from holding memory it was never owed.
+        outcome = await run_bounded(
+            command,
+            label="meta-hook",
+            timeout_seconds=float(action.get("timeout_seconds", 10)),
+            output_limit=4096,
+            stderr_limit=4096,
+            merge_stderr=True,
             cwd=cwd,
-            stdin=asyncio.subprocess.DEVNULL,
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL,
-            creationflags=background_creation_flags(),
         )
-        try:
-            code = await asyncio.wait_for(
-                process.wait(), timeout=float(action.get("timeout_seconds", 10))
-            )
-        except TimeoutError:
-            await reap_process_tree(process)
-            raise TimeoutError("hook subprocess timed out") from None
+        if outcome.timed_out:
+            raise TimeoutError("hook subprocess timed out")
+        code = outcome.exit_code
         if code:
             raise RuntimeError(f"hook subprocess exited with status {code}")
 

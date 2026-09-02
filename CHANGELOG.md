@@ -23,7 +23,8 @@ The release procedure that maintains this file is [`RELEASING.md`](RELEASING.md)
 - **Reading a Project's config file no longer blocks the daemon.**
   Every Projects poll read each Project's `.swe-mux/config.toml` on the event loop; the stall watchdog caught that read blocking for 6.6 s on a disk saturated by concurrent builds, and it now runs in a thread.
 - **Daemon subprocesses are spawned off the event loop, and the health endpoint no longer stats the served frontend on every poll.**
-  asyncio starts a child synchronously on the loop that asks, and the stall watchdog caught that call holding the daemon for 23.5 s while a build saturated the disk; every bounded command now runs on a loop of its own on another thread, with callbacks, request context, and cancellation preserved.
+  asyncio starts a child synchronously on the loop that asks, and the stall watchdog caught that call holding the daemon for 23.5 s while a build saturated the disk; every helper the daemon runs - git queries and mutations, Tailscale, the firewall check, hook commands - now runs on a spawn loop on another thread, with callbacks, request context, and cancellation preserved, and commands a person is waiting on take a lane of their own so a poller's stuck spawn cannot hold them.
+  A git query whose output exceeds the daemon's cap is refused rather than shown clipped.
   The served frontend's identity is answered from the last reading for a few seconds instead of a stat per request.
 - **The UI says when the daemon is not answering.**
   A slim banner appears after two missed health probes, counts the seconds, and clears on the first answer, so a stalled daemon reads as stalled rather than as a crashed app.

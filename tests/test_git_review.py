@@ -4,6 +4,7 @@ import asyncio
 import logging
 import subprocess
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -553,41 +554,74 @@ async def test_patch_command_is_hardened_and_scope_parameters_are_strict(
 async def test_patch_runner_times_out_reaps_and_does_not_log_content(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    class NeverEndingReader:
-        async def read(self, size: int) -> bytes:
-            del size
-            await asyncio.Event().wait()
-            return b"secret patch body"
+    """The reap is the bounded runner's contract; this module owes the mapping and
+    the silence about patch bodies."""
+    from swe_mux.bounded_subprocess import ProcessOutcome
 
-    class FakeProcess:
-        stdout = NeverEndingReader()
-        stderr = NeverEndingReader()
-        returncode: int | None = None
+    seen: list[dict[str, Any]] = []
 
-        async def wait(self) -> int:
-            await asyncio.Event().wait()
-            return 0
+    async def fake_run_bounded(argv: Any, **kwargs: Any) -> ProcessOutcome:
+        seen.append({"argv": tuple(argv), **kwargs})
+        return ProcessOutcome(
+            exit_code=None,
+            stdout=b"secret patch body",
+            stderr=b"",
+            stdout_truncated=False,
+            stderr_truncated=False,
+            duration_ms=10.0,
+            timed_out=True,
+        )
 
-    process = FakeProcess()
-    reaped = 0
-
-    async def fake_create(*args: object, **kwargs: object) -> FakeProcess:
-        del args, kwargs
-        return process
-
-    async def fake_reap(target: object) -> None:
-        nonlocal reaped
-        assert target is process
-        reaped += 1
-        process.returncode = 124
-
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create)
-    monkeypatch.setattr(git_review, "reap_process_tree", fake_reap)
+    monkeypatch.setattr(git_review, "run_bounded", fake_run_bounded)
     with caplog.at_level(logging.INFO, logger=git_review.__name__):
         result = await git_review._run_patch("C:/repo", "diff", timeout_seconds=0.01)
     assert result.timed_out is True
-    assert reaped >= 1
+    assert result.stdout == b""
+    assert seen[0]["argv"][:4] == ("git", "--no-optional-locks", "-C", "C:/repo")
+    assert seen[0]["lane"] == "interactive"
     assert "secret patch body" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_oversized_output_is_refused_rather_than_parsed_clipped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A clipped `worktree list` parses into something confidently wrong; a clipped
+    patch renders as a patch. Both come back empty and `too_large`."""
+    from swe_mux.bounded_subprocess import ProcessOutcome
+
+    def outcome(stdout: bytes, *, truncated: bool) -> ProcessOutcome:
+        return ProcessOutcome(
+            exit_code=0,
+            stdout=stdout,
+            stderr=b"",
+            stdout_truncated=truncated,
+            stderr_truncated=False,
+            duration_ms=1.0,
+            timed_out=False,
+        )
+
+    answers = iter(
+        [
+            outcome(b"worktree C:/repo\n", truncated=True),
+            outcome(b"diff --git a b\n" * 20_000, truncated=False),
+            outcome(b"x" * (git_review.GIT_DIFF_MAX_BYTES + 1), truncated=True),
+            outcome(b"diff --git a b\n", truncated=False),
+        ]
+    )
+
+    async def fake_run_bounded(argv: Any, **kwargs: Any) -> ProcessOutcome:
+        return next(answers)
+
+    monkeypatch.setattr(git_review, "run_bounded", fake_run_bounded)
+    query = await git_review._run_git_bytes("C:/repo", "worktree", "list")
+    assert query.too_large is True and query.stdout == b""
+    too_many_lines = await git_review._run_patch("C:/repo", "diff")
+    assert too_many_lines.too_large is True and too_many_lines.stdout == b""
+    too_many_bytes = await git_review._run_patch("C:/repo", "diff")
+    assert too_many_bytes.too_large is True
+    fine = await git_review._run_patch("C:/repo", "diff")
+    assert fine.too_large is False and fine.stdout == b"diff --git a b\n"
 
 
 @pytest.mark.asyncio

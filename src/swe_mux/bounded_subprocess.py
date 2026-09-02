@@ -47,6 +47,12 @@ log = logging.getLogger(__name__)
 
 #: The thread the spawn loop runs on. Named so a stall dump reads as what it is.
 SPAWN_THREAD_NAME = "subprocess-spawn"
+#: Lanes: one loop for pollers, one for commands a person is waiting on. A spawn
+#: that the kernel holds for twenty seconds blocks every other spawn queued on the
+#: same loop, and a Land or a commit must not sit behind a git monitor sweep.
+LANE_BACKGROUND = "background"
+LANE_INTERACTIVE = "interactive"
+LANES: tuple[str, ...] = (LANE_BACKGROUND, LANE_INTERACTIVE)
 #: How long shutdown waits for the spawn loop to stop before abandoning it.
 SPAWN_LOOP_STOP_SECONDS = 5.0
 
@@ -242,10 +248,11 @@ class _SpawnLoop:
     caller cancels the run over here, which is what reaps the tree.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, thread_name: str = SPAWN_THREAD_NAME) -> None:
         self._lock = threading.Lock()
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
+        self._thread_name = thread_name
 
     def get(self) -> asyncio.AbstractEventLoop:
         with self._lock:
@@ -262,12 +269,16 @@ class _SpawnLoop:
                 finally:
                     loop.close()
 
-            thread = threading.Thread(target=run, name=SPAWN_THREAD_NAME, daemon=True)
+            thread = threading.Thread(target=run, name=self._thread_name, daemon=True)
             thread.start()
             ready.wait(SPAWN_LOOP_STOP_SECONDS)
             self._loop, self._thread = loop, thread
             log.info("subprocess spawn loop started thread=%s", thread.name)
             return loop
+
+    def owns(self, loop: asyncio.AbstractEventLoop) -> bool:
+        with self._lock:
+            return loop is self._loop
 
     def stop(self) -> None:
         """Stop the loop and join its thread; a no-op when nothing was started."""
@@ -283,13 +294,26 @@ class _SpawnLoop:
             log.warning("subprocess spawn loop did not stop within %.0fs", SPAWN_LOOP_STOP_SECONDS)
 
 
-_spawn = _SpawnLoop()
-atexit.register(_spawn.stop)
+_spawn_lanes: dict[str, _SpawnLoop] = {
+    LANE_BACKGROUND: _SpawnLoop(SPAWN_THREAD_NAME),
+    LANE_INTERACTIVE: _SpawnLoop(f"{SPAWN_THREAD_NAME}-interactive"),
+}
 
 
 def stop_spawn_loop() -> None:
-    """Shut the spawn loop down; the daemon calls this at teardown."""
-    _spawn.stop()
+    """Shut every spawn loop down; the daemon calls this at teardown."""
+    for lane in _spawn_lanes.values():
+        lane.stop()
+
+
+atexit.register(stop_spawn_loop)
+
+
+def _spawn_lane(lane: str) -> _SpawnLoop:
+    try:
+        return _spawn_lanes[lane]
+    except KeyError:
+        raise ValueError(f"unknown spawn lane {lane!r}; expected one of {LANES}") from None
 
 
 def _resolve_on(loop: asyncio.AbstractEventLoop, future: asyncio.Future[Any], task: Any) -> None:
@@ -324,6 +348,7 @@ async def run_bounded(
     env: Mapping[str, str] | None = None,
     on_chunk: Callable[[bytes], None] | None = None,
     operation_id: str | None = None,
+    lane: str = LANE_BACKGROUND,
 ) -> ProcessOutcome:
     """Run one command to completion under a timeout and an output cap.
 
@@ -338,12 +363,15 @@ async def run_bounded(
     Anything raised after the spawn reaps the tree on its way out, `CancelledError`
     included.
 
-    The run itself happens on the spawn loop (`_SpawnLoop`), never on the caller's:
+    The run itself happens on a spawn loop (`_SpawnLoop`), never on the caller's:
     the spawn is a synchronous kernel call that a saturated disk can hold for tens
-    of seconds, and the caller's loop is the one every terminal shares.
+    of seconds, and the caller's loop is the one every terminal shares. `lane`
+    picks which: pollers share `LANE_BACKGROUND`, and a command a person is
+    waiting on (a commit, a land, a diff they opened) takes `LANE_INTERACTIVE`, so
+    a spawn the kernel is holding for a sweep does not hold theirs too.
     """
     caller = asyncio.get_running_loop()
-    spawn = _spawn.get()
+    spawn = _spawn_lane(lane).get()
     if spawn is caller:
         # Already on the spawn loop (a nested bounded run); nothing to marshal.
         return await _run_bounded_here(

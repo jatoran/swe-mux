@@ -8,7 +8,10 @@ from collections import OrderedDict
 from dataclasses import dataclass, replace
 from pathlib import Path
 
-from .subprocess_flags import background_creation_flags, reap_process_tree
+from .bounded_subprocess import run_bounded
+
+#: Each query prints one path or one remote URL; 1 MiB leaves room for any of them.
+_GIT_OUTPUT_LIMIT = 1024 * 1024
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,26 +53,20 @@ def _normalize_remote(value: str) -> str:
 
 
 async def _git(cwd: Path, *args: str) -> str | None:
-    process: asyncio.subprocess.Process | None = None
+    """One read-only Git query's stdout, or None when it failed, timed out or is absent."""
     try:
-        process = await asyncio.create_subprocess_exec(
-            "git",
-            "-C",
-            str(cwd),
-            *args,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL,
-            creationflags=background_creation_flags(),
+        outcome = await run_bounded(
+            ["git", "-C", str(cwd), *args],
+            label="git-project-identity",
+            timeout_seconds=3,
+            output_limit=_GIT_OUTPUT_LIMIT,
+            stderr_limit=1024,
         )
-        stdout, _ = await asyncio.wait_for(process.communicate(), timeout=3)
-        if process.returncode == 0:
-            return stdout.decode("utf-8", "replace").strip()
-    except TimeoutError:
-        if process is not None:
-            await reap_process_tree(process)
-    except (FileNotFoundError, OSError):
-        pass
-    return None
+    except OSError:
+        return None
+    if outcome.timed_out or outcome.exit_code != 0:
+        return None
+    return outcome.stdout.decode("utf-8", "replace").strip()
 
 
 async def resolve_project(cwd: str | Path) -> ProjectIdentity:
