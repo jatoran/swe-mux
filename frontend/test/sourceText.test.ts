@@ -112,6 +112,12 @@ const SOURCE_TEXT_TESTS: Readonly<Record<string, readonly Reason[]>> = {
   'noteEditor.test.ts': ['component-jsx'],
   'projectResourceCreate.test.ts': ['component-jsx'],
   'queuePane.test.ts': ['composition-root', 'component-jsx'],
+  //: The renderer harness for arranging draws plain buttons rather than mounting a terminal
+  //: pane, so it cannot see a chip *shape* that stopped publishing `data-rail-slot` - and a
+  //: chip the hit test skips silently shifts every index measured past it. The stylesheet
+  //: half is the mechanism itself: arrangement is a mode because the chips lose their
+  //: pointer events, which is a fact about the CSS and about no runtime.
+  'railArrange.test.ts': ['component-jsx', 'stylesheet'],
   'railClearance.test.ts': ['stylesheet'],
   'railDensity.test.ts': ['stylesheet', 'cross-language-contract', 'component-jsx'],
   'railGlassContrast.test.ts': ['stylesheet'],

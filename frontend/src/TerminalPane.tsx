@@ -41,7 +41,7 @@ import { claimTerminalTextPaste, clipboardImage, copyPreparedText, pasteNeedsMan
 import { currentInsertTarget, noteTerminalFocus } from './insertTarget'
 import { captureCopy } from './clipboardHistory'
 import { resumeCommand } from './resumeCommand'
-import { padRingCount, padSlotKeys, railItemDisplayLabel, railItemDisplayMode, railItemVisible, railPadSlotLabel, railPadSlotMode, railPayload, resolveRailRows, type RailBackend, type RailEntry, type RailItem } from './commandRail'
+import { padRingCount, padSlotKeys, railItemDisplayLabel, railItemDisplayMode, railItemVisible, railPadSlotLabel, railPadSlotMode, railPayload, resolveRailRows, type RailBackend, type RailConfig, type RailDevice, type RailEntry, type RailItem } from './commandRail'
 import { isRepeatableRailKey } from './railKeyRepeat'
 import { RailRepeatKey, useRailKeyRepeat } from './RailRepeatKey'
 import { RailPad, useRailPad, type RailPadSlotView } from './RailPad'
@@ -50,8 +50,12 @@ import { activatePromptRailItem, railItemLabel } from './promptRail'
 import { usePromptTitles } from './promptTitles'
 import { railItemHasIcon, RailItemIcon, SendIcon } from './railIcons'
 import { RailStrip } from './RailStrip'
+import { RailArrangePanel, type RailArrangeCatalogEntry, type RailArrangeRow } from './RailArrangePanel'
+import { railArrangeScopeDetail, railArrangeScopeLabel } from './railArrange'
+import { useRailArrange } from './useRailArrange'
+import { applyScopedRail } from './railScope'
 import { registerRailClearance } from './railClearance'
-import { MOBILE_QUERY, currentProfile, loadRailConfig } from './deviceSettings'
+import { MOBILE_QUERY, currentProfile, currentRailBlob, loadRailConfig, loadResolvedRail, saveRailBlob } from './deviceSettings'
 import { APP_TAIL_KEY, VIEWPORT_MEASURE_RETRY_FRAMES, VIEWPORT_SETTLE_MS, appOffTailByDistance, appOwnsTail, attachRegistersViewport, createSurfaceRepairScheduler, createViewportScheduler, effectiveViewportCost, inputResetsAppTail, redrawVisibleTerminal, reflowVisibleTerminalRenderer, restoreTerminalScrollAnchor, scrollTerminalToTail, terminalHostIsVisible, terminalRowsAboveTail, terminalSurface, terminalSurfaceChanged, terminalWidthPolicyFontSize, trackAppTailDistance, claudeHostMaxWidth, claudeWidthCap, claudeWidthCapClamping, type SurfaceRepairScheduler, type TerminalSurface } from './terminalViewport'
 import { createWheelPacer, isWheelReportBurst } from './terminalWheelPacing'
 import { terminalRenderControl } from './terminalRenderPause'
@@ -108,7 +112,7 @@ import {
   type TerminalInputSource,
 } from './terminalInputDiagnostics'
 import { reportPromptSubmitted } from './projectRecency'
-import { SOFT_KEYBOARD_EVENT, clampPeekOffset, deepActiveElement, hiddenOutputDeservesPeek, holdSoftKeyboard, inputEndsPeek, lastSoftKeyboardInset, nextPeekOffset, peekToggleVisible, restoreSoftKeyboard, shouldHoldBridgeFocus, softKeyboardDismissals, softKeyboardHolder, softKeyboardInputMode, touchCompatMouseEvent, type PeekTrigger } from './mobileKeyboard'
+import { SOFT_KEYBOARD_EVENT, clampPeekOffset, deepActiveElement, hiddenOutputDeservesPeek, holdSoftKeyboard, inputEndsPeek, lastSoftKeyboardInset, nextPeekOffset, peekToggleVisible, preserveSoftKeyboardAcross, restoreSoftKeyboard, shouldHoldBridgeFocus, softKeyboardDismissals, softKeyboardHolder, softKeyboardInputMode, touchCompatMouseEvent, type PeekTrigger } from './mobileKeyboard'
 import { dismissStack } from './dismissStack.ts'
 import { useDismissLevel } from './modalFocus'
 import { RESERVE_INTENT_WINDOW_MS, nextReserveState, paintedRowCount, reservedKeyboardPx } from './keyboardReserve'
@@ -519,6 +523,25 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
   // Bumped when another surface edits the shared rail config so this pane re-reads it.
   const [,bumpRailRev]=useState(0)
   useEffect(()=>{const on=()=>bumpRailRev(value=>value+1);window.addEventListener('mux:settings-changed',on);return()=>window.removeEventListener('mux:settings-changed',on)},[])
+  // Arranging the rail in place (`useRailArrange.ts`). A mode rather than an ambient gesture:
+  // every chip on this rail is a live control - a pad fires from the first pixel of a drag,
+  // an arrow repeats on a hold - so a drag that sometimes rearranges and sometimes sends
+  // Ctrl+C to a PTY is the one failure this surface cannot afford. While it is on, chips are
+  // inert by CSS and the panel above states which scope the edits write to.
+  //
+  // Declared here, before the config it edits exists, so the deep effects below can end the
+  // mode: `save` and the config are handed to it through refs it re-reads per render.
+  const arrangeConfigRef=useRef<RailConfig|null>(null)
+  const arrangeSaveRef=useRef<(next:RailConfig)=>void>(()=>{})
+  const arrange=useRailArrange({
+    device:currentProfile(),
+    surface:'strip',
+    // The fallback is unreachable in practice - the ref is filled every render, and a drop
+    // can only land between two of them - but it keeps the getter total rather than asserting.
+    config:()=>arrangeConfigRef.current??loadRailConfig(session.project_id),
+    save:next=>arrangeSaveRef.current(next),
+  })
+  const exitArrange=arrange.exit
   // Ending a session is a two-click confirm, and App owns both the armed id and the
   // window that disarms it (`requestKill`). The rail button mirrors that broadcast
   // rather than running a second timer of its own, so its label can never disagree
@@ -543,6 +566,9 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
   // state bleed across the switch too.
   useEffect(()=>{
     setLastReply('')
+    // Arranging is per-rail and the rail is per-session: a mode left standing across a switch
+    // would leave the incoming session's chips inert with no visible reason.
+    exitArrange()
     setPreparedClipboard('')
     setManualClipboard(false)
     // The toast carries the selection readout as well as the copy and paste confirmations,
@@ -3491,6 +3517,36 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     return()=>surface.removeEventListener('mousedown',preserveRailKeyboard)
   },[session.id])
 
+  // ...and the repair for the presses that guard cannot reach. It is bound to `mousedown`,
+  // which a phone delivers only once a gesture has *resolved*, so it covers a tap and can
+  // never cover a hold: Android answers a stationary touch over non-editable content itself
+  // by moving focus, and by the time the compat `mousedown` arrives the keyboard is already
+  // down. A hold anywhere on the rail therefore closed the keyboard and left it closed -
+  // which is what "long-pressing a button collapses the keyboard" is. The pan bookkeeping in
+  // `OverflowRail` repairs only its own gesture, only on a row wide enough to overflow, and
+  // not at all inside the overflow popover; this arms the repair for every press in the
+  // toolbar, whatever the gesture turns out to be.
+  //
+  // Bound to the surface and filtered to the rail, like the guard above, so it survives the
+  // rail's own switches without depending on when the toolbar happens to be mounted.
+  useEffect(()=>{
+    const surface=host.current?.closest<HTMLElement>('.terminal-surface')
+    if(!surface)return
+    return preserveSoftKeyboardAcross(surface,'.terminal-action-rail')
+  },[session.id])
+  // Android's own long-press menu cancels the pointer about 500 ms in, which would kill an
+  // arrange drag a moment after it lifted, and there is nothing on this toolbar a context
+  // menu is the answer to.
+  useEffect(()=>{
+    const surface=host.current?.closest<HTMLElement>('.terminal-surface')
+    if(!surface)return
+    const suppress=(event:Event)=>{
+      if(event.target instanceof Element&&event.target.closest('.terminal-action-rail'))event.preventDefault()
+    }
+    surface.addEventListener('contextmenu',suppress)
+    return()=>surface.removeEventListener('contextmenu',suppress)
+  },[session.id])
+
   // Its own effect on purpose: the one above owns the terminal's whole lifetime, so
   // listing the scale in its deps would dispose the terminal, drop the socket and
   // replay the entire buffer to change a number xterm takes directly.
@@ -3885,7 +3941,12 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
   // same reason `loadRailConfig` above is: this pane re-renders on every config
   // arrival, and the breakpoint change that flips `currentProfile()` re-renders it too.
   const railOn=railEnabled?.[currentProfile()]??true
-  const railRows=utilityPane||!railOn?[]:resolveRailRows(railConfig,'strip',{device:currentProfile(),backend:session.backend as RailBackend})
+  const railDevice:RailDevice=currentProfile()
+  // Empty rows are kept while arranging and dropped every other time. A row this session
+  // filters out entirely, or one a drag has just emptied, is somewhere a chip has to be
+  // droppable - a row that vanishes with its last chip is a row nothing can be put back
+  // into - while a shell session reading the rail normally must not grow a blank strip.
+  const railRows=utilityPane||!railOn?[]:resolveRailRows(railConfig,'strip',{device:railDevice,backend:session.backend as RailBackend},arrange.arranging)
   // Only a rail that actually carries an auto-labelled prompt button reads the
   // library; every other rail costs nothing (`promptTitles.ts`).
   const promptTitles=usePromptTitles(session.project_id,railRows.some(row=>row.entries.some(entry=>entry.item.type==='prompt'&&entry.item.autoLabel)))
@@ -3894,7 +3955,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
   // scrollable submit target. The fixed action is intentionally not configurable:
   // removing it would strand a phone whose soft-keyboard Enter cannot submit.
   const scrollingRailRows=mobilePinnedSend
-    ?railRows.map(row=>({...row,entries:row.entries.filter(entry=>entry.item.id!=='enter')})).filter(row=>row.entries.length)
+    ?railRows.map(row=>({...row,entries:row.entries.filter(entry=>entry.item.id!=='enter')})).filter(row=>arrange.arranging||row.entries.length)
     :railRows
   // One drop-up at a time, and a second tap on its own trigger closes it — the
   // trigger is the affordance, so it has to be able to undo itself.
@@ -4092,7 +4153,12 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     }
     return views
   }
-  const renderRailItem=({item,key}:RailEntry)=>{
+  // `slot` and `reorderId` are on every chip shape, always, not only while arranging. They
+  // are what lets a drag translate a hit test back into a *stored* index: this rail draws a
+  // filtered projection of its row (backend gating, the mutually exclusive built-ins below,
+  // the mobile Enter end-cap), so rendered order is not stored order and an index measured
+  // against pixels would save the wrong move without ever looking wrong (`railArrange.ts`).
+  const renderRailItem=({item,key,index}:RailEntry)=>{
     if(item.type==='pad'){
       const slots=railPadSlots(item)
       // A pad every one of whose slots this session filtered out is not a control, it is
@@ -4100,11 +4166,11 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       // as nothing rather than as dead buttons.
       if(!slots.some(slot=>!slot.disabled))return null
       const view=actionPresentation(item)
-      return <RailPad key={key} controller={railPadControl} item={item} slots={slots} className={`${item.className||'term-key'} ${view.className||''}`.trim()} content={view.content} modifierPrefix={modifierPrefix||undefined}/>
+      return <RailPad key={key} slot={index} reorderId={key} controller={railPadControl} item={item} slots={slots} className={`${item.className||'term-key'} ${view.className||''}`.trim()} content={view.content} modifierPrefix={modifierPrefix||undefined}/>
     }
     if(item.type==='key'&&isRepeatableRailKey(item.id)){
       const label=railItemDisplayLabel(item)
-      return <RailRepeatKey key={key} railItem={item.id} repeat={railKeyRepeat} sequence={modifiedSequence(item)} label={label} title={`${modifierPrefix?`${modifierPrefix}+`:''}${item.title||label}`} className={item.className||'term-key'}/>
+      return <RailRepeatKey key={key} slot={index} reorderId={key} railItem={item.id} repeat={railKeyRepeat} sequence={modifiedSequence(item)} label={label} title={`${modifierPrefix?`${modifierPrefix}+`:''}${item.title||label}`} className={item.className||'term-key'}/>
     }
     const view=railItemView(item)
     if(!view)return null
@@ -4115,6 +4181,8 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     return <button
       key={key}
       data-rail-item={item.id}
+      data-rail-slot={index}
+      data-reorder-id={key}
       class={view.className}
       disabled={view.disabled}
       aria-label={view.ariaLabel}
@@ -4127,14 +4195,43 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
   // Backend filtering alone is not enough: the mutually exclusive built-ins
   // (Relaunch versus Copy reply / Copy resume, Attach on a backend that takes no
   // files) decide at render time and return null, so a row holding only those
-  // would otherwise stand as a full-height empty strip.
+  // would otherwise stand as a full-height empty strip. Arranging keeps them for the same
+  // reason it keeps backend-emptied ones: a row you cannot see is a row you cannot drop into.
   const builtRailRows=scrollingRailRows
-    .map(row=>({id:row.id,nodes:row.entries.map(renderRailItem).filter((node):node is VNode=>!!node)}))
-    .filter(row=>row.nodes.length)
+    .map(row=>({id:row.id,label:row.label,nodes:row.entries.map(renderRailItem).filter((node):node is VNode=>!!node)}))
+    .filter(row=>arrange.arranging||row.nodes.length)
   // The status readout and the settings gear ride the last surviving row, so they
   // stay put as rows are added and a rail configured down to nothing still has a
   // way back into settings.
-  const renderedRailRows=builtRailRows.length?builtRailRows:[{id:'rail-empty',nodes:[]}]
+  const renderedRailRows=builtRailRows.length?builtRailRows:[{id:'rail-empty',label:undefined,nodes:[]}]
+
+  // ---- Arranging the rail in place -----------------------------------------------------
+  //
+  // Handed to the controller declared above, which cannot see this far down its host's own
+  // render. Every write goes through `applyScopedRail`, the same routing the Settings editor
+  // uses, and that is the reason no scope control is offered while dragging: a shared row
+  // lands in the global scope (visible in every Project, which is what a rail edit means), a
+  // detached Project's whole layout stays with it, and a delta Project's own rows and actions
+  // stay project state. A hand already holding a chip cannot reach a scope picker, so the
+  // panel *states* the answer instead of asking for one.
+  arrangeConfigRef.current=railConfig
+  arrangeSaveRef.current=(next:RailConfig)=>{
+    const resolved=loadResolvedRail(session.project_id)
+    void saveRailBlob(applyScopedRail(currentRailBlob(),session.project_id||undefined,resolved,next))
+  }
+  const arrangeScope=loadResolvedRail(session.project_id).kind
+  // Only what is not already on this device's rail. Placing the same Action twice is legal
+  // and stays an editor operation: a tray that repeated everything already visible would be
+  // mostly noise, and the useful question here is "what is missing".
+  const arrangePlaced=new Set(railConfig.layouts[railDevice]?.strip.flatMap(row=>row.items)||[])
+  const arrangeCatalog:RailArrangeCatalogEntry[]=!arrange.arranging?[]:railConfig.items.flatMap(item=>{
+    if(arrangePlaced.has(item.id)||!railItemVisible(item,session.backend as RailBackend))return []
+    const chip=renderRailItem({key:`arrange-catalog:${item.id}`,item,rowId:'',index:-1})
+    // A chip this session resolves to nothing is an Action it does not have; offering it
+    // would place a button that never draws.
+    return chip?[{id:item.id,label:railItemDisplayLabel(item),chip}]:[]
+  })
+  const arrangeRows:RailArrangeRow[]=renderedRailRows.map(row=>({id:row.id,label:row.label,chips:row.nodes}))
 
   const ownerNotice=inputOwnerNotice(inputOwnership)
   // Ordered above every other notice in the slot, because it is the only one
@@ -4165,7 +4262,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     '--peek-offset':`${peekOffset}px`,
     '--terminal-keyboard-reserve':`${keyboardReserved?reservePxRef.current:0}px`,
   } as Record<string,string>
-    return <div class={`terminal-surface${utilityPane?' plugin-utility-surface':''}${peekOffset>0?' keyboard-peek':''}${peekAnimated?' keyboard-peek-animated':''}${keyboardReserved?' keyboard-reserved':''}`} style={surfaceStyle}><div class={`terminal-host${letterboxActive?' letterboxed':''}`} style={claudeHostStyle} ref={host} /><input ref={attachmentInputRef} type="file" hidden multiple aria-label="Choose files to attach" onChange={event=>{const files=Array.from(event.currentTarget.files||[]);event.currentTarget.value='';void attachFilesRef.current(files)}}/><textarea ref={mobileLiveInputRef} class="mobile-terminal-live-input" rows={1} aria-label="Live mobile terminal input" autoCapitalize="off" autoCorrect="off" autoComplete="off" spellcheck={false} inputMode="text" enterkeyhint="enter"/>{mobileDraftOpen&&<MobileTerminalDraft sessionName={sessionDisplayName(session)||session.id} text={mobileDraftText} busy={mobileDraftInserting} error={mobileDraftError} onInput={setMobileDraftText} onInsert={()=>void insertMobileDraft()} onClear={()=>setMobileDraftText('')} onClose={closeMobileDraft}/>} {!utilityPane&&railOn&&<div ref={railRef} class={`terminal-action-rail${mobilePinnedSend?' mobile-pinned-send':''}`} role="toolbar" aria-label="Terminal keys and clipboard actions" onClick={event=>pulseRail(event.currentTarget,event.target)}><div class="terminal-action-rows">{renderedRailRows.map((row,index)=><RailStrip key={row.id} chips={row.nodes} label={renderedRailRows.length>1?`Actions, row ${index+1}`:'Actions'} onConfigure={()=>onConfigureRail?.()}/>)}</div>{mobilePinnedSend&&<button class="terminal-mobile-send" title="Send composed input; the keyboard Enter key inserts a newline" aria-label="Send composed input" onClick={()=>sendKey('\r')}><SendIcon/></button>}</div>}{peekToggleVisible(effectiveKeyboardInset,peekOffset>0,offTail,appOffTail)&&<button class={`terminal-peek-top${peekOffset>0?' active':''}`} aria-pressed={peekOffset>0} title={peekOffset>0?"Back to the composer":"Look at the top of the screen, the keyboard is covering it"} aria-label={peekOffset>0?"Back to the composer":"Show the top of the terminal"} onMouseDown={holdSoftKeyboard} onClick={()=>applyPeekRef.current('toggle')}>{peekOffset>0?'↓':'↑'}</button>}{clipboardStatus&&<div class="terminal-clip-toast" role="status">{clipboardStatus}</div>}{(offTail||appOffTail)&&<button class="terminal-jump-latest" title="Scroll to the newest output" aria-label="Jump to latest output" onMouseDown={holdSoftKeyboard} onClick={jumpToLatest}>↓</button>}{fileDropActive&&<div class="terminal-image-drop" role="status">Drop files to attach to {session.backend}</div>}{findOpen && <div class="terminal-find" role="search">
+    return <div class={`terminal-surface${utilityPane?' plugin-utility-surface':''}${peekOffset>0?' keyboard-peek':''}${peekAnimated?' keyboard-peek-animated':''}${keyboardReserved?' keyboard-reserved':''}`} style={surfaceStyle}><div class={`terminal-host${letterboxActive?' letterboxed':''}`} style={claudeHostStyle} ref={host} /><input ref={attachmentInputRef} type="file" hidden multiple aria-label="Choose files to attach" onChange={event=>{const files=Array.from(event.currentTarget.files||[]);event.currentTarget.value='';void attachFilesRef.current(files)}}/><textarea ref={mobileLiveInputRef} class="mobile-terminal-live-input" rows={1} aria-label="Live mobile terminal input" autoCapitalize="off" autoCorrect="off" autoComplete="off" spellcheck={false} inputMode="text" enterkeyhint="enter"/>{mobileDraftOpen&&<MobileTerminalDraft sessionName={sessionDisplayName(session)||session.id} text={mobileDraftText} busy={mobileDraftInserting} error={mobileDraftError} onInput={setMobileDraftText} onInsert={()=>void insertMobileDraft()} onClear={()=>setMobileDraftText('')} onClose={closeMobileDraft}/>} {!utilityPane&&railOn&&<div ref={railRef} class={`terminal-action-rail${mobilePinnedSend?' mobile-pinned-send':''}${arrange.arranging?' rail-arranging':''}`} role="toolbar" aria-label="Terminal keys and clipboard actions" onClick={event=>{if(arrange.arranging)return;pulseRail(event.currentTarget,event.target)}}>{arrange.arranging&&<RailArrangePanel device={railDevice} rows={arrangeRows} catalog={arrangeCatalog} catalogOpen={arrange.catalogOpen} onToggleCatalog={arrange.toggleCatalog} scopeLabel={railArrangeScopeLabel(arrangeScope)} scopeDetail={railArrangeScopeDetail(arrangeScope)} preview={arrange.preview} canUndo={arrange.canUndo} onUndo={arrange.undo} onDone={arrange.exit} onChipPointerDown={arrange.beginChipDrag} onCatalogPointerDown={arrange.beginCatalogDrag}/>}<div class="terminal-action-rows" data-rail-arrange-surface={arrange.arranging?'rail':undefined} onPointerDown={event=>arrange.beginChipDrag(event as unknown as PointerEvent)}>{renderedRailRows.map((row,index)=><RailStrip key={row.id} chips={row.nodes} label={renderedRailRows.length>1?`Actions, row ${index+1}`:'Actions'} onConfigure={()=>onConfigureRail?.()} device={railDevice} rowId={row.id} arranging={arrange.arranging} caretAt={arrange.caretFor(row.id)} onArrange={arrange.enter}/>)}</div>{mobilePinnedSend&&<button class="terminal-mobile-send" title="Send composed input; the keyboard Enter key inserts a newline" aria-label="Send composed input" onClick={()=>sendKey('\r')}><SendIcon/></button>}</div>}{peekToggleVisible(effectiveKeyboardInset,peekOffset>0,offTail,appOffTail)&&<button class={`terminal-peek-top${peekOffset>0?' active':''}`} aria-pressed={peekOffset>0} title={peekOffset>0?"Back to the composer":"Look at the top of the screen, the keyboard is covering it"} aria-label={peekOffset>0?"Back to the composer":"Show the top of the terminal"} onMouseDown={holdSoftKeyboard} onClick={()=>applyPeekRef.current('toggle')}>{peekOffset>0?'↓':'↑'}</button>}{clipboardStatus&&<div class="terminal-clip-toast" role="status">{clipboardStatus}</div>}{(offTail||appOffTail)&&<button class="terminal-jump-latest" title="Scroll to the newest output" aria-label="Jump to latest output" onMouseDown={holdSoftKeyboard} onClick={jumpToLatest}>↓</button>}{fileDropActive&&<div class="terminal-image-drop" role="status">Drop files to attach to {session.backend}</div>}{findOpen && <div class="terminal-find" role="search">
     <input value={findQuery} onInput={event => { setFindQuery(event.currentTarget.value); setFindResult('') }} onKeyDown={event => {
       // Stopped here so the keypress is one pop, on this bar's own level.
       if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); dismissStack.pop() }
