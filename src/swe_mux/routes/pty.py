@@ -39,7 +39,7 @@ from ..session import (
     session_is_unwitnessed,
 )
 from ..terminal_arbitration import ClaimReason, ClaimRequest, evaluate_claim
-from ..ui_build import read_ui_build_id
+from ..ui_build import ui_build_id_cached
 from . import terminal
 
 log = logging.getLogger(__name__)
@@ -1077,7 +1077,7 @@ async def events_ws(request: web.Request) -> web.WebSocketResponse:
     await ws.send_json(
         {
             "type": "events_hello",
-            "ui_build_id": read_ui_build_id(request.app[keys.FRONTEND_DIR]),
+            "ui_build_id": await ui_build_id_cached(request.app[keys.FRONTEND_DIR]),
             "daemon_generation": generation or "legacy",
         }
     )

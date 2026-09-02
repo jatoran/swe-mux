@@ -59,6 +59,7 @@ from .automation_registry import resolve_config as resolve_automation_config
 from .automation_store import AutomationStore
 from .background_tasks import background
 from .behavioral_consumers import BehavioralConsumerService
+from .bounded_subprocess import stop_spawn_loop
 from .build_support import precompress_static
 from .clipboard_store import ClipboardStore
 from .code_graph import CodeGraphStore
@@ -2759,6 +2760,9 @@ async def _teardown_runtime(app: web.Application) -> None:  # noqa: PLR0912, PLR
         keys.REAPER,
     ):
         _close_handle(app, key)
+    # After every service that could still be running a bounded command, so the
+    # spawn loop is stopped with nothing left to spawn on it.
+    await asyncio.to_thread(stop_spawn_loop)
     await background.stop(LIFECYCLE_HEARTBEAT_LOOP)
     # Last so an exception anywhere above still reads as an unclean exit.
     await asyncio.to_thread(daemon_clean_exit, config.data_dir, intent)

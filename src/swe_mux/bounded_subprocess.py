@@ -31,15 +31,24 @@ And nothing here decodes: `git cat-file blob` needs the bytes git stores, and
 from __future__ import annotations
 
 import asyncio
+import atexit
+import contextvars
 import logging
+import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from .subprocess_flags import background_creation_flags, reap_process_tree
 
 log = logging.getLogger(__name__)
+
+#: The thread the spawn loop runs on. Named so a stall dump reads as what it is.
+SPAWN_THREAD_NAME = "subprocess-spawn"
+#: How long shutdown waits for the spawn loop to stop before abandoning it.
+SPAWN_LOOP_STOP_SECONDS = 5.0
 
 #: How long a drain may take *after* the tree has been reaped. The pipes close as
 #: the tree dies, so this is milliseconds in every ordinary case; it exists because
@@ -214,6 +223,95 @@ async def _cancel(*tasks: asyncio.Task[tuple[bytes, bool]] | None) -> None:
         await asyncio.gather(*live, return_exceptions=True)
 
 
+class _SpawnLoop:
+    """One event loop on its own thread, where every bounded subprocess is spawned.
+
+    asyncio spawns a child *synchronously on the loop that asks*: on Windows the
+    proactor transport's constructor calls `CreateProcess` before it returns, and on
+    POSIX the fork-and-exec is the same shape. On 2026-09-02 the stall watchdog
+    caught the daemon's loop inside that call for 23.5 s while `cargo test` saturated
+    the disk the git helper's image lives on - and every terminal, request and
+    keystroke waited behind one `git status`. `CreateProcess` releases the GIL, so
+    the same call on another thread costs the daemon nothing.
+
+    Moving the *spawn* alone is not possible with asyncio's public API (the
+    transport owns the `Popen`), so the whole bounded run - spawn, pipe reads,
+    timeout, reap - executes on this loop unchanged, and the caller's loop only ever
+    awaits a future. Output callbacks are marshalled back to the caller's loop, the
+    caller's context (request correlation) is carried across, and cancelling the
+    caller cancels the run over here, which is what reaps the tree.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._thread: threading.Thread | None = None
+
+    def get(self) -> asyncio.AbstractEventLoop:
+        with self._lock:
+            if self._loop is not None and self._loop.is_running():
+                return self._loop
+            loop = asyncio.new_event_loop()
+            ready = threading.Event()
+
+            def run() -> None:
+                asyncio.set_event_loop(loop)
+                loop.call_soon(ready.set)
+                try:
+                    loop.run_forever()
+                finally:
+                    loop.close()
+
+            thread = threading.Thread(target=run, name=SPAWN_THREAD_NAME, daemon=True)
+            thread.start()
+            ready.wait(SPAWN_LOOP_STOP_SECONDS)
+            self._loop, self._thread = loop, thread
+            log.info("subprocess spawn loop started thread=%s", thread.name)
+            return loop
+
+    def stop(self) -> None:
+        """Stop the loop and join its thread; a no-op when nothing was started."""
+        with self._lock:
+            loop, thread = self._loop, self._thread
+            self._loop, self._thread = None, None
+        if loop is None or thread is None:
+            return
+        if loop.is_running():
+            loop.call_soon_threadsafe(loop.stop)
+        thread.join(SPAWN_LOOP_STOP_SECONDS)
+        if thread.is_alive():
+            log.warning("subprocess spawn loop did not stop within %.0fs", SPAWN_LOOP_STOP_SECONDS)
+
+
+_spawn = _SpawnLoop()
+atexit.register(_spawn.stop)
+
+
+def stop_spawn_loop() -> None:
+    """Shut the spawn loop down; the daemon calls this at teardown."""
+    _spawn.stop()
+
+
+def _resolve_on(loop: asyncio.AbstractEventLoop, future: asyncio.Future[Any], task: Any) -> None:
+    """Copy a finished spawn-loop task's outcome onto the caller's future."""
+
+    def deliver() -> None:
+        if future.done():
+            return
+        if task.cancelled():
+            future.cancel()
+        elif (exc := task.exception()) is not None:
+            future.set_exception(exc)
+        else:
+            future.set_result(task.result())
+
+    try:
+        loop.call_soon_threadsafe(deliver)
+    except RuntimeError:
+        # The caller's loop closed before the run finished; nothing is waiting.
+        log.debug("bounded_command_outcome_dropped label=%s", getattr(task, "get_name", str)())
+
+
 async def run_bounded(
     argv: Sequence[str],
     *,
@@ -239,7 +337,97 @@ async def run_bounded(
     and swallowing it into an outcome would make every caller re-derive it.
     Anything raised after the spawn reaps the tree on its way out, `CancelledError`
     included.
+
+    The run itself happens on the spawn loop (`_SpawnLoop`), never on the caller's:
+    the spawn is a synchronous kernel call that a saturated disk can hold for tens
+    of seconds, and the caller's loop is the one every terminal shares.
     """
+    caller = asyncio.get_running_loop()
+    spawn = _spawn.get()
+    if spawn is caller:
+        # Already on the spawn loop (a nested bounded run); nothing to marshal.
+        return await _run_bounded_here(
+            argv,
+            label=label,
+            timeout_seconds=timeout_seconds,
+            output_limit=output_limit,
+            stderr_limit=stderr_limit,
+            merge_stderr=merge_stderr,
+            cwd=cwd,
+            env=env,
+            on_chunk=on_chunk,
+            operation_id=operation_id,
+        )
+
+    marshalled: Callable[[bytes], None] | None = None
+    if on_chunk is not None:
+        observer = on_chunk
+
+        def marshalled(chunk: bytes) -> None:
+            # Observers touch the caller's own state (an `asyncio.Event`, a queue),
+            # so they run where they were written, in the order the bytes arrived.
+            try:
+                caller.call_soon_threadsafe(observer, chunk)
+            except RuntimeError:
+                pass
+
+    context = contextvars.copy_context()
+    outcome: asyncio.Future[ProcessOutcome] = caller.create_future()
+    handle: dict[str, Any] = {}
+    cancel_lock = threading.Lock()
+
+    def start() -> None:
+        task = spawn.create_task(
+            _run_bounded_here(
+                argv,
+                label=label,
+                timeout_seconds=timeout_seconds,
+                output_limit=output_limit,
+                stderr_limit=stderr_limit,
+                merge_stderr=merge_stderr,
+                cwd=cwd,
+                env=env,
+                on_chunk=marshalled,
+                operation_id=operation_id,
+            ),
+            name=f"bounded:{label}",
+            context=context,
+        )
+        task.add_done_callback(lambda done: _resolve_on(caller, outcome, done))
+        with cancel_lock:
+            handle["task"] = task
+            if handle.get("cancelled"):
+                task.cancel()
+
+    spawn.call_soon_threadsafe(start)
+    try:
+        return await outcome
+    except asyncio.CancelledError:
+        # The caller gave up: cancel the run where it lives, which reaps the tree.
+        # Recorded under the lock so a cancel that lands before `start` ran is not
+        # lost between the two threads.
+        with cancel_lock:
+            handle["cancelled"] = True
+            task = handle.get("task")
+        if task is not None:
+            spawn.call_soon_threadsafe(task.cancel)
+        raise
+
+
+async def _run_bounded_here(
+    argv: Sequence[str],
+    *,
+    label: str,
+    timeout_seconds: float,
+    output_limit: int,
+    stderr_limit: int | None,
+    merge_stderr: bool,
+    cwd: str | Path | None,
+    env: Mapping[str, str] | None,
+    on_chunk: Callable[[bytes], None] | None,
+    operation_id: str | None,
+) -> ProcessOutcome:
+    """The run, on whichever loop is current. `run_bounded` puts it on the spawn loop."""
     loop = asyncio.get_running_loop()
     started = loop.time()
     stdout_task: asyncio.Task[tuple[bytes, bool]] | None = None

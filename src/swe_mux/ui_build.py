@@ -2,13 +2,22 @@
 
 from __future__ import annotations
 
+import asyncio
 import threading
+import time
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from pathlib import Path
 
 UI_BUILD_META_NAME = "ui-build"
 UI_BUILD_ID_LENGTH = 64
+#: How long a stat of the served index is trusted before the loop asks a thread
+#: to repeat it. The health endpoint is polled every few seconds by the tray, the
+#: stall banner and every open tab, and on 2026-09-02 the watchdog caught that
+#: stat holding the loop for up to 15 s under a saturated disk, thirteen times in
+#: one morning. The tree it describes changes on a redeploy or an overlay install,
+#: both of which restart the daemon, so a few seconds of staleness costs nothing.
+UI_BUILD_FRESH_SECONDS = 5.0
 
 
 class _BuildMetaParser(HTMLParser):
@@ -47,11 +56,16 @@ class _CacheEntry:
 
 
 _cache: dict[Path, _CacheEntry] = {}
+#: When each path was last stat'ed, so `ui_build_id_cached` can skip the syscall.
+_checked_at: dict[Path, float] = {}
 _cache_lock = threading.Lock()
 
 
 def read_ui_build_id(frontend_dir: Path) -> str | None:
-    """Read the served index identity, rechecking only when its stat changes."""
+    """Read the served index identity, rechecking only when its stat changes.
+
+    Synchronous and always stats. On the event loop use `ui_build_id_cached`.
+    """
 
     path = frontend_dir / "index.html"
     try:
@@ -59,9 +73,11 @@ def read_ui_build_id(frontend_dir: Path) -> str | None:
     except OSError:
         with _cache_lock:
             _cache.pop(path, None)
+            _checked_at[path] = time.monotonic()
         return None
     with _cache_lock:
         cached = _cache.get(path)
+        _checked_at[path] = time.monotonic()
         if cached and cached.modified_ns == stat.st_mtime_ns and cached.size == stat.st_size:
             return cached.build_id
     try:
@@ -71,3 +87,27 @@ def read_ui_build_id(frontend_dir: Path) -> str | None:
     with _cache_lock:
         _cache[path] = _CacheEntry(stat.st_mtime_ns, stat.st_size, build_id)
     return build_id
+
+
+async def ui_build_id_cached(frontend_dir: Path) -> str | None:
+    """The served index identity for a request handler: never a stat on the loop.
+
+    Answers from the last reading while it is younger than `UI_BUILD_FRESH_SECONDS`,
+    and otherwise repeats the stat in a thread. A missing index is remembered for
+    the same window, so a tree with no frontend is not stat'ed on every poll either.
+    """
+    path = frontend_dir / "index.html"
+    with _cache_lock:
+        checked = _checked_at.get(path)
+        cached = _cache.get(path)
+    if checked is not None and time.monotonic() - checked < UI_BUILD_FRESH_SECONDS:
+        return cached.build_id if cached is not None else None
+    return await asyncio.to_thread(read_ui_build_id, frontend_dir)
+
+
+def forget_ui_build_id(frontend_dir: Path) -> None:
+    """Drop what is known about a tree, so the next ask stats it again."""
+    path = frontend_dir / "index.html"
+    with _cache_lock:
+        _cache.pop(path, None)
+        _checked_at.pop(path, None)
