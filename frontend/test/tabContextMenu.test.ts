@@ -96,12 +96,15 @@ test('ended-session actions name and target the retained conversation directly',
 test('the Project menu acts on this Project, each row with its own mark',()=>{
   const menu=section('{projectMenu && <div', '{sidebarMenu&&<div')
 
-  // Four surfaces left because each is a drawer tab or a dialog that already opens on the
+  // Five surfaces left because each is a drawer tab or a dialog that already opens on the
   // selected Project: right-clicking a Project row to reach them was a second route to a
-  // place one click away.
-  for(const gone of ['openNotesBrowser(target)','processes.project','queue.fleetProject','openProjectFiles(']){
+  // place one click away. The prompt library went last and for the same reason - the
+  // Actions drawer's Prompt templates section is already scoped to the selected Project.
+  for(const gone of ['openNotesBrowser(target)','processes.project','queue.fleetProject','openProjectFiles(','prompts.openProject']){
     assert.ok(!menu.includes(gone),`${gone} must not be a Project-menu row`)
   }
+  // No Project-menu row opens the library by any route, named command or not.
+  assert.doesNotMatch(menu,/setPromptLibraryOpen/,'the Project menu must not open the prompt library')
   // Clicking a Project header is the fold, and long-press drag is the reorder path.
   assert.doesNotMatch(menu,/toggleProjectCollapsed/)
   assert.doesNotMatch(menu,/project\.moveUp|project\.moveDown/)
