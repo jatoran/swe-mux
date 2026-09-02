@@ -8,6 +8,14 @@ import sys
 from collections.abc import Mapping
 from pathlib import Path
 
+from .bundle_swap import (
+    clear_stale_hold,
+    cmd_gate,
+    ensure_exec_launcher,
+    hold_path,
+    sh_gate,
+    write_script,
+)
 from .config import Config
 from .harness import agent_harnesses
 from .host_platform import IS_WINDOWS
@@ -120,7 +128,7 @@ def resolve_codex_pty_command(
     return resolved, ()
 
 
-def _write_shim(bin_dir: Path, backend: str) -> Path:
+def _write_shim(bin_dir: Path, backend: str, hold: Path) -> Path:
     """Write one agent shim in this host's executable-script format.
 
     Both forms do the same thing - hand the launch to `swe_mux.agent_launcher`
@@ -133,21 +141,32 @@ def _write_shim(bin_dir: Path, backend: str) -> Path:
     shim's pid: a wrapper process between the pseudoterminal's root and the real
     agent would make the root exit before the agent does, and every process-tree
     walk would then be rooted at a dead pid.
+
+    Both forms open with the bundle-swap gate (`bundle_swap`), because on the
+    frozen app `sys.executable` names the exe inside the directory a redeploy
+    renames - so a launch that lands in the swap window either does not start or
+    dies in the bootloader against a `_MEIPASS` that no longer exists. A shim
+    launch is rarer than a hook, but it fails louder: it is the whole session.
     """
     if IS_WINDOWS:
         path = bin_dir / f"{backend}.cmd"
-        path.write_text(
-            f'@echo off\r\n"{sys.executable}" -m swe_mux.agent_launcher {backend} %*\r\n',
-            encoding="utf-8",
+        write_script(
+            path,
+            "@echo off\r\n"
+            f"rem {SHIM_MARKER}\r\n"
+            "setlocal\r\n"
+            f"{cmd_gate(hold)}"
+            f'"{sys.executable}" -m swe_mux.agent_launcher {backend} %*\r\n'
+            "exit /b %ERRORLEVEL%\r\n",
         )
         return path
     path = bin_dir / backend
-    path.write_text(
+    write_script(
+        path,
         "#!/bin/sh\n"
         f"# {SHIM_MARKER}\n"
+        f"{sh_gate(hold)}"
         f'exec "{sys.executable}" -m swe_mux.agent_launcher {backend} "$@"\n',
-        encoding="utf-8",
-        newline="\n",
     )
     # Executable for the owner only. The shim names an interpreter path and a
     # module, so it is not a secret, but the data dir is the user's and there is
@@ -179,8 +198,15 @@ def create_agent_shims(
     """
     bin_dir = config.data_dir / "bin"
     bin_dir.mkdir(parents=True, exist_ok=True)
+    # A redeploy that was killed between raising the hold and its `finally` would
+    # otherwise make every gated shim pay its full wait, once, forever. Cleared
+    # here because this is the one place that both runs on the daemon's own
+    # schedule and already owns the shim directory.
+    clear_stale_hold(config.data_dir)
+    hold = hold_path(config.data_dir)
     for backend in agent_harnesses():
-        _write_shim(bin_dir, backend)
+        _write_shim(bin_dir, backend, hold)
+    hook_launcher = ensure_exec_launcher(config.data_dir)
     # `agent_shims_on_shell_path` governs only what a shell pane's PATH advertises,
     # so the shims themselves are written either way: `MUX_*_EXE` and the settings
     # paths below are read by any shim that is invoked by absolute path, and a user
@@ -214,6 +240,12 @@ def create_agent_shims(
         # the Run menu worked, which is the hardest shape of bug to notice.
         "MUX_OMP_EXTENSION_ROOT": str(config.data_dir / "omp-extensions"),
         "MUX_OPENCODE_CONFIG_ROOT": str(config.data_dir / "opencode-configs"),
+        # Hook delivery for anything that assembles its own hook command inside a
+        # session rather than getting one from an adapter - `agent_launcher`'s
+        # Codex `notify` and lifecycle hooks. Absent on a source install, where
+        # `sys.executable` is already a path nothing renames and the gate would be
+        # a shell process per hook for nothing.
+        **({"MUX_HOOK_LAUNCHER": str(hook_launcher)} if hook_launcher else {}),
     }
     for backend in agent_harnesses():
         prefix = f"MUX_{backend.upper().replace('-', '_')}"

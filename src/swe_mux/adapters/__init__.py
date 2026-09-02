@@ -2,6 +2,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import assert_never
 
+from ..bundle_swap import hook_delivery_executable
 from ..harness import HARNESSES, HarnessDescriptor
 from .base import BackendAdapter, SpawnOptions, SpawnSpec
 from .claude import ClaudeAdapter
@@ -68,6 +69,7 @@ def build_agent_adapter(
             data_home_resolver=harness.data_home,
             rollout_file_prefix=harness.rollout_file_prefix or "rollout-",
             skill=skill,
+            hook_executable=hook_delivery_executable(data_dir),
         )
     if harness.adapter_family == "omp":
         return OmpAdapter(
