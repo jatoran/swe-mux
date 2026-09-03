@@ -41,7 +41,8 @@ of each other. The fix that had covered that was keyed on an ancestor class the 
 is why the row styling now keys off the row's own class.
 The section is expanded by default, remembers its disclosure state on the device, and its Manage button opens the full responsive library.
 The command palette, main menu, and that Manage button all open that same library.
-The session context menu no longer does: it opened a whole surface of its own from a menu whose every other row acts on the session and closes, and the library is a palette command and a drawer tab away from wherever you already are (`ui.md`).
+Neither context menu in the sidebar does: the session menu dropped it because it opened a whole surface of its own from a menu whose every other row acts on the session and closes, and the Project menu followed, because the drawer's Prompt templates section is already scoped to the selected Project and the row was a third route to it after that and the palette (`ui.md`).
+`prompts.openProject` keeps its command and its leader binding; only the menu row went.
 A separate `prompts.new` command opens it on a blank template, scoped to the focused session's Project, and is what the rail's Prompts drop-up uses for its `+ New` exit; starting in create mode is a property of the *opening*, so an ordinary open afterwards still lands on the list.
 
 Templates are created and edited where they are used.

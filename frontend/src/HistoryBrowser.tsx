@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { api, type ApiError } from './api'
 import { withoutClipboardCapture } from './clipboardHistory'
 import { Dropdown } from './Dropdown'
-import { compareProjectNames, projectDropdownOptions } from './projectOptions'
+import { projectDropdownOptions } from './projectOptions'
 import { useDismissLevel, useModalFocus } from './modalFocus'
 import { copyPreparedText } from './terminalClipboard'
 import { TranscriptToolCalls } from './TranscriptToolCalls'
@@ -22,6 +22,7 @@ import {
   commitsSummary, countLabel, defaultHistorySections, historyKeyStats, sectionKeysVisible, speakerLabel, splitRecentScans,
   type HistorySectionKey, type HistorySectionState,
 } from './historyDetail'
+import { groupHistoryFeed } from './historyFeed'
 import { ModelName } from './ModelName'
 import { parseGitProvenance, provenanceRoleLabel, shortSha, type GitProvenance } from './gitWorktrees'
 import { lineageCounterpart, lineageCutLabel, lineageDirection, lineageEndpointLabel, lineageVerb, orderedLineage, type LineageEdge } from './lineageView'
@@ -116,7 +117,10 @@ export function HistoryBrowser({projects,initialProjectId,initialEntryId,onClose
   const [external,setExternal]=useState('')
   const [dateFrom,setDateFrom]=useState('')
   const [dateTo,setDateTo]=useState('')
-  const [timeBasis,setTimeBasis]=useState<'started'|'last_message'>('started')
+  // Last activity, not session start: History opens on "what was I just doing", and a
+  // long conversation spawned yesterday outranks a short one spawned an hour ago and
+  // abandoned. This one control both orders the list and scopes the date range below it.
+  const [timeBasis,setTimeBasis]=useState<'started'|'last_message'>('last_message')
   const [transcript,setTranscript]=useState<Transcript|null>(null)
   const [confirmDelete,setConfirmDelete]=useState<string|null>(null)
   const [activeMatch,setActiveMatch]=useState(0)
@@ -196,21 +200,9 @@ export function HistoryBrowser({projects,initialProjectId,initialEntryId,onClose
     transcriptBody.current?.querySelector<HTMLElement>(`[data-message-ordinal="${match.ordinal}"]`)?.scrollIntoView({block:'center',behavior:'smooth'})
   },[transcript?.entry.id,activeMatch])
 
-  const grouped=useMemo(()=>{
-    const groups=new Map<string|null,{label:string;entries:HistoryEntry[]}>()
-    for(const entry of items){
-      const key=entry.project_id||null
-      const known=historyProjects.find(item=>item.project_id===key)
-      const configured=projects.find(item=>item.id===key)
-      const baseLabel=known?.label||configured?.name||entry.project_label||'Unassigned'
-      const group=groups.get(key)||{label:known?.removed_at?`${baseLabel} (removed)`:baseLabel,entries:[]}
-      group.entries.push(entry);groups.set(key,group)
-    }
-    // Headings by Project name; the conversations inside each keep the feed's own order,
-    // which is what carries recency. The unassigned bucket sorts last rather than under U.
-    return [...groups.entries()].sort(([leftKey,left],[rightKey,right])=>
-      Number(leftKey===null)-Number(rightKey===null)||compareProjectNames(left.label,right.label))
-  },[items,historyProjects,projects])
+  // Both levels keep the feed's order (`historyFeed.ts`): a heading appears where its most
+  // recent conversation does, so changing the sort moves the top of the list.
+  const grouped=useMemo(()=>groupHistoryFeed(items,historyProjects,projects),[items,historyProjects,projects])
 
   const resetSections=()=>{setSections(defaultHistorySections());setTimelineExpanded(false)}
   const toggleSection=(key:HistorySectionKey,open:boolean)=>setSections(current=>current[key]===open?current:{...current,[key]:open})
@@ -254,10 +246,15 @@ export function HistoryBrowser({projects,initialProjectId,initialEntryId,onClose
     }catch(cause){
       const error=cause as ApiError
       setTranscript(null)
+      // The 409 says something definite now. The daemon searches for a conversation whose
+      // recorded path went stale before it answers with this - the CLI re-homes these
+      // files when a session enters or leaves a worktree - so reaching here means the file
+      // is not on disk under this conversation's id at all, rather than that mux lost
+      // track of where it went.
       setError(error?.status===404
         ? 'That session has no History row any more, so its conversation cannot be opened. Search below for it by name.'
         : error?.detail?.code==='transcript_unavailable'
-          ? 'That session kept no readable transcript, so there is no conversation to open.'
+          ? 'That conversation’s transcript is no longer on disk. The agent CLI prunes its own history on its own timer, and mux does not own that file.'
           : cause instanceof Error?cause.message:String(cause))
     }
   }
@@ -338,7 +335,10 @@ export function HistoryBrowser({projects,initialProjectId,initialEntryId,onClose
           <Dropdown ariaLabel="Filter history provider" value={backend} onChange={setBackend} options={[{value:'',label:'All agents'},...historyHarnesses.map(harness=>({value:harness.name,label:harness.display_name}))]}/>
           <Dropdown ariaLabel="Filter history state" value={state} onChange={setState} options={[{value:'',label:'All states'},{value:'idle',label:'Completed'},{value:'exited',label:'Exited'},{value:'crashed',label:'Crashed'}]}/>
           <Dropdown ariaLabel="Filter history origin" value={external} onChange={setExternal} options={[{value:'',label:'Mux + external'},{value:'false',label:'Mux sessions'},{value:'true',label:'External sessions'}]}/>
-          <Dropdown ariaLabel="Filter history time field" value={timeBasis} onChange={value=>setTimeBasis(value as typeof timeBasis)} options={[{value:'started',label:'Time: session started'},{value:'last_message',label:'Time: last message'}]}/>
+          {/* Named for what it does. It reads as a sort because it is one, and the date
+              range under it narrows the same timestamp - one field, two uses, so a
+              conversation can never sort by one clock and be filtered by another. */}
+          <Dropdown ariaLabel="Sort and date-filter history by" value={timeBasis} onChange={value=>setTimeBasis(value as typeof timeBasis)} options={[{value:'last_message',label:'Sort: last activity'},{value:'started',label:'Sort: session started'}]}/>
           <label>from<input type="datetime-local" value={dateFrom} onChange={event=>setDateFrom(event.currentTarget.value)}/></label><label>to<input type="datetime-local" value={dateTo} onChange={event=>setDateTo(event.currentTarget.value)}/></label>
           <div class="history-backfill-control"><button disabled={!project||project==='__ungrouped__'||!!job&&['queued','running'].includes(job.status)} onClick={()=>void startBackfill()}>Scan historical sessions</button><small>{project&&project!=='__ungrouped__'?'Discovers and indexes all native history for this Project.':'Select one Project to scan its complete native history.'}</small></div>
           {job&&<div class={`history-backfill-status ${job.status}`}><div><strong>{job.phase}</strong><span>{job.total?`${job.processed}/${job.total}`:`${job.scanned} scanned`}</span></div>{['queued','running'].includes(job.status)&&<progress max={Math.max(1,job.total)} value={job.processed}/>}<small>{job.discovered} discovered · {job.indexed} indexed ({job.indexed_messages} messages) · {job.unchanged} unchanged · {job.unreadable} unreadable{job.ambiguous?` · ${job.ambiguous} ambiguous`:''}</small>{job.error&&<small class="error">{job.error}</small>}{['queued','running'].includes(job.status)&&<button onClick={()=>void cancelBackfill()}>Cancel scan</button>}</div>}

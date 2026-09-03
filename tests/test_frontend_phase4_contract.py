@@ -985,10 +985,15 @@ def test_history_filters_fit_narrow_split_panes() -> None:
     assert "flex:0 1 auto;min-width:min(7rem,100%);max-width:100%" in css
     assert ".history-search { display:grid" not in css
     assert "@container (max-width:620px)" in css
-    # The time filter chooses which of the two stamps a row is ranked by, so the row
-    # has to show both for the choice to mean anything.
+    # The control chooses which of the two stamps a row is ranked by, so the row has to
+    # show both for the choice to mean anything. It is named as a sort because it now is
+    # one: it used to scope only the date range, so toggling it changed nothing at all
+    # unless a range happened to be set (`design/features/history.md`).
     assert "time_basis" in history
-    assert "Time: last message" in history
+    assert "Sort: last activity" in history
+    assert "Sort: session started" in history
+    # And it opens on last activity, which is what "the most recent conversations" means.
+    assert "useState<'started'|'last_message'>('last_message')" in history
     assert "Started {timestampLabel(historyStart(entry))}" in history
     assert "Last {entry.last_message_role" in history
 
@@ -1012,13 +1017,20 @@ def test_daemon_spawned_panes_request_focus_rather_than_setting_it() -> None:
     # `confirmSecondOpinion` was a fourth flow until the cross-vendor review lost its
     # frontend (`test_frontend_control_plane_contract.py`); a handler that does not exist
     # cannot owe a focus request.
+    # The rule is about *which* id, not about which setter appears. A flow may focus a
+    # placeholder leaf directly, because the client put that leaf in the layout in the
+    # same tick and there is no gap for reconciliation to read as stale - that is how the
+    # History resume shows a pane from the press rather than from the answer. What must
+    # never be set directly is an id the daemon just handed back.
     for flow in ("resumeHistoryEntry", "runBranch", "resumeSession"):
         body = re.search(rf"const {flow} = ?async[^\n]*\n(.*?)\n  \}}\n", app, re.DOTALL)
         assert body, f"{flow} is no longer a recognisable handler"
         assert "requestFocusView(" in body.group(1), f"{flow} must request focus, not set it"
-        assert "setFocusedViewId(" not in body.group(1), (
-            f"{flow} sets focus directly, which the layout refresh will undo"
-        )
+        for target in re.findall(r"setFocusedViewId\(([^\n]*)", body.group(1)):
+            assert "pendingId" in target, (
+                f"{flow} sets focus on {target.strip()}, which the layout refresh will undo; "
+                "only a placeholder this flow placed itself may be focused directly"
+            )
 
     # The request is held in a ref and consulted by the reconciliation effect, or it
     # would be dropped by the very render it exists to survive.

@@ -566,6 +566,8 @@ The guarded assertions themselves did not move: a real turn still has to produce
 - **Every per-session artifact root is exported to the shim environment**, not only the adapter path.
   `MUX_OPENCODE_CONFIG_ROOT` was once read by the launcher and never exported, so an opencode started by typing `opencode` in a shell pane materialized no config — no plugin, no hooks, no state, no MCP — while the same harness from the Run menu worked.
   A divergence between the two launch paths is the hardest kind to notice, because the path under test is rarely the path in use.
+  `MUX_HOOK_LAUNCHER` joined that set on 2026-09-02 for the same reason: `agent_launcher` assembles Codex's lifecycle hooks in the pane, where there is no `Config` to read, so the gated launcher the daemon wrote (`swe_mux/bundle_swap.py`) has to be published rather than recomputed.
+  It is absent on a source install, which is not an omission - an interpreter in a virtualenv is renamed by nothing, so there is no swap window to gate and gating it would cost a shell process on every `PreToolUse`.
   Extension-registered native tools are the route if that surface is ever wanted.
 - **`PI_CODING_AGENT_DIR` is shared between pi and oh-my-pi and is read by both descriptors.**
   Mirroring the CLI's own resolution is the job of a data-home resolver, so an exported value moves both harnesses exactly as it moves both CLIs.

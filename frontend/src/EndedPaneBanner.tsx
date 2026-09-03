@@ -20,10 +20,14 @@ export type EndedPaneBannerProps = {
   onResume?: () => void
   onRestart?: () => void
   onOpenTranscript?: () => void
+  /** True while this pane's own resume is in flight. The daemon proves a resumed pane
+   *  stayed up before it answers, which takes seconds, and a button that looks untouched
+   *  for that long reads as one that did not work. */
+  resuming?: boolean
 }
 
 export function EndedPaneBanner(
-  { session, onResume, onRestart, onOpenTranscript }: EndedPaneBannerProps,
+  { session, onResume, onRestart, onOpenTranscript, resuming = false }: EndedPaneBannerProps,
 ) {
   const cold = session.cold === true
   const inactive = isInactiveSession(session)
@@ -45,7 +49,11 @@ export function EndedPaneBanner(
       : null}
     {missing ? <span class="cold-pane-empty">{missing}</span> : null}
     {onOpenTranscript ? <button onClick={onOpenTranscript}>Read transcript</button> : null}
-    {onResume ? <button onClick={onResume}>Resume</button> : null}
-    {onRestart ? <button onClick={onRestart}>Restart terminal</button> : null}
+    {onResume
+      ? <button disabled={resuming} onClick={onResume}>{resuming ? 'Resuming…' : 'Resume'}</button>
+      : null}
+    {onRestart
+      ? <button disabled={resuming} onClick={onRestart}>{resuming ? 'Restarting…' : 'Restart terminal'}</button>
+      : null}
   </div>
 }

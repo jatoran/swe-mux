@@ -21,9 +21,10 @@ SHIM_MARKER = "swe_mux.agent_launcher"
 # harness-detection call looks for; a `claude.sh` would simply never be found.
 SHIM_SUFFIX = ".cmd" if IS_WINDOWS else ""
 SHIM_NAMES = tuple(f"{name}{SHIM_SUFFIX}" for name in agent_harnesses())
-# A shim is two lines. Reading more than this would mean the candidate is not one,
-# and the cap is what keeps `is_mux_shim` from slurping an arbitrary binary that
-# happens to sit at an agent's name on PATH.
+# A shim is a handful of lines - the bundle-swap gate (`bundle_swap`) and the one
+# launch line, well under this. Reading more than this would mean the candidate is
+# not one, and the cap is what keeps `is_mux_shim` from slurping an arbitrary
+# binary that happens to sit at an agent's name on PATH.
 _SHIM_READ_LIMIT = 4096
 
 

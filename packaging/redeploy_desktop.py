@@ -77,6 +77,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 import build_desktop  # noqa: E402 - sibling packaging module
 
+from swe_mux import bundle_swap  # noqa: E402
 from swe_mux.bundle_archive import (  # noqa: E402
     ArchiveError,
     file_digest,
@@ -784,34 +785,41 @@ def _run(args: argparse.Namespace, config, outcome: Outcome) -> int:  # noqa: AN
     stop_app_processes(config)
 
     # -- swap ---------------------------------------------------------------
+    # Held for the renames only. `dist/swe-mux` stops existing between them, and
+    # every gated shim in the data dir waits that out rather than launching a
+    # process whose `_MEIPASS` is about to name a directory called something else
+    # (`swe_mux.bundle_swap` has the failure it closes). The stopped shell and
+    # daemon are not what this protects: the hook clients of live sessions are,
+    # and those are deliberately spared by `stop_app_processes` above.
     if not args.skip_build:
         clear_slot(PREV_APP)
-        if APP_DIST.exists() and not replace_dir(APP_DIST, PREV_APP):
-            # A lock straggler outlived the targeted stop. Only now is the blunt
-            # image-wide kill worth its cost: the alternative is a redeploy that
-            # fails outright. Sparing helpers first means the common path never
-            # pays it, and this path retries the rename once afterwards.
-            force_stop_app_images()
-            if not replace_dir(APP_DIST, PREV_APP):
-                log("ABORT: could not retire the old bundle; relaunching it unchanged")
+        with bundle_swap.hold_bundle_swap(config.data_dir):
+            if APP_DIST.exists() and not replace_dir(APP_DIST, PREV_APP):
+                # A lock straggler outlived the targeted stop. Only now is the blunt
+                # image-wide kill worth its cost: the alternative is a redeploy that
+                # fails outright. Sparing helpers first means the common path never
+                # pays it, and this path retries the rename once afterwards.
+                force_stop_app_images()
+                if not replace_dir(APP_DIST, PREV_APP):
+                    log("ABORT: could not retire the old bundle; relaunching it unchanged")
+                    outcome.record(
+                        OUTCOME_SWAP_FAILED,
+                        "The old app bundle could not be retired, so the previous build was "
+                        "restarted unchanged. Your change did NOT ship.",
+                        code=1,
+                    )
+                    return relaunch_and_report(config, args, note="old build (swap failed)")
+            if not replace_dir(STAGED_APP, APP_DIST):
+                log("ABORT: could not move the staged bundle into dist; restoring the old app")
+                if PREV_APP.exists():
+                    replace_dir(PREV_APP, APP_DIST)
                 outcome.record(
                     OUTCOME_SWAP_FAILED,
-                    "The old app bundle could not be retired, so the previous build was "
-                    "restarted unchanged. Your change did NOT ship.",
+                    "The new bundle could not be moved into place, so the previous build was "
+                    "restored. Your change did NOT ship.",
                     code=1,
                 )
                 return relaunch_and_report(config, args, note="old build (swap failed)")
-        if not replace_dir(STAGED_APP, APP_DIST):
-            log("ABORT: could not move the staged bundle into dist; restoring the old app")
-            if PREV_APP.exists():
-                replace_dir(PREV_APP, APP_DIST)
-            outcome.record(
-                OUTCOME_SWAP_FAILED,
-                "The new bundle could not be moved into place, so the previous build was "
-                "restored. Your change did NOT ship.",
-                code=1,
-            )
-            return relaunch_and_report(config, args, note="old build (swap failed)")
         shutil.rmtree(STAGING_ROOT, ignore_errors=True)
 
     # -- relaunch ------------------------------------------------------------
@@ -843,7 +851,9 @@ def _run(args: argparse.Namespace, config, outcome: Outcome) -> int:  # noqa: AN
         )
         stop_app_processes(config)
         clear_slot(FAILED_APP)
-        if not replace_dir(APP_DIST, FAILED_APP) or not replace_dir(PREV_APP, APP_DIST):
+        with bundle_swap.hold_bundle_swap(config.data_dir):
+            rolled_back = replace_dir(APP_DIST, FAILED_APP) and replace_dir(PREV_APP, APP_DIST)
+        if not rolled_back:
             log("ABORT: rollback swap failed; check dist/ by hand")
             outcome.record(
                 OUTCOME_SWAP_FAILED,

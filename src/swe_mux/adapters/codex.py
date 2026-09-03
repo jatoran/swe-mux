@@ -13,6 +13,7 @@ import uuid
 from collections.abc import Callable
 from pathlib import Path
 
+from ..bundle_swap import hook_delivery_from_env
 from ..codex_tui import with_scrollback_safe_tui
 from ..harness import descriptor
 from .base import BackendAdapter, SpawnOptions, SpawnSpec, deliver_project_skill
@@ -30,16 +31,24 @@ def codex_data_home() -> Path:
 
 
 def _codex_hook_commands(event: str, executable: str | None = None) -> tuple[str, str]:
-    argv = [executable or sys.executable, "-m", "swe_mux.hook_client", event]
+    argv = [executable or hook_delivery_from_env(), "-m", "swe_mux.hook_client", event]
     return shlex.join(argv), subprocess.list2cmdline(argv)
 
 
-def codex_lifecycle_hook_args(existing_args: list[str] | None = None) -> list[str]:
+def codex_lifecycle_hook_args(
+    existing_args: list[str] | None = None, *, executable: str | None = None
+) -> list[str]:
     """Inline additive Codex lifecycle hooks without rewriting user configuration.
 
     The command is session-independent: its exact definition hashes the same in every
     pane, so Codex's non-managed hook trust review is needed once rather than once per
     mux session. Per-session authentication remains in the inherited MUX_HOOK_* env.
+
+    `executable` is the daemon-side answer for what to put in front of the module
+    (the bundle-swap gate, `bundle_swap`); omitted, it is read from the session's
+    own `MUX_HOOK_LAUNCHER`, which is how `agent_launcher` gets the same answer in
+    a pane that has no `Config`. Changing it re-hashes the definition once, so
+    Codex asks for its non-managed hook trust review one more time.
     """
     existing = existing_args or []
     configured = "\n".join(existing)
@@ -47,7 +56,7 @@ def codex_lifecycle_hook_args(existing_args: list[str] | None = None) -> list[st
     for event in CODEX_LIFECYCLE_HOOK_EVENTS:
         if f"hooks.{event}" in configured:
             continue
-        command, windows_command = _codex_hook_commands(event)
+        command, windows_command = _codex_hook_commands(event, executable)
         timeout = 3 if event == "SessionEnd" else 15
         value = (
             f'hooks.{event}=[{{ hooks = [{{ type = "command", '
@@ -85,6 +94,7 @@ class CodexAdapter(BackendAdapter):
         data_home_resolver: Callable[[], Path] | None = None,
         rollout_file_prefix: str = "rollout-",
         skill: bool = False,
+        hook_executable: str | None = None,
     ) -> None:
         self.name = name
         # Automatic skill delivery is a spawn-time write of the shared project
@@ -101,6 +111,14 @@ class CodexAdapter(BackendAdapter):
         self.default_exe = default_exe
         self.default_args = default_args or []
         self.command_resolver = command_resolver
+        self._hook_executable = hook_executable
+        # Deliberately NOT routed through the bundle-swap gate. Codex spawns
+        # `notify` itself, with no shell, and appends the notification JSON as a
+        # trailing argument - so on Windows the gate's `.cmd` would have to go
+        # through `cmd.exe`, which is the one documented way to corrupt exactly
+        # that JSON (`launchers.resolve_codex_pty_command`). It carries only
+        # `agent-turn-complete`, whose durable siblings all travel over the
+        # lifecycle hooks above, and those are gated.
         self.notify_program = (
             [sys.executable, "-m", "swe_mux.hook_client", "codex_notify"] if notify else None
         )
@@ -195,7 +213,7 @@ class CodexAdapter(BackendAdapter):
             prefix = [
                 "-c",
                 f"notify={json.dumps(self.notify_program)}",
-                *codex_lifecycle_hook_args(configured),
+                *codex_lifecycle_hook_args(configured, executable=self._hook_executable),
                 *prefix,
             ]
         return [*prefix, *configured]

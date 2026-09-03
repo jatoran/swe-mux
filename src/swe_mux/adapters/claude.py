@@ -14,6 +14,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from ..approvals import DECISION_HOOK_EVENTS
+from ..bundle_swap import ensure_exec_launcher
 from ..harness import HARNESSES, descriptor
 from ..host_platform import IS_WINDOWS
 from ..mcp_contract import claude_read_permissions
@@ -231,6 +232,12 @@ class ClaudeAdapter(BackendAdapter):
         self._approval_hook_timeout = max(1, int(round(approval_hook_timeout)))
         if data_dir:
             data_dir.mkdir(parents=True, exist_ok=True)
+        # Hook delivery goes through the data dir's gated launcher on the frozen
+        # app, because the command written here names an executable *inside the
+        # directory a redeploy renames* and hooks fire straight through the swap
+        # (`bundle_swap`). None on a source install, which leaves `sys.executable`.
+        launcher = ensure_exec_launcher(data_dir) if data_dir else None
+        self._hook_executable = str(launcher) if launcher else None
         self.settings_path = (
             self._write_hook_settings(data_dir) if data_dir and instrument else None
         )
@@ -274,7 +281,7 @@ class ClaudeAdapter(BackendAdapter):
         hooks: dict[str, list[dict[str, object]]] = {}
         family = descriptor(self.name) if self.name in HARNESSES else descriptor("claude")
         for event in family.hook_events:
-            command = _hook_command(event, identity=identity)
+            command = _hook_command(event, self._hook_executable, identity=identity)
             entry: dict[str, object] = {"type": "command", "command": command}
             if family.hook_approval_decisions and event in DECISION_HOOK_EVENTS:
                 # The CLI's own default is 600 s, and a timed-out hook does not

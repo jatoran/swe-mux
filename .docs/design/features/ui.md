@@ -359,7 +359,7 @@ Its rules, and what each one is defending:
 ## Menus and overlays
 
 - Scope follows the menu that opened a surface, never a hidden mode.
-  The app menu opens History, Notes, the fleet queue, prompt library, clipboard history, Resources, Usage & spend, and notifications across every Project; right-clicking a Project row opens Session history and the prompt library prefiltered to it.
+  The app menu opens History, Notes, the fleet queue, prompt library, clipboard history, Resources, Usage & spend, and notifications across every Project; right-clicking a Project row opens Session history prefiltered to it, and only that: the prompt library left the Project menu because the Actions drawer's Prompt templates section is already scoped to the selected Project, which made the row a third route to it after that and the palette.
   Right-clicking empty sidebar space is the no-Project case and matches the app menu.
 - **A Project menu row has to earn its place against the drawer.**
   Notes, Processes, the fleet queue, and Browse files each left it, because each is a drawer tab or a dialog that already opens on the *selected* Project - so right-clicking a Project row to reach them was a second route to a place one click away, and the two that stayed are the two with no such home.
@@ -3319,6 +3319,18 @@ The app-wide answer to "what is this", and the recovery path for the tour.
   (sidebar row, toolbar Run, palette, keybinding, custom launcher) inherits it, and it runs
   with the optimistic state so the pending terminal is visible immediately. Project Actions
   take the same step in `attachActionSessions`.
+- **Any launch the daemon takes seconds to answer places its pane first.** A spawn, a worktree
+  launch, and a History resume all put a labelled placeholder leaf in the layout, focus it, and
+  swap in the real session when the response arrives, removing it and handing focus back on a
+  failure (`pendingSession.ts`). This is not decoration: focus that names a session no layout
+  holds yet is undone by reconciliation on the desktop and falls through to whatever tab was
+  already showing on a phone, so a flow that awaits before placing does not merely feel slow, it
+  lands somewhere else and jumps later. The resume is the one that writes no layout back, because
+  its daemon route attaches the pane itself (`features/history.md`).
+- **Error toasts render above every modal layer.** An error is almost always the answer to
+  something pressed *inside* a modal — a resume the daemon refused, a save that failed — and
+  below the overlay it is a press that appears to have done nothing. The stack takes no pointer
+  events; only each toast does, to dismiss itself.
 - The drawer is deliberately *not* a modal layer. Inserting targets the surface that was focused
   before it opened — terminal or Continuity note, whichever was last focused (`insertTarget.ts`;
   a detached editor loses the routing to the focused terminal) — so the workspace has to stay
