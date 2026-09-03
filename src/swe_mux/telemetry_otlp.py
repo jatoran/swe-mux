@@ -67,6 +67,11 @@ _KNOWN_IGNORED_EVENTS = frozenset(
         # add nothing it does not have.
         "hook_execution_start",
         "hook_execution_complete",
+        # Seen on the live fleet after the 2026-09-03 redeploy, neither in the
+        # headless capture: an `@` mention typed into the composer, and the CLI's own
+        # local retention housekeeping. Neither is a lifecycle fact about a run.
+        "at_mention",
+        "retention_sweep",
     }
 )
 
