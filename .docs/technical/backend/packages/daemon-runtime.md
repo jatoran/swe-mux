@@ -338,6 +338,7 @@ The resulting extension import failure was observed 2026-09-02 as a modal `Faile
 **The consequence is a lost event and not a cosmetic dialog.** `hook_client` spools its durable events when the daemon is down, which is exactly what makes a redeploy safe for a live fleet; a helper that dies in the bootloader never reaches that code, so a `Stop` or a `PermissionRequest` is lost rather than deferred and the session reads as "working" until the 900 s no-evidence alarm.
 
 `hold_bundle_swap` writes `<data_dir>/bundle-swap.hold`, settles for `SETTLE_SECONDS` so bootloaders already in flight can finish starting, and removes it in a `finally`; `packaging/redeploy_desktop.py` holds it across both renames and across the rollback's two.
+The settle is enforced against a monotonic deadline, so an early timer wake cannot shorten the bootloader safety window.
 `ensure_exec_launcher` writes `<data_dir>/bin/swemux-exec[.cmd]`, which waits while that file exists and then runs its target - a **drop-in for `sys.executable`** rather than a hook-specific entrypoint, so every caller keeps the `-m swe_mux.<helper> ...` argv it already had and only the program in front changes.
 The same gate opens each agent shim `launchers._write_shim` writes.
 A wedged hold is bounded twice: the shims give up after `WAIT_SECONDS`, and `clear_stale_hold` deletes one older than `STALE_SECONDS`.
