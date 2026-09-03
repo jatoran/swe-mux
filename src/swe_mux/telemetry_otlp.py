@@ -61,6 +61,12 @@ _KNOWN_IGNORED_EVENTS = frozenset(
         "conversation_starts",
         "turn_ttft",
         "websocket_connect",
+        # Claude's hook-execution timing. Seen on the first live session after
+        # deployment rather than in the headless capture, which configures no hooks;
+        # the hook's own PostToolUse delivery already reaches the ledger, so these
+        # add nothing it does not have.
+        "hook_execution_start",
+        "hook_execution_complete",
     }
 )
 
