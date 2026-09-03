@@ -236,7 +236,36 @@ the loop from.
 
 ## Audited window (2026-09-03)
 
-PENDING_AUDIT
+`tools/telemetry_audit_window.py --hours 24` against the live data directory, after the
+schema 4 redeploy and one on-demand reconciliation pass, read-only beside the running daemon.
+For every run that started in the window, the provider's own record (transcript or
+conversation store) is parsed by the daemon's dialect scanner and each call it names is
+looked up in the ledger by its native call id.
+
+| figure | value |
+| --- | --- |
+| runs in the window | 130 (122 with a native record, 8 with none) |
+| native calls | 11,905 (claude 10,866; codex 643; omp 396) |
+| matched in the ledger under the same id | 11,905 |
+| native-only (in the provider's record, missing from the ledger) | 0 |
+| ledger-only (in the ledger, not named by the provider's record) | 666 |
+
+The ledger-only calls are live-only evidence, classified by provenance:
+
+| count | what it is |
+| --- | --- |
+| 577 | Codex nested code-mode executions (`exec-` call ids) reported by the hook alone; the transcript names only the model-facing call |
+| 42 | Tier 0 verification records (`tier0:` ids, the `.worktree-verify` runs) imported as legacy calls |
+| 31 | Claude OTel tool results the transcript did not name, ranked `native` |
+| 13 | Codex nested executions with both a hook request and a hook result |
+| 3 | hook-only model-layer calls |
+
+The eight runs with no native record are runs whose transcript no longer exists on disk;
+the reconciler records them as `unavailable`, which is the state the quality readout shows
+(206 claude, 22 omp, 18 opencode runs over the whole 2,000-run inventory), distinct from a
+parse error and from a record that was read and held nothing.
+The on-demand pass before the audit scanned one changed store, skipped 1,753 unchanged ones
+by watermark, and inserted two calls.
 
 ## Remaining implementation
 
