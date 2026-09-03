@@ -30,7 +30,8 @@ test('the workload table reads at human scale rather than raw units', async ({ p
 
   const row = page.locator('.usage-table', { hasText: 'Observed workload' }).locator('tbody tr').first()
   // 8403 seconds and 9,702,931,354 tokens are both technically present and practically unread.
-  await expect(row.locator('td').nth(2)).toHaveText('2h 20m')
+  await expect(row.locator('td').nth(2)).toContainText('1m 35s')
+  await expect(row.locator('td').nth(2)).toContainText('2h 20m wall')
   await expect(row.locator('td').nth(6)).toHaveText('9.7B')
   // The exact total is still one hover away rather than discarded by the rounding.
   await expect(row.locator('td').nth(6)).toHaveAttribute('title', /9.702.931.354/)
@@ -46,14 +47,19 @@ test('collection health is collapsed beneath the metrics it qualifies', async ({
   // off the first screen, so it ships closed and the tables sit above it.
   const health = page.locator('.telemetry-collection-health')
   await expect(health).toHaveJSProperty('open', false)
-  await expect(health.locator('summary')).toContainText('parser v4')
+  await expect(health.locator('summary')).toContainText('4610/4821 calls have results')
 
   const metrics = await page.locator('.usage-table', { hasText: 'Cross-project tool metrics' }).boundingBox()
   const collapsed = await health.boundingBox()
   expect(collapsed!.y).toBeGreaterThan(metrics!.y)
 
   await health.locator('summary').click()
-  await expect(health.locator('tbody tr')).toHaveCount(1)
+  // Two tables, one row each: field completeness per backend, and the provider event
+  // names seen per harness version. Both are collection facts, not fleet metrics.
+  await expect(health.locator('table')).toHaveCount(2)
+  await expect(health.locator('table').first().locator('tbody tr')).toHaveCount(1)
+  await expect(health.locator('table').last().locator('tbody tr')).toHaveCount(1)
+  await expect(health.locator('table').last()).toContainText('tool_result')
 })
 
 test('every segment fits the shared frame without overlapping its chrome', async ({ page }) => {

@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any, Literal, cast
 
 from . import process_priority
-from .adapters import BackendAdapter, SpawnOptions
+from .adapters import BackendAdapter, SpawnOptions, SpawnSpec
 from .adapters.claude import claude_data_home
 from .agent_environment import capture_config_baseline
 from .background_tasks import background
@@ -90,6 +90,7 @@ from .supervisor_client import (
     host_for_adoption,
     liveness_of,
 )
+from .telemetry_otlp import provider_otel_args, provider_otel_env
 from .terminal_arbitration import OwnerState, effective_geometry, release_owner
 from .transcript_repair import resolve_row_transcript
 from .transcript_view import conversation_is_readable
@@ -2802,6 +2803,7 @@ class SessionManager:
         status_timeline: StatusTimelineStore | None = None,
         recovery: SessionRecoveryStore | None = None,
         agent_surfaces: dict[str, str] | None = None,
+        native_otel_enabled: bool = False,
     ) -> None:
         self.adapters, self.reaper, self.history, self.events = adapters, reaper, history, events
         # Durable sink for the per-session transition ledgers; None in tests
@@ -2832,6 +2834,7 @@ class SessionManager:
         # Restart-scoped like every other per-harness toggle. None (tests,
         # minimal wiring) stamps nothing.
         self.agent_surfaces = agent_surfaces
+        self.native_otel_enabled = native_otel_enabled
         self.hook_spool_dir = hook_spool_dir
         if hook_spool_dir is not None:
             hook_spool_dir.mkdir(parents=True, exist_ok=True)
@@ -3057,6 +3060,19 @@ class SessionManager:
             if resume_native_id
             else adapter.spawn_spec(native_id, opts)
         )
+        otel_args = provider_otel_args(
+            backend,
+            enabled=self.native_otel_enabled,
+            ingress_url=self.ingress_url,
+            session_id=sid,
+            secret=hook_secret,
+        )
+        if otel_args:
+            spawn_spec = SpawnSpec(
+                executable=spawn_spec.executable,
+                argv=(*spawn_spec.argv, *otel_args),
+                env=spawn_spec.env,
+            )
         record = SessionRecord(
             sid,
             name or f"{backend}-{sid[:6]}",
@@ -3183,6 +3199,15 @@ class SessionManager:
         # pane additionally drops any inherited NO_COLOR that would fight the colour
         # it forces (see spawn_contract.base_session_env).
         env_base = base_session_env(os.environ, backend)
+        env_extra.update(
+            provider_otel_env(
+                backend,
+                enabled=self.native_otel_enabled,
+                ingress_url=self.ingress_url,
+                session_id=sid,
+                secret=hook_secret,
+            )
+        )
         pty: PtyHost | RemotePtyHost | None = None
         if self.supervisor is not None and self.supervisor.connected:
             remote = RemotePtyHost(

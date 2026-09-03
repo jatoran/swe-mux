@@ -94,7 +94,7 @@ test('the Automation dashboard mirrors the attention inbox as the same component
   // The away report stays with the drawer inbox it summarizes.
   assert.ok(source('Notifications.tsx').includes("api('GET','/api/attention/absence')"))
   // The workload table moved to Resources, following the cost column that left before it.
-  assert.ok(source('WorkloadTelemetry.tsx').includes("api<Workloads>('GET', '/api/telemetry/workloads')"))
+  assert.ok(source('WorkloadTelemetry.tsx').includes("api<Workloads>('GET', `/api/telemetry/v2/workload?${telemetryQuery("))
 })
 
 test('the spend view is one component drawn in both places rather than two copies', () => {

@@ -20,10 +20,14 @@ Resources is live readings of one host that go stale in seconds; Usage is a retr
 Four segments: **Processes**, **Network**, **Storage**, **Fleet activity**.
 It replaces three separate modals that were three implementations of one shape - layer, focus trap, header, close - reached from three app-menu rows.
 
-`FleetActivityView.tsx` holds `runs + workload`, `tools + skills`, and `context + compaction`, which were domains of a retired **Tokens** segment and measure neither a token nor a dollar.
+`FleetActivityView.tsx` holds `runs + workload`, `tools + skills`, `context + compaction`, and `inefficiencies`; the first three were domains of a retired **Tokens** segment and measure neither a token nor a dollar.
 Processes says what the fleet is running now; Fleet activity says what it has been doing.
 Money is deliberately absent: the Usage dialog is the whole cost picture, and a second table of one number under a second name is the drift this split removed.
-Parser coverage is a collapsed `<details>` inside `tools + skills` rather than a peer table, because it says whether those figures were collectable rather than what they are.
+Every tab reads the canonical telemetry v2 routes (`/api/telemetry/v2/*`), never the legacy operational snapshot, and every figure is the daemon's exact total over the selected window; nothing is summed from a displayed page.
+The controls above the tabs - range, cohort, backend, and (on the tool tabs) layer - are one query string built by `telemetryQuery` in `WorkloadTelemetry.tsx` and shared by every tab, so switching tabs never silently changes the question.
+The backend picker offers what the ledger has actually seen in the window rather than the harness registry, because a harness that never ran here is not a filter anyone can use and an imported one that mux never launched still is.
+Collection health is a collapsed `<details>` inside `tools + skills` rather than a peer table, because it says whether those figures were collectable rather than what they are; it carries the field-completeness denominators per backend, the provider event names seen per harness version with whether the reducer understood them, and any ledger schema drift.
+The export section beside it links the JSONL and CSV attachments the daemon streams for the same window and filters.
 
 Each view keeps its own fetching and is **unmounted when not selected** on purpose, since Processes and Network poll and a dialog holding live pollers open would cost more than the modals it replaced.
 
@@ -53,8 +57,8 @@ The source multi-select popover, the collector refresh, and the cache controls a
 Historical source controls derive from cache metadata instead of the launch-harness registry, and issue one unified refresh request.
 `usageAnalytics.ts` owns source and model aggregation.
 
-`operationalTelemetry.ts` holds the `/api/telemetry/operational` shapes, which two dialogs now read for different halves - Usage → Quota takes `quota.attributions`, Resources → Fleet activity takes `tools` and `compactions`.
-Neither owns the types, and a copy in each reader is how they drift.
+`operationalTelemetry.ts` holds the `/api/telemetry/operational` shapes, which Usage → Quota reads for `quota.attributions`.
+Resources → Fleet activity no longer reads that snapshot; its tool and compaction tables moved to the canonical ledger routes on 2026-09-02, and the legacy `tools` and `compactions` halves stay in the shape only for the Usage dialog's reader.
 
 ## Bandwidth, storage, and processes
 

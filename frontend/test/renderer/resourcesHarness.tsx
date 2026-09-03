@@ -16,17 +16,16 @@ import '../../src/style.css'
 const NOW = 1_770_000_000
 
 const TELEMETRY = {
-  since: 0,
+  from: NOW - 7 * 86400,
+  to: NOW,
+  origin: 'mux_owned',
   dimensions: [
-    { backend: 'codex', model: 'unknown', runs: 1232, ended_runs: 191, average_duration_s: 8403.96, tokens_in: 9_664_898_958, tokens_out: 38_032_396, average_final_context_pct: 0.4338, average_peak_context_pct: 0.5432, turns_per_run: 0.0016, stalls_per_run: 0, approvals_per_run: 0.0008, completion_evidence_count: 0, completion_evidence_runs: 0 },
-    { backend: 'claude', model: 'claude-opus-4-8', runs: 606, ended_runs: 63, average_duration_s: 5691.24, tokens_in: 35_087_852_487, tokens_out: 276_238_868, average_final_context_pct: 0.2592, average_peak_context_pct: 0.2662, turns_per_run: 2.4, stalls_per_run: 0.12, approvals_per_run: 0.34, completion_evidence_count: 84, completion_evidence_runs: 41 },
-    { backend: 'claude', model: 'claude-sonnet-4-6', runs: 694, ended_runs: 0, average_duration_s: null, tokens_in: 1_024_543_568, tokens_out: 11_889_003, average_final_context_pct: 0.063, average_peak_context_pct: 0.063, turns_per_run: 0, stalls_per_run: 0, approvals_per_run: 0, completion_evidence_count: 0, completion_evidence_runs: 0 },
+    { backend: 'codex', model: 'gpt-5.6-sol', runs: 32, ended_runs: 31, average_wall_duration_s: 8403.96, average_turn_duration_ms: 94500, average_tool_duration_ms: 4300, average_model_wait_ms: 12400, model_requests: 212, model_request_failures: 2, input_tokens: 9_664_898_958, output_tokens: 38_032_396, cache_read_tokens: 4_000_000_000, cache_write_tokens: 0, average_final_context_pct: 0.4338, average_peak_context_pct: 0.5432, turns: 143, completed_turns: 141, model_tool_calls: 880, runtime_tool_calls: 602, completed_tool_calls: 862, failed_tool_calls: 18, approval_events: 8, stall_events: 2, subagent_events: 12, verifications: 44, successful_verifications: 41 },
+    { backend: 'claude', model: 'claude-opus-5', runs: 26, ended_runs: 23, average_wall_duration_s: 5691.24, average_turn_duration_ms: 71200, average_tool_duration_ms: 2100, input_tokens: 35_087_852, output_tokens: 276_238, cache_read_tokens: 20_000_000, cache_write_tokens: 100_000, average_final_context_pct: 0.2592, average_peak_context_pct: 0.2662, turns: 98, completed_turns: 96, model_tool_calls: 461, runtime_tool_calls: 0, completed_tool_calls: 450, failed_tool_calls: 11, approval_events: 5, stall_events: 3, subagent_events: 18, verifications: 36, successful_verifications: 34 },
+    { backend: 'claude', model: 'claude-sonnet-5', runs: 14, ended_runs: 12, average_wall_duration_s: 2200, average_turn_duration_ms: null, average_tool_duration_ms: null, input_tokens: 1_024_543, output_tokens: 11_889, cache_read_tokens: 700_000, cache_write_tokens: 0, average_final_context_pct: 0.063, average_peak_context_pct: 0.063, turns: 0, completed_turns: 0, model_tool_calls: 0, runtime_tool_calls: 0, completed_tool_calls: 0, failed_tool_calls: 0, approval_events: 0, stall_events: 0, subagent_events: 0, verifications: 0, successful_verifications: 0 },
   ],
-  event_counts: { turn_ended: 457 },
   interpretation: 'observational_correlation_only',
-  observer_spend: { tokens: 2269, cost_usd: 0.0006258 },
-  provider_cost_dimensions: [],
-  cost_note: 'ccusage costs are backend/model aggregates and are not attributed to individual runs',
+  collection: { backfilled: 1200, backfill_completed: false, backfill_stream: 'tool_events', provider_dropped: 0 },
 }
 
 const OPERATIONAL = {
@@ -52,8 +51,56 @@ const OPERATIONAL = {
   ],
 }
 
+const CANONICAL = {
+  from: NOW - 7 * 86400,
+  to: NOW,
+  origin: 'mux_owned',
+  matching_calls: 4821,
+  groups: [
+    { backend: 'claude', model: 'claude-opus-5', project_id: 'project-aaaaaaaa', origin: 'mux_owned', invocation_layer: 'model', family: 'file', operation: 'write', transport: 'native', raw_name: 'Edit', calls: 4821, statuses: { succeeded: 4610, failed: 211 }, duration_count: 4700, average_duration_ms: 143.7 },
+  ],
+  skills: {
+    matching_invocations: 12,
+    groups: [
+      { backend: 'claude', model: 'claude-opus-5', project_id: 'project-aaaaaaaa', skill_name: 'documentation', invocation_trigger: 'claude-proactive', skill_source: 'userSettings', skill_scope: 'user', invocations: 12 },
+    ],
+  },
+  collection: { backfilled: 1200, backfill_completed: false, backfill_stream: 'tool_events', provider_dropped: 0 },
+}
+
+const QUALITY = {
+  totals: { calls: 4821, with_request: 4821, with_result: 4610, with_provider_result: 3900, with_duration: 4700, with_input_hash: 4800, with_executed_input_hash: 3900, with_output_hash: 4550, with_output_size: 4300, with_harness_version: 3900, truncated_outputs: 2, runtime_parent_unavailable: 0, other_family: 0 },
+  backends: [
+    { backend: 'claude', calls: 4821, with_request: 4821, with_result: 4610, with_provider_result: 3900, with_duration: 4700, with_input_hash: 4800, with_executed_input_hash: 3900, with_output_hash: 4550, with_output_size: 4300, with_harness_version: 3900, truncated_outputs: 2, runtime_parent_unavailable: 0, other_family: 0 },
+  ],
+  parsers: [
+    { backend: 'claude', harness_version: '2.1.259', parser_version: 'otlp-json-v2', event_name: 'tool_result', recognized: 1, occurrences: 3900, first_seen_at: NOW - 86400, last_seen_at: NOW - 60 },
+  ],
+  collection: CANONICAL.collection,
+}
+
+const COMPACTIONS = {
+  total: 3,
+  groups: [
+    { backend: 'claude', model: 'claude-opus-5', project_id: 'project-aaaaaaaa', trigger: 'auto', count: 3, failures: 0, duration_count: 3, average_duration_ms: 825, token_count: 3, average_tokens_reclaimed: 48200 },
+  ],
+  collection: CANONICAL.collection,
+}
+
+const TOOL_PAGE = {
+  matching_calls: 4821,
+  next_cursor: null,
+  items: [
+    { tool_call_id: 'call-aaaaaaaa', run_id: 'run-bbbbbbbb', turn_id: 'turn-cccccccc', session_id: 'session-dddddddd', backend: 'claude', model: 'claude-opus-5', invocation_layer: 'model', raw_name: 'Edit', family: 'file', operation: 'write', transport: 'native', started_at: NOW - 60, finished_at: NOW - 59, status: 'succeeded', duration_ms: 143.7, target_preview: 'src/swe_mux/server.py', output_measurement: 'full_hash_size_unknown', request_source: 'transcript', result_source: 'transcript' },
+  ],
+}
+
 const ROUTES: Array<[string, unknown]> = [
-  ['/api/telemetry/workloads', TELEMETRY],
+  ['/api/telemetry/v2/workload', TELEMETRY],
+  ['/api/telemetry/v2/tools/summary', CANONICAL],
+  ['/api/telemetry/v2/tools?', TOOL_PAGE],
+  ['/api/telemetry/v2/quality', QUALITY],
+  ['/api/telemetry/v2/compactions', COMPACTIONS],
   ['/api/telemetry/operational', OPERATIONAL],
 ]
 

@@ -299,7 +299,10 @@ async def test_subagent_hooks_never_date_transcript_staleness_evidence(
         note_hook_cwd=lambda _session, _payload: None,
         note_hook_transcript_path=lambda _session, _payload: None,
     )
-    app[keys.EVENTS] = SimpleNamespace(emit=AsyncMock())
+    # The canonical-telemetry side channel is a plain call; nothing here reads it.
+    app[keys.EVENTS] = SimpleNamespace(
+        emit=AsyncMock(), emit_transient_to=lambda *_args, **_payload: None
+    )
     app[keys.AUTOMATION] = SimpleNamespace(note_native_hook=lambda _sid: None)
     app[keys.HOOK_INGRESS_WINDOWS] = {}
     app.router.add_post("/api/hooks/{sid}", hook_ingress)

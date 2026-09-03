@@ -27,6 +27,7 @@ from ..observation import (
     foreign_conversation_hook_id,
     session_hook_event_scope,
 )
+from ..telemetry_otlp import PARSER_VERSION, otlp_reduction
 
 log = logging.getLogger(__name__)
 
@@ -51,6 +52,7 @@ MCP_RATE_LIMIT = 120
 
 
 MCP_BODY_BYTES = 256 * 1024
+OTLP_BODY_BYTES = 4 * 1024 * 1024
 
 
 def hook_event_payload(payload: dict[str, Any]) -> dict[str, Any]:
@@ -418,7 +420,54 @@ async def hook_ingress(request: web.Request) -> web.Response:
     return json_response({"ok": True})
 
 
+async def telemetry_otlp_logs(request: web.Request) -> web.Response:
+    """Session-authenticated local OTLP/JSON ingress with immediate content reduction."""
+
+    if request.content_length is not None and request.content_length > OTLP_BODY_BYTES:
+        raise web.HTTPRequestEntityTooLarge(
+            max_size=OTLP_BODY_BYTES, actual_size=request.content_length
+        )
+    peer = request.transport.get_extra_info("peername") if request.transport else None
+    host = peer[0] if peer else ""
+    if host not in {"127.0.0.1", "::1"}:
+        raise web.HTTPForbidden(text="telemetry ingress is loopback-only")
+    session = request.app[keys.SESSIONS].resolve(request.match_info["sid"])
+    supplied = request.headers.get("X-Mux-Hook-Secret", "")
+    if not secrets.compare_digest(supplied, session.hook_secret):
+        raise web.HTTPForbidden(text="invalid telemetry secret")
+    try:
+        payload = await request.json()
+        reduction = otlp_reduction(
+            payload,
+            session_id=session.record.id,
+            backend=session.record.backend,
+        )
+    except (ValueError, json.JSONDecodeError) as exc:
+        raise web.HTTPBadRequest(text=str(exc)) from None
+    service = request.app[keys.CANONICAL_TELEMETRY]
+    # The raw body is dropped here. What survives is the reduced events and a
+    # count of which provider event names arrived, so a renamed attribute shows
+    # up as drift in the quality view rather than as a quietly emptier ledger.
+    service.note_parser_signatures(
+        backend=str(session.record.backend),
+        harness_version=reduction.harness_version,
+        parser_version=PARSER_VERSION,
+        signatures=reduction.signatures,
+    )
+    accepted = sum(service.enqueue_provider_event(event) for event in reduction.events)
+    rejected = len(reduction.events) - accepted
+    return json_response(
+        {
+            "partialSuccess": {
+                "rejectedLogRecords": rejected,
+                "errorMessage": "ingress queue full" if rejected else "",
+            }
+        }
+    )
+
+
 ROUTES: tuple[web.RouteDef, ...] = (
     web.post("/api/hooks/{sid}", hook_ingress),
+    web.post("/api/telemetry/otlp/{sid}/v1/logs", telemetry_otlp_logs),
     web.post("/mcp", mcp_endpoint),
 )

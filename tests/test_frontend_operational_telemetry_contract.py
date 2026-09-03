@@ -33,10 +33,11 @@ def test_process_fleet_exposes_durable_identity_state_and_rechecked_actions() ->
 def test_operational_evidence_survives_the_split_without_identity_overclaim() -> None:
     """The evidence surfaces moved to two dialogs; every claim they make moved with them.
 
-    Quota is one of the three pots of spend and lives in the Usage dialog. Tool, skill, and
-    compaction evidence measures behavior rather than money and lives in Resources → Fleet
-    activity. One `/api/telemetry/operational` payload feeds both halves, so the shapes are
-    shared rather than copied into each reader.
+    Quota is one of the three pots of spend and lives in the Usage dialog, read from the
+    legacy `/api/telemetry/operational` snapshot. Tool, skill, and compaction evidence
+    measures behavior rather than money and lives in Resources → Fleet activity, which since
+    2026-09-02 reads the canonical ledger (`/api/telemetry/v2/*`) rather than that snapshot,
+    and never sums a total from a displayed page.
     """
     telemetry = source("operationalTelemetry.ts")
     fleet = source("FleetActivityView.tsx")
@@ -44,10 +45,14 @@ def test_operational_evidence_survives_the_split_without_identity_overclaim() ->
     segments = source("usageSegments.ts")
     quota = source("QuotaAnalytics.tsx")
 
-    # One declared path and one set of shapes, read by both dialogs.
+    # One declared legacy path for the quota half; the canonical routes for the other.
     assert "/api/telemetry/operational" in telemetry
-    assert "OPERATIONAL_TELEMETRY_PATH" in fleet
     assert "OPERATIONAL_TELEMETRY_PATH" in modal
+    assert "OPERATIONAL_TELEMETRY_PATH" not in fleet
+    assert "/api/telemetry/v2/tools/summary" in fleet
+    assert "/api/telemetry/v2/quality" in fleet
+    assert "/api/telemetry/v2/compactions" in fleet
+    assert "/api/telemetry/v2/export/" in fleet
     assert "/api/telemetry/quota-series" in source("usageAnalytics.ts")
 
     # Quota keeps its account semantics and its refusal to overclaim them.
@@ -67,15 +72,21 @@ def test_operational_evidence_survives_the_split_without_identity_overclaim() ->
     # Tool, skill, and compaction evidence, with every caveat it carried before the move.
     assert "tools + skills" in fleet
     assert "context + compaction" in fleet
-    assert "unknown or unmapped" in fleet
-    assert "project/session" in fleet
-    assert "parser_versions" in fleet
+    assert "project/layer" in fleet
     assert "Token drops alone remain unknown" in fleet
-    assert "Prompt similarity and file reads never imply skill usage" in fleet
-    # Parser coverage is a collapsed diagnostic, not a third peer metric: it says whether
-    # the figures above were collectable, which is asked only once they look wrong.
+    assert "Skills are never inferred from Markdown or generic file reads" in fleet
+    assert "Only explicit provider records qualify as skill activation" in fleet
+    # Collection health is a collapsed diagnostic, not a third peer metric: it says whether
+    # the figures above were collectable, which is asked only once they look wrong. It
+    # carries the per-backend field denominators and the provider event names the reducer
+    # saw, understood or not, so a renamed attribute reads as drift rather than silence.
     assert "telemetry-collection-health" in fleet
     assert "<details class=\"telemetry-collection-health\">" in fleet
+    assert "unrecognised provider event name" in fleet
+    assert "runtime_parent_unavailable" in fleet
+    assert "schema drift" in fleet
+    # The controls are one query for every tab, so switching tabs never changes the question.
+    assert "telemetryQuery({days,origin,backend,layer})" in fleet
 
     # Money is deliberately absent here. The Usage dialog is the whole cost picture, and a
     # second table of one number under a second name is the drift this split removed.

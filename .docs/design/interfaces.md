@@ -2574,6 +2574,16 @@ DELETE /provider-accounts/{provider}/{account_id}
 GET|POST /usage
 DELETE /usage/cache
 GET    /telemetry/operational[?provider=&account=&limit=]
+GET    /telemetry/v2/tools/summary[?from=&to=&origin=&project=&backend=&model=&layer=&family=&status=]
+GET    /telemetry/v2/tools[?from=&to=&cursor=&limit=&project=&backend=&model=&origin=&layer=&family=&status=]
+GET    /telemetry/v2/tools/{tool_call_id}
+GET    /telemetry/v2/workload[?from=&to=&origin=&project=&backend=&model=]
+GET    /telemetry/v2/quality[?from=&to=&origin=&project=&backend=&model=]
+GET    /telemetry/v2/inefficiencies[?from=&to=&origin=&project=&backend=&model=&layer=&family=&status=]
+GET    /telemetry/v2/compactions[?from=&to=&origin=&project=&backend=&model=]
+GET    /telemetry/v2/parsers
+GET    /telemetry/v2/export/{kind}[?from=&to=&origin=&project=&backend=&model=&format=jsonl|csv]
+POST   /telemetry/otlp/{session_id}/v1/logs
 GET    /telemetry/quota-series[?provider=&account=&since=&until=&resolution=raw|daily&limit=]
 POST   /telemetry/quota-resets/review {ids: [reset_id], resolution: seen|manual_usage|discarded}
 ```
@@ -2584,6 +2594,31 @@ Each source carries `source_id`, `source_label`, `collector_id`, daily, monthly,
 The historical source list is not derived from the harness registry and may include tools swe-mux does not launch.
 `DELETE /usage/cache` clears only historical ccusage data.
 Quota provider and account telemetry is independent and remains under `/telemetry/*`.
+Canonical telemetry v2 defaults to the last seven days and `origin=mux_owned`.
+`origin=all` includes imported provider history.
+Summary and workload responses aggregate the complete requested range without a row cap.
+The tool-detail route returns at most 500 rows per page with an opaque continuation cursor and
+an exact `matching_calls` denominator.
+The tool-call audit route returns the canonical lifecycle row plus every content-free evidence
+observation, contribution, precedence rank, and conflict marker.
+The quality route reports lifecycle and field-completeness denominators by backend, and every
+provider event name seen per harness version with whether the reducer understood it.
+The inefficiency route returns deterministic review candidates with their evidence, coverage,
+confidence, and suggested investigation.
+It performs no adaptive configuration change and makes no causal claim.
+`project`, `backend`, and `model` are exact-match filters on every aggregate; `layer`,
+`family`, and `status` additionally apply to the tool summary and the inefficiency route.
+The parsers route returns the parser-signature table, the ledger schema version and
+per-file signatures with any drift, and collection health.
+The export route streams every matching row of `tool_calls`, `runs`, `turns`,
+`model_requests`, `skills`, `verifications`, `compactions`, or `evidence` as JSONL (default)
+or CSV, with evidence identifiers and source locators, as an attachment.
+Invalid cursors, non-increasing time windows, and an unknown format return 400; an unknown
+export kind returns 404.
+The OTLP/JSON ingress is loopback-only, requires the session's hook secret in
+`X-Mux-Hook-Secret`, and accepts at most 4 MiB per batch.
+It reduces provider output to size and SHA-256 metadata before enqueueing and never writes the
+submitted OTLP body to the generic event log.
 
 Auth file contents never appear in API responses. `GET /provider-accounts` reports each live
 system auth state as `saved | external | signed_out | unreadable`; saved selection is derived

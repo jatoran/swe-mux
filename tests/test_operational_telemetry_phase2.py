@@ -1442,6 +1442,13 @@ def test_operational_telemetry_route_is_registered(phase2_path: Path) -> None:
     app = create_app(Config(data_dir=phase2_path.with_suffix(".data")))
     routes = {(route.method, route.resource.canonical) for route in app.router.routes()}
     assert ("GET", "/api/telemetry/operational") in routes
+    assert ("GET", "/api/telemetry/v2/tools/summary") in routes
+    assert ("GET", "/api/telemetry/v2/tools") in routes
+    assert ("GET", "/api/telemetry/v2/tools/{tool_call_id}") in routes
+    assert ("GET", "/api/telemetry/v2/workload") in routes
+    assert ("GET", "/api/telemetry/v2/inefficiencies") in routes
+    assert ("GET", "/api/telemetry/v2/quality") in routes
+    assert ("GET", "/api/telemetry/v2/compactions") in routes
     assert ("GET", "/api/telemetry/quota-series") in routes
     assert ("POST", "/api/telemetry/quota-resets/review") in routes
     assert ("GET", "/api/diagnostics/notifications") in routes

@@ -33,6 +33,7 @@ from swe_mux.status_timeline import StatusTimelineStore
 class _FakeSession:
     def __init__(self) -> None:
         self.attach_replay_bytes: int | None = 512 * 1024
+        self.native_otel_enabled = False
 
 
 class _FakeSessionManager:
@@ -79,11 +80,24 @@ def test_the_replay_budget_reaches_the_manager_and_every_live_session(tmp_path: 
     assert sessions.sessions["live"].attach_replay_bytes == 64 * 1024
 
 
+def test_native_otel_toggle_applies_to_new_sessions_without_restart(tmp_path: Path) -> None:
+    config = Config(data_dir=tmp_path)
+    sessions = _FakeSessionManager()
+    hot = _apply(
+        config,
+        {"canonical_telemetry_native_otel_enabled": True},
+        sessions=sessions,
+    )
+    assert "canonical_telemetry_native_otel_enabled" in hot
+    assert sessions.native_otel_enabled is True
+
+
 def test_the_stand_in_matches_the_real_classes() -> None:
     # The fake above is only worth anything while its attribute names are the real
     # ones. Both are constructor keywords, which is the shape a rename has to move.
     assert "attach_replay_bytes" in inspect.signature(Session.__init__).parameters
     assert "attach_replay_bytes" in inspect.signature(SessionManager.__init__).parameters
+    assert "native_otel_enabled" in inspect.signature(SessionManager.__init__).parameters
     # `sessions` is assigned in the body rather than taken as an argument, so it is
     # read from the source of that assignment instead of from a signature.
     assert "self.sessions: dict[str, Session] = {}" in inspect.getsource(SessionManager.__init__)

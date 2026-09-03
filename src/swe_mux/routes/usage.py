@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import logging
+import time
 from typing import Any
 
 from aiohttp import web
@@ -14,6 +16,12 @@ from ..http_support import json_response
 from ..operational_telemetry import OperationalTelemetryStore
 from ..provider_accounts import (
     ProviderAccountManager,
+)
+from ..telemetry_queries import (
+    EXPORT_KINDS,
+    FILTER_COLUMNS,
+    TOOL_FILTER_COLUMNS,
+    clean_filters,
 )
 from ..usage import UsageManager
 from .support import _query_epoch
@@ -50,6 +58,204 @@ async def operational_telemetry(request: web.Request) -> web.Response:
             limit=limit,
         )
     )
+
+
+def _telemetry_window(request: web.Request) -> tuple[float, float]:
+    now = time.time()
+    from_ts = _query_epoch(request, "from")
+    to_ts = _query_epoch(request, "to")
+    start = now - 7 * 86400 if from_ts is None else from_ts
+    end = now if to_ts is None else to_ts
+    if start >= end:
+        raise web.HTTPBadRequest(text="from must be before to")
+    return start, end
+
+
+def _canonical_scope(
+    request: web.Request, *, allowed: tuple[str, ...] = FILTER_COLUMNS
+) -> dict[str, Any]:
+    """Window, cohort, and exact-match filters shared by every v2 aggregate.
+
+    `origin=all` widens the default mux-owned cohort to imported history. The
+    filter columns are the ones both the entity tables and the rollup tables carry,
+    so a filtered answer is as exact as an unfiltered one.
+    """
+
+    start, end = _telemetry_window(request)
+    origin = request.query.get("origin", "mux_owned")
+    filters = clean_filters(
+        {
+            "project_id": request.query.get("project"),
+            "backend": request.query.get("backend"),
+            "model": request.query.get("model"),
+            "invocation_layer": request.query.get("layer"),
+            "family": request.query.get("family"),
+            "status": request.query.get("status"),
+        },
+        allowed,
+    )
+    return {
+        "from_ts": start,
+        "to_ts": end,
+        "origin": None if origin == "all" else origin,
+        "filters": filters,
+    }
+
+
+async def canonical_tool_summary(request: web.Request) -> web.Response:
+    """Exact aggregate across every ledger segment in the requested window."""
+
+    service = request.app[keys.CANONICAL_TELEMETRY]
+    result = await service.tool_summary(
+        **_canonical_scope(request, allowed=TOOL_FILTER_COLUMNS)
+    )
+    result["collection"] = service.health()
+    return json_response(result)
+
+
+async def canonical_tool_calls(request: web.Request) -> web.Response:
+    """Cursor-bounded details; the matching total remains exact and uncapped."""
+
+    start, end = _telemetry_window(request)
+    try:
+        limit = int(request.query.get("limit", 100))
+        service = request.app[keys.CANONICAL_TELEMETRY]
+        result = await service.tool_page(
+            from_ts=start,
+            to_ts=end,
+            limit=limit,
+            cursor=request.query.get("cursor"),
+            project_id=request.query.get("project"),
+            backend=request.query.get("backend"),
+            model=request.query.get("model"),
+            origin=(
+                None
+                if request.query.get("origin") == "all"
+                else request.query.get("origin", "mux_owned")
+            ),
+            invocation_layer=request.query.get("layer"),
+            family=request.query.get("family"),
+            status=request.query.get("status"),
+        )
+    except ValueError as exc:
+        raise web.HTTPBadRequest(text=str(exc)) from None
+    result["collection"] = service.health()
+    return json_response(result)
+
+
+async def canonical_workload(request: web.Request) -> web.Response:
+    service = request.app[keys.CANONICAL_TELEMETRY]
+    result = await service.workload_summary(**_canonical_scope(request))
+    result["collection"] = service.health()
+    return json_response(result)
+
+
+async def canonical_tool_audit(request: web.Request) -> web.Response:
+    result = await request.app[keys.CANONICAL_TELEMETRY].tool_audit(
+        request.match_info["tool_call_id"]
+    )
+    if result is None:
+        raise web.HTTPNotFound(text="unknown canonical tool call")
+    return json_response(result)
+
+
+async def canonical_inefficiencies(request: web.Request) -> web.Response:
+    service = request.app[keys.CANONICAL_TELEMETRY]
+    result = await service.inefficiency_findings(
+        **_canonical_scope(request, allowed=TOOL_FILTER_COLUMNS)
+    )
+    result["collection_health"] = service.health()
+    return json_response(result)
+
+
+async def canonical_quality(request: web.Request) -> web.Response:
+    service = request.app[keys.CANONICAL_TELEMETRY]
+    result = await service.quality_summary(**_canonical_scope(request))
+    result["collection"] = service.health()
+    return json_response(result)
+
+
+async def canonical_compactions(request: web.Request) -> web.Response:
+    service = request.app[keys.CANONICAL_TELEMETRY]
+    result = await service.compaction_summary(**_canonical_scope(request))
+    result["collection"] = service.health()
+    return json_response(result)
+
+
+async def canonical_parsers(request: web.Request) -> web.Response:
+    """Which provider event names each harness version has sent, understood or not."""
+
+    service = request.app[keys.CANONICAL_TELEMETRY]
+    return json_response(
+        {
+            "signatures": await service.parser_signatures(),
+            "schema": await service.schema_status(),
+            "collection": service.health(),
+        }
+    )
+
+
+def _csv_cell(value: Any) -> str:
+    if value is None:
+        return ""
+    text = str(value)
+    if any(character in text for character in ',"\r\n'):
+        return '"' + text.replace('"', '""') + '"'
+    return text
+
+
+async def canonical_export(request: web.Request) -> web.StreamResponse:
+    """Stream every matching canonical row as JSONL or CSV, provenance included.
+
+    Pages are pulled from the ledger's worker one at a time, so a million-row
+    export never sits in memory and never holds the event loop; the response is
+    the whole window, not a capped slice.
+    """
+
+    kind = request.match_info["kind"]
+    if kind not in EXPORT_KINDS:
+        raise web.HTTPNotFound(text="unknown telemetry export kind")
+    output = request.query.get("format", "jsonl")
+    if output not in {"jsonl", "csv"}:
+        raise web.HTTPBadRequest(text="format must be jsonl or csv")
+    scope = _canonical_scope(request)
+    service = request.app[keys.CANONICAL_TELEMETRY]
+    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime(scope["from_ts"]))
+    response = web.StreamResponse(
+        headers={
+            "Content-Type": (
+                "application/x-ndjson; charset=utf-8"
+                if output == "jsonl"
+                else "text/csv; charset=utf-8"
+            ),
+            "Content-Disposition": (
+                f'attachment; filename="swe-mux-telemetry-{kind}-{stamp}.{output}"'
+            ),
+            "Cache-Control": "no-store",
+        }
+    )
+    await response.prepare(request)
+    cursor: str | None = None
+    columns: list[str] | None = None
+    # unsupervised-loop-ok: one response's page loop, ended by the ledger's cursor
+    while True:
+        page = await service.export_page(kind=kind, cursor=cursor, limit=2000, **scope)
+        lines: list[str] = []
+        for row in page["items"]:
+            if output == "jsonl":
+                lines.append(json.dumps(row, separators=(",", ":"), default=str))
+                continue
+            if columns is None:
+                columns = list(row)
+                lines.append(",".join(columns))
+            lines.append(",".join(_csv_cell(row.get(column)) for column in columns))
+        if lines:
+            await response.write(("\n".join(lines) + "\n").encode("utf-8"))
+        cursor = page["next_cursor"]
+        if cursor is None:
+            break
+    await response.write_eof()
+    return response
 
 
 async def quota_telemetry_series(request: web.Request) -> web.Response:
@@ -266,6 +472,15 @@ ROUTES: tuple[web.RouteDef, ...] = (
     web.post("/api/usage/refresh", refresh_usage),
     web.delete("/api/usage/cache", clear_usage_cache),
     web.get("/api/telemetry/operational", operational_telemetry),
+    web.get("/api/telemetry/v2/tools/summary", canonical_tool_summary),
+    web.get("/api/telemetry/v2/tools", canonical_tool_calls),
+    web.get("/api/telemetry/v2/tools/{tool_call_id}", canonical_tool_audit),
+    web.get("/api/telemetry/v2/workload", canonical_workload),
+    web.get("/api/telemetry/v2/inefficiencies", canonical_inefficiencies),
+    web.get("/api/telemetry/v2/quality", canonical_quality),
+    web.get("/api/telemetry/v2/compactions", canonical_compactions),
+    web.get("/api/telemetry/v2/parsers", canonical_parsers),
+    web.get("/api/telemetry/v2/export/{kind}", canonical_export),
     web.get("/api/telemetry/quota-series", quota_telemetry_series),
     web.post("/api/telemetry/quota-resets/review", review_quota_resets),
     web.get("/api/provider-accounts", get_provider_accounts),

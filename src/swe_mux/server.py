@@ -217,6 +217,7 @@ from .supervisor_client import SupervisorClient, SupervisorUnavailable
 from .tailscale import (
     is_tailscale_ip,
 )
+from .telemetry_service import CanonicalTelemetryService
 from .tier0_store import Tier0Context, Tier0Store
 from .update_check import UPDATE_CHECK_LOOP, UpdateChecker
 from .update_install import UpdateInstaller
@@ -1206,6 +1207,11 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
         retention_days=config.operational_telemetry_retention_days,
         process_retention_days=config.process_evidence_retention_days,
     )
+    # Shadow canonical ledger. It has its own monthly segment files so durable
+    # analytics never depend on the capped WebSocket event history or inflate the
+    # already multi-gigabyte application database. The legacy store stays live
+    # until corpus reconciliation proves the replacement's per-harness coverage.
+    canonical_telemetry = CanonicalTelemetryService(config.data_dir / "telemetry")
     # Retention is housekeeping and belongs to `TELEMETRY_RETENTION_LOOP`, which
     # runs it 5s after start and hourly after that. The identity repair below is
     # not: it hides false runs that would otherwise be served as history from the
@@ -1361,6 +1367,7 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
             name: agent_surfaces.surfaces_env_value(config, name)
             for name in HARNESSES
         },
+        native_otel_enabled=config.canonical_telemetry_native_otel_enabled,
     )
 
     # The observer decides an approval; this is the only way it can deliver one.
@@ -1563,6 +1570,9 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
     project_actions = ProjectActionService(config.data_dir)
     project_watcher = ProjectFileWatcher(projects, events, config)
     telemetry.start(events, sessions=sessions, history=history)
+    canonical_telemetry.start(
+        events, sessions=sessions, legacy_database=config.database_path
+    )
 
     automation_gate_cache: dict[str, tuple[float, frozenset[str]]] = {}
     publish(app, {keys.AUTOMATION_GATE_CACHE: automation_gate_cache})
@@ -2523,6 +2533,7 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
             keys.OPENROUTER: openrouter,
             keys.USAGE: usage,
             keys.TELEMETRY: telemetry,
+            keys.CANONICAL_TELEMETRY: canonical_telemetry,
             keys.STATUS_TIMELINE: status_timeline,
             keys.SESSION_RECOVERY: session_recovery,
             keys.STORAGE_USAGE: StorageUsage(
@@ -2740,6 +2751,7 @@ async def _teardown_runtime(app: web.Application) -> None:  # noqa: PLR0912, PLR
         keys.STATUS_TIMELINE,
         keys.SESSION_RECOVERY,
         keys.TELEMETRY,
+        keys.CANONICAL_TELEMETRY,
         keys.TIER0,
         keys.CLIPBOARD,
     ):
@@ -2753,6 +2765,7 @@ async def _teardown_runtime(app: web.Application) -> None:  # noqa: PLR0912, PLR
         keys.VOICE_STORE,
         keys.ASSISTANT_STORE,
         keys.TELEMETRY,
+        keys.CANONICAL_TELEMETRY,
         keys.STATUS_TIMELINE,
         keys.SESSION_RECOVERY,
         keys.TIER0,

@@ -52,6 +52,108 @@ SQLite connection:
 Creating the store on an existing mux database is additive. History migrations add the
 compaction summary columns without replacing existing history rows.
 
+### Canonical activity ledger
+
+Long-term tool, skill, turn, run, and verification analytics use a second store under
+`<data_dir>/telemetry/`.
+The existing operational tables remain readable during migration and are never deleted by the
+new ledger.
+
+- `catalog.sqlite3` owns the schema version, segment inventory, entity-to-segment locations,
+  exact closed-day tool and workload rollups, dirty rollup days, segment seal history,
+  parser signatures, and resumable legacy-import cursors.
+- `segments/YYYY-MM.sqlite3` owns content-free evidence and canonical run, turn, tool-call,
+  model-request, compaction, skill-invocation, and verification entities whose activity began
+  in that UTC month.
+- Every file is versioned (`telemetry_schema.py`, `LEDGER_SCHEMA_VERSION`).
+  Opening a file creates missing tables from the current schema and then applies each
+  additive migration the file has not seen, checking every `ADD COLUMN` against the table
+  first, so a data directory written by an older daemon gains exactly the columns the current
+  code reads and a fresh file is stamped without re-applying anything.
+  A file stamped newer than the daemon is refused.
+  Background health reports the version, which files applied what, and a structural
+  signature per file compared with the one a fresh file would carry, so an incomplete
+  migration reads as drift rather than as an `INSERT` failure later.
+- One entity has one home segment even when its completion evidence arrives in a later month.
+- Closed UTC days are served from exact rollups (`tool_daily`, `workload_daily`).
+  The current day, partial boundary days, and any day dirtied by late evidence are read from
+  canonical entities until the rollup worker rebuilds them.
+  A run or turn that ends on a later day than it started dirties its start day, because that
+  is the day its rollup row lives in.
+  Consecutive raw days inside one month are read with one query, so a window of dirty days
+  costs one query per month rather than one per day.
+- Aggregates accept exact-match filters on Project, backend, and model (tools also on layer,
+  family, and status).
+  Every filter column exists on both the entity tables and the rollup tables, so a filtered
+  answer is as exact as an unfiltered one.
+- Inactive segments are integrity-checked, WAL-checkpointed, SHA-256 sealed, and retained.
+  Late evidence invalidates the prior seal with a durable reason before updating the segment.
+- Detailed pages are cursor-bounded, while matching counts and aggregates cover the complete
+  requested time range.
+- The default query cohort is mux-owned runs from the last seven days.
+  Imported provider history is a separately selected cohort.
+- Provider output is not copied into the ledger.
+  Evidence stores the native locator, native identifiers, byte and character counts, SHA-256,
+  bounded target preview, parser version, and source precedence.
+  A full-output hash paired with a bounded transcript preview records size as unknown rather than
+  mislabelling the preview length as the result length.
+- Hook output that exists only long enough to measure and hash is delivered to the canonical
+  consumer alone.
+  It is never written to the generic `events` table or broadcast to unrelated subscribers.
+- Presentation events such as `state_changed` are excluded.
+  The ledger accepts only auditable run, turn, tool, skill, approval, stall, subagent,
+  verification, Git, land, and compaction evidence.
+
+Canonical tool identity is `(run, agent, invocation layer, native call id)`.
+The invocation layer keeps a Codex model-facing `exec` call distinct from the nested runtime
+`Bash` call it dispatches.
+Missing parent provenance remains `provider_unavailable`; timestamp proximity never upgrades it
+to a proven parent relationship.
+
+Canonical merge precedence is field-specific.
+Native provider OTel outranks transcript/store evidence, which outranks hooks, reconciliation,
+and legacy imports.
+A lower-ranked source may fill a field the higher-ranked source did not provide, such as a hook
+duration paired with a transcript result.
+A measurement label describes the value beside it: a row that recorded no output size and
+said so takes a later provider's size together with that provider's measurement, and a row
+that already carries a measurement keeps the one its values came with.
+The requested target and the executed arguments are two hashes kept apart
+(`input_sha256` from what the model asked for, `executed_input_sha256` from what the provider
+reports it ran).
+Every contributing observation remains linked through `telemetry_entity_evidence`.
+
+### Native provider telemetry
+
+`canonical_telemetry_native_otel_enabled` hands each new Claude session an OTLP/JSON exporter
+environment and each new Codex session an exporter configuration argument, both pointed at the
+daemon's loopback ingress and authenticated with the session's hook secret.
+The contracts were measured against Claude Code 2.1.259 and Codex CLI 0.153.0 on 2026-09-03
+(`development/TELEMETRY_HARDENING.md` records the attribute sets); the scrubbed captures are
+committed as fixtures and `tests/test_live_otlp.py` re-measures them.
+
+The reducer (`telemetry_otlp.py`) copies only named metadata attributes.
+Content attributes (`tool_input`, `arguments`, `output`, `prompt`, `response`, `error`) are
+hashed and measured; identity attributes (`user.*`, `organization.id`, `session.id`,
+`host.name`) are dropped by construction, and a test asserts that none of either class
+survives reduction of the real captures.
+A Codex call id prefixed `exec-` is the nested code-mode execution and maps to the runtime
+layer, where it merges with the hook's entity; Codex model traffic completes as
+`response.completed` and its successful HTTP calls are not counted as model requests.
+
+Every provider event name is counted per harness version in `parser_signatures`, recognised
+or not.
+A future CLI that renames an attribute therefore shows as an unrecognised name in the
+Collection health readout rather than as a ledger that quietly stopped filling a column.
+
+### Exports
+
+`GET /api/telemetry/v2/export/{kind}` streams every canonical row of one kind in the
+selected window, cohort, and filters as JSONL or CSV, paged through the ledger's worker so
+neither the event loop nor memory holds the whole answer.
+Rows carry their evidence identifiers and source locator; provider output is not in the
+ledger and so is not in an export.
+
 ## Process lifecycle
 
 1. The process inspector samples only roots and descendants of live/retained mux sessions;
@@ -189,6 +291,16 @@ Parser and reconciliation coverage is drawn collapsed under the tool metrics it 
 
 ```text
 GET /api/telemetry/operational?provider=&account=&limit=
+GET /api/telemetry/v2/tools/summary?from=&to=&origin=&project=&backend=&model=&layer=&family=&status=
+GET /api/telemetry/v2/tools?from=&to=&cursor=&limit=&project=&backend=&model=&origin=&layer=&family=&status=
+GET /api/telemetry/v2/tools/{tool_call_id}
+GET /api/telemetry/v2/workload?from=&to=&origin=&project=&backend=&model=
+GET /api/telemetry/v2/quality?from=&to=&origin=&project=&backend=&model=
+GET /api/telemetry/v2/inefficiencies?from=&to=&origin=&project=&backend=&model=&layer=&family=&status=
+GET /api/telemetry/v2/compactions?from=&to=&origin=&project=&backend=&model=
+GET /api/telemetry/v2/parsers
+GET /api/telemetry/v2/export/{kind}?from=&to=&origin=&project=&backend=&model=&format=jsonl|csv
+POST /api/telemetry/otlp/{session_id}/v1/logs
 GET /api/telemetry/quota-series?provider=&account=&since=&until=&resolution=raw|daily&limit=
 POST /api/telemetry/quota-resets/review {ids: [reset_id], resolution: seen|manual_usage|discarded}
 GET /api/provider-accounts
@@ -216,6 +328,9 @@ Its `interpretation` is `quota_utilization_not_token_usage`.
   applies at the next daemon start)
 - `process_evidence_retention_days = 30`
 - `operational_telemetry_retention_days = 180`
+- `canonical_telemetry_native_otel_enabled = false` enables authenticated loopback OTLP/JSON
+  capture for newly spawned supported harness sessions.
+  Existing sessions retain the exporter environment they started with.
 - `provider_quota_poll_minutes = 15`
 - `provider_quota_turn_refresh_enabled = false`
 - `provider_quota_turn_refresh_min_minutes = 5`
@@ -226,6 +341,13 @@ or session lifecycle.
 ## Key files
 
 - Store and native reconciliation: `src/swe_mux/operational_telemetry.py`
+- Canonical ledger schema and migrations: `src/swe_mux/telemetry_schema.py`
+- Canonical ledger write path (identity, precedence, rollups, seals): `src/swe_mux/telemetry_ledger.py`
+- Canonical ledger queries, filters, and exports: `src/swe_mux/telemetry_queries.py`
+- Legacy stream importers: `src/swe_mux/telemetry_imports.py`
+- Daemon adapter (batching, catch-up, rollup worker, health): `src/swe_mux/telemetry_service.py`
+- Provider OTLP normalization: `src/swe_mux/telemetry_otlp.py`
+- Query benchmark on a seeded scratch ledger: `tools/telemetry_benchmark.py`
 - Process reconciliation/actions: `src/swe_mux/processes.py`
 - Event-loop stall explanation: `src/swe_mux/stall_watchdog.py`
 - Scheduling-class policy: `src/swe_mux/process_priority.py`

@@ -109,6 +109,34 @@ class EventBus:
                 self._record_drop(queue, event)
         return event
 
+    def emit_transient_to(
+        self,
+        subscriber: str,
+        event_type: str,
+        *,
+        session_id: str | None = None,
+        source: str = "daemon",
+        **payload: Any,
+    ) -> MuxEvent:
+        """Deliver content-sensitive evidence to one named in-process consumer.
+
+        Provider hook output may be needed long enough to hash and measure it but
+        must not enter the generic event history or reach unrelated subscribers.
+        The consumer stores only its reduced metadata and provenance.
+        """
+
+        event = MuxEvent(
+            self._clock(), session_id, source, event_type, payload, transient=True
+        )
+        for queue in tuple(self._subscribers):
+            if self._labels.get(id(queue)) != subscriber:
+                continue
+            try:
+                queue.put_nowait(event)
+            except asyncio.QueueFull:
+                self._record_drop(queue, event)
+        return event
+
     async def emit(
         self,
         event_type: str,
@@ -122,6 +150,11 @@ class EventBus:
             semantic = (
                 session_id,
                 event_type,
+                # Provider call identity is the only safe discriminator for
+                # parallel calls of the same tool. Falling back to the older
+                # semantic shape keeps hook-only harnesses working without
+                # collapsing two native calls merely because they overlap.
+                payload.get("call_id"),
                 payload.get("tool"),
                 payload.get("kind"),
                 payload.get("scope", "root"),

@@ -149,6 +149,10 @@ def apply_runtime_config(app: web.Application, changed: set[str]) -> None:
             set_log_level(config.log_level)
     sessions: SessionManager | None = app.get(keys.SESSIONS)
     if sessions:
+        if "canonical_telemetry_native_otel_enabled" in changed:
+            # Applies to new provider processes only. Existing CLIs keep the
+            # exporter environment they started with.
+            sessions.native_otel_enabled = config.canonical_telemetry_native_otel_enabled
         if "scrollback_bytes" in changed:
             sessions.max_scrollback = config.scrollback_bytes
         if "attach_replay_bytes" in changed:

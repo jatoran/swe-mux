@@ -4517,6 +4517,46 @@ async def apply_hook_observation(
         # `PreToolUse` is deliberately not evidence here: Codex fires it *before*
         # the permission decision, so it proves an attempt, not an answer.
         tool_use_id = str(payload.get("tool_use_id") or "") or None
+        # Transcript-backed harnesses publish their durable result later, but the
+        # hook owns execution duration and may own richer failure metadata. Send a
+        # content-sensitive observation only to the canonical reducer: the output
+        # itself never enters the generic EventBus log or the legacy event table.
+        if "transcript" in descriptor(session.record.backend).state_sources:
+            response = (
+                payload.get("tool_response")
+                if event_type == "PostToolUse"
+                else payload.get("error")
+            )
+            if response is None:
+                output_text = ""
+            elif isinstance(response, str):
+                output_text = response
+            else:
+                output_text = json.dumps(
+                    response,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    default=str,
+                )
+            output_bytes = output_text.encode("utf-8", "replace")
+            _, result_target = _recall_tool_call(session, tool_use_id or "")
+            events.emit_transient_to(
+                "canonical-telemetry",
+                "canonical_tool_result",
+                session_id=session.record.id,
+                source="hook",
+                scope="root",
+                tool=str(payload.get("tool_name") or payload.get("name") or "tool"),
+                call_id=tool_use_id,
+                target=result_target,
+                success=event_type == "PostToolUse",
+                duration_ms=payload.get("duration_ms"),
+                error_type=payload.get("error_type"),
+                output_chars=len(output_text),
+                output_bytes=len(output_bytes),
+                output_sha256=hashlib.sha256(output_bytes).hexdigest() if output_bytes else None,
+            )
         note_activity_evidence(
             session,
             f"activity:hook:{event_type}",

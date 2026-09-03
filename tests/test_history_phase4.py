@@ -232,6 +232,21 @@ async def test_ungrouped_history_is_filterable_without_matching_all_projects(
     history.close()
 
 
+async def test_store_backed_history_enters_telemetry_inventory_without_a_file(
+    tmp_path: Path,
+) -> None:
+    history = HistoryIndex(tmp_path / "mux.db")
+    stored = agent("stored", "opencode", tmp_path)
+    await history.session_started(stored, None)
+
+    rows = await history.telemetry_history_rows()
+
+    assert [(row["id"], row["backend"], row["transcript_path"]) for row in rows] == [
+        ("stored", "opencode", None)
+    ]
+    history.close()
+
+
 async def test_event_cursor_is_monotonic_and_gap_free(tmp_path: Path) -> None:
     history = HistoryIndex(tmp_path / "mux.db")
     events = EventBus(history.append_event)
