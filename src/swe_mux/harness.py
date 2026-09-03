@@ -1315,6 +1315,7 @@ HARNESSES: dict[str, HarnessDescriptor] = {
                     "reasoning_tokens",
                     "provider_metrics",
                     "guardian_review",
+                    "sandbox_outcome",
                 }
             ),
         ),

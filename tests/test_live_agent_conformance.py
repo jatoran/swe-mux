@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import subprocess
 import time
 import uuid
@@ -27,6 +26,7 @@ from swe_mux.history import HistoryIndex
 from swe_mux.launchers import resolve_command
 from swe_mux.operational_telemetry import OperationalTelemetryStore, scan_native_telemetry
 from swe_mux.provider_accounts import PROVIDERS, ProviderAccountError, ProviderAccountManager
+from swe_mux.shim_paths import which_real
 from tests.support.detection_replay import DetectionReplay
 
 RUN_LIVE = os.environ.get("SWEMUX_RUN_LIVE_AGENT_TESTS") == "1"
@@ -51,7 +51,10 @@ def _executable(backend: str) -> str:
     """
     harness = descriptor(backend)
     if os.name == "nt" and harness.requires_direct_entrypoint:
-        shim = shutil.which(f"{harness.script_base_name}.cmd")
+        # `which_real` rather than `shutil.which`: a session's PATH puts mux's own
+        # `~/.mux/bin/<name>.cmd` launcher first, and that one re-enters the
+        # daemon's launcher with the daemon's hooks and arguments attached.
+        shim = which_real(f"{harness.script_base_name}.cmd")
         if shim:
             return shim
     return resolve_command(harness.executable)

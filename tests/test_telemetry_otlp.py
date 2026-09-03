@@ -455,3 +455,66 @@ async def test_otlp_ingress_is_session_authenticated_and_queues_reduced_events()
             "signatures": {("tool_result", True): 1},
         }
     ]
+
+
+def test_codex_sandbox_outcome_is_a_denial_the_later_failed_result_cannot_unknow(
+    tmp_path: Path,
+) -> None:
+    """`codex.sandbox_outcome` was first seen live on 0.153.0 when the sandbox refused a
+    write; its attributes are the ones `session_telemetry.rs` records (`tool_name`,
+    `call_id`, `outcome`, `initial_duration_ms`, `escalated_duration_ms`) and the
+    outcome values are the ones `orchestrator.rs` emits."""
+
+    from swe_mux.telemetry_ledger import CanonicalTelemetryLedger
+
+    def outcome(value: str, **extra: object) -> dict[str, object]:
+        return batch(
+            attribute("event.name", "codex.sandbox_outcome"),
+            attribute("tool_name", "exec_command"),
+            attribute("call_id", "call-9"),
+            attribute("outcome", value),
+            attribute("initial_duration_ms", 41),
+            *(attribute(key, item) for key, item in extra.items()),
+        )
+
+    denied = otlp_log_events(outcome("denied"), session_id="session-1", backend="codex")[0]
+    assert denied.type == "canonical_tool_result"
+    assert denied.payload["denied"] is True
+    assert denied.payload["decision_source"] == "sandbox"
+    assert denied.payload["error_type"] == "sandbox_denied"
+    assert denied.payload["duration_ms"] == 41
+    timed_out = otlp_log_events(outcome("timed_out"), session_id="session-1", backend="codex")[0]
+    assert timed_out.payload["success"] is False and "denied" not in timed_out.payload
+    assert timed_out.payload["error_type"] == "sandbox_timed_out"
+    escalated = otlp_log_events(
+        outcome("escalated", escalated_duration_ms=88), session_id="session-1", backend="codex"
+    )[0]
+    assert escalated.type == "approval_resolved"
+    assert escalated.payload["decision"] == "escalated"
+    assert escalated.payload["sandbox_escalated_duration_ms"] == 88
+    reduction = otlp_log_reduction(outcome("denied"), session_id="session-1", backend="codex")
+    assert reduction.signatures == {("sandbox_outcome", True): 1}
+
+    # The provider's own failed result for the call follows the verdict at the same
+    # rank; it fills fields but the status stays denied and the cause stays named.
+    failed = otlp_log_events(
+        batch(
+            attribute("event.name", "codex.tool_result"),
+            attribute("tool_name", "exec_command"),
+            attribute("call_id", "call-9"),
+            attribute("success", False),
+            attribute("duration_ms", 43),
+            attribute("output", "sandbox refused the write"),
+        ),
+        session_id="session-1",
+        backend="codex",
+    )[0]
+    ledger = CanonicalTelemetryLedger(tmp_path / "telemetry")
+    dimensions = {"session_id": "session-1", "run_id": "run-1", "backend": "codex"}
+    ledger.record_events([(denied, dimensions), (failed, dimensions)])
+    call = ledger.tool_calls()[0]
+    assert call["status"] == "denied"
+    assert call["error_type"] == "sandbox_denied"
+    assert call["output_sha256"] is not None
+    assert call["evidence_count"] == 2
+    ledger.close()

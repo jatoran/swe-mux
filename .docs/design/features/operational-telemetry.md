@@ -60,12 +60,20 @@ The existing operational tables remain readable during migration and are never d
 new ledger.
 
 - `catalog.sqlite3` owns the schema version, segment inventory, entity-to-segment locations,
-  exact closed-day tool and workload rollups, dirty rollup days, segment seal history,
-  parser signatures, and resumable legacy-import cursors.
+  exact closed-day tool, workload, skill, verification, and compaction rollups, exact
+  closed-hour tool and workload rollups, dirty rollup days and hours, segment seal history,
+  parser signatures, finding reviews, native reconciliation records, and resumable
+  legacy-import cursors.
 - `segments/YYYY-MM.sqlite3` owns content-free evidence and canonical run, turn, tool-call,
-  model-request, compaction, skill-invocation, and verification entities whose activity began
-  in that UTC month.
-- Every file is versioned (`telemetry_schema.py`, `LEDGER_SCHEMA_VERSION`).
+  model-request, compaction, skill-invocation, verification, and provider-metric entities
+  whose activity began in that UTC month.
+- Every file is versioned (`telemetry_schema.py`, `LEDGER_SCHEMA_VERSION`, 4 since
+  2026-09-03).
+  A migration step is a SQL statement or a callable, for the shapes SQL cannot express
+  additively: recreating a derived rollup table whose key changed (version 3 put evidence
+  quality into the tool rollup key), backfilling a new column from existing ones, and
+  deriving a maintained table once (version 4's per-run repeat counts) while dirtying every
+  rolled bucket so a new rollup (version 4's quality rollups) is built from the entities.
   Opening a file creates missing tables from the current schema and then applies each
   additive migration the file has not seen, checking every `ADD COLUMN` against the table
   first, so a data directory written by an older daemon gains exactly the columns the current
@@ -75,17 +83,67 @@ new ledger.
   signature per file compared with the one a fresh file would carry, so an incomplete
   migration reads as drift rather than as an `INSERT` failure later.
 - One entity has one home segment even when its completion evidence arrives in a later month.
-- Closed UTC days are served from exact rollups (`tool_daily`, `workload_daily`).
-  The current day, partial boundary days, and any day dirtied by late evidence are read from
-  canonical entities until the rollup worker rebuilds them.
-  A run or turn that ends on a later day than it started dirties its start day, because that
-  is the day its rollup row lives in.
-  Consecutive raw days inside one month are read with one query, so a window of dirty days
-  costs one query per month rather than one per day.
+- Closed UTC days are served from exact day rollups (`tool_daily`, `workload_daily`,
+  `quality_daily`, `skill_daily`, `verification_daily`, `compaction_daily`), and the closed
+  hours of a partial day from exact hour rollups (`tool_hourly`, `workload_hourly`,
+  `quality_hourly`), so a 24-hour window that spans two partial days is answered from at
+  most 23 hour rows plus the current hour.
+  A tool page's exact `matching_calls` is summed from the same rollups whenever its filters
+  are rollup columns, and counted from rows only for an identity filter (`run_id`,
+  `turn_id`), so the count beside a page never scans the window.
+  A raw query writes its dimension filters as `+column=?`, which keeps SQLite on the time
+  index for a span that is at most a partial hour rather than driving the query from a
+  backend index that reads every row of that backend; measured at ten million calls, the
+  hint is the difference between 398 ms and the unfiltered cost.
+  The repeated-identical-call finding reads `telemetry_call_repeats`, which every tool-call
+  write keeps current per (run, agent, tool, input hash); a group is in the window when its
+  latest repeat is, and its count is the run's whole count for that input, because the run
+  is the unit the finding is about.
+  The current hour, and any day or hour dirtied by late evidence, are read from canonical
+  entities until the rollup worker rebuilds them; day rollups never delete hour rollups.
+  A run or turn that ends on a later day than it started dirties its start day and hour,
+  because that is where its rollup row lives.
+  Consecutive raw stretches inside one month are read with one query, so a window of dirty
+  days costs one query per month rather than one per day.
+  Rolled-up and raw reads agree on every figure and differ only in the `coverage` block that
+  says how the window was answered; the tests and `tools/telemetry_benchmark.py` assert it.
 - Aggregates accept exact-match filters on Project, backend, and model (tools also on layer,
-  family, and status).
+  family, status, and evidence quality).
   Every filter column exists on both the entity tables and the rollup tables, so a filtered
   answer is as exact as an unfiltered one.
+- Every tool call carries an `evidence_quality` (`native`, `transcript`, `hook`,
+  `reconciled`, `legacy`, `none`) derived from the rank of the source that closed it, and an
+  approval wait paired from the `approval_needed` request that named the call to its
+  resolution or its own result; nothing is estimated, and a resolution with no recorded
+  request leaves the wait unknown.
+  A run's `started_at_source` says whether its start was declared by the session record or
+  history row or is only the earliest evidence; a declared start replaces an estimate and
+  never the reverse.
+  A denied status is a failure whose cause is known: the provider's own failed result for
+  the same call arrives after its sandbox or permission verdict at the same rank, fills the
+  fields it carries, and does not turn `denied` back into `failed`.
+- Native stores are reconciled directly (`telemetry_reconcile.py`): every five minutes, and
+  on `POST /api/telemetry/v2/reconcile`, each run's Claude, Codex, OMP, Pi, or OpenCode
+  record is read past its per-run watermark by the same dialect scanner the legacy store
+  uses and fed to the reducer as `reconciled_transcript` evidence, ranked below live native
+  and transcript evidence and above hooks and legacy imports.
+  The pass never writes a native store; a test proves every store byte-identical afterwards.
+- Provider metrics (Codex's `codex.tool.call`, token usage, turn durations, guardian reviews,
+  and their siblings) are kept as aggregated points with allow-listed attributes and never
+  become entities; the metric summary compares `codex.tool.call` per run against the
+  ledger's own count of that run's calls, and disagreement names the run.
+- Inefficiency findings carry a stable `finding_key`; an operator's review (`useful`,
+  `noise`, `already_known`) is the only feedback a finding collects, and
+  `propose_adaptive_change` is the one gate a configuration change could ever pass: a
+  `useful` verdict, a comparison window, and a rollback rule, none of which any code path
+  supplies today.
+- Cohort comparison splits one dimension and reports `comparable: false` with the reason when
+  the cohorts differ on a dimension the split does not fix, so a model comparison cannot
+  quietly be a Project comparison.
+- The legacy dashboard stays reachable while `canonical_telemetry_legacy_dashboard_enabled`
+  is on (the default); the shadow comparison classifies every disagreement between the legacy
+  `tool_events` table and the canonical calls, and the switch is the operator's to turn off
+  after reading it.
 - Inactive segments are integrity-checked, WAL-checkpointed, SHA-256 sealed, and retained.
   Late evidence invalidates the prior seal with a durable reason before updating the segment.
 - Detailed pages are cursor-bounded, while matching counts and aggregates cover the complete
@@ -141,10 +199,22 @@ A Codex call id prefixed `exec-` is the nested code-mode execution and maps to t
 layer, where it merges with the hook's entity; Codex model traffic completes as
 `response.completed` and its successful HTTP calls are not counted as model requests.
 
+Codex also exports OTLP metrics when its descriptor declares `exports_metrics` (measured on
+0.153.0: one delta-temporality batch of 64 metrics at exit); the reducer keeps the allow-listed
+names and attributes as provider metrics and counts the rest as recognised signatures.
+A `codex.sandbox_outcome` verdict (`denied`, `timed_out`, `signal`, `escalated`; first seen live
+on 2026-09-03 when the sandbox refused a write) reduces to a denied or failed result whose
+`error_type` names the sandbox, or to a resolved approval when the unsandboxed retry ran.
+Each descriptor's `provides` set names the facts its export was measured to carry, so the
+quality view reports an absent fact as unsupported for that harness rather than as missing on
+every row.
+
 Every provider event name is counted per harness version in `parser_signatures`, recognised
 or not.
 A future CLI that renames an attribute therefore shows as an unrecognised name in the
 Collection health readout rather than as a ledger that quietly stopped filling a column.
+That is how `sandbox_outcome` was found: the live denial canary failed on an unrecognised name
+rather than on a quietly emptier ledger.
 
 ### Exports
 
@@ -291,16 +361,27 @@ Parser and reconciliation coverage is drawn collapsed under the tool metrics it 
 
 ```text
 GET /api/telemetry/operational?provider=&account=&limit=
-GET /api/telemetry/v2/tools/summary?from=&to=&origin=&project=&backend=&model=&layer=&family=&status=
-GET /api/telemetry/v2/tools?from=&to=&cursor=&limit=&project=&backend=&model=&origin=&layer=&family=&status=
+GET /api/telemetry/v2/tools/summary?from=&to=&origin=&project=&backend=&model=&layer=&family=&status=&evidence=
+GET /api/telemetry/v2/tools?from=&to=&cursor=&limit=&project=&backend=&model=&origin=&layer=&family=&status=&evidence=&raw_name=&run_id=&turn_id=
 GET /api/telemetry/v2/tools/{tool_call_id}
+GET /api/telemetry/v2/runs/{run_id}
+GET /api/telemetry/v2/turns/{turn_id}
 GET /api/telemetry/v2/workload?from=&to=&origin=&project=&backend=&model=
+GET /api/telemetry/v2/skills/summary?from=&to=&origin=&project=&backend=&model=
+GET /api/telemetry/v2/verifications/summary?from=&to=&origin=&project=&backend=&model=
+GET /api/telemetry/v2/metrics/summary?from=&to=&origin=&project=&backend=&model=
 GET /api/telemetry/v2/quality?from=&to=&origin=&project=&backend=&model=
-GET /api/telemetry/v2/inefficiencies?from=&to=&origin=&project=&backend=&model=&layer=&family=&status=
+GET /api/telemetry/v2/inefficiencies?from=&to=&origin=&project=&backend=&model=&layer=&family=&status=&evidence=&reviewed=
+POST /api/telemetry/v2/inefficiencies/review {finding_key, kind, verdict, note?}
+GET /api/telemetry/v2/compare?split=&from=&to=&origin=&project=&backend=&model=
 GET /api/telemetry/v2/compactions?from=&to=&origin=&project=&backend=&model=
 GET /api/telemetry/v2/parsers
+GET /api/telemetry/v2/shadow?from=&to=
+POST /api/telemetry/v2/reconcile
 GET /api/telemetry/v2/export/{kind}?from=&to=&origin=&project=&backend=&model=&format=jsonl|csv
+GET /api/telemetry/v2/{kind}?from=&to=&cursor=&limit=&origin=&project=&backend=&model=
 POST /api/telemetry/otlp/{session_id}/v1/logs
+POST /api/telemetry/otlp/{session_id}/v1/metrics
 GET /api/telemetry/quota-series?provider=&account=&since=&until=&resolution=raw|daily&limit=
 POST /api/telemetry/quota-resets/review {ids: [reset_id], resolution: seen|manual_usage|discarded}
 GET /api/provider-accounts
@@ -331,6 +412,9 @@ Its `interpretation` is `quota_utilization_not_token_usage`.
 - `canonical_telemetry_native_otel_enabled = false` enables authenticated loopback OTLP/JSON
   capture for newly spawned supported harness sessions.
   Existing sessions retain the exporter environment they started with.
+- `canonical_telemetry_legacy_dashboard_enabled = true` keeps the legacy tool table and the
+  shadow comparison as a tab of Fleet activity; it is the operator's switch to turn off once
+  the comparison has been read, and turning it off deletes nothing.
 - `provider_quota_poll_minutes = 15`
 - `provider_quota_turn_refresh_enabled = false`
 - `provider_quota_turn_refresh_min_minutes = 5`
@@ -345,9 +429,12 @@ or session lifecycle.
 - Canonical ledger write path (identity, precedence, rollups, seals): `src/swe_mux/telemetry_ledger.py`
 - Canonical ledger queries, filters, and exports: `src/swe_mux/telemetry_queries.py`
 - Legacy stream importers: `src/swe_mux/telemetry_imports.py`
-- Daemon adapter (batching, catch-up, rollup worker, health): `src/swe_mux/telemetry_service.py`
+- Direct native-store reconciliation: `src/swe_mux/telemetry_reconcile.py`
+- Daemon adapter (batching, catch-up, reconciliation, rollup worker, health): `src/swe_mux/telemetry_service.py`
 - Provider OTLP normalization: `src/swe_mux/telemetry_otlp.py`
-- Query benchmark on a seeded scratch ledger: `tools/telemetry_benchmark.py`
+- Query benchmark on a seeded scratch ledger (`--fast-seed` for ten million calls): `tools/telemetry_benchmark.py`
+- Event-loop lag under an ingestion flood, with a no-ledger control: `tools/telemetry_ingest_latency.py`
+- Call-by-call audit of a window against the providers' own records: `tools/telemetry_audit_window.py`
 - Process reconciliation/actions: `src/swe_mux/processes.py`
 - Event-loop stall explanation: `src/swe_mux/stall_watchdog.py`
 - Scheduling-class policy: `src/swe_mux/process_priority.py`
@@ -356,10 +443,13 @@ or session lifecycle.
 - History summaries/migrations: `src/swe_mux/history.py`
 - Composition/API: `src/swe_mux/server.py`
 - Process UI: `frontend/src/ProcessPanel.tsx`
-- Telemetry UI: `frontend/src/FleetActivityView.tsx`, `frontend/src/WorkloadTelemetry.tsx`, `frontend/src/QuotaAnalytics.tsx`, `frontend/src/ProviderAccounts.tsx`
+- Telemetry UI: `frontend/src/FleetActivityView.tsx`, `frontend/src/WorkloadTelemetry.tsx`, `frontend/src/telemetryCaption.tsx`, `frontend/src/LegacyToolTelemetry.tsx`, `frontend/src/QuotaAnalytics.tsx`, `frontend/src/ProviderAccounts.tsx`
 - Frontend payload shapes: `frontend/src/operationalTelemetry.ts`
-- Fixtures/tests: `tests/fixtures/telemetry/v1/`, `tests/test_operational_telemetry_phase2.py`,
-  `tests/test_live_agent_conformance.py`
+- Fixtures/tests: `tests/fixtures/telemetry/` (OTLP captures and the per-dialect native-store
+  fixtures), `tests/test_telemetry_otlp.py`, `tests/test_telemetry_ledger.py`,
+  `tests/test_telemetry_hardening.py`, `tests/test_telemetry_reconcile.py`,
+  `tests/test_telemetry_analytics.py`, `tests/test_operational_telemetry_phase2.py`,
+  `tests/test_live_agent_conformance.py`, `tests/test_live_otlp.py`
 
 ## Relates to
 

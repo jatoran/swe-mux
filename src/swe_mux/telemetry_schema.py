@@ -26,7 +26,7 @@ from typing import Any
 
 from .harness import HARNESSES
 
-LEDGER_SCHEMA_VERSION = 3
+LEDGER_SCHEMA_VERSION = 4
 
 _SOURCE_RANK = {
     "otel": 400,
@@ -149,6 +149,42 @@ WORKLOAD_HOURLY_TABLE = (
     + ")"
 )
 
+#: Field-completeness counts per harness version, rolled up so the quality readout
+#: costs one indexed read per group rather than a scan of every call in the window.
+#: The fields are the ones `quality_summary` reports, in its order.
+QUALITY_FIELDS = (
+    "calls",
+    "with_request",
+    "with_result",
+    "with_provider_result",
+    "with_duration",
+    "with_input_hash",
+    "with_executed_input_hash",
+    "with_output_hash",
+    "with_output_size",
+    "with_harness_version",
+    "with_approval_wait",
+    "truncated_outputs",
+    "runtime_parent_unavailable",
+    "other_family",
+)
+_QUALITY_ROLLUP_COLUMNS = (
+    "\n  backend TEXT NOT NULL,\n  harness_version TEXT NOT NULL,\n  model TEXT NOT NULL,"
+    "\n  project_id TEXT NOT NULL,\n  origin TEXT NOT NULL,"
+    + "".join(f"\n  {field} INTEGER NOT NULL DEFAULT 0," for field in QUALITY_FIELDS)
+    + "\n  PRIMARY KEY({bucket},backend,harness_version,model,project_id,origin)\n"
+)
+QUALITY_DAILY_TABLE = (
+    "CREATE TABLE IF NOT EXISTS quality_daily (\n  day TEXT NOT NULL,"
+    + _QUALITY_ROLLUP_COLUMNS.format(bucket="day")
+    + ")"
+)
+QUALITY_HOURLY_TABLE = (
+    "CREATE TABLE IF NOT EXISTS quality_hourly (\n  hour TEXT NOT NULL,"
+    + _QUALITY_ROLLUP_COLUMNS.format(bucket="hour")
+    + ")"
+)
+
 CATALOG_SCHEMA = f"""
 PRAGMA journal_mode=WAL;
 CREATE TABLE IF NOT EXISTS ledger_meta (
@@ -194,6 +230,8 @@ CREATE INDEX IF NOT EXISTS idx_tool_hourly_window
   ON tool_hourly(hour,origin,backend,project_id);
 {WORKLOAD_DAILY_TABLE};
 {WORKLOAD_HOURLY_TABLE};
+{QUALITY_DAILY_TABLE};
+{QUALITY_HOURLY_TABLE};
 CREATE TABLE IF NOT EXISTS skill_daily (
   day TEXT NOT NULL,
   backend TEXT NOT NULL,
@@ -616,7 +654,40 @@ CREATE TABLE IF NOT EXISTS telemetry_entity_evidence (
 );
 CREATE INDEX IF NOT EXISTS idx_ledger_entity_evidence
   ON telemetry_entity_evidence(evidence_id);
+
+CREATE TABLE IF NOT EXISTS telemetry_call_repeats (
+  run_id TEXT NOT NULL,
+  agent_id TEXT NOT NULL,
+  raw_name TEXT NOT NULL,
+  input_sha256 TEXT NOT NULL,
+  backend TEXT NOT NULL,
+  model TEXT,
+  project_id TEXT,
+  origin TEXT NOT NULL,
+  invocation_layer TEXT NOT NULL,
+  family TEXT NOT NULL,
+  repeats INTEGER NOT NULL,
+  first_at REAL NOT NULL,
+  last_at REAL NOT NULL,
+  PRIMARY KEY(run_id,agent_id,raw_name,input_sha256)
+);
+CREATE INDEX IF NOT EXISTS idx_ledger_call_repeats_time
+  ON telemetry_call_repeats(last_at,repeats);
 """
+
+#: One row per (run, agent, tool, input hash): how many times that exact input ran.
+#: Maintained on every tool-call write and read by the repeated-call finding, so the
+#: finding costs the rows that repeated rather than a scan of every call in the window.
+CALL_REPEATS_SELECT = (
+    "SELECT run_id,agent_id,raw_name,COALESCE(executed_input_sha256,input_sha256) input_sha256,"
+    "MIN(backend),MIN(model),MIN(project_id),MIN(origin),MIN(invocation_layer),MIN(family),"
+    "COUNT(*),MIN(started_at),MAX(started_at) FROM telemetry_tool_calls "
+    "WHERE COALESCE(executed_input_sha256,input_sha256) IS NOT NULL"
+)
+CALL_REPEATS_INSERT = (
+    "INSERT INTO telemetry_call_repeats(run_id,agent_id,raw_name,input_sha256,backend,model,"
+    "project_id,origin,invocation_layer,family,repeats,first_at,last_at) "
+)
 
 MigrationStep = str | Callable[[sqlite3.Connection], None]
 
@@ -660,6 +731,35 @@ def _backfill_evidence_quality(connection: sqlite3.Connection) -> None:
     )
 
 
+def _dirty_rolled_buckets(connection: sqlite3.Connection) -> None:
+    """Version 4 added quality rollups beside the tool and workload ones.
+
+    Every day and hour that already has a rollup is dirtied again so the worker
+    builds the new tables from the entities; nothing existing is dropped.
+    """
+
+    now = time.time()
+    connection.execute(
+        "INSERT INTO rollup_dirty_days(day,dirtied_at) SELECT day,? FROM rollup_days "
+        "WHERE true ON CONFLICT(day) DO UPDATE SET dirtied_at=excluded.dirtied_at",
+        (now,),
+    )
+    connection.execute(
+        "INSERT INTO rollup_dirty_hours(hour,dirtied_at) SELECT hour,? FROM rollup_hours "
+        "WHERE true ON CONFLICT(hour) DO UPDATE SET dirtied_at=excluded.dirtied_at",
+        (now,),
+    )
+
+
+def _backfill_call_repeats(connection: sqlite3.Connection) -> None:
+    """Version 4 keeps per-run repeat counts beside the calls; derive them once."""
+
+    connection.execute("DELETE FROM telemetry_call_repeats")
+    connection.execute(
+        CALL_REPEATS_INSERT + CALL_REPEATS_SELECT + " GROUP BY 1,2,3,4"
+    )
+
+
 #: Additive statements per target version. Each `ADD COLUMN` is checked against
 #: `PRAGMA table_info` before it runs, so a file created from the current schema
 #: (which already carries the column) and a file created by an older daemon both
@@ -669,6 +769,7 @@ def _backfill_evidence_quality(connection: sqlite3.Connection) -> None:
 CATALOG_MIGRATIONS: dict[int, tuple[MigrationStep, ...]] = {
     2: (),
     3: (_recreate_rollups,),
+    4: (_dirty_rolled_buckets,),
 }
 SEGMENT_MIGRATIONS: dict[int, tuple[MigrationStep, ...]] = {
     2: (
@@ -689,6 +790,7 @@ SEGMENT_MIGRATIONS: dict[int, tuple[MigrationStep, ...]] = {
         "ALTER TABLE telemetry_runs ADD COLUMN started_at_source TEXT",
         _backfill_evidence_quality,
     ),
+    4: (_backfill_call_repeats,),
 }
 
 

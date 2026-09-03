@@ -9,7 +9,7 @@ ledger does not (the gap reconciliation is there to close). Nothing is estimated
 and nothing is written.
 
     uv run python tools/telemetry_audit_window.py --hours 24
-    uv run python tools/telemetry_audit_window.py --hours 24 --data-dir C:/Users/me/.mux --json audit.json
+    uv run python tools/telemetry_audit_window.py --hours 24 --data-dir C:/me/.mux --json out.json
 
 It reads the data directory read-only and can run beside a live daemon.
 """
@@ -172,7 +172,9 @@ def main() -> int:
     arguments = parser.parse_args()
     data_dir = arguments.data_dir or Config().data_dir
     end = time.time()
-    report = audit(data_dir, start=end - arguments.hours * 3600, end=end, examples=arguments.examples)
+    report = audit(
+        data_dir, start=end - arguments.hours * 3600, end=end, examples=arguments.examples
+    )
     if arguments.json is not None:
         arguments.json.write_text(json.dumps(report, indent=1), encoding="utf-8")
     print(

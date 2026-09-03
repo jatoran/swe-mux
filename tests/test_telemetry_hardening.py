@@ -14,6 +14,7 @@ from swe_mux.telemetry_schema import (
     SEGMENT_MIGRATIONS,
     LedgerSchemaError,
 )
+from tests.test_telemetry_analytics import _seed_two_days
 from tests.test_telemetry_ledger import dimensions, event, figures
 
 DAY = 1_767_225_600.0  # 2026-01-01T00:00:00Z
@@ -30,6 +31,8 @@ _V1_MISSING_CATALOG_TABLES = (
     "rollup_dirty_hours",
     "finding_reviews",
     "native_reconciliations",
+    "quality_daily",
+    "quality_hourly",
 )
 _SEGMENT_STEPS = [
     step
@@ -49,6 +52,7 @@ def _drop_to_v1_shape(root: Path) -> None:
         with sqlite3.connect(segment) as connection:
             connection.execute("DROP TABLE segment_meta")
             connection.execute("DROP TABLE telemetry_provider_metrics")
+            connection.execute("DROP TABLE telemetry_call_repeats")
             for step in _SEGMENT_STEPS:
                 if isinstance(step, str):
                     tokens = step.split()
@@ -69,7 +73,7 @@ def test_a_version_one_ledger_is_migrated_additively_on_open(tmp_path: Path) -> 
 
     reopened = CanonicalTelemetryLedger(root)
     status = reopened.schema_status()
-    assert status["version"] == LEDGER_SCHEMA_VERSION == 3
+    assert status["version"] == LEDGER_SCHEMA_VERSION == 4
     assert status["drift"] == []
     assert status["migrations"][segment.stem] == {
         "found": 0,
@@ -411,4 +415,126 @@ def test_legacy_import_keeps_catching_up_after_it_completes(tmp_path: Path) -> N
     assert later == {"imported": 1, "cursor": 2, "completed": True}
     assert len(ledger.tool_calls()) == 2
     connection.close()
+    ledger.close()
+
+
+def test_a_conversation_rollover_is_a_second_run_with_its_own_calls(tmp_path: Path) -> None:
+    """The live rollover decision (`test_conversation_rollover.py`) closes the run row and
+    opens a new one under the replacement conversation id; the ledger keys every entity on
+    that run id, so a rolled conversation is two runs by construction and neither run's calls
+    leak into the other. This is the fixture-level stand-in for a live rollover canary, which
+    a one-shot headless invocation cannot produce."""
+
+    ledger = CanonicalTelemetryLedger(tmp_path / "telemetry")
+    first = dimensions(run_id="run-1")
+    first["native_conversation_id"] = "conversation-1"
+    second = dimensions(run_id="run-2")
+    second["native_conversation_id"] = "conversation-2"
+    ledger.record_event(event("tool_use", tool="Read", call_id="c-1"), first)
+    ledger.record_event(
+        event("tool_result", ts=1_788_000_001, tool="Read", call_id="c-1", success=True), first
+    )
+    ledger.record_event(event("agent_run_ended", ts=1_788_000_002, reason="rollover"), first)
+    ledger.record_event(event("tool_use", ts=1_788_000_003, tool="Read", call_id="c-2"), second)
+
+    runs = {row["run_id"]: row for row in ledger.export_page(kind="runs", **WINDOW)["items"]}
+    assert runs["run-1"]["native_conversation_id"] == "conversation-1"
+    assert runs["run-1"]["ended_at"] == 1_788_000_002
+    assert runs["run-1"]["end_reason"] == "rollover"
+    assert runs["run-2"]["native_conversation_id"] == "conversation-2"
+    assert runs["run-2"]["ended_at"] is None
+    calls = {row["native_call_id"]: row for row in ledger.tool_calls()}
+    assert calls["c-1"]["run_id"] == "run-1" and calls["c-1"]["status"] == "succeeded"
+    assert calls["c-2"]["run_id"] == "run-2" and calls["c-2"]["status"] == "running"
+    audit = ledger.run_audit("run-1")
+    assert audit is not None and audit["tool_calls"]["total"] == 1
+    ledger.close()
+
+
+def test_quality_and_page_counts_agree_between_rollups_and_raw_reads(tmp_path: Path) -> None:
+    """Schema 4 rolls the quality readout up and counts a tool page from rollups.
+
+    Both must say what the raw read says, and the filtered forms must agree too:
+    the `+column` planner hint in `_where` is what keeps a dimension filter on the
+    time index, and a hint that changed the answer would be a bug this catches.
+    """
+
+    ledger = CanonicalTelemetryLedger(tmp_path / "telemetry")
+    _seed_two_days(ledger)
+    window = {"from_ts": DAY - 7200, "to_ts": DAY + 40 * 3600}
+    filtered = {"filters": {"backend": "codex", "status": "succeeded"}}
+    before = {
+        "quality": figures(ledger.quality_summary(**window)),
+        "quality_filtered": figures(ledger.quality_summary(**window, filters={"backend": "codex"})),
+        "page": ledger.tool_page(**window, limit=5)["matching_calls"],
+        "page_filtered": ledger.tool_page(
+            **window, limit=5, backend="codex", status="succeeded"
+        )["matching_calls"],
+        "summary_filtered": figures(ledger.tool_summary(**window, **filtered)),
+    }
+    assert before["page"] == 40 and before["page_filtered"] == 16
+    assert before["quality"]["totals"]["calls"] == 40
+    rolled_days = 0
+    while ledger.rebuild_next_closed_day(now=DAY + 3 * 86400) is not None:
+        rolled_days += 1
+    while ledger.rebuild_next_closed_hour(now=DAY + 3 * 86400) is not None:
+        pass
+    assert rolled_days == 3
+    after = {
+        "quality": figures(ledger.quality_summary(**window)),
+        "quality_filtered": figures(ledger.quality_summary(**window, filters={"backend": "codex"})),
+        "page": ledger.tool_page(**window, limit=5)["matching_calls"],
+        "page_filtered": ledger.tool_page(
+            **window, limit=5, backend="codex", status="succeeded"
+        )["matching_calls"],
+        "summary_filtered": figures(ledger.tool_summary(**window, **filtered)),
+    }
+    assert after == before
+    assert ledger.quality_summary(**window)["coverage"]["rolled_days"] >= 1
+    # A filter on an identity column has no rollup and is counted from rows.
+    assert ledger.tool_page(**window, limit=5, run_id="run-codex-0")["matching_calls"] == 5
+    ledger.close()
+
+
+def test_repeated_calls_are_counted_as_they_are_written(tmp_path: Path) -> None:
+    """The repeat counter follows a call between input-hash groups and is what the
+    finding reads; a group whose last repeat left the window is not in it."""
+
+    ledger = CanonicalTelemetryLedger(tmp_path / "telemetry")
+    dims = dimensions()
+    for index in range(3):
+        ledger.record_event(
+            event("tool_use", ts=1_788_000_000 + index, tool="Grep", call_id=f"g-{index}",
+                  target="same"),
+            dims,
+        )
+    rows = ledger._query_all("SELECT * FROM telemetry_call_repeats")
+    assert len(rows) == 1 and rows[0]["repeats"] == 3
+    assert rows[0]["last_at"] == 1_788_000_002
+    # A later native result names a different executed input for one call: it
+    # leaves the group of three and forms a group of one.
+    ledger.record_event(
+        event("canonical_tool_result", ts=1_788_000_010, source="otel", tool="Grep",
+              call_id="g-2", success=True, executed_input_sha256="other"),
+        dims,
+    )
+    counts = {
+        row["input_sha256"]: row["repeats"]
+        for row in ledger._query_all("SELECT * FROM telemetry_call_repeats")
+    }
+    assert set(counts.values()) == {2, 1}
+    findings = ledger.inefficiency_findings(**WINDOW)["findings"]
+    assert not [item for item in findings if item["kind"] == "repeated_identical_calls"]
+    ledger.record_event(
+        event("tool_use", ts=1_788_000_020, tool="Grep", call_id="g-3", target="same"), dims
+    )
+    repeated = [
+        item
+        for item in ledger.inefficiency_findings(**WINDOW)["findings"]
+        if item["kind"] == "repeated_identical_calls"
+    ]
+    assert len(repeated) == 1 and repeated[0]["evidence"]["max_repeats"] == 3
+    # The window is judged by the group's latest repeat.
+    early = ledger.inefficiency_findings(from_ts=1_787_999_000, to_ts=1_788_000_015)["findings"]
+    assert not [item for item in early if item["kind"] == "repeated_identical_calls"]
     ledger.close()

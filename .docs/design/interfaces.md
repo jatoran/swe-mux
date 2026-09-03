@@ -2574,16 +2574,27 @@ DELETE /provider-accounts/{provider}/{account_id}
 GET|POST /usage
 DELETE /usage/cache
 GET    /telemetry/operational[?provider=&account=&limit=]
-GET    /telemetry/v2/tools/summary[?from=&to=&origin=&project=&backend=&model=&layer=&family=&status=]
-GET    /telemetry/v2/tools[?from=&to=&cursor=&limit=&project=&backend=&model=&origin=&layer=&family=&status=]
+GET    /telemetry/v2/tools/summary[?from=&to=&origin=&project=&backend=&model=&layer=&family=&status=&evidence=]
+GET    /telemetry/v2/tools[?from=&to=&cursor=&limit=&project=&backend=&model=&origin=&layer=&family=&status=&evidence=&raw_name=&run_id=&turn_id=]
 GET    /telemetry/v2/tools/{tool_call_id}
+GET    /telemetry/v2/runs/{run_id}
+GET    /telemetry/v2/turns/{turn_id}
 GET    /telemetry/v2/workload[?from=&to=&origin=&project=&backend=&model=]
+GET    /telemetry/v2/skills/summary[?from=&to=&origin=&project=&backend=&model=]
+GET    /telemetry/v2/verifications/summary[?from=&to=&origin=&project=&backend=&model=]
+GET    /telemetry/v2/metrics/summary[?from=&to=&origin=&project=&backend=&model=]
 GET    /telemetry/v2/quality[?from=&to=&origin=&project=&backend=&model=]
-GET    /telemetry/v2/inefficiencies[?from=&to=&origin=&project=&backend=&model=&layer=&family=&status=]
+GET    /telemetry/v2/inefficiencies[?from=&to=&origin=&project=&backend=&model=&layer=&family=&status=&evidence=&reviewed=0|1]
+POST   /telemetry/v2/inefficiencies/review {finding_key, kind, verdict: useful|noise|already_known, note?}
+GET    /telemetry/v2/compare[?split=model|backend|project_id&from=&to=&origin=&project=&backend=&model=]
 GET    /telemetry/v2/compactions[?from=&to=&origin=&project=&backend=&model=]
 GET    /telemetry/v2/parsers
+GET    /telemetry/v2/shadow[?from=&to=]
+POST   /telemetry/v2/reconcile
 GET    /telemetry/v2/export/{kind}[?from=&to=&origin=&project=&backend=&model=&format=jsonl|csv]
+GET    /telemetry/v2/{kind}[?from=&to=&cursor=&limit=&origin=&project=&backend=&model=&<kind filters>]
 POST   /telemetry/otlp/{session_id}/v1/logs
+POST   /telemetry/otlp/{session_id}/v1/metrics
 GET    /telemetry/quota-series[?provider=&account=&since=&until=&resolution=raw|daily&limit=]
 POST   /telemetry/quota-resets/review {ids: [reset_id], resolution: seen|manual_usage|discarded}
 ```
@@ -2601,10 +2612,31 @@ The tool-detail route returns at most 500 rows per page with an opaque continuat
 an exact `matching_calls` denominator.
 The tool-call audit route returns the canonical lifecycle row plus every content-free evidence
 observation, contribution, precedence rank, and conflict marker.
-The quality route reports lifecycle and field-completeness denominators by backend, and every
-provider event name seen per harness version with whether the reducer understood it.
+The quality route reports lifecycle and field-completeness denominators by backend and by
+harness version, every provider event name seen per harness version with whether the reducer
+understood it, each harness's measured capability set, and the native reconciliation status.
 The inefficiency route returns deterministic review candidates with their evidence, coverage,
-confidence, and suggested investigation.
+confidence, suggested investigation, a stable `finding_key`, and any recorded review;
+`reviewed=0` hides findings an operator has already judged.
+The review route records that judgement (`useful`, `noise`, or `already_known`) and is the only
+feedback channel; no finding produces a configuration change, and the gate a future proposal
+must pass (`telemetry_queries.propose_adaptive_change`) requires a `useful` verdict, a
+comparison window, and a rollback rule.
+The compare route splits one dimension into cohorts and reports `comparable: false` with the
+reason when the cohorts differ on a dimension the split does not name.
+The run and turn audit routes return the entity row, its children, per-status and per-quality
+call counts, provider metric totals, the reconciliation record, and lifecycle evidence.
+The generic `v2/{kind}` page serves every export kind (`tool_calls`, `runs`, `turns`,
+`model_requests`, `skills`, `verifications`, `compactions`, `provider_metrics`, `evidence`)
+newest first with an exact `matching` count and an opaque cursor, so a drill-down from an
+aggregate to its calls, runs, turns, and evidence never reads a page to compute a total.
+The shadow route compares the legacy `tool_events` table with the canonical calls per run and
+tool over the window, classifies every disagreement, and carries the
+`canonical_telemetry_legacy_dashboard_enabled` flag the Fleet activity view uses to draw the
+legacy tab.
+The reconcile route runs one direct native-store reconciliation pass and returns its summary.
+The metrics ingress accepts a provider's OTLP/JSON metrics batch under the same session secret
+as the logs ingress; only allow-listed metric names and attribute keys are kept.
 It performs no adaptive configuration change and makes no causal claim.
 `project`, `backend`, and `model` are exact-match filters on every aggregate; `layer`,
 `family`, and `status` additionally apply to the tool summary and the inefficiency route.

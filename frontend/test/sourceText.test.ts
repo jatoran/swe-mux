@@ -141,6 +141,10 @@ const SOURCE_TEXT_TESTS: Readonly<Record<string, readonly Reason[]>> = {
   'sourceText.test.ts': ['registry'],
   'styleInvariants.test.ts': ['stylesheet'],
   'tabContextMenu.test.ts': ['composition-root'],
+  //: `component-jsx` for the half that holds every Fleet activity total to drawing a
+  //: caption with a denominator beside it; the words themselves are pure and tested
+  //: directly from `telemetryCaptionText.ts`.
+  'telemetryCaption.test.ts': ['component-jsx'],
   'terminalClipboard.test.ts': ['component-jsx', 'stylesheet'],
   'terminalRenderDiagnostics.test.ts': ['component-jsx'],
   //: `negative-invariant` and not `component-jsx`: the assertion is that a whole effect

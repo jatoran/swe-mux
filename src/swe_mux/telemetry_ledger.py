@@ -33,7 +33,10 @@ from .telemetry_imports import LegacyImportMixin
 from .telemetry_queries import WORKLOAD_FIELDS, LedgerQueryMixin
 from .telemetry_reconcile import NativeReconcileMixin
 from .telemetry_schema import (
+    CALL_REPEATS_INSERT,
+    CALL_REPEATS_SELECT,
     LEDGER_SCHEMA_VERSION,
+    QUALITY_FIELDS,
     canonical_json,
     classify_tool,
     content_metrics,
@@ -1023,6 +1026,16 @@ class CanonicalTelemetryLedger(LegacyImportMixin, NativeReconcileMixin, LedgerQu
                 if value is not None and existing[field] is None:
                     updates[field] = value
             if is_result and rank >= int(existing["result_rank"]):
+                # A denial is a failure whose cause is known. The provider's own
+                # failed result for the same call arrives after its sandbox or
+                # permission verdict at the same rank; it may fill fields but must
+                # not un-know the cause.
+                if (
+                    status == "failed"
+                    and str(existing["status"]) == "denied"
+                    and rank == int(existing["result_rank"])
+                ):
+                    status = "denied"
                 updates.update(
                     {
                         "finished_at": event.ts,
@@ -1108,6 +1121,7 @@ class CanonicalTelemetryLedger(LegacyImportMixin, NativeReconcileMixin, LedgerQu
                 f"UPDATE telemetry_tool_calls SET {assignments} WHERE tool_call_id=?",
                 (*updates.values(), tool_call_id),
             )
+        self._refresh_call_repeats(connection, tool_call_id, run_id, agent_id, existing)
         self._link_evidence(
             connection,
             "tool_call",
@@ -1118,6 +1132,49 @@ class CanonicalTelemetryLedger(LegacyImportMixin, NativeReconcileMixin, LedgerQu
             conflict=conflict,
         )
         return tool_call_id
+
+    @staticmethod
+    def _refresh_call_repeats(
+        connection: sqlite3.Connection,
+        tool_call_id: str,
+        run_id: str,
+        agent_id: str,
+        existing: sqlite3.Row | None,
+    ) -> None:
+        """Recount the (run, agent, tool, input hash) groups this write touched.
+
+        The repeated-call finding reads these counts instead of grouping every call
+        in the window by its hash. A write can move a call between groups (a later
+        executed-input hash beside the requested one, a renamed request), so the
+        group it left is recounted as well as the one it joined; a group with no
+        calls left is removed.
+        """
+
+        after = connection.execute(
+            "SELECT raw_name,COALESCE(executed_input_sha256,input_sha256) input_hash "
+            "FROM telemetry_tool_calls WHERE tool_call_id=?",
+            (tool_call_id,),
+        ).fetchone()
+        keys: set[tuple[str, str]] = set()
+        if after is not None and after["input_hash"] is not None:
+            keys.add((str(after["raw_name"]), str(after["input_hash"])))
+        if existing is not None:
+            before_hash = existing["executed_input_sha256"] or existing["input_sha256"]
+            if before_hash is not None:
+                keys.add((str(existing["raw_name"]), str(before_hash)))
+        for raw_name, input_hash in keys:
+            connection.execute(
+                "DELETE FROM telemetry_call_repeats WHERE run_id=? AND agent_id=? "
+                "AND raw_name=? AND input_sha256=?",
+                (run_id, agent_id, raw_name, input_hash),
+            )
+            connection.execute(
+                CALL_REPEATS_INSERT
+                + CALL_REPEATS_SELECT
+                + " AND run_id=? AND agent_id=? AND raw_name=? "
+                "AND COALESCE(executed_input_sha256,input_sha256)=? GROUP BY 1,2,3,4",
+                (run_id, agent_id, raw_name, input_hash),
+            )
 
     def _record_skill(
         self,
@@ -1500,6 +1557,17 @@ class CanonicalTelemetryLedger(LegacyImportMixin, NativeReconcileMixin, LedgerQu
         rows = self._segment(period).execute(self._TOOL_ROLLUP_SQL, (start, end)).fetchall()
         return [tuple(row) for row in rows]
 
+    _QUALITY_ROLLUP_INSERT_COLUMNS = "backend,harness_version,model,project_id,origin," + ",".join(
+        QUALITY_FIELDS
+    )
+
+    def _quality_rollup_rows(
+        self, period: str, start: float, end: float
+    ) -> list[tuple[Any, ...]]:
+        sql = self._QUALITY_RAW_SQL.format(origin="", filters="")
+        rows = self._segment(period).execute(sql, (start, end)).fetchall()
+        return [tuple(row) for row in rows]
+
     def _rebuild_bucket(
         self,
         *,
@@ -1510,12 +1578,20 @@ class CanonicalTelemetryLedger(LegacyImportMixin, NativeReconcileMixin, LedgerQu
         period: str,
         tool_table: str,
         workload_table: str,
+        quality_table: str,
     ) -> None:
         known = self._catalog.execute(
             "SELECT 1 FROM ledger_segments WHERE period=?", (period,)
         ).fetchone()
         tool_rows = self._tool_rollup_rows(period, start, end) if known is not None else []
         workload_rows = self.workload_rows_between(period, start, end) if known is not None else []
+        quality_rows = self._quality_rollup_rows(period, start, end) if known is not None else []
+        self._catalog.execute(f"DELETE FROM {quality_table} WHERE {bucket_column}=?", (bucket,))
+        self._catalog.executemany(
+            f"INSERT INTO {quality_table}({bucket_column},{self._QUALITY_ROLLUP_INSERT_COLUMNS}) "
+            f"VALUES(?,{','.join('?' for _ in range(5 + len(QUALITY_FIELDS)))})",
+            [(bucket, *row) for row in quality_rows],
+        )
         workload_columns = (
             bucket_column, "backend", "model", "project_id", "origin", *WORKLOAD_FIELDS
         )
@@ -1627,6 +1703,7 @@ class CanonicalTelemetryLedger(LegacyImportMixin, NativeReconcileMixin, LedgerQu
                 period=period,
                 tool_table="tool_daily",
                 workload_table="workload_daily",
+                quality_table="quality_daily",
             )
             self._rebuild_daily_entities(day, start, end, period)
             self._catalog.execute("DELETE FROM rollup_dirty_days WHERE day=?", (day,))
@@ -1663,6 +1740,7 @@ class CanonicalTelemetryLedger(LegacyImportMixin, NativeReconcileMixin, LedgerQu
                 period=hour[:7],
                 tool_table="tool_hourly",
                 workload_table="workload_hourly",
+                quality_table="quality_hourly",
             )
             self._catalog.execute(
                 "INSERT INTO rollup_hours(hour,rebuilt_at) VALUES(?,?) "
