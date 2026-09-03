@@ -689,7 +689,12 @@ def test_menu_scope_follows_the_menu_that_opened_the_surface() -> None:
     ):
         assert elsewhere not in project_menu
     assert "openProjectFiles(" not in project_menu
-    for command in ("notes.browseProject", "processes.project", "project.files", "prompts.openProject"):
+    for command in (
+        "notes.browseProject",
+        "processes.project",
+        "project.files",
+        "prompts.openProject",
+    ):
         assert f"id: '{command}'" in app or f"id:'{command}'" in app
     # The category headings went with them: two headings over three rows apiece in a menu
     # of nine spent a fifth of its height saying what each row's own icon now says.
