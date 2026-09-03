@@ -143,7 +143,11 @@ def hold_bundle_swap(data_dir: Path, *, settle: float = SETTLE_SECONDS) -> Itera
         return
     try:
         if settle > 0:
-            time.sleep(settle)
+            deadline = time.monotonic() + settle
+            remaining = settle
+            while remaining > 0:
+                time.sleep(remaining)
+                remaining = deadline - time.monotonic()
         yield path
     finally:
         with contextlib.suppress(OSError):

@@ -18,6 +18,7 @@ from pathlib import Path
 
 import pytest
 
+import swe_mux.bundle_swap as bundle_swap
 from swe_mux.bundle_swap import (
     EXEC_LAUNCHER_STEM,
     HOLD_FILENAME,
@@ -110,6 +111,21 @@ def test_hold_settles_before_yielding(tmp_path: Path) -> None:
     with hold_bundle_swap(tmp_path, settle=0.2):
         elapsed = time.monotonic() - started
     assert elapsed >= 0.2
+
+
+def test_hold_retries_a_sleep_that_returns_before_the_deadline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An early timer wake cannot shorten the bootloader safety window."""
+    monotonic_values = iter((10.0, 10.18, 10.2))
+    sleeps: list[float] = []
+    monkeypatch.setattr(bundle_swap.time, "monotonic", lambda: next(monotonic_values))
+    monkeypatch.setattr(bundle_swap.time, "sleep", sleeps.append)
+
+    with hold_bundle_swap(tmp_path, settle=0.2):
+        pass
+
+    assert sleeps == pytest.approx([0.2, 0.02])
 
 
 def test_clear_stale_hold_only_removes_an_abandoned_one(tmp_path: Path) -> None:
