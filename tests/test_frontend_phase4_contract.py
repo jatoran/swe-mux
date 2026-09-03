@@ -675,17 +675,21 @@ def test_menu_scope_follows_the_menu_that_opened_the_surface() -> None:
     project_menu = app[
         app.index("aria-label={`Project actions for") : app.index('aria-label="Sidebar actions"')
     ]
-    # What survives here is the prefiltered surface with nowhere else to be reached from.
-    for scoped in ("history.openProject", "prompts.openProject"):
-        assert f"runNamedCommand('{scoped}')" in project_menu
-    # Notes, Processes, the fleet queue, and Browse files each left the Project menu: every
-    # one is a drawer tab or a dialog that already opens on the *selected* Project, and
-    # selecting a Project is one click on the row this menu was opened from - so the row
-    # was a second route to a place one click away. They keep their palette commands.
-    for elsewhere in ("openNotesBrowser(target)", "processes.project", "queue.fleetProject"):
+    # History survives as the prefiltered surface with nowhere else to be reached from.
+    assert "runNamedCommand('history.openProject')" in project_menu
+    # Notes, Processes, the fleet queue, Browse files, and Prompt library each left the
+    # Project menu. Every one already opens scoped to the selected Project from the drawer
+    # or another nearby surface, so the menu row duplicated a route one click away. They
+    # keep their palette commands.
+    for elsewhere in (
+        "openNotesBrowser(target)",
+        "processes.project",
+        "queue.fleetProject",
+        "prompts.openProject",
+    ):
         assert elsewhere not in project_menu
     assert "openProjectFiles(" not in project_menu
-    for command in ("notes.browseProject", "processes.project", "project.files"):
+    for command in ("notes.browseProject", "processes.project", "project.files", "prompts.openProject"):
         assert f"id: '{command}'" in app or f"id:'{command}'" in app
     # The category headings went with them: two headings over three rows apiece in a menu
     # of nine spent a fifth of its height saying what each row's own icon now says.

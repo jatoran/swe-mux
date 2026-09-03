@@ -331,7 +331,9 @@ And **not** a structural fallback: Phase 21 asked for a full replacement when th
 
 The gate that keeps short-lived helpers out of the window in which `dist/swe-mux` is being renamed, and the generator for the shims that honour it.
 The swap is two renames and the app's own processes are stopped first, so the window looked for years like it belonged to nobody; it does not, because every instrumented Claude session runs `dist/swe-mux/swe-mux.exe -m swe_mux.hook_client <event>` on every hook and those helpers are deliberately *spared* by the stop.
-A helper launched between the renames never starts; one launched just before them and still inside the PyInstaller bootloader dies against a `sys._MEIPASS` that is an absolute path to a directory now called something else - observed 2026-09-02 as a modal `Failed to execute script 'pyi_rth_multiprocessing' ... No module named '_socket'`, which is simply the first runtime hook in the startup sequence that imports an extension module.
+A helper launched between the renames never starts.
+One launched just before them can still be inside the PyInstaller bootloader when its directory moves, leaving `sys._MEIPASS` pointing at the directory's former absolute path.
+The resulting extension import failure was observed 2026-09-02 as a modal `Failed to execute script 'pyi_rth_multiprocessing' ... No module named '_socket'`; `_socket` is simply the first extension imported by the startup sequence's runtime hooks.
 
 **The consequence is a lost event and not a cosmetic dialog.** `hook_client` spools its durable events when the daemon is down, which is exactly what makes a redeploy safe for a live fleet; a helper that dies in the bootloader never reaches that code, so a `Stop` or a `PermissionRequest` is lost rather than deferred and the session reads as "working" until the 900 s no-evidence alarm.
 
