@@ -29,7 +29,7 @@ if (mobile) updateLayout(projectId, flattenIntoOneStack(layout))
 ```
 
 The node test runner strips types from `.ts` but cannot load `.tsx`.
-That is why several pure models are split out of the component that renders them (`dotShapes.ts`, `coldSession.ts`, `settingsTabs.ts`, `modelRouting.ts`, `settingsSave.ts`).
+That is why several pure models are split out of the component that renders them (`dotShapes.ts`, `coldSession.ts`, `settingsTabs.ts`, `modelRouting.ts`, `settingsSave.ts`, `historyFeed.ts`).
 
 ## Lazy boundaries
 

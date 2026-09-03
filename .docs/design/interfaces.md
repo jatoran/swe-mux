@@ -2183,7 +2183,7 @@ All three refuse as typed results that change nothing, rather than as protocol e
 ## History and reviews
 
 ```text
-GET    /history[?q=&scope=all|user|assistant|metadata&backend=&project=&state=&external=&time_basis=started|last_message&date_from=&date_to=&cursor=]
+GET    /history[?q=&scope=all|user|assistant|metadata&backend=&project=&state=&external=&time_basis=last_message|started&date_from=&date_to=&cursor=]
 GET    /history/projects
 GET    /history/{id}/transcript[?q=&scope=all|user|assistant|metadata]
 GET    /history/backfills[?project_id=]
@@ -2202,7 +2202,12 @@ POST   /history/{id}/second-opinion   preview/confirm with project_id (no in-app
 GET    /history/{id}/handoff
 ```
 
+`time_basis` both orders the page (newest first) and scopes `date_from`/`date_to`, and defaults to `last_message` - the most recent conversations, which is what every caller of this listing means. Ordering falls back through last message → exit → native start → spawn so a run with no indexed messages still has a position; the date range does not fall back, so it excludes such a run outright (`features/history.md`).
+`cursor` is opaque and keyed on the same ordering expression, so a cursor taken under one `time_basis` must be used with that same basis; changing the basis restarts the listing.
 Resume/review confirmation must target an existing Project and starts at its root.
+Every route that reads a run row's conversation - `GET /history/{id}/transcript`, `GET /history/{id}/branch-points`, `POST /history/{id}/resume` and a fork - resolves the conversation by id when the row's recorded `transcript_path` no longer exists, and writes the corrected path back to the row (`features/history.md`).
+A `409 transcript_unavailable` from any of them therefore means no file answers to that conversation id, not that mux lost track of where the CLI moved it.
+`GET /sessions/{id}/transcript` does the same search for a session in a terminal state and never for a live one.
 Resume returns `409 conversation_live` (with the owning `session_id`) when a live session currently claims the row's native conversation; Branch, not resume, is the flow for forking a live conversation.
 It returns `409 conversation_held` (with `holder: {kind, pid, job_id, name}`) when a CLI process mux does not own holds the conversation — a Claude background agent is the case that occurs — because that CLI answers a second opener by exiting rather than by refusing to start.
 It returns `503 resume_failed` (with `attempts` and the pane's own cleaned last output in `detail`) when the resumed pane died inside its settle window; the pane is discarded rather than returned.

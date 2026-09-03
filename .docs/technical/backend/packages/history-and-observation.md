@@ -45,6 +45,16 @@ Bounded harness conversation parsing, and normalized native tool names and input
 
 **Not:** process state, transcript writes, tool results, telemetry, persistence, or redaction, since the reader is the machine's owner.
 
+### `transcript_repair.py`
+
+Where a recorded conversation actually is once its recorded path stopped being true, and the write-back that makes one miss enough.
+`resolve_row_transcript` answers for a history row, mutating the row and repairing the stored path (with every watermark on it, and its transcript-index cursor) when the file has moved; `locate_conversation` is the same search without a row, for a caller that holds only a session.
+
+Two rules the module exists to keep. A located path is **verified before it is believed**, because `Adapter.locate_transcript` searches for Claude and computes for Codex, and an unchecked answer would record a second dead path as a repair.
+And a repair is **written down**, or the surface that noticed heals only itself and Resume, Branch and the reindexer go on reading the same dead row.
+
+**Not:** deciding *when* to look (every caller asks only after the recorded path has already missed, because a search is a directory probe per project slug), the search itself (`adapters/*.locate_transcript`), or following a file while its pane is alive - that is the observer's rebind (`session.py`), and this is what covers the window after it is gone.
+
 ### `transcript_fork.py`
 
 Writing a forked conversation: given a byte offset, a new native transcript holding the source's records up to it, with conversation ids rewritten, sidecar tool outputs repointed and copied, titles marked so the CLI has no name collision to break, and a queued prompt dropped rather than inherited.

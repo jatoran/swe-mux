@@ -36,6 +36,7 @@ from ..transcript_fork import (
     mint_conversation_id,
     write_fork,
 )
+from ..transcript_repair import resolve_row_transcript
 from ..transcript_view import (
     CONVERSATION_DEFAULT_LIMIT,
     CONVERSATION_MAX_LIMIT,
@@ -416,6 +417,18 @@ async def history_branch_points(request: web.Request) -> web.Response:
         return json_response({**empty, "reason": "not_agent"})
     if strategy != "transcript_fork":
         return json_response({**empty, "reason": "strategy_has_no_points"})
+    # A row's recorded path can name a file the CLI has since moved, which reads here as
+    # a conversation with no branch points rather than as a lookup that missed
+    # (`transcript_repair`).
+    await resolve_row_transcript(
+        row,
+        # A read route must not start requiring the session manager to answer: with no
+        # adapters there is nothing to search with, and the resolution degrades to the
+        # plain readability test it replaced.
+        adapters=getattr(request.app.get(keys.SESSIONS), "adapters", {}),
+        history=request.app[keys.HISTORY],
+        events=request.app[keys.EVENTS],
+    )
     outcome = await _read_branch_points(
         Path(str(row["transcript_path"])) if row.get("transcript_path") else None,
         backend,

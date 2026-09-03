@@ -22,9 +22,9 @@ from ..session import (
     SessionManager,
 )
 from ..session_resume import ResumeRefused, resume_run
+from ..transcript_repair import resolve_row_transcript
 from ..transcript_view import (
     ParsedConversation,
-    conversation_is_readable,
     parse_transcript_with_watermark,
 )
 from . import sessions
@@ -43,7 +43,7 @@ async def list_history(request: web.Request) -> web.Response:
         external=(external_value.lower() == "true") if external_value is not None else None,
         date_from=float(request.query["date_from"]) if request.query.get("date_from") else None,
         date_to=float(request.query["date_to"]) if request.query.get("date_to") else None,
-        time_basis=request.query.get("time_basis", "started"),
+        time_basis=request.query.get("time_basis", "last_message"),
         cursor=request.query.get("cursor"),
         limit=int(request.query.get("limit", min(50, request.app[keys.CONFIG].history_limit))),
     )
@@ -113,15 +113,28 @@ async def history_transcript(request: web.Request) -> web.Response:
     row = await request.app[keys.HISTORY].history_entry(request.match_info["sid"])
     if not row:
         raise NotFound(request.match_info["sid"], kind="session")
-    transcript = row.get("transcript_path")
-    path = Path(str(transcript)) if transcript else None
+    # Ask where the conversation *is* rather than testing where it was recorded: the CLI
+    # moves these files (`transcript_repair`), and a row whose path went stale refused to
+    # open with a message blaming the CLI's pruning for a file sitting one slug away.
+    # The search only runs once the recorded path has already missed, and it writes the
+    # repair back so Resume and the reindexer stop reading the same dead row.
+    located = await resolve_row_transcript(
+        row,
+        # `.get`, like the holder decoration below it: reading a conversation must not
+        # start depending on a live session manager. With no adapters there is nothing to
+        # search with and this degrades to the readability test it replaced.
+        adapters=getattr(request.app.get(keys.SESSIONS), "adapters", {}),
+        history=request.app[keys.HISTORY],
+        events=request.app[keys.EVENTS],
+    )
     backend = str(row["backend"])
     native_id = str(row.get("native_id") or "") or None
-    if not conversation_is_readable(path, backend, native_id):
+    if not located.readable:
         return json_response(
             {"error": "native transcript is unavailable", "code": "transcript_unavailable"},
             409,
         )
+    path = located.path
     # Parse off the event loop and reuse the shared watermark-keyed cache; large
     # conversations otherwise block the loop on every open. The watermark comes back
     # from the same call, so it can never claim to cover content this parse did not

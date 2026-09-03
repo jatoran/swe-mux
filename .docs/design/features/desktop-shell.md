@@ -438,6 +438,14 @@ It is a real surface - anything that can reach the port can drive the page - so 
   A failed build never touches the running app, and a new build that never reports healthy is
   rolled back to `swe-mux.prev` (failed bundle kept at `dist/swe-mux.failed`), so a remote
   client cannot be stranded.
+  **Both renames run under the bundle-swap hold** (`swe_mux/bundle_swap.py`), because the window
+  between them is not empty: live sessions keep launching `swe-mux.exe -m swe_mux.hook_client`
+  on every hook, and those helpers are deliberately spared by the detach-stop.
+  One caught mid-bootloader dies against a `_MEIPASS` that names a directory now called
+  something else, which is a *lost* durable event rather than a deferred one - the spool it
+  would have written is code it never reaches.
+  The gate lives in `~/.mux/bin`, outside anything the swap renames, because by the time any
+  code inside the bundle runs the process is already committed to that path.
   **The health wait reports progress rather than waiting in silence.** The successor daemon
   binds before its runtime is built and answers 503 naming the phase it is in, so `wait_healthy`
   logs each phase *change* to `redeploy.log` and, on expiry, says which phase the budget ran out
