@@ -180,6 +180,26 @@ test('an overlay drawn over a region shadows it, and takes the whole touch', () 
   assert.equal(GESTURE_SHADOWING_SELECTORS.includes('.rail-dropup'), false)
 })
 
+test('an arranging rail shadows its own upward swipe', () => {
+  // Not a surface drawn over the rail: the rail itself, in the one mode that uses the
+  // channel the region exists to claim. A chip is dragged in every direction, including up
+  // into the bin and new-row targets, so a flick that never held long enough to lift one
+  // took no pointer-drag claim and opened the app menu out from under the rearrangement.
+  const el = (...classes: string[]) => ({ matches: (query: string) => query.split('.').filter(Boolean).every(name => classes.includes(name)) })
+  const arranging = [el('term-key'), el('terminal-action-rail', 'rail-arranging')]
+  const idle = [el('term-key'), el('terminal-action-rail')]
+
+  assert.equal(pathShadowsGesture(arranging), true)
+  assert.equal(regionForPath(arranging), null)
+  // The same element matches the region selector too, so the shadow only works because it
+  // is checked first, per element - not because the region stopped being one.
+  assert.equal(pathShadowsGesture(idle), false)
+  assert.equal(regionForPath(idle), 'commandRail')
+  // Dropped outright rather than merely denied a region: a pan across an arranging rail
+  // that fell through to the workspace slots would change tabs behind it.
+  assert.equal(GESTURE_SHADOWING_SELECTORS.includes('.terminal-action-rail.rail-arranging'), true)
+})
+
 test('the top bar opens downward, and only the mic can be put away again', () => {
   assert.equal(surfaceGestureFor('quotaChip', 'down'), 'quotaChip.accounts')
   assert.equal(surfaceGestureFor('runTrigger', 'down'), 'runTrigger.menu')

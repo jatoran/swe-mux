@@ -1538,15 +1538,23 @@ The app-wide answer to "what is this", and the recovery path for the tour.
   That last rule exists because the overflow veto is *conditional* - a strip that scrolls only
   when full would otherwise make a gesture beside it work half the time, which is worse than not
   having it.
-  **A surface drawn over a region takes its touches whole** (`GESTURE_SHADOWING_SELECTORS`).
-  A region claims a channel because that channel is dead there, and an overlay opened from the
-  region can break that premise while still living inside it: the command rail's overflow popover
-  is a DOM child of the rail row and scrolls vertically, so scrolling its chips *was* the rail's
-  upward swipe and opened the app menu. The veto is on surface identity, not on scroll state - a
-  short panel that does not overflow is no more a place to open the app menu than a tall one - and
-  it drops the sequence outright rather than merely declining to call it a region gesture, since
-  a path that is only "not a region" still resolves the workspace slots and a sideways drag across
-  the panel would change tabs behind it. Drop-ups need no entry: they mount outside the rail, so
+  **What breaks a region's premise stops the region answering** (`GESTURE_SHADOWING_SELECTORS`).
+  A region claims a channel because that channel is dead there, and two things break that without
+  the region ceasing to exist. An overlay opened from the region lives inside it: the command
+  rail's overflow popover is a DOM child of the rail row and scrolls vertically, so scrolling its
+  chips *was* the rail's upward swipe and opened the app menu. And the region in a mode that uses
+  the channel itself: an arranging rail is dragged in every direction, including up into its bin
+  and new-row targets, so single-finger vertical is the most load-bearing thing on it rather than
+  the deadest - a *committed* drag already stands the recognizer down through the pointer-drag
+  claim, but a flick that never held long enough to lift a chip takes no claim, and that is
+  exactly the gesture that opened the app menu out from under someone rearranging their rail.
+  The veto is on identity and mode, never on scroll state - a short panel that does not overflow
+  is no more a place to open the app menu than a tall one - and it drops the sequence outright
+  rather than merely declining to call it a region gesture, since a path that is only "not a
+  region" still resolves the workspace slots and a sideways drag across the panel, or a pan
+  across an arranging rail, would change tabs behind it. An arranging rail matches its region
+  selector and its shadow selector on the same element, and the shadow is checked first, which is
+  what makes a mode entry work at all. Drop-ups need no entry: they mount outside the rail, so
   no region matches them to begin with.
 - **Only the command rail's swipe is a rebindable slot** (`rail_swipe_up`, default `menu.toggle`),
   because it is the only one whose action is not about the surface it starts on - it opens the app
@@ -2292,6 +2300,9 @@ The app-wide answer to "what is this", and the recovery path for the tour.
   This is the only part of the feature whose failure is invisible - the drag looks right and the layout saves wrong - which is why the translation is a pure function with its own tests and is exercised end to end against a deliberately filtered row.
   Dropping past the last visible chip appends to the *row*, not after the last visible slot, so a trailing filtered action stays trailing.
 - **Escape unwinds one layer at a time.** A drag in flight puts its chip back and the mode stays open; a second Escape closes the mode. A press outside the rail closes it too.
+- **While the mode is on, the rail stops answering to its own upward swipe** (`GESTURE_SHADOWING_SELECTORS`).
+  That swipe opens the app menu, and it exists because single-finger vertical is dead on a strip that only pans sideways - which arranging is precisely the mode that makes untrue.
+  A committed drag already stands the recognizer down through the pointer-drag claim; a flick too quick to lift a chip takes no claim, and that is the one that opened the menu out from under a rearrangement.
 - A drop that changes nothing writes nothing: an identical layout still costs a settings round trip and a broadcast to every other device.
 - Saves predating the layout model are migrated on read, per scope and by shape rather than by a version field, so a rewritten global scope and a still-legacy project override coexist.
   The old list is resolved once for each device and becomes its rail row, so an upgrade renders identically on both devices and only then diverges by hand.
