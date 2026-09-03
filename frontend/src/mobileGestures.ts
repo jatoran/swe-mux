@@ -264,39 +264,52 @@ const REGION_GESTURES: Partial<Record<GestureRegion, Partial<Record<GestureDirec
 }
 
 /**
- * Surfaces painted *over* a region that shadow its gesture entirely.
+ * What breaks a region's premise, so the region stops answering to a swipe.
  *
  * A region answers to a swipe because the channel it claims is dead there — the command
  * rail claims single-finger vertical because a strip that only pans sideways has no
- * vertical scroll of its own to protect. An overlay opened from that rail breaks the
- * premise while still living inside it: `RailStrip` renders the overflow popover as a DOM
- * child of `.rail-row`, and its `.rail-overflow-grid` is a real vertical scroller, so
- * scrolling the folded row to reach a chip *was* an upward swipe on the rail and opened
- * the app menu.
+ * vertical scroll of its own to protect. Two things break that premise, and neither is
+ * the region ceasing to exist:
  *
- * The veto is on surface identity, not on scroll state. A short popover that does not
+ *   * **A surface painted over it.** An overlay opened from the rail lives inside it:
+ *     `RailStrip` renders the overflow popover as a DOM child of `.rail-row`, and its
+ *     `.rail-overflow-grid` is a real vertical scroller, so scrolling the folded row to
+ *     reach a chip *was* an upward swipe on the rail and opened the app menu.
+ *   * **The region in a mode that uses the channel itself.** An arranging rail
+ *     (`railArrange.ts`) is dragged in every direction, including up into its bin and
+ *     new-row targets, so single-finger vertical is the most load-bearing thing on it
+ *     rather than the deadest. A *committed* drag already stands this recognizer down
+ *     through the pointer-drag claim, but a flick that never holds long enough to lift a
+ *     chip takes no claim — and that is precisely the gesture that opened the app menu
+ *     out from under someone rearranging their rail.
+ *
+ * The veto is on identity and mode, never on scroll state. A short popover that does not
  * overflow is no more a place to open the app menu than a long one, and `overflow-y` is
- * the wrong question to ask: what settles it is that the panel is its own surface, drawn
- * on top, so a gesture inside it can only mean something about it. That is the same rule
- * `resolveGestureCommand` applies to the dismiss stack, one level down.
+ * the wrong question to ask: what settles it is that a gesture there can only mean
+ * something about the thing under it. That is the same rule `resolveGestureCommand`
+ * applies to the dismiss stack, one level down.
  *
  * Checked per path element, nearest-first, so a shadowing surface *inside* a region wins
- * over the region and a region nested inside chrome is unaffected.
+ * over the region and a region nested inside chrome is unaffected. An arranging rail
+ * matches both its region selector and its shadow selector on the same element, and the
+ * shadow is checked first, which is what makes the mode entry work at all.
  *
  * Drop-ups (`.rail-dropup`) are deliberately absent: they mount under `.terminal-surface`,
  * outside `.terminal-action-rail`, so no region ever matches them in the first place.
  */
 export const GESTURE_SHADOWING_SELECTORS: readonly string[] = [
   '.rail-overflow-popover',
+  '.terminal-action-rail.rail-arranging',
 ]
 
 /**
- * Whether a touch began on a surface that shadows everything under it.
+ * Whether a touch began somewhere that shadows everything under it.
  *
  * The recognizer drops the sequence outright on this, rather than merely declining to
  * call it a region gesture. Declining would hand the touch to the *workspace* slots,
- * where a horizontal swipe is `mobileTab.next` — so scrolling the folded rail sideways
- * would change tabs behind the panel, trading one wrong gesture for a worse one.
+ * where a horizontal swipe is `mobileTab.next` — so scrolling the folded rail sideways,
+ * or panning an arranging rail to reach a chip, would change tabs behind it: one wrong
+ * gesture traded for a worse one.
  */
 export function pathShadowsGesture(path: readonly { matches: (selector: string) => boolean }[]): boolean {
   return path.some(element => GESTURE_SHADOWING_SELECTORS.some(selector => element.matches(selector)))
