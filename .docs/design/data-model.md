@@ -212,19 +212,38 @@
   see the same call, and the richer record wins whichever arrives first.
   Both columns are additive migrations (schema version 2) and are NULL for facts recorded
   before them and for facts that are not tool calls.
-- `<data_dir>/telemetry/catalog.sqlite3`: canonical telemetry catalog with monthly-segment
-  inventory, entity locations, resumable legacy-import cursors, dirty rollup days, the exact
-  closed-day `tool_daily` and `workload_daily` rollups, segment seals, metric checkpoints, and
-  `parser_signatures` (provider event names by harness version, recognised or not).
+- `<data_dir>/telemetry/catalog.sqlite3`: canonical telemetry catalog (schema 4 since
+  2026-09-03) with monthly-segment inventory, entity locations, resumable legacy-import
+  cursors, dirty rollup days and hours, the exact closed-day `tool_daily`, `workload_daily`,
+  `quality_daily`, `skill_daily`, `verification_daily`, and `compaction_daily` rollups, the
+  closed-hour `tool_hourly`, `workload_hourly`, and `quality_hourly` rollups, segment seals,
+  metric checkpoints,
+  `parser_signatures` (provider event names by harness version, recognised or not),
+  `finding_reviews` (an operator's verdict per stable finding key), and
+  `native_reconciliations` (per run: the store watermark read, the parser revision, what it
+  found, and what was inserted).
   `ledger_meta` carries the schema version.
+  The tool rollup key includes `evidence_quality`, which is why version 3 recreates the
+  daily tool rollup and dirties every rolled day rather than altering it in place; version 4
+  adds the quality rollups (field-completeness counts per backend, harness version, model,
+  Project, and origin) and dirties every rolled day and hour so the worker builds them.
   It contains no provider transcript content.
 - `<data_dir>/telemetry/segments/YYYY-MM.sqlite3`: monthly canonical activity segments, each
   carrying its own schema version in `segment_meta` and migrated additively on open.
   `telemetry_evidence` stores content-free source identity, timestamps, source locator, payload
   hash and size, and privacy class.
-  `telemetry_runs`, `telemetry_turns`, `telemetry_tool_calls`, `telemetry_model_requests`,
-  `telemetry_compactions`, `telemetry_skill_invocations`, and `telemetry_verifications` hold
-  queryable lifecycle entities.
+  `telemetry_runs` (with `started_at_source`, `declared` or `first_evidence`),
+  `telemetry_turns`, `telemetry_tool_calls` (with `evidence_quality` and
+  `approval_requested_at`), `telemetry_model_requests`, `telemetry_compactions`,
+  `telemetry_skill_invocations`, and `telemetry_verifications` hold queryable lifecycle
+  entities.
+  `telemetry_provider_metrics` keeps a provider's own aggregated metric points (name, kind,
+  temporality, allow-listed attributes, count, sum, min, max) beside the entities; a point
+  never becomes an entity because it carries no call identity.
+  `telemetry_call_repeats` (schema 4) holds one row per (run, agent, tool, input hash) with
+  how many calls ran that exact input and when the first and last did, maintained by every
+  tool-call write and backfilled once by the migration; the repeated-call finding reads it
+  instead of grouping every call in the window by hash.
   `telemetry_entity_evidence` records which observation contributed which entity side and its
   precedence.
   A catalog location makes entity identity global across segments, so a call beginning before a

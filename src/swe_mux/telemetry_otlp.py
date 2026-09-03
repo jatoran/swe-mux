@@ -101,6 +101,7 @@ CAPABILITIES = (
     "subagent",
     "provider_metrics",
     "guardian_review",
+    "sandbox_outcome",
 )
 
 
@@ -483,6 +484,63 @@ def _tool_decision(
     )
 
 
+#: Codex's sandbox verdicts (`codex-rs/core/src/tools/orchestrator.rs`): the
+#: sandboxed attempt was refused and not retried, or it timed out or died by
+#: signal inside the sandbox, or it failed there and the unsandboxed retry ran.
+_SANDBOX_FAILURES = frozenset({"denied", "timed_out", "signal"})
+
+
+def _sandbox_outcome(
+    ts: float, session_id: str, backend: str, attributes: dict[str, Any]
+) -> MuxEvent:
+    """Reduce `codex.sandbox_outcome`, seen live on 0.153.0 when a write was refused.
+
+    The event names the call and carries `outcome`, `initial_duration_ms`, and,
+    for an escalated retry, `escalated_duration_ms` (`session_telemetry.rs`). A
+    refusal is a denied result whose cause is known; a timeout or signal is a
+    failed result with that cause; an escalation resolved an implicit approval to
+    run outside the sandbox, so it is recorded as one. The provider's own
+    `tool_result` for the call follows and fills what this does not carry.
+    """
+
+    common = _common(attributes, backend)
+    call_id = _first_text(attributes, "call_id", "tool_use_id")
+    outcome = (_text(attributes.get("outcome")) or "unknown").casefold()
+    tool = _first_text(attributes, "tool_name", "gen_ai.tool.name") or "tool"
+    base = {
+        **common,
+        "tool": tool,
+        "call_id": call_id,
+        "invocation_layer": _invocation_layer(backend, call_id),
+        "sandbox_outcome": outcome,
+        "sandbox_initial_duration_ms": _number(attributes.get("initial_duration_ms")),
+        "sandbox_escalated_duration_ms": _number(attributes.get("escalated_duration_ms")),
+    }
+    if outcome in _SANDBOX_FAILURES:
+        return _event(
+            ts,
+            session_id,
+            "canonical_tool_result",
+            attributes,
+            {
+                **base,
+                "success": False,
+                "denied": True if outcome == "denied" else None,
+                "decision": outcome if outcome == "denied" else None,
+                "decision_source": "sandbox" if outcome == "denied" else None,
+                "error_type": f"sandbox_{outcome}",
+                "duration_ms": _number(attributes.get("initial_duration_ms")),
+            },
+        )
+    return _event(
+        ts,
+        session_id,
+        "approval_resolved",
+        attributes,
+        {**base, "decision": outcome, "decision_source": "sandbox"},
+    )
+
+
 def _skill(
     ts: float, session_id: str, backend: str, attributes: dict[str, Any]
 ) -> MuxEvent | None:
@@ -670,6 +728,7 @@ def _websocket_request(
 _REDUCERS = {
     "tool_result": _tool_result,
     "tool_decision": _tool_decision,
+    "sandbox_outcome": _sandbox_outcome,
     "skill_activated": _skill,
     "skill_invocation": _skill,
     "compaction": _compaction,

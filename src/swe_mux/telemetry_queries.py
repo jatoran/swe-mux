@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from .telemetry_otlp import provider_capabilities
-from .telemetry_schema import canonical_json, digest, period_of
+from .telemetry_schema import QUALITY_FIELDS, canonical_json, digest, period_of
 
 #: Columns a caller may filter aggregates by. Every one exists on the canonical
 #: entity tables and on both rollup tables, so a filter costs nothing in exactness.
@@ -114,10 +114,45 @@ Filters = dict[str, str]
 Span = tuple[str, float, float, str | None]
 
 
+#: Filter columns that are dimensions of a row rather than its identity. In a raw
+#: entity query they are written as `+column=?`, which tells SQLite's planner not to
+#: drive the query from an index on that column: every raw query here is bounded by
+#: time, and the time index reads a partial hour where the dimension index would
+#: read every row of one backend. Measured at ten million calls: a backend+status
+#: filter went from 398 ms to the unfiltered cost. An identity column (`run_id`,
+#: `turn_id`, `session_id`) keeps its index, which is the right plan for it.
+_DIMENSION_COLUMNS = frozenset(
+    {
+        "project_id",
+        "backend",
+        "model",
+        "origin",
+        "invocation_layer",
+        "family",
+        "status",
+        "evidence_quality",
+        "raw_name",
+        "harness_version",
+        "framework",
+        "skill_name",
+        "invocation_trigger",
+        "trigger",
+        "query_source",
+        "metric_name",
+        "event_type",
+        "source_kind",
+    }
+)
+
+
+def _term(column: str) -> str:
+    return f"+{column}=?" if column in _DIMENSION_COLUMNS else f"{column}=?"
+
+
 def _where(filters: Filters | None, *, prefix: str = " AND ") -> tuple[str, tuple[Any, ...]]:
     if not filters:
         return "", ()
-    clauses = [f"{column}=?" for column in filters]
+    clauses = [_term(column) for column in filters]
     return prefix + " AND ".join(clauses), tuple(filters.values())
 
 
@@ -325,8 +360,13 @@ class LedgerQueryMixin:
         cursor: str | None = None,
         origin: str | None = "mux_owned",
         filters: Filters | None = None,
+        matching: int | None = None,
     ) -> dict[str, Any]:
-        """Newest-first page of one entity kind with an exact matching count."""
+        """Newest-first page of one entity kind with an exact matching count.
+
+        `matching` lets a caller that already holds the exact count (from rollups)
+        pass it in rather than have every segment count its rows again.
+        """
 
         if kind not in EXPORT_KINDS:
             raise ValueError(f"unknown entity kind {kind!r}")
@@ -339,10 +379,10 @@ class LedgerQueryMixin:
         clauses = [f"{time_column}>=?", f"{time_column}<?"]
         args: list[Any] = [from_ts, to_ts]
         if origin is not None and "origin" not in usable:
-            clauses.append("origin=?")
+            clauses.append(_term("origin"))
             args.append(origin)
         for column, value in usable.items():
-            clauses.append(f"{column}=?")
+            clauses.append(_term(column))
             args.append(value)
         count_where = " AND ".join(clauses)
         count_args = tuple(args)
@@ -353,14 +393,15 @@ class LedgerQueryMixin:
             args.extend((marker, marker, str(decoded[1])))
         where = " AND ".join(clauses)
         candidates: list[dict[str, Any]] = []
-        matching = 0
+        counted = matching or 0
         for period in self._periods(from_ts, to_ts):
             connection = self._segment(period)
-            matching += int(
-                connection.execute(
-                    f"SELECT COUNT(*) FROM {table} WHERE {count_where}", count_args
-                ).fetchone()[0]
-            )
+            if matching is None:
+                counted += int(
+                    connection.execute(
+                        f"SELECT COUNT(*) FROM {table} WHERE {count_where}", count_args
+                    ).fetchone()[0]
+                )
             candidates.extend(
                 dict(row)
                 for row in connection.execute(
@@ -383,10 +424,44 @@ class LedgerQueryMixin:
             "to": to_ts,
             "origin": origin or "all",
             "filters": dict(usable),
-            "matching": matching,
+            "matching": counted,
             "items": page,
             "next_cursor": next_cursor,
         }
+
+    _TOOL_COUNT_RAW_SQL = (
+        "SELECT COUNT(*) count FROM telemetry_tool_calls "
+        "WHERE started_at>=? AND started_at<?{origin}{filters}"
+    )
+
+    def tool_call_count(
+        self,
+        *,
+        from_ts: float,
+        to_ts: float,
+        origin: str | None,
+        filters: Filters | None,
+    ) -> int | None:
+        """The exact number of matching calls, from rollups wherever a bucket has one.
+
+        Answerable this way only for filters the rollup key carries; a filter on an
+        identity column (`run_id`, `turn_id`) returns None and the caller counts
+        rows.
+        """
+
+        if filters and not set(filters) <= {*TOOL_FILTER_COLUMNS, "raw_name"}:
+            return None
+        rows, _coverage = self._rollup_or_raw(
+            from_ts=from_ts,
+            to_ts=to_ts,
+            origin=origin,
+            filters=filters,
+            rollup_table="tool_daily",
+            rollup_columns="calls count",
+            raw_sql=self._TOOL_COUNT_RAW_SQL,
+            hours=True,
+        )
+        return sum(int(row["count"] or 0) for row in rows)
 
     def tool_page(
         self,
@@ -431,6 +506,9 @@ class LedgerQueryMixin:
             cursor=cursor,
             origin=origin,
             filters=filters,
+            matching=self.tool_call_count(
+                from_ts=from_ts, to_ts=to_ts, origin=origin, filters=filters
+            ),
         )
         page["matching_calls"] = page["matching"]
         return page
@@ -1350,8 +1428,14 @@ class LedgerQueryMixin:
     ) -> list[dict[str, Any]]:
         """Identical calls (same tool, same executed or requested input) repeated in one run.
 
-        Read from the entities rather than a rollup because the key is a content
-        hash; bounded by the window, and the window is bounded by the caller.
+        Read from `telemetry_call_repeats`, which the write path keeps per (run,
+        agent, tool, input hash), so the cost is the groups that repeated rather than
+        every call in the window. A group is in the window when its latest repeat is,
+        and its count is the run's whole count for that input: a run is the unit the
+        finding is about, and a run that crosses the window edge is not two runs.
+        The finding's identity is backend, model, and tool, so those and the layer,
+        family, and Project filters apply; a status or evidence-quality filter
+        describes single calls and does not narrow it.
         """
 
         origin_clause = "" if origin is None else " AND origin=?"
@@ -1359,17 +1443,14 @@ class LedgerQueryMixin:
         usable = {
             column: value
             for column, value in (filters or {}).items()
-            if column in TOOL_FILTER_COLUMNS
+            if column in {*FILTER_COLUMNS, "invocation_layer", "family"}
         }
         filter_clause, filter_args = _where(usable)
         by_tool: dict[tuple[str, str, str], dict[str, Any]] = {}
         for row in self._query_all(
-            "SELECT backend,COALESCE(model,'unknown') model,raw_name,run_id,"
-            "COALESCE(executed_input_sha256,input_sha256) input_hash,COUNT(*) repeats "
-            "FROM telemetry_tool_calls WHERE started_at>=? AND started_at<? "
-            "AND COALESCE(executed_input_sha256,input_sha256) IS NOT NULL"
-            f"{origin_clause}{filter_clause} GROUP BY backend,model,raw_name,run_id,input_hash "
-            "HAVING COUNT(*)>=3",
+            "SELECT backend,COALESCE(model,'unknown') model,raw_name,run_id,repeats "
+            "FROM telemetry_call_repeats WHERE last_at>=? AND last_at<? AND repeats>=3"
+            f"{origin_clause}{filter_clause}",
             (from_ts, to_ts, *origin_args, *filter_args),
             from_ts=from_ts,
             to_ts=to_ts,
@@ -1658,6 +1739,29 @@ class LedgerQueryMixin:
 
     # -- quality ----------------------------------------------------------------
 
+    #: Per (backend, harness version, model, Project, origin) field-completeness
+    #: counts over one time span; the same shape the `quality_daily` and
+    #: `quality_hourly` rollups hold, so a rolled bucket and a raw span add up.
+    _QUALITY_RAW_SQL = (
+        "SELECT backend,COALESCE(harness_version,'unknown') harness_version,"
+        "COALESCE(model,'unknown') model,COALESCE(project_id,'') project_id,origin,"
+        "COUNT(*) calls,COALESCE(SUM(request_source IS NOT NULL),0) with_request,"
+        "COALESCE(SUM(result_source IS NOT NULL),0) with_result,"
+        "COALESCE(SUM(result_source IN ('otel','provider_otel')),0) with_provider_result,"
+        "COALESCE(SUM(duration_ms IS NOT NULL),0) with_duration,"
+        "COALESCE(SUM(COALESCE(executed_input_sha256,input_sha256) IS NOT NULL),0) with_input_hash,"
+        "COALESCE(SUM(executed_input_sha256 IS NOT NULL),0) with_executed_input_hash,"
+        "COALESCE(SUM(output_sha256 IS NOT NULL),0) with_output_hash,"
+        "COALESCE(SUM(output_bytes IS NOT NULL),0) with_output_size,"
+        "COALESCE(SUM(harness_version IS NOT NULL),0) with_harness_version,"
+        "COALESCE(SUM(approval_wait_ms IS NOT NULL),0) with_approval_wait,"
+        "COALESCE(SUM(COALESCE(output_truncated,0)=1),0) truncated_outputs,"
+        "COALESCE(SUM(invocation_layer='runtime' AND parent_status='provider_unavailable'),0) "
+        "runtime_parent_unavailable,COALESCE(SUM(family='other'),0) other_family "
+        "FROM telemetry_tool_calls WHERE started_at>=? AND started_at<?{origin}{filters} "
+        "GROUP BY backend,harness_version,model,project_id,origin"
+    )
+
     def quality_summary(
         self,
         *,
@@ -1668,49 +1772,26 @@ class LedgerQueryMixin:
     ) -> dict[str, Any]:
         """Field completeness and lifecycle balance, never collapsed into one score."""
 
-        fields = (
-            "calls",
-            "with_request",
-            "with_result",
-            "with_provider_result",
-            "with_duration",
-            "with_input_hash",
-            "with_executed_input_hash",
-            "with_output_hash",
-            "with_output_size",
-            "with_harness_version",
-            "with_approval_wait",
-            "truncated_outputs",
-            "runtime_parent_unavailable",
-            "other_family",
-        )
+        fields = QUALITY_FIELDS
         totals = {field: 0 for field in fields}
         backends: dict[str, dict[str, int]] = {}
         versions: dict[tuple[str, str], dict[str, int]] = {}
         filter_clause, filter_args = _where(filters)
         origin_clause = "" if origin is None else " AND origin=?"
         origin_args: tuple[Any, ...] = () if origin is None else (origin,)
-        sql = (
-            "SELECT backend,COALESCE(harness_version,'unknown') harness_version,"
-            "COUNT(*) calls,SUM(request_source IS NOT NULL) with_request,"
-            "SUM(result_source IS NOT NULL) with_result,"
-            "SUM(result_source IN ('otel','provider_otel')) with_provider_result,"
-            "SUM(duration_ms IS NOT NULL) with_duration,"
-            "SUM(COALESCE(executed_input_sha256,input_sha256) IS NOT NULL) with_input_hash,"
-            "SUM(executed_input_sha256 IS NOT NULL) with_executed_input_hash,"
-            "SUM(output_sha256 IS NOT NULL) with_output_hash,"
-            "SUM(output_bytes IS NOT NULL) with_output_size,"
-            "SUM(harness_version IS NOT NULL) with_harness_version,"
-            "SUM(approval_wait_ms IS NOT NULL) with_approval_wait,"
-            "SUM(COALESCE(output_truncated,0)=1) truncated_outputs,"
-            "SUM(invocation_layer='runtime' AND parent_status='provider_unavailable') "
-            "runtime_parent_unavailable,SUM(family='other') other_family "
-            "FROM telemetry_tool_calls WHERE started_at>=? AND started_at<?"
-            f"{origin_clause}{filter_clause} GROUP BY backend,harness_version"
+        rows, coverage = self._rollup_or_raw(
+            from_ts=from_ts,
+            to_ts=to_ts,
+            origin=origin,
+            filters=filters,
+            rollup_table="quality_daily",
+            rollup_columns=(
+                "backend,harness_version,model,project_id,origin," + ",".join(fields)
+            ),
+            raw_sql=self._QUALITY_RAW_SQL,
+            hours=True,
         )
-        for row in self._query_all(
-            sql, (from_ts, to_ts, *origin_args, *filter_args), from_ts=from_ts, to_ts=to_ts
-        ):
+        for row in rows:
             backend = str(row["backend"])
             target = backends.setdefault(backend, {field: 0 for field in fields})
             version = versions.setdefault(
@@ -1740,6 +1821,7 @@ class LedgerQueryMixin:
             "to": to_ts,
             "origin": origin or "all",
             "filters": dict(filters or {}),
+            "coverage": coverage,
             "totals": totals,
             "backends": [
                 {"backend": backend, **values} for backend, values in sorted(backends.items())

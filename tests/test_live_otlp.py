@@ -29,6 +29,7 @@ import pytest
 from aiohttp import web
 
 from swe_mux.harness import HARNESSES, descriptor
+from swe_mux.shim_paths import path_without_shim_dirs
 from swe_mux.telemetry_otlp import (
     CONTENT_ATTRIBUTES,
     IDENTITY_ATTRIBUTES,
@@ -63,6 +64,8 @@ class Scenario:
     prompt: str
     #: Extra argv for Claude beyond the read probe (the read tool stays allowed).
     claude_tools: str = "Read"
+    #: Tools Claude is told it may not use (`--disallowedTools`), or empty.
+    claude_disallowed: str = ""
     #: Codex sandbox for the run.
     codex_sandbox: str = "read-only"
     #: What the reduced events must show. Each key is asserted by `_check`.
@@ -99,15 +102,39 @@ SCENARIOS: tuple[Scenario, ...] = (
         expect={"failed_results": 1},
         backends=("claude", "codex"),
     ),
+    # Measured 2026-09-03: a headless denial is not a decision event on either CLI.
+    # Claude 2.1.259 under `--permission-mode dontAsk` with only `Read` allowed
+    # still wrote the file (no `tool_decision`, a successful `Write` result); with
+    # the tools on `--disallowedTools` it never proposes them, so no decision is
+    # exported either. Codex 0.153.0 under `--sandbox read-only` on Windows
+    # approved `apply_patch` through its automated reviewer and wrote the file, and
+    # `codex.sandbox_outcome` fires only when the sandbox itself blocks a command,
+    # which this host did not do on demand. What the scenario can assert is that
+    # the reducer sees every name each CLI sends and that no write succeeded
+    # where the CLI was told not to; the denied-decision reduction is covered by
+    # the captured `tool_decision` fixtures in `test_telemetry_otlp.py`.
     Scenario(
         name="denial",
         prompt=(
-            "Try to create a file named blocked.txt containing the word no. If the tool is "
-            "refused or not permitted, reply exactly with 'denied' and stop."
+            "First read hello.txt in this directory. Then try to create a file named "
+            "blocked.txt containing the word no. If the tool is refused or not permitted, "
+            "reply exactly with 'denied' and stop."
         ),
         claude_tools="Read",
+        claude_disallowed="Write,Edit,NotebookEdit,Bash",
+        expect={"denied_or_no_write": True, "tool_results": 1},
+        files={"hello.txt": "pineapple\n"},
+        backends=("claude",),
+    ),
+    Scenario(
+        name="denial",
+        prompt=(
+            "Using exec_command only (never apply_patch), run the shell command "
+            "`cmd /c echo no > blocked.txt`. If the sandbox blocks it, do not retry or "
+            "escalate; reply exactly with 'denied' and stop."
+        ),
         expect={"denied_or_no_write": True},
-        backends=("claude", "codex"),
+        backends=("codex",),
     ),
     Scenario(
         name="skill",
@@ -165,6 +192,8 @@ def _command(backend: str, ingress: str, scenario: Scenario) -> list[str]:
             "--allowedTools",
             scenario.claude_tools,
         ]
+        if scenario.claude_disallowed:
+            command.extend(["--disallowedTools", scenario.claude_disallowed])
     else:
         probe = harness.headless_probes.read_tool
         assert probe is not None
@@ -182,11 +211,24 @@ def _command(backend: str, ingress: str, scenario: Scenario) -> list[str]:
 
 
 def _environment(backend: str, ingress: str) -> dict[str, str]:
+    """The child's environment: the operator's, minus everything a mux session adds.
+
+    Run from inside a swe-mux pane this process carries `MUX_*` (hook URLs and the
+    session's secret, so the child's hooks would post as *this* session), every
+    `CLAUDE*` marker a Claude Code parent sets (`CLAUDECODE`, `CLAUDE_CODE_*`,
+    `CLAUDE_JOB_DIR`, whose inheritance renames panes), the provider's own `OTEL_*`
+    export settings, and a PATH whose first entry is mux's launcher shim directory.
+    `CLAUDE_CONFIG_DIR` is the one `CLAUDE*` key kept, because it says where the
+    operator's credentials are.
+    """
+
     env = {
         key: value
         for key, value in os.environ.items()
-        if not key.startswith(("OTEL_", "MUX_")) and key != "CLAUDE_CODE_ENABLE_TELEMETRY"
+        if not key.startswith(("OTEL_", "MUX_"))
+        and (not key.startswith("CLAUDE") or key == "CLAUDE_CONFIG_DIR")
     }
+    env["PATH"] = path_without_shim_dirs()
     env.update(
         provider_otel_env(
             backend, enabled=True, ingress_url=ingress, session_id="live", secret="secret"

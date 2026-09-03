@@ -108,11 +108,16 @@ digests, UTC period and day keys, source precedence ranks, tool classification).
 ## `telemetry_ledger.py`
 
 The synchronous write path of the canonical ledger under `<data_dir>/telemetry/`: entity
-identity, field-level source precedence, evidence links, closed-day rollup rebuilds, segment
-sealing, and storage and schema status.
+identity, field-level source precedence, evidence quality, approval-wait pairing, declared
+against first-evidence run starts, evidence links, the per-run repeat counts every tool-call
+write keeps current, closed-day and closed-hour rollup rebuilds (tool, workload, and quality
+per bucket; skill, verification, and compaction per day), segment sealing, and storage and
+schema status.
 Reduces content-free evidence into run, turn, tool-call, model-request, compaction,
-skill-invocation, and verification entities, one home segment per entity across months.
-`LegacyImportMixin` and `LedgerQueryMixin` are mixed in here so one class is the ledger.
+skill-invocation, verification, and provider-metric entities, one home segment per entity
+across months.
+`LegacyImportMixin`, `NativeReconcileMixin`, and `LedgerQueryMixin` are mixed in here so one
+class is the ledger.
 
 **Not:** provider transcript content, the browser presentation, causal performance claims,
 deletion of legacy telemetry, or anything async.
@@ -122,31 +127,57 @@ deletion of legacy telemetry, or anything async.
 Resumable, non-destructive importers for the legacy `tool_events`, `history`, status-timeline
 turn, `context_compactions`, and Tier 0 test-outcome streams in `mux.db`, each past a durable
 cursor and each re-read periodically after it first catches up.
+An unrecoverable legacy field is recorded as unknown, never estimated: a legacy run's start
+is its history row's `spawned_at` and is marked `declared`, and a legacy call with no duration
+keeps `duration_ms` NULL.
 
-**Not:** parsing a native transcript itself; that remains the legacy store's reconciler.
+**Not:** parsing a native transcript itself; that is `telemetry_reconcile.py`.
+
+## `telemetry_reconcile.py`
+
+Direct reconciliation of every transcript harness's native store (Claude, Codex, OMP, Pi,
+OpenCode) into the canonical reducer, without the legacy `tool_events` hop: the same dialect
+scanner the legacy store uses (`operational_telemetry.scan_native_telemetry`) is run past a
+per-run watermark and its records become `reconciled_transcript` evidence.
+Each pass is recorded in `native_reconciliations` with the watermark, the parser revision, and
+what it found, which is what makes "unchanged since last time" a stat rather than a re-parse
+and what `tools/telemetry_audit_window.py` compares the ledger against call by call.
+
+**Not:** a writer of any native store (a test proves every store is byte-identical after a
+pass), or a source that outranks live native OTel or transcript evidence.
 
 ## `telemetry_queries.py`
 
-Exact aggregates over the whole requested window (closed days from rollups, everything else
-from entities, consecutive raw days merged into one query per month), exact-match filters,
-cursor-bounded detail and export pages, the tool-call audit, deterministic inefficiency
-candidates, field-completeness quality, and the parser-signature readout.
+Exact aggregates over the whole requested window (closed days from day rollups, closed hours of
+partial days from hour rollups, everything else from entities, consecutive raw stretches merged
+into one query per month), exact-match filters including evidence quality (written as
+`+column=?` in raw SQL so a dimension filter stays on the time index), cursor-bounded detail
+and export pages for every entity kind with a tool page's count summed from rollups, the
+tool-call, run, and turn audits, skill,
+verification, and provider-metric summaries with the per-run `codex.tool.call` agreement,
+deterministic inefficiency candidates with stable finding keys and operator reviews, cohort
+comparison, the adaptive-change gate, the shadow comparison against legacy `tool_events`, and
+the quality readout by backend and by harness version.
 
 **Not:** any total derived from a displayed page.
 
 ## `telemetry_service.py`
 
 The daemon adapter: one worker thread owning every ledger call, batched EventBus ingestion,
-the legacy catch-up loop, the rollup and sealing worker, schema-drift logging, and the health
-block `GET /api/diagnostics/background` reports.
+the legacy catch-up loop, the five-minute native reconciliation loop, the rollup (days, then
+hours) and sealing worker, schema-drift logging, and the health block
+`GET /api/diagnostics/background` reports.
 
 **Not:** the reducer's rules; it only schedules them.
 
 ## `telemetry_otlp.py`
 
 Reduction of provider OTLP/JSON log and metric batches to canonical events, the exporter
-environment and arguments a new session is launched with, and the per-batch signature of event
-names seen, measured against Claude Code 2.1.259 and Codex CLI 0.153.0.
+environment and arguments a new session is launched with (a metrics exporter only for a harness
+whose descriptor declares `exports_metrics`), the allow-listed metric names and attributes kept
+as provider metrics, the per-harness capability table drawn from each descriptor's `provides`,
+and the per-batch signature of event names seen, measured against Claude Code 2.1.259 and Codex
+CLI 0.153.0 and re-measured by the seven live scenarios in `tests/test_live_otlp.py`.
 
 **Not:** storage of any content or identity attribute; both classes are hashed or dropped
 before the batch is released.
