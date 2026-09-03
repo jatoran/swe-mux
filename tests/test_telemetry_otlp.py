@@ -248,8 +248,12 @@ def test_only_enabled_providers_with_a_verified_contract_receive_exporter_env() 
         "-c",
         "otel.log_user_prompt=false",
     )
-    assert "http://127.0.0.1:8765/api/telemetry/otlp/session-1/v1/logs" in codex[-1]
-    assert '"x-mux-hook-secret" = "secret"' in codex[-1]
+    logs = next(argument for argument in codex if argument.startswith("otel.exporter="))
+    metrics = next(argument for argument in codex if argument.startswith("otel.metrics_exporter="))
+    assert "http://127.0.0.1:8765/api/telemetry/otlp/session-1/v1/logs" in logs
+    assert "http://127.0.0.1:8765/api/telemetry/otlp/session-1/v1/metrics" in metrics
+    assert '"x-mux-hook-secret" = "secret"' in logs
+    assert '"x-mux-hook-secret" = "secret"' in metrics
 
 
 # -- measured provider contracts ---------------------------------------------------

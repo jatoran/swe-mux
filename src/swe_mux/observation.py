@@ -3134,6 +3134,9 @@ async def _request_stabilized_approval(
             kind="approval",
             detail=detail,
             stabilized=True,
+            # The provider's call id, when the request named one, is what lets the
+            # canonical ledger pair this wait with the call's eventual result.
+            call_id=tool_use_id,
         )
 
     # The inline fast path is only safe while `settle()` cannot block: a delegated

@@ -4016,7 +4016,8 @@ class HistoryIndex:
         def op() -> list[dict[str, Any]]:
             rows = self._db.execute(
                 "SELECT id,backend,project_id,model,transcript_path,transcript_mtime_ns,"
-                "transcript_size FROM history WHERE agent_visible=1 "
+                "transcript_size,native_id,external,spawned_at,exited_at,note_id "
+                "FROM history WHERE agent_visible=1 "
                 "AND ((transcript_path IS NOT NULL AND transcript_path!='') "
                 f"OR backend IN ({_STORE_BACKEND_SQL})) "
                 "ORDER BY spawned_at DESC LIMIT ?",

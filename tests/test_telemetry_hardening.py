@@ -14,25 +14,45 @@ from swe_mux.telemetry_schema import (
     SEGMENT_MIGRATIONS,
     LedgerSchemaError,
 )
-from tests.test_telemetry_ledger import dimensions, event
+from tests.test_telemetry_ledger import dimensions, event, figures
 
 DAY = 1_767_225_600.0  # 2026-01-01T00:00:00Z
 WINDOW = {"from_ts": 1_787_999_000, "to_ts": 1_788_001_000}
+_V1_MISSING_CATALOG_TABLES = (
+    "workload_daily",
+    "parser_signatures",
+    "tool_hourly",
+    "workload_hourly",
+    "skill_daily",
+    "verification_daily",
+    "compaction_daily",
+    "rollup_hours",
+    "rollup_dirty_hours",
+    "finding_reviews",
+    "native_reconciliations",
+)
+_SEGMENT_STEPS = [
+    step
+    for version in sorted(SEGMENT_MIGRATIONS)
+    for step in SEGMENT_MIGRATIONS[version]
+]
 
 
-def _drop_v2_shape(root: Path) -> None:
+def _drop_to_v1_shape(root: Path) -> None:
     """Rewrite a fresh ledger into the 2026-09-02 (version 1) shape."""
 
     with sqlite3.connect(root / "catalog.sqlite3") as catalog:
         catalog.execute("DELETE FROM ledger_meta WHERE key='schema_version'")
-        catalog.execute("DROP TABLE workload_daily")
-        catalog.execute("DROP TABLE parser_signatures")
+        for table in _V1_MISSING_CATALOG_TABLES:
+            catalog.execute(f"DROP TABLE {table}")
     for segment in (root / "segments").glob("*.sqlite3"):
         with sqlite3.connect(segment) as connection:
             connection.execute("DROP TABLE segment_meta")
-            for statement in SEGMENT_MIGRATIONS[2]:
-                tokens = statement.split()
-                connection.execute(f"ALTER TABLE {tokens[2]} DROP COLUMN {tokens[5]}")
+            connection.execute("DROP TABLE telemetry_provider_metrics")
+            for step in _SEGMENT_STEPS:
+                if isinstance(step, str):
+                    tokens = step.split()
+                    connection.execute(f"ALTER TABLE {tokens[2]} DROP COLUMN {tokens[5]}")
 
 
 def test_a_version_one_ledger_is_migrated_additively_on_open(tmp_path: Path) -> None:
@@ -40,20 +60,23 @@ def test_a_version_one_ledger_is_migrated_additively_on_open(tmp_path: Path) -> 
     ledger = CanonicalTelemetryLedger(root)
     ledger.record_event(event("tool_use", tool="Read", call_id="call-1"), dimensions())
     ledger.close()
-    _drop_v2_shape(root)
+    _drop_to_v1_shape(root)
     [segment] = (root / "segments").glob("*.sqlite3")
     with sqlite3.connect(segment) as old:
         old_columns = {row[1] for row in old.execute("PRAGMA table_info(telemetry_tool_calls)")}
     assert "output_truncated" not in old_columns
+    assert "evidence_quality" not in old_columns
 
     reopened = CanonicalTelemetryLedger(root)
     status = reopened.schema_status()
-    assert status["version"] == LEDGER_SCHEMA_VERSION == 2
+    assert status["version"] == LEDGER_SCHEMA_VERSION == 3
     assert status["drift"] == []
     assert status["migrations"][segment.stem] == {
         "found": 0,
-        "applied": len(SEGMENT_MIGRATIONS[2]),
+        "applied": len(_SEGMENT_STEPS),
     }
+    # The v3 backfill classified the surviving v1 row from its result provenance.
+    assert reopened.tool_calls()[0]["evidence_quality"] == "none"
     # The migrated file accepts the current write path and keeps the old row.
     reopened.record_event(
         event(
@@ -244,8 +267,12 @@ def test_filters_apply_identically_to_raw_days_and_rolled_up_days(tmp_path: Path
     assert raw_workload["dimensions"][0]["model_tool_calls"] == 2
 
     assert ledger.rebuild_next_closed_day(now=DAY + 2 * 86400) == "2026-01-01"
-    assert ledger.tool_summary(**window, filters={"backend": "claude"}) == raw_tools
-    assert ledger.workload_summary(**window, filters={"backend": "claude"}) == raw_workload
+    assert figures(ledger.tool_summary(**window, filters={"backend": "claude"})) == figures(
+        raw_tools
+    )
+    assert figures(
+        ledger.workload_summary(**window, filters={"backend": "claude"})
+    ) == figures(raw_workload)
     assert ledger.workload_summary(**window, filters={"backend": "pi"})["dimensions"] == []
     ledger.close()
 

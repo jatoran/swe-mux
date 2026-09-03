@@ -78,6 +78,48 @@ def native_telemetry(backend: str) -> NativeTelemetry | None:
     return harness.native_telemetry if harness is not None else None
 
 
+#: The facts a native export can carry, by name. A harness declares the subset it
+#: was measured to provide (`NativeTelemetry.provides`); the quality view reports
+#: every other name as unsupported for that harness rather than as missing on each
+#: row. "Unavailable" is what the provider cannot say; "missing" is what it did not
+#: say this time.
+CAPABILITIES = (
+    "tool_duration",
+    "tool_decision",
+    "executed_input",
+    "output_size",
+    "output_content",
+    "runtime_parent",
+    "agent_identity",
+    "turn_identity",
+    "model_request",
+    "model_cost",
+    "first_token",
+    "reasoning_tokens",
+    "skill_activation",
+    "compaction",
+    "subagent",
+    "provider_metrics",
+    "guardian_review",
+)
+
+
+def provider_capabilities() -> dict[str, dict[str, str]]:
+    """Per harness, whether each capability is measured, unmeasured, or impossible."""
+
+    result: dict[str, dict[str, str]] = {}
+    for name, harness in HARNESSES.items():
+        contract = harness.native_telemetry
+        if contract is None:
+            result[name] = dict.fromkeys(CAPABILITIES, "no_native_telemetry")
+            continue
+        result[name] = {
+            capability: "measured" if capability in contract.provides else "unmeasured"
+            for capability in CAPABILITIES
+        }
+    return result
+
+
 def provider_otel_env(
     backend: str,
     *,
@@ -119,30 +161,37 @@ def provider_otel_args(
 ) -> tuple[str, ...]:
     """Native CLI arguments where the provider configures OTLP outside env.
 
-    Codex takes its exporter as configuration, and posts to the endpoint exactly as
-    written (measured on 0.153.0: twelve batches on the configured path, the header
-    attached). Only the log exporter is configured; the metrics exporter key is not
-    verified against a real run and is deliberately left unset.
+    Codex takes its exporters as configuration and posts to each endpoint exactly as
+    written (measured on 0.153.0: twelve log batches and one 818 KB metrics batch on
+    the configured paths, the header attached). The metrics exporter is configured
+    only for a harness that declares `exports_metrics`; the reducer keeps the
+    allow-listed metrics and drops the rest.
     """
 
     contract = native_telemetry(backend)
     if not enabled or contract is None or contract.transport != "config_arg":
         return ()
-    endpoint = f"{ingress_url.rstrip('/')}/api/telemetry/otlp/{session_id}/v1/logs"
-    exporter = (
-        "otel.exporter={ otlp-http = { "
-        f'endpoint = "{endpoint}", protocol = "json", '
-        f'headers = {{ "x-mux-hook-secret" = "{secret}" }}'
-        " } }"
-    )
-    return (
+    base = f"{ingress_url.rstrip('/')}/api/telemetry/otlp/{session_id}"
+
+    def exporter(signal: str) -> str:
+        return (
+            "{ otlp-http = { "
+            f'endpoint = "{base}/v1/{signal}", protocol = "json", '
+            f'headers = {{ "x-mux-hook-secret" = "{secret}" }}'
+            " } }"
+        )
+
+    arguments = [
         "-c",
         'otel.environment="swe-mux"',
         "-c",
         "otel.log_user_prompt=false",
         "-c",
-        exporter,
-    )
+        f"otel.exporter={exporter('logs')}",
+    ]
+    if contract.exports_metrics:
+        arguments.extend(("-c", f"otel.metrics_exporter={exporter('metrics')}"))
+    return tuple(arguments)
 
 
 def _any_value(value: Any) -> Any:
@@ -701,12 +750,112 @@ def otlp_log_events(payload: Any, *, session_id: str, backend: str) -> list[MuxE
     return otlp_log_reduction(payload, session_id=session_id, backend=backend).events
 
 
-def otlp_metric_reduction(payload: Any, *, session_id: str, backend: str) -> OtlpReduction:
-    """Reduce attributable counter points; aggregated counts remain aggregated.
+#: Metrics kept as aggregated provider self-reports beside the canonical entities.
+#: They carry no call identity, so they never become entities; what they are good
+#: for is a denominator the provider computed itself (`codex.tool.call` against the
+#: ledger's own count of that run's calls). Everything else Codex exports - startup
+#: phases, cache hits, sqlite timings - is counted as a recognised signature and
+#: dropped. Measured on Codex CLI 0.153.0.
+METRIC_ALLOWLIST = frozenset(
+    {
+        "codex.tool.call",
+        "codex.tool.call.duration_ms",
+        "codex.turn.tool.call",
+        "codex.turn.token_usage",
+        "codex.turn.e2e_duration_ms",
+        "codex.turn.ttft.duration_ms",
+        "codex.conversation.turn.count",
+        "codex.guardian.review",
+        "codex.guardian.review.duration_ms",
+        "codex.hooks.run",
+        "codex.hooks.run.duration_ms",
+        "codex.thread.skills.enabled_total",
+        "codex.thread.skills.kept_total",
+        "codex.skill.injected",
+        "codex.rollout.size_bytes",
+    }
+)
+#: Point attributes kept beside a metric: outcome and dimension names only. Never
+#: an identity (`user.*`, `auth_mode`) and never a body.
+METRIC_ATTRIBUTES = frozenset(
+    {
+        "tool",
+        "success",
+        "command_category",
+        "sandbox",
+        "sandbox_policy",
+        "session_source",
+        "token_type",
+        "decision",
+        "outcome",
+        "risk_level",
+        "action",
+        "terminal_status",
+        "hook_name",
+        "status",
+        "kind",
+        "event",
+        "model",
+        "skill",
+        "invoke_type",
+        "guardian_model",
+    }
+)
 
-    Only `codex.skill.injected` is understood. No provider is configured to export
-    metrics to the ingress yet, so this reducer is exercised by its unit tests and
-    stands ready rather than being measured against a live run.
+
+def _metric_agent(attributes: dict[str, Any]) -> str:
+    source = _text(attributes.get("session_source"))
+    if source and source.startswith("subagent"):
+        return source
+    return "root"
+
+
+def _nanos(value: Any) -> float | None:
+    try:
+        return int(value) / 1_000_000_000 if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _skill_counter(
+    ts: float,
+    session_id: str,
+    backend: str,
+    attributes: dict[str, Any],
+    point: dict[str, Any],
+    temporality: str,
+) -> MuxEvent | None:
+    skill = _text(attributes.get("skill"))
+    count = _integer(point.get("asInt") or point.get("asDouble"))
+    if skill is None or not count:
+        return None
+    invoke_type = _text(attributes.get("invoke_type")) or "unknown"
+    series_id = hashlib.sha256(f"{session_id}:{skill}:{invoke_type}".encode()).hexdigest()
+    return _event(
+        ts,
+        session_id,
+        "canonical_skill_invoked",
+        attributes,
+        {
+            **_common(attributes, backend),
+            "skill": skill,
+            "invocation_id": f"metric:{series_id}:{point.get('timeUnixNano')}",
+            "invocation_trigger": invoke_type,
+            "count": count,
+            "metric_temporality": temporality,
+            "metric_series_id": series_id,
+            "metric_start_time": point.get("startTimeUnixNano"),
+        },
+    )
+
+
+def otlp_metric_reduction(payload: Any, *, session_id: str, backend: str) -> OtlpReduction:
+    """Reduce OTLP metrics to aggregated provider self-reports; drop the rest.
+
+    A counter or histogram point becomes one `provider_metric` observation carrying
+    its allow-listed dimensions, count, sum, min, and max. `codex.skill.injected`
+    additionally becomes a skill invocation, because it is the only metric that
+    names an activation the log stream does not.
     """
 
     if not isinstance(payload, dict):
@@ -719,6 +868,10 @@ def otlp_metric_reduction(payload: Any, *, session_id: str, backend: str) -> Otl
         if not isinstance(resource, dict):
             continue
         resource_attributes = _resource_attributes(resource)
+        if reduction.harness_version is None:
+            reduction.harness_version = _first_text(
+                resource_attributes, "service.version", "app.version"
+            )
         scopes = resource.get("scopeMetrics")
         for scope in scopes if isinstance(scopes, list) else []:
             if not isinstance(scope, dict):
@@ -728,47 +881,66 @@ def otlp_metric_reduction(payload: Any, *, session_id: str, backend: str) -> Otl
                 if not isinstance(metric, dict):
                     continue
                 metric_name = str(metric.get("name") or "<unnamed>")
-                if metric_name != "codex.skill.injected":
-                    reduction.note(f"metric:{metric_name}", False)
+                signature = f"metric:{metric_name}"
+                if metric_name not in METRIC_ALLOWLIST:
+                    reduction.note(signature, True)
                     continue
-                reduction.note(f"metric:{metric_name}", True)
-                aggregate = metric.get("sum")
-                points = aggregate.get("dataPoints") if isinstance(aggregate, dict) else []
-                temporality_value = (
-                    aggregate.get("aggregationTemporality")
-                    if isinstance(aggregate, dict)
-                    else None
+                reduction.note(signature, True)
+                kind = next((k for k in ("sum", "histogram", "gauge") if k in metric), None)
+                aggregate = metric.get(kind) if kind else None
+                if not isinstance(aggregate, dict):
+                    continue
+                temporality = (
+                    "cumulative"
+                    if str(aggregate.get("aggregationTemporality")) == "2"
+                    else "delta"
                 )
-                temporality = "cumulative" if str(temporality_value) == "2" else "delta"
+                points = aggregate.get("dataPoints")
                 for point in points if isinstance(points, list) else []:
                     if not isinstance(point, dict):
                         continue
                     attributes = {**resource_attributes, **_attributes(point.get("attributes"))}
-                    skill = _text(attributes.get("skill"))
-                    count = _integer(point.get("asInt") or point.get("asDouble"))
-                    if skill is None or not count:
-                        continue
-                    invoke_type = _text(attributes.get("invoke_type")) or "unknown"
-                    series_id = hashlib.sha256(
-                        f"{session_id}:{skill}:{invoke_type}".encode()
-                    ).hexdigest()
+                    if reduction.harness_version is None:
+                        reduction.harness_version = _text(attributes.get("app.version"))
+                    ts = _timestamp(point)
+                    if metric_name == "codex.skill.injected":
+                        skill_event = _skill_counter(
+                            ts, session_id, backend, attributes, point, temporality
+                        )
+                        if skill_event is not None:
+                            reduction.events.append(skill_event)
+                    kept = {
+                        key: value
+                        for key, value in attributes.items()
+                        if key in METRIC_ATTRIBUTES and value is not None
+                    }
+                    if kind == "histogram":
+                        count = _integer(point.get("count"))
+                        total = _number(point.get("sum"))
+                        low = _number(point.get("min"))
+                        high = _number(point.get("max"))
+                    else:
+                        value = _number(point.get("asInt") or point.get("asDouble"))
+                        count, total, low, high = None, value, None, None
                     reduction.events.append(
                         _event(
-                            _timestamp(point),
+                            ts,
                             session_id,
-                            "canonical_skill_invoked",
+                            "provider_metric",
                             attributes,
                             {
                                 **_common(attributes, backend),
-                                "skill": skill,
-                                "invocation_id": (
-                                    f"metric:{series_id}:{point.get('timeUnixNano')}"
-                                ),
-                                "invocation_trigger": invoke_type,
+                                "agent_id": _metric_agent(attributes),
+                                "metric": metric_name,
+                                "kind": kind,
+                                "temporality": temporality,
+                                "attributes": kept,
                                 "count": count,
-                                "metric_temporality": temporality,
-                                "metric_series_id": series_id,
-                                "metric_start_time": point.get("startTimeUnixNano"),
+                                "sum": total,
+                                "min": low,
+                                "max": high,
+                                "started_at": _nanos(point.get("startTimeUnixNano")),
+                                "native_observed_at": _text(point.get("timeUnixNano")),
                             },
                         )
                     )

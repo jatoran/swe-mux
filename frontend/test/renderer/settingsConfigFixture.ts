@@ -188,6 +188,7 @@ export const SETTINGS_CONFIG_FIXTURE = {
   "openrouter_standard_model": "",
   "operational_telemetry_retention_days": 180,
   "canonical_telemetry_native_otel_enabled": false,
+  "canonical_telemetry_legacy_dashboard_enabled": true,
   "pinned_directories": [],
   "port": 8765,
   "process_evidence_retention_days": 30,

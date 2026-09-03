@@ -2,6 +2,7 @@ import { useEffect, useState } from 'preact/hooks'
 import { api } from './api'
 import { formatCount, formatDuration, formatPercent } from './automationCost'
 import { ModelName } from './ModelName'
+import { type Coverage, TelemetryCaption } from './telemetryCaption'
 
 // Observed workload per backend and model: runs, durations, context pressure, turn and stall
 // rates, completion evidence, and tokens.
@@ -34,6 +35,7 @@ type Dimension = {
 type Workloads = {
   from: number;to: number;origin: string
   dimensions: Dimension[]
+  coverage?: Coverage
   interpretation: string
   collection?:{backfilled:number;backfill_completed:boolean;backfill_stream:string;provider_dropped:number}
 }
@@ -41,27 +43,27 @@ type Workloads = {
 const integer = new Intl.NumberFormat()
 
 /** The query string every Fleet activity read shares: window, cohort, and exact filters. */
-export function telemetryQuery({days,origin,backend='',layer=''}:{days:number;origin:string;backend?:string;layer?:string}): string {
+export function telemetryQuery({days,origin,backend='',project='',model='',layer='',family='',status='',evidence=''}:{days:number;origin:string;backend?:string;project?:string;model?:string;layer?:string;family?:string;status?:string;evidence?:string}): string {
   const from=days>0?Math.floor(Date.now()/1000)-days*86400:0
   const parts=[`from=${from}`,`origin=${origin}`]
-  if(backend)parts.push(`backend=${encodeURIComponent(backend)}`)
-  if(layer)parts.push(`layer=${encodeURIComponent(layer)}`)
+  const named:Array<[string,string]>=[['backend',backend],['project',project],['model',model],['layer',layer],['family',family],['status',status],['evidence',evidence]]
+  for(const [key,value] of named)if(value)parts.push(`${key}=${encodeURIComponent(value)}`)
   return parts.join('&')
 }
 
-export function WorkloadTelemetry({days=7,origin='mux_owned',backend=''}:{days?:number;origin?:string;backend?:string}) {
+export function WorkloadTelemetry({days=7,origin='mux_owned',backend='',project='',model=''}:{days?:number;origin?:string;backend?:string;project?:string;model?:string}) {
   const [data, setData] = useState<Workloads | null>(null)
   const [error, setError] = useState('')
   useEffect(() => {
     let stale = false
-    api<Workloads>('GET', `/api/telemetry/v2/workload?${telemetryQuery({days,origin,backend})}`)
+    api<Workloads>('GET', `/api/telemetry/v2/workload?${telemetryQuery({days,origin,backend,project,model})}`)
       .then(next => { if (!stale) setData(next) })
       .catch(cause => { if (!stale) setError(cause instanceof Error ? cause.message : String(cause)) })
     return () => { stale = true }
-  }, [days,origin,backend])
+  }, [days,origin,backend,project,model])
 
   return <div class="operational-telemetry">
-    <p class="telemetry-caveat">{days?`Last ${days} day${days===1?'':'s'}`:'All retained time'} of {origin==='all'?'mux-owned and imported':'mux-owned'} runs{backend?` on ${backend}`:''}. Descriptive correlation only. These figures do not rank agents and do not claim that one model caused an outcome. {data?.collection&&!data.collection.backfill_completed?`Historical import: ${data.collection.backfill_stream} · ${formatCount(data.collection.backfilled)} observations preserved. `:''}{data?.interpretation || ''}</p>
+    <p class="telemetry-caveat">{days?`Last ${days} day${days===1?'':'s'}`:'All retained time'} of {origin==='all'?'mux-owned and imported':origin==='imported'?'imported':'mux-owned'} runs{backend?` on ${backend}`:''}{model?` · ${model}`:''}{project?` · project ${project.slice(0,8)}`:''}. Descriptive correlation only. These figures do not rank agents and do not claim that one model caused an outcome. {data?.collection&&!data.collection.backfill_completed?`Historical import: ${data.collection.backfill_stream} · ${formatCount(data.collection.backfilled)} observations preserved. `:''}{data?.interpretation || ''}</p>
     {error && <div class="usage-error" role="alert">{error}</div>}
     <section class="usage-table">
       <h3>Observed workload</h3>
@@ -86,6 +88,7 @@ export function WorkloadTelemetry({days=7,origin='mux_owned',backend=''}:{days?:
           </tr>)}</tbody>
         </table></div>
         : <p>No workload telemetry yet. Figures appear once runs have started and ended under an observed harness.</p>}
+      <TelemetryCaption days={days} origin={origin} denominator={`${formatCount(data?.dimensions.reduce((sum,row)=>sum+row.runs,0)||0)} runs across ${data?.dimensions.length||0} backend/model rows`} coverage={data?.coverage} filters={{backend,project,model}}/>
     </section>
   </div>
 }

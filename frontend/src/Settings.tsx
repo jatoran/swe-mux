@@ -105,7 +105,8 @@ type Config = {
   session_process_priority:'normal'|'below_normal';daemon_process_priority:'normal'|'above_normal'
   ghost_window_sweep_enabled:boolean;ghost_window_poll_seconds:number
   status_timeline_retention_days:number
-  operational_telemetry_retention_days:number;canonical_telemetry_native_otel_enabled:boolean;provider_quota_poll_minutes:number
+  operational_telemetry_retention_days:number;canonical_telemetry_native_otel_enabled:boolean
+  canonical_telemetry_legacy_dashboard_enabled:boolean;provider_quota_poll_minutes:number
   provider_quota_turn_refresh_enabled:boolean;provider_quota_turn_refresh_min_minutes:number
   middle_click_paste:boolean; broadcast_default:boolean
   mobile_vertical_drag:'smart'|'terminal'|'application'|'disabled'
@@ -1825,6 +1826,8 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <label class="check"><span>Capture native provider telemetry for new sessions</span><input type="checkbox" checked={draft.canonical_telemetry_native_otel_enabled} onChange={e=>change('canonical_telemetry_native_otel_enabled',e.currentTarget.checked)}/></label>
           <p>Routes supported provider tool, skill, decision, timing, and compaction metadata to this daemon over authenticated loopback.</p>
           <p>Tool output is hashed and discarded rather than copied into the ledger.</p>
+          <label class="check"><span>Keep the legacy tool table beside the ledger</span><input type="checkbox" checked={draft.canonical_telemetry_legacy_dashboard_enabled} onChange={e=>change('canonical_telemetry_legacy_dashboard_enabled',e.currentTarget.checked)}/></label>
+          <p>Shows the retired operational tool table and its shadow comparison as a Fleet activity tab. Turn it off once the comparison has been reviewed; nothing is deleted either way.</p>
         </section>}
 
         {/* Per-Project options are NOT here: the Projects registry is the single

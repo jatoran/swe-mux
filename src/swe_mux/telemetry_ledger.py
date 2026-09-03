@@ -2,17 +2,17 @@
 
 The legacy operational telemetry tables store observer events as independent rows.
 This ledger reduces those observations into run, turn, tool-call, skill, model
-request, compaction, and verification entities while retaining a content-free
-evidence trail. Detailed provider output remains in the provider transcript or
-conversation store.
+request, compaction, verification, and provider-metric entities while retaining a
+content-free evidence trail. Detailed provider output remains in the provider
+transcript or conversation store.
 
 The storage core is synchronous on purpose: the daemon adapter
 (`telemetry_service.CanonicalTelemetryService`) runs every call on one dedicated
 executor, and migrations, corpus backfills, and deterministic tests use this same
 reducer rather than an async twin. Schema and migrations live in
-`telemetry_schema.py`, the legacy importers in `telemetry_imports.py`, and the
-query surface in `telemetry_queries.py`; this module owns identity, precedence,
-and the write path.
+`telemetry_schema.py`, the legacy importers in `telemetry_imports.py`, direct native
+reconciliation in `telemetry_reconcile.py`, and the query surface in
+`telemetry_queries.py`; this module owns identity, precedence, and the write path.
 """
 
 from __future__ import annotations
@@ -31,6 +31,7 @@ from .harness import HARNESSES
 from .models import MuxEvent
 from .telemetry_imports import LegacyImportMixin
 from .telemetry_queries import WORKLOAD_FIELDS, LedgerQueryMixin
+from .telemetry_reconcile import NativeReconcileMixin
 from .telemetry_schema import (
     LEDGER_SCHEMA_VERSION,
     canonical_json,
@@ -38,7 +39,9 @@ from .telemetry_schema import (
     content_metrics,
     day_of,
     digest,
+    evidence_quality_for,
     expected_signature,
+    hour_of,
     migrate_catalog,
     migrate_segment,
     period_of,
@@ -66,6 +69,7 @@ _CAPTURED_EVENT_TYPES = frozenset(
         "land_handed_back",
         "land_landed",
         "land_refused",
+        "provider_metric",
         "session_crashed",
         "session_exited",
         "skill_invoked",
@@ -78,12 +82,15 @@ _CAPTURED_EVENT_TYPES = frozenset(
         "turn_started",
     }
 )
+_RUN_LIFECYCLE_EVENTS = frozenset(
+    {"agent_run_started", "agent_run_ended", "session_exited", "session_crashed"}
+)
 _RUN_ENDING_EVENTS = frozenset({"agent_run_ended", "session_exited", "session_crashed"})
 _NATIVE_SOURCES = frozenset({"otel", "provider_otel", "transcript"})
 _UNMEASURED = "unknown"
 
 
-class CanonicalTelemetryLedger(LegacyImportMixin, LedgerQueryMixin):
+class CanonicalTelemetryLedger(LegacyImportMixin, NativeReconcileMixin, LedgerQueryMixin):
     """Synchronous core for segmented canonical telemetry."""
 
     def __init__(self, root: Path) -> None:
@@ -99,7 +106,10 @@ class CanonicalTelemetryLedger(LegacyImportMixin, LedgerQueryMixin):
         }
         self._segments: dict[str, sqlite3.Connection] = {}
         self._dirty_segments: set[str] = set()
-        self._extra_dirty_days: set[str] = set()
+        # Timestamps of entities a batch touched *besides* the events' own: the
+        # start of a run or turn that ended later, a call abandoned by a run end.
+        # Their day and hour are dirtied so the rollup they live in is rebuilt.
+        self._extra_dirty_stamps: set[float] = set()
         self._closed = False
 
     def close(self) -> None:
@@ -150,7 +160,7 @@ class CanonicalTelemetryLedger(LegacyImportMixin, LedgerQueryMixin):
         outcome = migrate_segment(connection)
         if outcome["applied"]:
             log.info(
-                "canonical telemetry segment %s migrated from schema %s to %s (%d statements)",
+                "canonical telemetry segment %s migrated from schema %s to %s (%d steps)",
                 period,
                 outcome["found"],
                 outcome["version"],
@@ -259,7 +269,7 @@ class CanonicalTelemetryLedger(LegacyImportMixin, LedgerQueryMixin):
         """Reduce a batch and commit each touched segment exactly once."""
 
         self._dirty_segments.clear()
-        self._extra_dirty_days.clear()
+        self._extra_dirty_stamps.clear()
         changed: dict[str, list[float]] = {}
         inserted = 0
         for event, dimensions in items:
@@ -271,7 +281,7 @@ class CanonicalTelemetryLedger(LegacyImportMixin, LedgerQueryMixin):
         for period in self._dirty_segments:
             self._segment(period).commit()
         now = time.time()
-        dirty_days = set(self._extra_dirty_days)
+        stamps = set(self._extra_dirty_stamps)
         for period, timestamps in changed.items():
             first = min(timestamps)
             last = max(timestamps)
@@ -283,16 +293,27 @@ class CanonicalTelemetryLedger(LegacyImportMixin, LedgerQueryMixin):
                 "ELSE last_observed_at END,evidence_rows=evidence_rows+? WHERE period=?",
                 (first, first, last, last, len(timestamps), period),
             )
-            dirty_days.update(day_of(timestamp) for timestamp in timestamps)
-        for day in dirty_days:
+            stamps.update(timestamps)
+        self._mark_dirty(stamps, now)
+        if changed or stamps:
+            self._catalog.commit()
+        return inserted
+
+    def _mark_dirty(self, stamps: Iterable[float], now: float) -> None:
+        days = {day_of(stamp) for stamp in stamps}
+        hours = {hour_of(stamp) for stamp in stamps}
+        for day in days:
             self._catalog.execute(
                 "INSERT INTO rollup_dirty_days(day,dirtied_at) VALUES(?,?) "
                 "ON CONFLICT(day) DO UPDATE SET dirtied_at=excluded.dirtied_at",
                 (day, now),
             )
-        if changed or dirty_days:
-            self._catalog.commit()
-        return inserted
+        for hour in hours:
+            self._catalog.execute(
+                "INSERT INTO rollup_dirty_hours(hour,dirtied_at) VALUES(?,?) "
+                "ON CONFLICT(hour) DO UPDATE SET dirtied_at=excluded.dirtied_at",
+                (hour, now),
+            )
 
     def record_parser_signatures(
         self,
@@ -438,6 +459,10 @@ class CanonicalTelemetryLedger(LegacyImportMixin, LedgerQueryMixin):
                     turn_id,
                     tool_call_id,
                 )
+        elif event.type in {"approval_needed", "approval_resolved"} and native_call_id:
+            self._note_approval(
+                connection, event, dimensions, evidence_id, run_id, turn_id, backend
+            )
         elif event.type == "skill_invoked":
             self._record_skill(
                 connection, event, dimensions, evidence_id, run_id, turn_id
@@ -449,6 +474,10 @@ class CanonicalTelemetryLedger(LegacyImportMixin, LedgerQueryMixin):
         elif event.type == "context_compacted":
             self._record_compaction(
                 connection, event, dimensions, evidence_id, run_id, turn_id
+            )
+        elif event.type == "provider_metric":
+            self._record_provider_metric(
+                connection, event, dimensions, evidence_id, run_id, backend
             )
         return True
 
@@ -470,12 +499,19 @@ class CanonicalTelemetryLedger(LegacyImportMixin, LedgerQueryMixin):
             if tool_rows:
                 connection.execute(
                     "UPDATE telemetry_tool_calls SET status='abandoned',finished_at=?,"
-                    "result_source=?,result_rank=?,status_source=? "
+                    "result_source=?,result_rank=?,status_source=?,evidence_quality=? "
                     "WHERE run_id=? AND status='running'",
-                    (event.ts, event.source, source_rank(event.source), event.source, run_id),
+                    (
+                        event.ts,
+                        event.source,
+                        source_rank(event.source),
+                        event.source,
+                        evidence_quality_for(source_rank(event.source), event.source),
+                        run_id,
+                    ),
                 )
                 for tool_id, started_at in tool_rows:
-                    self._extra_dirty_days.add(day_of(started_at))
+                    self._extra_dirty_stamps.add(started_at)
                     self._link_evidence(
                         connection,
                         "tool_call",
@@ -497,7 +533,7 @@ class CanonicalTelemetryLedger(LegacyImportMixin, LedgerQueryMixin):
                     "last_evidence_id=? WHERE run_id=? AND status='running'",
                     (event.ts, evidence_id, run_id),
                 )
-                self._extra_dirty_days.update(day_of(started) for started in open_turns)
+                self._extra_dirty_stamps.update(open_turns)
             if tool_rows or open_turns:
                 self._dirty_segments.add(period)
 
@@ -513,29 +549,46 @@ class CanonicalTelemetryLedger(LegacyImportMixin, LedgerQueryMixin):
         model = str(dimensions.get("model") or "") or None
         initial_model = None if dimensions.get("model_is_final_only") else model
         ended = event.ts if event.type in _RUN_ENDING_EVENTS else None
-        started_at = float(dimensions.get("run_started_at") or event.ts)
+        declared = dimensions.get("run_started_at")
+        # A declared start comes from the session record or the history row. Without
+        # one, the earliest evidence is the only start there is, and the row says so
+        # rather than presenting the estimate as a fact.
+        started_at = float(declared) if declared else float(event.ts)
+        started_at_source = "declared" if declared else "first_evidence"
         connection = self._entity_connection("run", run_id, period_of(started_at))
         existing = connection.execute(
             "SELECT started_at FROM telemetry_runs WHERE run_id=?", (run_id,)
         ).fetchone()
         if existing is not None:
-            # The run's rollup day is its start day; anything that changes the row
-            # later (tokens, end time, model) has to dirty that day, not today's.
-            self._extra_dirty_days.add(day_of(float(existing["started_at"])))
+            # The run's rollup bucket is its start; anything that changes the row
+            # later (tokens, end time, model) has to dirty that bucket, not today's.
+            self._extra_dirty_stamps.add(float(existing["started_at"]))
         connection.execute(
             "INSERT INTO telemetry_runs"
             "(run_id,session_id,native_conversation_id,parent_run_id,launch_tool_call_id,"
             "project_id,backend,harness_version,origin,source_locator,started_at,ended_at,"
             "end_reason,initial_model,final_model,input_tokens,output_tokens,cache_read_tokens,"
             "cache_write_tokens,cost_usd,final_context_pct,peak_context_pct,measurement_source,"
-            "first_evidence_id,last_evidence_id) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+            "first_evidence_id,last_evidence_id,started_at_source) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
             "ON CONFLICT(run_id) DO UPDATE SET "
             "project_id=COALESCE(telemetry_runs.project_id,excluded.project_id),"
             "native_conversation_id=COALESCE(telemetry_runs.native_conversation_id,"
             "excluded.native_conversation_id),"
             "harness_version=COALESCE(excluded.harness_version,telemetry_runs.harness_version),"
             "source_locator=COALESCE(excluded.source_locator,telemetry_runs.source_locator),"
+            # A declared start replaces a first-evidence estimate, never the reverse,
+            # and among estimates the earliest evidence wins.
+            "started_at=CASE WHEN excluded.started_at_source='declared' "
+            "AND COALESCE(telemetry_runs.started_at_source,'')!='declared' "
+            "THEN excluded.started_at "
+            "WHEN excluded.started_at_source!='declared' "
+            "AND COALESCE(telemetry_runs.started_at_source,'')!='declared' "
+            "THEN MIN(telemetry_runs.started_at,excluded.started_at) "
+            "ELSE telemetry_runs.started_at END,"
+            "started_at_source=CASE WHEN excluded.started_at_source='declared' "
+            "THEN 'declared' ELSE COALESCE(telemetry_runs.started_at_source,"
+            "excluded.started_at_source) END,"
             "ended_at=COALESCE(excluded.ended_at,telemetry_runs.ended_at),"
             "end_reason=COALESCE(excluded.end_reason,telemetry_runs.end_reason),"
             "final_model=COALESCE(excluded.final_model,telemetry_runs.final_model),"
@@ -578,8 +631,11 @@ class CanonicalTelemetryLedger(LegacyImportMixin, LedgerQueryMixin):
                 dimensions.get("measurement_source"),
                 evidence_id,
                 evidence_id,
+                started_at_source,
             ),
         )
+        if event.type in _RUN_LIFECYCLE_EVENTS:
+            self._link_evidence(connection, "run", run_id, evidence_id, event.type, event.source)
 
     def _upsert_turn(
         self,
@@ -599,7 +655,7 @@ class CanonicalTelemetryLedger(LegacyImportMixin, LedgerQueryMixin):
             "SELECT started_at FROM telemetry_turns WHERE turn_id=?", (turn_id,)
         ).fetchone()
         if existing is not None:
-            self._extra_dirty_days.add(day_of(float(existing["started_at"])))
+            self._extra_dirty_stamps.add(float(existing["started_at"]))
         finished = event.ts if event.type != "turn_started" else None
         status = {
             "turn_started": "running",
@@ -652,6 +708,112 @@ class CanonicalTelemetryLedger(LegacyImportMixin, LedgerQueryMixin):
             return "runtime"
         return "model"
 
+    def _tool_call_identity(
+        self, event: MuxEvent, dimensions: Mapping[str, Any], run_id: str, backend: str
+    ) -> tuple[str, str, str, str | None]:
+        native_call_id = str(event.payload.get("call_id") or "") or None
+        layer = self._invocation_layer(event, backend)
+        agent_id = str(event.payload.get("agent_id") or dimensions.get("agent_id") or "root")
+        identity = native_call_id or f"evidence:{event.session_id}:{event.seq}"
+        return digest(f"{run_id}\0{agent_id}\0{layer}\0{identity}"), layer, agent_id, native_call_id
+
+    def _note_approval(
+        self,
+        connection: sqlite3.Connection,
+        event: MuxEvent,
+        dimensions: Mapping[str, Any],
+        evidence_id: str,
+        run_id: str,
+        turn_id: str | None,
+        backend: str,
+    ) -> None:
+        """Pair an approval request with the call it named, and time the wait.
+
+        The request opens the call's row if nothing has yet; the resolution, or the
+        call's own result, closes the wait. Nothing is estimated: a resolution with
+        no recorded request leaves the wait unknown.
+        """
+
+        tool_call_id, layer, agent_id, native_call_id = self._tool_call_identity(
+            event, dimensions, run_id, backend
+        )
+        connection = self._entity_connection("tool_call", tool_call_id, period_of(event.ts))
+        existing = connection.execute(
+            "SELECT started_at,approval_requested_at,approval_wait_ms FROM telemetry_tool_calls "
+            "WHERE tool_call_id=?",
+            (tool_call_id,),
+        ).fetchone()
+        raw_name = str(event.payload.get("tool") or event.payload.get("detail") or "tool")
+        if existing is None:
+            classified = classify_tool(raw_name, backend=backend, source=event.source)
+            connection.execute(
+                "INSERT INTO telemetry_tool_calls"
+                "(tool_call_id,run_id,turn_id,agent_id,session_id,project_id,backend,model,"
+                "origin,native_call_id,invocation_layer,raw_name,family,operation,transport,"
+                "server_name,tool_name,proposed_at,started_at,status,input_measurement,"
+                "output_measurement,executed_input_measurement,normalization_version,"
+                "evidence_count,evidence_quality,approval_requested_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'running',?,?,?,3,1,'none',?)",
+                (
+                    tool_call_id,
+                    run_id,
+                    turn_id,
+                    agent_id,
+                    event.session_id,
+                    dimensions.get("project_id"),
+                    backend,
+                    event.payload.get("model") or dimensions.get("model"),
+                    str(dimensions.get("origin") or "mux_owned"),
+                    native_call_id,
+                    layer,
+                    raw_name,
+                    classified["family"],
+                    classified["operation"],
+                    classified["transport"],
+                    classified["server"],
+                    classified["tool"],
+                    event.ts,
+                    event.ts,
+                    _UNMEASURED,
+                    _UNMEASURED,
+                    _UNMEASURED,
+                    event.ts if event.type == "approval_needed" else None,
+                ),
+            )
+        else:
+            self._extra_dirty_stamps.add(float(existing["started_at"]))
+            if event.type == "approval_needed" and existing["approval_requested_at"] is None:
+                connection.execute(
+                    "UPDATE telemetry_tool_calls SET approval_requested_at=?,"
+                    "evidence_count=evidence_count+1 WHERE tool_call_id=?",
+                    (event.ts, tool_call_id),
+                )
+            elif (
+                event.type == "approval_resolved"
+                and existing["approval_requested_at"] is not None
+                and existing["approval_wait_ms"] is None
+            ):
+                wait = max(0.0, (event.ts - float(existing["approval_requested_at"])) * 1000)
+                connection.execute(
+                    "UPDATE telemetry_tool_calls SET approval_wait_ms=?,"
+                    "evidence_count=evidence_count+1 WHERE tool_call_id=?",
+                    (wait, tool_call_id),
+                )
+            else:
+                connection.execute(
+                    "UPDATE telemetry_tool_calls SET evidence_count=evidence_count+1 "
+                    "WHERE tool_call_id=?",
+                    (tool_call_id,),
+                )
+        self._link_evidence(
+            connection,
+            "tool_call",
+            tool_call_id,
+            evidence_id,
+            "approval_request" if event.type == "approval_needed" else "approval_resolution",
+            event.source,
+        )
+
     def _upsert_tool_call(
         self,
         connection: sqlite3.Connection,
@@ -663,11 +825,9 @@ class CanonicalTelemetryLedger(LegacyImportMixin, LedgerQueryMixin):
         backend: str,
     ) -> str:
         payload = event.payload
-        native_call_id = str(payload.get("call_id") or "") or None
-        layer = self._invocation_layer(event, backend)
-        agent_id = str(payload.get("agent_id") or dimensions.get("agent_id") or "root")
-        identity = native_call_id or f"evidence:{evidence_id}"
-        tool_call_id = digest(f"{run_id}\0{agent_id}\0{layer}\0{identity}")
+        tool_call_id, layer, agent_id, native_call_id = self._tool_call_identity(
+            event, dimensions, run_id, backend
+        )
         connection = self._entity_connection(
             "tool_call", tool_call_id, period_of(event.ts)
         )
@@ -679,7 +839,7 @@ class CanonicalTelemetryLedger(LegacyImportMixin, LedgerQueryMixin):
             "SELECT * FROM telemetry_tool_calls WHERE tool_call_id=?", (tool_call_id,)
         ).fetchone()
         if existing is not None:
-            self._extra_dirty_days.add(day_of(float(existing["started_at"])))
+            self._extra_dirty_stamps.add(float(existing["started_at"]))
         is_result = event.type == "tool_result"
         input_value = (
             payload.get("tool_input") or payload.get("arguments") or payload.get("target")
@@ -750,6 +910,7 @@ class CanonicalTelemetryLedger(LegacyImportMixin, LedgerQueryMixin):
         truncated_value = payload.get("output_truncated")
         output_truncated = None if truncated_value is None else int(bool(truncated_value))
         provider_sequence = payload.get("provider_sequence")
+        quality = evidence_quality_for(rank, event.source) if is_result else "none"
         conflict = False
         if existing is not None and is_result:
             conflict = (
@@ -777,9 +938,10 @@ class CanonicalTelemetryLedger(LegacyImportMixin, LedgerQueryMixin):
                 "target_preview,target_sha256,request_source,"
                 "request_rank,result_source,result_rank,status_source,duration_source,error_source,"
                 "output_source,normalization_version,evidence_count,output_truncated,"
-                "provider_sequence,native_conversation_id,tool_namespace,error_sha256) "
+                "provider_sequence,native_conversation_id,tool_namespace,error_sha256,"
+                "evidence_quality) "
                 "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,"
-                "?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     tool_call_id,
                     run_id,
@@ -842,7 +1004,7 @@ class CanonicalTelemetryLedger(LegacyImportMixin, LedgerQueryMixin):
                         else None
                     ),
                     event.source if is_result and output_sha is not None else None,
-                    2,
+                    3,
                     1,
                     output_truncated,
                     provider_sequence,
@@ -850,6 +1012,7 @@ class CanonicalTelemetryLedger(LegacyImportMixin, LedgerQueryMixin):
                     or dimensions.get("native_conversation_id"),
                     payload.get("tool_namespace"),
                     payload.get("error_sha256"),
+                    quality,
                 ),
             )
         else:
@@ -868,6 +1031,7 @@ class CanonicalTelemetryLedger(LegacyImportMixin, LedgerQueryMixin):
                         "result_source": event.source,
                         "result_rank": rank,
                         "status_source": event.source,
+                        "evidence_quality": quality,
                     }
                 )
             if is_result:
@@ -889,6 +1053,16 @@ class CanonicalTelemetryLedger(LegacyImportMixin, LedgerQueryMixin):
                 for field, value in field_values.items():
                     if value is not None and existing[field] is None:
                         updates[field] = value
+                if (
+                    existing["approval_requested_at"] is not None
+                    and existing["approval_wait_ms"] is None
+                    and "approval_wait_ms" not in updates
+                ):
+                    # The result is the latest the wait can have ended; a resolution
+                    # that arrived earlier already closed it more precisely.
+                    updates["approval_wait_ms"] = max(
+                        0.0, (event.ts - float(existing["approval_requested_at"])) * 1000
+                    )
                 if updates.keys() & {"duration_ms", "approval_wait_ms"}:
                     updates["duration_source"] = event.source
                 if updates.keys() & {"error_type", "exit_code", "error_sha256"}:
@@ -927,6 +1101,8 @@ class CanonicalTelemetryLedger(LegacyImportMixin, LedgerQueryMixin):
                         "request_rank": rank,
                     }
                 )
+                if existing["proposed_at"] is None:
+                    updates["proposed_at"] = event.ts
             assignments = ",".join(f"{key}=?" for key in updates)
             connection.execute(
                 f"UPDATE telemetry_tool_calls SET {assignments} WHERE tool_call_id=?",
@@ -1225,6 +1401,56 @@ class CanonicalTelemetryLedger(LegacyImportMixin, LedgerQueryMixin):
             event.source,
         )
 
+    def _record_provider_metric(
+        self,
+        connection: sqlite3.Connection,
+        event: MuxEvent,
+        dimensions: Mapping[str, Any],
+        evidence_id: str,
+        run_id: str,
+        backend: str,
+    ) -> None:
+        """Keep one aggregated provider point as itself; it never becomes an entity."""
+
+        payload = event.payload
+        metric = str(payload.get("metric") or "").strip()
+        if not metric:
+            return
+        attributes = payload.get("attributes")
+        attributes = attributes if isinstance(attributes, dict) else {}
+        metric_id = digest(f"{run_id}\0metric\0{evidence_id}")
+        connection.execute(
+            "INSERT OR IGNORE INTO telemetry_provider_metrics"
+            "(metric_id,run_id,session_id,agent_id,project_id,backend,model,origin,"
+            "harness_version,metric_name,kind,temporality,attributes_json,count,sum,min,max,"
+            "started_at,observed_at,evidence_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                metric_id,
+                run_id,
+                str(event.session_id),
+                str(payload.get("agent_id") or dimensions.get("agent_id") or "root"),
+                dimensions.get("project_id"),
+                backend,
+                payload.get("model") or dimensions.get("model"),
+                str(dimensions.get("origin") or "mux_owned"),
+                payload.get("harness_version") or dimensions.get("harness_version"),
+                metric,
+                str(payload.get("kind") or "sum"),
+                str(payload.get("temporality") or "delta"),
+                canonical_json(attributes).decode("utf-8"),
+                payload.get("count"),
+                payload.get("sum"),
+                payload.get("min"),
+                payload.get("max"),
+                payload.get("started_at"),
+                event.ts,
+                evidence_id,
+            ),
+        )
+        self._link_evidence(
+            connection, "provider_metric", metric_id, evidence_id, "point", event.source
+        )
+
     @staticmethod
     def _link_evidence(
         connection: sqlite3.Connection,
@@ -1252,8 +1478,134 @@ class CanonicalTelemetryLedger(LegacyImportMixin, LedgerQueryMixin):
 
     # -- rollups, seals, storage ------------------------------------------------
 
+    _TOOL_ROLLUP_SQL = (
+        "SELECT backend,COALESCE(model,'unknown') model,COALESCE(project_id,'') project_id,"
+        "origin,invocation_layer,family,operation,transport,raw_name,status,evidence_quality,"
+        "COUNT(*) calls,SUM(duration_ms IS NOT NULL) duration_count,"
+        "SUM(COALESCE(duration_ms,0)) duration_ms,SUM(COALESCE(input_bytes,0)) input_bytes,"
+        "SUM(COALESCE(output_bytes,0)) output_bytes,"
+        "SUM(approval_wait_ms IS NOT NULL) approval_wait_count,"
+        "SUM(COALESCE(approval_wait_ms,0)) approval_wait_ms "
+        "FROM telemetry_tool_calls WHERE started_at>=? AND started_at<? "
+        "GROUP BY backend,model,project_id,origin,invocation_layer,family,operation,transport,"
+        "raw_name,status,evidence_quality"
+    )
+    _TOOL_ROLLUP_INSERT_COLUMNS = (
+        "backend,model,project_id,origin,invocation_layer,family,operation,transport,raw_name,"
+        "status,evidence_quality,calls,duration_count,duration_ms,input_bytes,output_bytes,"
+        "approval_wait_count,approval_wait_ms"
+    )
+
+    def _tool_rollup_rows(self, period: str, start: float, end: float) -> list[tuple[Any, ...]]:
+        rows = self._segment(period).execute(self._TOOL_ROLLUP_SQL, (start, end)).fetchall()
+        return [tuple(row) for row in rows]
+
+    def _rebuild_bucket(
+        self,
+        *,
+        bucket_column: str,
+        bucket: str,
+        start: float,
+        end: float,
+        period: str,
+        tool_table: str,
+        workload_table: str,
+    ) -> None:
+        known = self._catalog.execute(
+            "SELECT 1 FROM ledger_segments WHERE period=?", (period,)
+        ).fetchone()
+        tool_rows = self._tool_rollup_rows(period, start, end) if known is not None else []
+        workload_rows = self.workload_rows_between(period, start, end) if known is not None else []
+        workload_columns = (
+            bucket_column, "backend", "model", "project_id", "origin", *WORKLOAD_FIELDS
+        )
+        placeholders = ",".join("?" for _ in range(18))
+        self._catalog.execute(f"DELETE FROM {tool_table} WHERE {bucket_column}=?", (bucket,))
+        self._catalog.executemany(
+            f"INSERT INTO {tool_table}({bucket_column},{self._TOOL_ROLLUP_INSERT_COLUMNS}) "
+            f"VALUES(?,{placeholders})",
+            [(bucket, *row) for row in tool_rows],
+        )
+        self._catalog.execute(f"DELETE FROM {workload_table} WHERE {bucket_column}=?", (bucket,))
+        self._catalog.executemany(
+            f"INSERT INTO {workload_table}({','.join(workload_columns)}) "
+            f"VALUES({','.join('?' for _ in workload_columns)})",
+            [
+                (bucket, *(group[column] for column in workload_columns[1:]))
+                for group in workload_rows
+            ],
+        )
+
+    def _rebuild_daily_entities(self, day: str, start: float, end: float, period: str) -> None:
+        known = self._catalog.execute(
+            "SELECT 1 FROM ledger_segments WHERE period=?", (period,)
+        ).fetchone()
+        connection = self._segment(period) if known is not None else None
+        self._catalog.execute("DELETE FROM skill_daily WHERE day=?", (day,))
+        self._catalog.execute("DELETE FROM verification_daily WHERE day=?", (day,))
+        self._catalog.execute("DELETE FROM compaction_daily WHERE day=?", (day,))
+        if connection is None:
+            return
+        self._catalog.executemany(
+            "INSERT INTO skill_daily(day,backend,model,project_id,origin,skill_name,"
+            "invocation_trigger,skill_source,skill_scope,invocations) VALUES(?,?,?,?,?,?,?,?,?,?)",
+            [
+                (day, *tuple(row))
+                for row in connection.execute(
+                    "SELECT backend,COALESCE(model,'unknown'),COALESCE(project_id,''),origin,"
+                    "skill_name,COALESCE(invocation_trigger,'unknown'),"
+                    "COALESCE(skill_source,'unknown'),COALESCE(skill_scope,'unknown'),"
+                    "SUM(occurrences) FROM telemetry_skill_invocations "
+                    "WHERE activated_at>=? AND activated_at<? GROUP BY 1,2,3,4,5,6,7,8",
+                    (start, end),
+                ).fetchall()
+            ],
+        )
+        self._catalog.executemany(
+            "INSERT INTO verification_daily(day,backend,model,project_id,origin,framework,"
+            "verifications,successful,passed,failed,errors,skipped) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+            [
+                (day, *tuple(row))
+                for row in connection.execute(
+                    "SELECT backend,COALESCE(model,'unknown'),COALESCE(project_id,''),origin,"
+                    "framework,COUNT(*),SUM(successful=1),SUM(COALESCE(passed,0)),"
+                    "SUM(COALESCE(failed,0)),SUM(COALESCE(errors,0)),SUM(COALESCE(skipped,0)) "
+                    "FROM telemetry_verifications WHERE finished_at>=? AND finished_at<? "
+                    "GROUP BY 1,2,3,4,5",
+                    (start, end),
+                ).fetchall()
+            ],
+        )
+        self._catalog.executemany(
+            "INSERT INTO compaction_daily(day,backend,model,project_id,origin,trigger,count,"
+            "failures,duration_count,duration_ms,token_count,tokens_reclaimed) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+            [
+                (day, *tuple(row))
+                for row in connection.execute(
+                    "SELECT backend,COALESCE(model,'unknown'),COALESCE(project_id,''),origin,"
+                    "COALESCE(trigger,'unknown'),COUNT(*),"
+                    "SUM(CASE WHEN success=0 THEN 1 ELSE 0 END),"
+                    "SUM(duration_ms IS NOT NULL),SUM(COALESCE(duration_ms,0)),"
+                    "SUM(tokens_before IS NOT NULL AND tokens_after IS NOT NULL),"
+                    "SUM(CASE WHEN tokens_before IS NOT NULL AND tokens_after IS NOT NULL "
+                    "THEN tokens_before-tokens_after ELSE 0 END) "
+                    "FROM telemetry_compactions WHERE observed_at>=? AND observed_at<? "
+                    "GROUP BY 1,2,3,4,5",
+                    (start, end),
+                ).fetchall()
+            ],
+        )
+
     def rebuild_next_closed_day(self, *, now: float | None = None) -> str | None:
-        """Rebuild one dirty closed UTC day's tool and workload rollups from entities."""
+        """Rebuild one dirty closed UTC day's rollups from canonical entities.
+
+        Tool, workload, skill, verification, and compaction rollups are rebuilt
+        together. The day's hour rollups are left alone: a full-day window reads
+        the day, a partial-day window still needs the hours, and the hours that
+        changed are dirty in their own right and rebuilt by the hour worker.
+        """
 
         current_day = day_of(time.time() if now is None else now)
         row = self._catalog.execute(
@@ -1266,64 +1618,17 @@ class CanonicalTelemetryLedger(LegacyImportMixin, LedgerQueryMixin):
         start = datetime.strptime(day, "%Y-%m-%d").replace(tzinfo=UTC).timestamp()
         end = start + 86400
         period = day[:7]
-        known = self._catalog.execute(
-            "SELECT 1 FROM ledger_segments WHERE period=?", (period,)
-        ).fetchone()
-        tool_rows: list[sqlite3.Row] = []
-        if known is not None:
-            tool_rows = self._segment(period).execute(
-                "SELECT backend,COALESCE(model,'unknown') model,"
-                "COALESCE(project_id,'') project_id,origin,invocation_layer,family,operation,"
-                "transport,raw_name,status,COUNT(*) calls,"
-                "SUM(duration_ms IS NOT NULL) duration_count,"
-                "SUM(COALESCE(duration_ms,0)) duration_ms,"
-                "SUM(COALESCE(input_bytes,0)) input_bytes,"
-                "SUM(COALESCE(output_bytes,0)) output_bytes "
-                "FROM telemetry_tool_calls WHERE started_at>=? AND started_at<? "
-                "GROUP BY backend,model,project_id,origin,invocation_layer,family,operation,"
-                "transport,raw_name,status",
-                (start, end),
-            ).fetchall()
-        workload_rows = self.workload_day_rows(day)
-        workload_columns = ("day", "backend", "model", "project_id", "origin", *WORKLOAD_FIELDS)
         with self._catalog:
-            self._catalog.execute("DELETE FROM tool_daily WHERE day=?", (day,))
-            self._catalog.executemany(
-                "INSERT INTO tool_daily"
-                "(day,backend,model,project_id,origin,invocation_layer,family,operation,"
-                "transport,raw_name,status,calls,duration_count,duration_ms,input_bytes,"
-                "output_bytes) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                [
-                    (
-                        day,
-                        item["backend"],
-                        item["model"],
-                        item["project_id"],
-                        item["origin"],
-                        item["invocation_layer"],
-                        item["family"],
-                        item["operation"],
-                        item["transport"],
-                        item["raw_name"],
-                        item["status"],
-                        item["calls"],
-                        item["duration_count"],
-                        item["duration_ms"],
-                        item["input_bytes"],
-                        item["output_bytes"],
-                    )
-                    for item in tool_rows
-                ],
+            self._rebuild_bucket(
+                bucket_column="day",
+                bucket=day,
+                start=start,
+                end=end,
+                period=period,
+                tool_table="tool_daily",
+                workload_table="workload_daily",
             )
-            self._catalog.execute("DELETE FROM workload_daily WHERE day=?", (day,))
-            self._catalog.executemany(
-                f"INSERT INTO workload_daily({','.join(workload_columns)}) "
-                f"VALUES({','.join('?' for _ in workload_columns)})",
-                [
-                    (day, *(group[column] for column in workload_columns[1:]))
-                    for group in workload_rows
-                ],
-            )
+            self._rebuild_daily_entities(day, start, end, period)
             self._catalog.execute("DELETE FROM rollup_dirty_days WHERE day=?", (day,))
             self._catalog.execute(
                 "INSERT INTO rollup_days(day,rebuilt_at) VALUES(?,?) "
@@ -1331,6 +1636,41 @@ class CanonicalTelemetryLedger(LegacyImportMixin, LedgerQueryMixin):
                 (day, time.time()),
             )
         return day
+
+    def rebuild_next_closed_hour(self, *, now: float | None = None) -> str | None:
+        """Rebuild one dirty closed UTC hour's tool and workload rollups.
+
+        Hours serve the sub-day windows (the last 24 hours spans two partial days
+        that no day rollup can answer), so every closed dirty hour is rebuilt even
+        when its day already has a rollup of its own.
+        """
+
+        current_hour = hour_of(time.time() if now is None else now)
+        row = self._catalog.execute(
+            "SELECT hour FROM rollup_dirty_hours WHERE hour<? ORDER BY hour LIMIT 1",
+            (current_hour,),
+        ).fetchone()
+        if row is None:
+            return None
+        hour = str(row["hour"])
+        start = datetime.strptime(hour, "%Y-%m-%dT%H").replace(tzinfo=UTC).timestamp()
+        with self._catalog:
+            self._rebuild_bucket(
+                bucket_column="hour",
+                bucket=hour,
+                start=start,
+                end=start + 3600,
+                period=hour[:7],
+                tool_table="tool_hourly",
+                workload_table="workload_hourly",
+            )
+            self._catalog.execute(
+                "INSERT INTO rollup_hours(hour,rebuilt_at) VALUES(?,?) "
+                "ON CONFLICT(hour) DO UPDATE SET rebuilt_at=excluded.rebuilt_at",
+                (hour, time.time()),
+            )
+            self._catalog.execute("DELETE FROM rollup_dirty_hours WHERE hour=?", (hour,))
+        return hour
 
     def seal_next_segment(
         self, *, now: float | None = None, grace_days: int = 7
@@ -1385,8 +1725,15 @@ class CanonicalTelemetryLedger(LegacyImportMixin, LedgerQueryMixin):
             "MIN(first_observed_at) oldest,MAX(last_observed_at) newest "
             "FROM ledger_segments"
         ).fetchone()
-        dirty = self._catalog.execute("SELECT COUNT(*) FROM rollup_dirty_days").fetchone()
-        rolled = self._catalog.execute("SELECT COUNT(*) FROM rollup_days").fetchone()
+        counts = {
+            name: int(self._catalog.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] or 0)
+            for name, table in (
+                ("dirty_days", "rollup_dirty_days"),
+                ("rolled_days", "rollup_days"),
+                ("dirty_hours", "rollup_dirty_hours"),
+                ("rolled_hours", "rollup_hours"),
+            )
+        }
         return {
             "bytes": bytes_used,
             "disk_free_bytes": usage.free,
@@ -1396,8 +1743,7 @@ class CanonicalTelemetryLedger(LegacyImportMixin, LedgerQueryMixin):
             "sealed_segments": int(segments["sealed"] or 0),
             "oldest_at": segments["oldest"],
             "newest_at": segments["newest"],
-            "dirty_days": int(dirty[0] or 0),
-            "rolled_days": int(rolled[0] or 0),
+            **counts,
             "retention": "forever",
             "automatic_deletion": False,
         }

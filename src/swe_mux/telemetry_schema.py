@@ -7,6 +7,11 @@ gains exactly the additive columns and tables the current code reads, and a fres
 file records the current version without re-applying anything. `CREATE TABLE IF NOT
 EXISTS` alone cannot do that: it never adds a column to a table that already exists,
 which is how a redeploy would otherwise start failing on the first `INSERT`.
+
+A migration step is either a SQL statement (an `ADD COLUMN` is checked against the
+table first, so it is idempotent) or a callable, for the two shapes SQL alone cannot
+express additively: recreating a derived rollup table whose key changed, and
+backfilling a new column from existing ones.
 """
 
 from __future__ import annotations
@@ -14,12 +19,14 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+import time
+from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 
 from .harness import HARNESSES
 
-LEDGER_SCHEMA_VERSION = 2
+LEDGER_SCHEMA_VERSION = 3
 
 _SOURCE_RANK = {
     "otel": 400,
@@ -31,41 +38,28 @@ _SOURCE_RANK = {
     "legacy": 50,
 }
 
-CATALOG_SCHEMA = """
-PRAGMA journal_mode=WAL;
-CREATE TABLE IF NOT EXISTS ledger_meta (
-  key TEXT PRIMARY KEY,
-  value TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS ledger_segments (
-  period TEXT PRIMARY KEY,
-  relative_path TEXT NOT NULL UNIQUE,
-  first_observed_at REAL,
-  last_observed_at REAL,
-  evidence_rows INTEGER NOT NULL DEFAULT 0,
-  sealed_at REAL,
-  sha256 TEXT
-);
-CREATE TABLE IF NOT EXISTS rollup_dirty_days (
-  day TEXT PRIMARY KEY,
-  dirtied_at REAL NOT NULL
-);
-CREATE TABLE IF NOT EXISTS entity_locations (
-  entity_kind TEXT NOT NULL,
-  entity_id TEXT NOT NULL,
-  period TEXT NOT NULL,
-  PRIMARY KEY(entity_kind,entity_id)
-);
-CREATE TABLE IF NOT EXISTS legacy_imports (
-  source_id TEXT PRIMARY KEY,
-  source_path TEXT NOT NULL,
-  cursor_rowid INTEGER NOT NULL DEFAULT 0,
-  imported_rows INTEGER NOT NULL DEFAULT 0,
-  completed INTEGER NOT NULL DEFAULT 0,
-  updated_at REAL NOT NULL
-);
-CREATE TABLE IF NOT EXISTS tool_daily (
-  day TEXT NOT NULL,
+#: What a result's source rank says about the quality of the evidence behind a
+#: canonical tool call. Stored on the row and carried into every rollup, so a
+#: dashboard can be cut by it as exactly as by backend.
+EVIDENCE_QUALITIES = ("native", "transcript", "hook", "reconciled", "legacy", "none")
+
+
+def evidence_quality_for(result_rank: int | None, result_source: str | None) -> str:
+    if result_source is None:
+        return "none"
+    rank = int(result_rank or 0)
+    if rank >= 400:
+        return "native"
+    if rank >= 300:
+        return "transcript"
+    if rank >= 200:
+        return "hook"
+    if rank >= 100:
+        return "reconciled"
+    return "legacy"
+
+
+_TOOL_ROLLUP_COLUMNS = """
   backend TEXT NOT NULL,
   model TEXT NOT NULL,
   project_id TEXT NOT NULL,
@@ -76,20 +70,31 @@ CREATE TABLE IF NOT EXISTS tool_daily (
   transport TEXT NOT NULL,
   raw_name TEXT NOT NULL,
   status TEXT NOT NULL,
+  evidence_quality TEXT NOT NULL,
   calls INTEGER NOT NULL,
   duration_count INTEGER NOT NULL,
   duration_ms REAL NOT NULL,
   input_bytes INTEGER NOT NULL,
   output_bytes INTEGER NOT NULL,
+  approval_wait_count INTEGER NOT NULL DEFAULT 0,
+  approval_wait_ms REAL NOT NULL DEFAULT 0,
   PRIMARY KEY(
-    day,backend,model,project_id,origin,invocation_layer,family,operation,
-    transport,raw_name,status
+    {bucket},backend,model,project_id,origin,invocation_layer,family,operation,
+    transport,raw_name,status,evidence_quality
   )
-);
-CREATE INDEX IF NOT EXISTS idx_tool_daily_window
-  ON tool_daily(day,origin,backend,project_id);
-CREATE TABLE IF NOT EXISTS workload_daily (
-  day TEXT NOT NULL,
+"""
+TOOL_DAILY_TABLE = (
+    "CREATE TABLE IF NOT EXISTS tool_daily (\n  day TEXT NOT NULL,"
+    + _TOOL_ROLLUP_COLUMNS.format(bucket="day")
+    + ")"
+)
+TOOL_HOURLY_TABLE = (
+    "CREATE TABLE IF NOT EXISTS tool_hourly (\n  hour TEXT NOT NULL,"
+    + _TOOL_ROLLUP_COLUMNS.format(bucket="hour")
+    + ")"
+)
+
+_WORKLOAD_ROLLUP_COLUMNS = """
   backend TEXT NOT NULL,
   model TEXT NOT NULL,
   project_id TEXT NOT NULL,
@@ -131,10 +136,115 @@ CREATE TABLE IF NOT EXISTS workload_daily (
   subagent_events INTEGER NOT NULL DEFAULT 0,
   verifications INTEGER NOT NULL DEFAULT 0,
   successful_verifications INTEGER NOT NULL DEFAULT 0,
-  PRIMARY KEY(day,backend,model,project_id,origin)
+  PRIMARY KEY({bucket},backend,model,project_id,origin)
+"""
+WORKLOAD_DAILY_TABLE = (
+    "CREATE TABLE IF NOT EXISTS workload_daily (\n  day TEXT NOT NULL,"
+    + _WORKLOAD_ROLLUP_COLUMNS.format(bucket="day")
+    + ")"
+)
+WORKLOAD_HOURLY_TABLE = (
+    "CREATE TABLE IF NOT EXISTS workload_hourly (\n  hour TEXT NOT NULL,"
+    + _WORKLOAD_ROLLUP_COLUMNS.format(bucket="hour")
+    + ")"
+)
+
+CATALOG_SCHEMA = f"""
+PRAGMA journal_mode=WAL;
+CREATE TABLE IF NOT EXISTS ledger_meta (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS ledger_segments (
+  period TEXT PRIMARY KEY,
+  relative_path TEXT NOT NULL UNIQUE,
+  first_observed_at REAL,
+  last_observed_at REAL,
+  evidence_rows INTEGER NOT NULL DEFAULT 0,
+  sealed_at REAL,
+  sha256 TEXT
+);
+CREATE TABLE IF NOT EXISTS rollup_dirty_days (
+  day TEXT PRIMARY KEY,
+  dirtied_at REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS rollup_dirty_hours (
+  hour TEXT PRIMARY KEY,
+  dirtied_at REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS entity_locations (
+  entity_kind TEXT NOT NULL,
+  entity_id TEXT NOT NULL,
+  period TEXT NOT NULL,
+  PRIMARY KEY(entity_kind,entity_id)
+);
+CREATE TABLE IF NOT EXISTS legacy_imports (
+  source_id TEXT PRIMARY KEY,
+  source_path TEXT NOT NULL,
+  cursor_rowid INTEGER NOT NULL DEFAULT 0,
+  imported_rows INTEGER NOT NULL DEFAULT 0,
+  completed INTEGER NOT NULL DEFAULT 0,
+  updated_at REAL NOT NULL
+);
+{TOOL_DAILY_TABLE};
+CREATE INDEX IF NOT EXISTS idx_tool_daily_window
+  ON tool_daily(day,origin,backend,project_id);
+{TOOL_HOURLY_TABLE};
+CREATE INDEX IF NOT EXISTS idx_tool_hourly_window
+  ON tool_hourly(hour,origin,backend,project_id);
+{WORKLOAD_DAILY_TABLE};
+{WORKLOAD_HOURLY_TABLE};
+CREATE TABLE IF NOT EXISTS skill_daily (
+  day TEXT NOT NULL,
+  backend TEXT NOT NULL,
+  model TEXT NOT NULL,
+  project_id TEXT NOT NULL,
+  origin TEXT NOT NULL,
+  skill_name TEXT NOT NULL,
+  invocation_trigger TEXT NOT NULL,
+  skill_source TEXT NOT NULL,
+  skill_scope TEXT NOT NULL,
+  invocations INTEGER NOT NULL,
+  PRIMARY KEY(
+    day,backend,model,project_id,origin,skill_name,invocation_trigger,skill_source,skill_scope
+  )
+);
+CREATE TABLE IF NOT EXISTS verification_daily (
+  day TEXT NOT NULL,
+  backend TEXT NOT NULL,
+  model TEXT NOT NULL,
+  project_id TEXT NOT NULL,
+  origin TEXT NOT NULL,
+  framework TEXT NOT NULL,
+  verifications INTEGER NOT NULL,
+  successful INTEGER NOT NULL,
+  passed INTEGER NOT NULL,
+  failed INTEGER NOT NULL,
+  errors INTEGER NOT NULL,
+  skipped INTEGER NOT NULL,
+  PRIMARY KEY(day,backend,model,project_id,origin,framework)
+);
+CREATE TABLE IF NOT EXISTS compaction_daily (
+  day TEXT NOT NULL,
+  backend TEXT NOT NULL,
+  model TEXT NOT NULL,
+  project_id TEXT NOT NULL,
+  origin TEXT NOT NULL,
+  trigger TEXT NOT NULL,
+  count INTEGER NOT NULL,
+  failures INTEGER NOT NULL,
+  duration_count INTEGER NOT NULL,
+  duration_ms REAL NOT NULL,
+  token_count INTEGER NOT NULL,
+  tokens_reclaimed INTEGER NOT NULL,
+  PRIMARY KEY(day,backend,model,project_id,origin,trigger)
 );
 CREATE TABLE IF NOT EXISTS rollup_days (
   day TEXT PRIMARY KEY,
+  rebuilt_at REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS rollup_hours (
+  hour TEXT PRIMARY KEY,
   rebuilt_at REAL NOT NULL
 );
 CREATE TABLE IF NOT EXISTS segment_seals (
@@ -161,6 +271,30 @@ CREATE TABLE IF NOT EXISTS parser_signatures (
   first_seen_at REAL NOT NULL,
   last_seen_at REAL NOT NULL,
   PRIMARY KEY(backend,harness_version,parser_version,event_name)
+);
+CREATE TABLE IF NOT EXISTS finding_reviews (
+  finding_key TEXT PRIMARY KEY,
+  kind TEXT NOT NULL,
+  verdict TEXT NOT NULL,
+  note TEXT,
+  reviewed_at REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS native_reconciliations (
+  run_id TEXT PRIMARY KEY,
+  backend TEXT NOT NULL,
+  source_locator TEXT,
+  watermark_first INTEGER,
+  watermark_second INTEGER,
+  parser_version TEXT NOT NULL,
+  status TEXT NOT NULL,
+  recognized INTEGER NOT NULL DEFAULT 0,
+  unknown INTEGER NOT NULL DEFAULT 0,
+  tool_events INTEGER NOT NULL DEFAULT 0,
+  skill_events INTEGER NOT NULL DEFAULT 0,
+  compaction_events INTEGER NOT NULL DEFAULT 0,
+  inserted INTEGER NOT NULL DEFAULT 0,
+  diagnostic TEXT,
+  reconciled_at REAL NOT NULL
 );
 """
 
@@ -222,7 +356,8 @@ CREATE TABLE IF NOT EXISTS telemetry_runs (
   peak_context_pct REAL,
   measurement_source TEXT,
   first_evidence_id TEXT NOT NULL,
-  last_evidence_id TEXT NOT NULL
+  last_evidence_id TEXT NOT NULL,
+  started_at_source TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_ledger_runs_time
   ON telemetry_runs(started_at,backend,project_id,origin);
@@ -251,6 +386,8 @@ CREATE TABLE IF NOT EXISTS telemetry_turns (
 );
 CREATE INDEX IF NOT EXISTS idx_ledger_turns_run
   ON telemetry_turns(run_id,started_at);
+CREATE INDEX IF NOT EXISTS idx_ledger_turns_time
+  ON telemetry_turns(started_at,turn_id);
 
 CREATE TABLE IF NOT EXISTS telemetry_model_requests (
   model_request_id TEXT PRIMARY KEY,
@@ -375,6 +512,8 @@ CREATE TABLE IF NOT EXISTS telemetry_tool_calls (
   native_conversation_id TEXT,
   tool_namespace TEXT,
   error_sha256 TEXT,
+  evidence_quality TEXT NOT NULL DEFAULT 'none',
+  approval_requested_at REAL,
   UNIQUE(run_id,agent_id,invocation_layer,native_call_id)
 );
 CREATE INDEX IF NOT EXISTS idx_ledger_tools_time
@@ -439,6 +578,33 @@ CREATE INDEX IF NOT EXISTS idx_ledger_verifications_time
 CREATE INDEX IF NOT EXISTS idx_ledger_verifications_run
   ON telemetry_verifications(run_id,finished_at);
 
+CREATE TABLE IF NOT EXISTS telemetry_provider_metrics (
+  metric_id TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  agent_id TEXT NOT NULL,
+  project_id TEXT,
+  backend TEXT NOT NULL,
+  model TEXT,
+  origin TEXT NOT NULL,
+  harness_version TEXT,
+  metric_name TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  temporality TEXT NOT NULL,
+  attributes_json TEXT NOT NULL,
+  count INTEGER,
+  sum REAL,
+  min REAL,
+  max REAL,
+  started_at REAL,
+  observed_at REAL NOT NULL,
+  evidence_id TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_ledger_metrics_time
+  ON telemetry_provider_metrics(observed_at,metric_name);
+CREATE INDEX IF NOT EXISTS idx_ledger_metrics_run
+  ON telemetry_provider_metrics(run_id,metric_name);
+
 CREATE TABLE IF NOT EXISTS telemetry_entity_evidence (
   entity_kind TEXT NOT NULL,
   entity_id TEXT NOT NULL,
@@ -452,16 +618,59 @@ CREATE INDEX IF NOT EXISTS idx_ledger_entity_evidence
   ON telemetry_entity_evidence(evidence_id);
 """
 
+MigrationStep = str | Callable[[sqlite3.Connection], None]
+
+
+def _recreate_rollups(connection: sqlite3.Connection) -> None:
+    """Version 3 changed the tool rollup key (evidence quality joined it).
+
+    Rollups are derived, so the old rows are dropped and every day that had one is
+    dirtied again; the rollup worker rebuilds them from the entities, which is the
+    only source of truth here.
+    """
+
+    now = time.time()
+    connection.execute("DROP TABLE IF EXISTS tool_daily")
+    connection.execute(TOOL_DAILY_TABLE)
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_tool_daily_window "
+        "ON tool_daily(day,origin,backend,project_id)"
+    )
+    connection.execute(
+        # `WHERE true` disambiguates the upsert clause after INSERT ... SELECT.
+        "INSERT INTO rollup_dirty_days(day,dirtied_at) SELECT day,? FROM rollup_days "
+        "WHERE true ON CONFLICT(day) DO UPDATE SET dirtied_at=excluded.dirtied_at",
+        (now,),
+    )
+    connection.execute("DELETE FROM rollup_days")
+
+
+def _backfill_evidence_quality(connection: sqlite3.Connection) -> None:
+    connection.execute(
+        "UPDATE telemetry_tool_calls SET evidence_quality=CASE "
+        "WHEN result_source IS NULL THEN 'none' "
+        "WHEN result_rank>=400 THEN 'native' "
+        "WHEN result_rank>=300 THEN 'transcript' "
+        "WHEN result_rank>=200 THEN 'hook' "
+        "WHEN result_rank>=100 THEN 'reconciled' "
+        "ELSE 'legacy' END"
+    )
+    connection.execute(
+        "UPDATE telemetry_runs SET started_at_source='unknown' WHERE started_at_source IS NULL"
+    )
+
+
 #: Additive statements per target version. Each `ADD COLUMN` is checked against
 #: `PRAGMA table_info` before it runs, so a file created from the current schema
 #: (which already carries the column) and a file created by an older daemon both
 #: end at the same shape. Version 1 is the shape shipped on 2026-09-02; the
 #: tables that were added in later versions are covered by the `IF NOT EXISTS`
 #: schema text and need no statement here.
-CATALOG_MIGRATIONS: dict[int, tuple[str, ...]] = {
+CATALOG_MIGRATIONS: dict[int, tuple[MigrationStep, ...]] = {
     2: (),
+    3: (_recreate_rollups,),
 }
-SEGMENT_MIGRATIONS: dict[int, tuple[str, ...]] = {
+SEGMENT_MIGRATIONS: dict[int, tuple[MigrationStep, ...]] = {
     2: (
         "ALTER TABLE telemetry_tool_calls ADD COLUMN output_truncated INTEGER",
         "ALTER TABLE telemetry_tool_calls ADD COLUMN provider_sequence INTEGER",
@@ -473,6 +682,12 @@ SEGMENT_MIGRATIONS: dict[int, tuple[str, ...]] = {
         "ALTER TABLE telemetry_model_requests ADD COLUMN client_request_id TEXT",
         "ALTER TABLE telemetry_model_requests ADD COLUMN endpoint TEXT",
         "ALTER TABLE telemetry_model_requests ADD COLUMN effort TEXT",
+    ),
+    3: (
+        "ALTER TABLE telemetry_tool_calls ADD COLUMN evidence_quality TEXT NOT NULL DEFAULT 'none'",
+        "ALTER TABLE telemetry_tool_calls ADD COLUMN approval_requested_at REAL",
+        "ALTER TABLE telemetry_runs ADD COLUMN started_at_source TEXT",
+        _backfill_evidence_quality,
     ),
 }
 
@@ -487,15 +702,18 @@ def _column_names(connection: sqlite3.Connection, table: str) -> set[str]:
     }
 
 
-def _apply_statement(connection: sqlite3.Connection, statement: str) -> bool:
-    """Run one migration statement, skipping an `ADD COLUMN` that already applies."""
+def _apply_step(connection: sqlite3.Connection, step: MigrationStep) -> bool:
+    """Run one migration step, skipping an `ADD COLUMN` that already applies."""
 
-    tokens = statement.split()
+    if callable(step):
+        step(connection)
+        return True
+    tokens = step.split()
     if len(tokens) >= 6 and tokens[:2] == ["ALTER", "TABLE"] and tokens[3:5] == ["ADD", "COLUMN"]:
         table, column = tokens[2], tokens[5]
         if column in _column_names(connection, table):
             return False
-    connection.execute(statement)
+    connection.execute(step)
     return True
 
 
@@ -524,13 +742,13 @@ def migrate(
     *,
     schema: str,
     meta_table: str,
-    migrations: dict[int, tuple[str, ...]],
+    migrations: dict[int, tuple[MigrationStep, ...]],
     kind: str,
 ) -> dict[str, Any]:
     """Bring one ledger file to `LEDGER_SCHEMA_VERSION`, additively and idempotently.
 
     Returns what happened so the caller can log it: the version found, the version
-    written, and the statements that actually ran. A file stamped with a version this
+    written, and the steps that actually ran. A file stamped with a version this
     code does not know is refused rather than read with the wrong expectations.
     """
 
@@ -542,16 +760,25 @@ def migrate(
             f"{LEDGER_SCHEMA_VERSION}"
         )
     # A file with no version row predates versioning (the 2026-09-02 shape) or was
-    # just created from the current schema; both walk every migration, and the
-    # column checks make that a no-op for the fresh file.
+    # just created from the current schema. The fresh file is told apart by having
+    # no rows to migrate: its callables would otherwise dirty nothing and drop an
+    # empty table, which is harmless but reads as a migration in the log.
+    fresh = found == 0 and _is_fresh(connection, kind)
     applied: list[str] = []
-    for version in range(max(found, 1) + 1, LEDGER_SCHEMA_VERSION + 1):
-        for statement in migrations.get(version, ()):
-            if _apply_statement(connection, statement):
-                applied.append(statement)
+    if not fresh:
+        for version in range(max(found, 1) + 1, LEDGER_SCHEMA_VERSION + 1):
+            for step in migrations.get(version, ()):
+                if _apply_step(connection, step):
+                    applied.append(step if isinstance(step, str) else step.__name__)
     _write_version(connection, meta_table, LEDGER_SCHEMA_VERSION)
     connection.commit()
     return {"found": found, "version": LEDGER_SCHEMA_VERSION, "applied": applied}
+
+
+def _is_fresh(connection: sqlite3.Connection, kind: str) -> bool:
+    table = "ledger_segments" if kind == "catalog" else "telemetry_evidence"
+    row = connection.execute(f"SELECT 1 FROM {table} LIMIT 1").fetchone()
+    return row is None
 
 
 def migrate_catalog(connection: sqlite3.Connection) -> dict[str, Any]:
@@ -582,11 +809,30 @@ def schema_signature(connection: sqlite3.Connection) -> str:
     incomplete migration from a healthy one without inspecting columns by hand.
     """
 
-    rows = connection.execute(
-        "SELECT type,name,sql FROM sqlite_master WHERE sql IS NOT NULL "
-        "AND name NOT LIKE 'sqlite_%' ORDER BY type,name"
+    # Introspected rather than read from `sqlite_master.sql`: an `ADD COLUMN` appends
+    # after a table's UNIQUE clause while a fresh CREATE lists it before, so the
+    # statement text of two identical shapes differs and the columns do not.
+    parts: list[str] = []
+    tables = connection.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' "
+        "ORDER BY name"
     ).fetchall()
-    text = "\n".join(f"{row[0]} {row[1]} {' '.join(str(row[2]).split())}" for row in rows)
+    for (table,) in tables:
+        columns = connection.execute(f"PRAGMA table_info({table})").fetchall()
+        for column in sorted(columns, key=lambda item: str(item[1])):
+            parts.append(
+                f"column {table}.{column[1]} {str(column[2]).upper()} "
+                f"notnull={column[3]} default={column[4]} pk={column[5]}"
+            )
+        for index in connection.execute(f"PRAGMA index_list({table})").fetchall():
+            name, unique, origin = str(index[1]), int(index[2]), str(index[3])
+            indexed = [
+                str(row[2])
+                for row in connection.execute(f"PRAGMA index_info({name})").fetchall()
+            ]
+            label = name if origin == "c" else f"{origin}:{','.join(indexed)}"
+            parts.append(f"index {table} {label} unique={unique} columns={','.join(indexed)}")
+    text = "\n".join(sorted(parts))
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
@@ -625,6 +871,10 @@ def period_of(ts: float) -> str:
 
 def day_of(ts: float) -> str:
     return datetime.fromtimestamp(ts, tz=UTC).strftime("%Y-%m-%d")
+
+
+def hour_of(ts: float) -> str:
+    return datetime.fromtimestamp(ts, tz=UTC).strftime("%Y-%m-%dT%H")
 
 
 def source_rank(source: str) -> int:
@@ -700,3 +950,17 @@ def classify_tool(raw: str, *, backend: str, source: str) -> dict[str, str | Non
         "server": server,
         "tool": tool,
     }
+
+
+TOOL_FAMILIES = (
+    "read",
+    "file",
+    "search",
+    "agent",
+    "skill",
+    "shell",
+    "planning",
+    "web",
+    "integration",
+    "other",
+)

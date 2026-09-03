@@ -857,6 +857,10 @@ class Config:
     # Native provider OTLP is opt-in. It is routed only to this daemon over
     # authenticated loopback and reduced to metadata before storage.
     canonical_telemetry_native_otel_enabled: bool = False
+    # The legacy operational tool table stays reachable beside the canonical ledger
+    # until the operator has read the shadow comparison and turns it off; the ledger
+    # never deletes the legacy rows either way.
+    canonical_telemetry_legacy_dashboard_enabled: bool = True
     # Durable per-session detection timeline (status_timeline.py): chattier
     # than the other telemetry (every ledger entry, including a busy turn's
     # detail churn), so its window is its own knob.

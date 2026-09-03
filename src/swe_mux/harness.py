@@ -456,6 +456,14 @@ class NativeTelemetry:
     # Whether `api_request` events are HTTP plumbing (listings, connection
     # setup) rather than model requests; model traffic then completes elsewhere.
     http_requests_are_plumbing: bool = False
+    # Whether the CLI also exports OTLP metrics to the daemon's metrics path.
+    exports_metrics: bool = False
+    # The facts the export was *measured* to carry, by the capability names the
+    # ledger's quality view reports (`telemetry_otlp.CAPABILITIES`). A name absent
+    # here is reported as unsupported for the harness rather than as missing on
+    # every row, which is the difference between "the provider cannot say" and
+    # "the provider said nothing this time".
+    provides: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True, slots=True)
@@ -1148,7 +1156,21 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         npm_entrypoint=("@anthropic-ai/claude-code/", "/cli.js"),
         requires_direct_entrypoint=False,
         # Reads OTEL_* from its environment and posts to the logs endpoint verbatim.
-        native_telemetry=NativeTelemetry(transport="env", measured_version="2.1.259"),
+        native_telemetry=NativeTelemetry(
+            transport="env",
+            measured_version="2.1.259",
+            provides=frozenset(
+                {
+                    "tool_duration",
+                    "tool_decision",
+                    "executed_input",
+                    "output_size",
+                    "turn_identity",
+                    "model_request",
+                    "model_cost",
+                }
+            ),
+        ),
         code_mode_tool=None,
         hook_reports_runtime_layer=False,
         headless_probes=HeadlessProbes(
@@ -1278,6 +1300,23 @@ HARNESSES: dict[str, HarnessDescriptor] = {
             measured_version="0.153.0",
             runtime_call_id_prefix="exec-",
             http_requests_are_plumbing=True,
+            exports_metrics=True,
+            provides=frozenset(
+                {
+                    "tool_duration",
+                    "tool_decision",
+                    "executed_input",
+                    "output_size",
+                    "output_content",
+                    "runtime_parent",
+                    "agent_identity",
+                    "model_request",
+                    "first_token",
+                    "reasoning_tokens",
+                    "provider_metrics",
+                    "guardian_review",
+                }
+            ),
         ),
         code_mode_tool="exec",
         hook_reports_runtime_layer=True,
