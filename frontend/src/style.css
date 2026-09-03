@@ -1586,6 +1586,14 @@ body {
 /* Collection health: collapsed, and visibly subordinate to the two tables it qualifies.
    It says whether those figures were collectable, which is only ever asked after they
    already look wrong. */
+.telemetry-total-caption{display:block;margin:6px 0 0;color:var(--muted)}
+.telemetry-review{display:inline-flex;gap:6px;margin-top:4px}
+.telemetry-review button[disabled]{opacity:.55}
+.telemetry-drill{border-left:3px solid var(--accent,#7aa2f7)}
+.telemetry-drill-clear{margin-left:auto}
+.telemetry-export-kind{display:inline-block;margin:0 12px 4px 0}
+[data-capability="no_native_telemetry"]{color:var(--muted)}
+[data-capability="unmeasured"]{opacity:.7}
 .telemetry-collection-health{border:1px solid var(--line);background:var(--panel2);color:var(--muted)}
 .telemetry-collection-health>summary{padding:6px 9px;cursor:pointer;color:var(--text)}
 .telemetry-collection-health>div{border-top:1px solid var(--line)}

@@ -1571,7 +1571,7 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
     project_watcher = ProjectFileWatcher(projects, events, config)
     telemetry.start(events, sessions=sessions, history=history)
     canonical_telemetry.start(
-        events, sessions=sessions, legacy_database=config.database_path
+        events, sessions=sessions, legacy_database=config.database_path, history=history
     )
 
     automation_gate_cache: dict[str, tuple[float, frozenset[str]]] = {}

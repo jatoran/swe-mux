@@ -39,7 +39,7 @@ test('the workload table reads at human scale rather than raw units', async ({ p
 
 test('collection health is collapsed beneath the metrics it qualifies', async ({ page }) => {
   await page.setViewportSize({ width: 1200, height: 900 })
-  await openDomain(page, 'tools + skills')
+  await openDomain(page, 'tools')
   await page.locator('.usage-table', { hasText: 'Cross-project tool metrics' }).locator('tbody tr').first().waitFor()
 
   // Parser coverage does not measure the fleet — it says whether the two tables above it
@@ -54,12 +54,14 @@ test('collection health is collapsed beneath the metrics it qualifies', async ({
   expect(collapsed!.y).toBeGreaterThan(metrics!.y)
 
   await health.locator('summary').click()
-  // Two tables, one row each: field completeness per backend, and the provider event
-  // names seen per harness version. Both are collection facts, not fleet metrics.
-  await expect(health.locator('table')).toHaveCount(2)
+  // Four tables: field completeness per backend, the same per harness version, what
+  // each harness's export can carry, and the provider event names seen. All are
+  // collection facts, not fleet metrics.
+  await expect(health.locator('table')).toHaveCount(4)
   await expect(health.locator('table').first().locator('tbody tr')).toHaveCount(1)
   await expect(health.locator('table').last().locator('tbody tr')).toHaveCount(1)
   await expect(health.locator('table').last()).toContainText('tool_result')
+  await expect(health).toContainText('no native telemetry')
 })
 
 test('every segment fits the shared frame without overlapping its chrome', async ({ page }) => {
@@ -97,7 +99,7 @@ test('every segment fits the shared frame without overlapping its chrome', async
 
 test('at phone width the dialog fills the screen without scrolling sideways', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 800 })
-  await openDomain(page, 'tools + skills')
+  await openDomain(page, 'tools')
   await page.locator('.usage-table', { hasText: 'Cross-project tool metrics' }).locator('tbody tr').first().waitFor()
   const overflow = await page.evaluate(() => ({
     body: document.documentElement.scrollWidth <= document.documentElement.clientWidth,

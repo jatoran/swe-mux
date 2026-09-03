@@ -1,9 +1,10 @@
 """Batched EventBus adapter that keeps canonical telemetry SQLite work off the loop.
 
 One dedicated worker thread owns every ledger call: live ingestion, the legacy
-catch-up importer, the rollup and sealing worker, and every query the routes make.
-That single writer is what lets the storage core stay synchronous and simple, and
-the batching is what keeps a busy fleet from paying one commit per observation.
+catch-up importer, direct native reconciliation, the rollup and sealing worker, and
+every query the routes make. That single writer is what lets the storage core stay
+synchronous and simple, and the batching is what keeps a busy fleet from paying one
+commit per observation.
 """
 
 from __future__ import annotations
@@ -26,11 +27,16 @@ from .telemetry_queries import Filters
 CANONICAL_TELEMETRY_LOOP = "canonical-telemetry"
 CANONICAL_TELEMETRY_BACKFILL_LOOP = "canonical-telemetry-backfill"
 CANONICAL_TELEMETRY_ROLLUP_LOOP = "canonical-telemetry-rollup"
+CANONICAL_TELEMETRY_RECONCILE_LOOP = "canonical-telemetry-reconcile"
 _INGEST_BATCH_SIZE = 256
 _INGEST_BATCH_SECONDS = 0.05
 #: Once the legacy streams are caught up, the legacy store keeps reconciling
 #: transcripts on its own schedule, so the importers are asked again this often.
 _BACKFILL_RECHECK_SECONDS = 300.0
+#: Native stores are re-read past their watermarks this often; an unchanged
+#: conversation costs one stat.
+_RECONCILE_SECONDS = 300.0
+_RECONCILE_INVENTORY = 2000
 
 #: (backend, harness version, parser version, {(event name, recognised): count})
 PendingSignatures = tuple[str, str | None, str, dict[tuple[str, bool], int]]
@@ -47,9 +53,11 @@ class CanonicalTelemetryService:
         self._events: EventBus | None = None
         self._queue: asyncio.Queue[MuxEvent | None] | None = None
         self._sessions: Any = None
+        self._history: Any = None
         self._task: asyncio.Task[None] | None = None
         self._backfill_task: asyncio.Task[None] | None = None
         self._rollup_task: asyncio.Task[None] | None = None
+        self._reconcile_task: asyncio.Task[None] | None = None
         self._legacy_database: Path | None = None
         self._accepted = 0
         self._backfilled = 0
@@ -62,6 +70,7 @@ class CanonicalTelemetryService:
         self._pending_signatures: list[PendingSignatures] = []
         self._last_sealed_period: str | None = None
         self._last_sealed_at: float | None = None
+        self._reconcile_summary: dict[str, Any] = {}
         self._storage: dict[str, Any] = {
             "bytes": 0,
             "segments": 0,
@@ -73,10 +82,16 @@ class CanonicalTelemetryService:
         self._last_error_at: float | None = None
 
     def start(
-        self, events: EventBus, *, sessions: Any, legacy_database: Path | None = None
+        self,
+        events: EventBus,
+        *,
+        sessions: Any,
+        legacy_database: Path | None = None,
+        history: Any = None,
     ) -> None:
         self._events = events
         self._sessions = sessions
+        self._history = history
         self._queue = events.subscribe(name=CANONICAL_TELEMETRY_LOOP)  # type: ignore[assignment]
         self._task = background.start(CANONICAL_TELEMETRY_LOOP, self._consume)
         self._legacy_database = legacy_database
@@ -87,6 +102,10 @@ class CanonicalTelemetryService:
         else:
             self._backfill_completed = True
         self._rollup_task = background.start(CANONICAL_TELEMETRY_ROLLUP_LOOP, self._rollup)
+        if history is not None:
+            self._reconcile_task = background.start(
+                CANONICAL_TELEMETRY_RECONCILE_LOOP, self._reconcile
+            )
 
     def _record_batch(
         self,
@@ -251,6 +270,20 @@ class CanonicalTelemetryService:
             stream_index = 0
             await asyncio.sleep(_BACKFILL_RECHECK_SECONDS)
 
+    async def _reconcile(self) -> None:
+        """Read each native store past its watermark straight into the reducer."""
+
+        await asyncio.sleep(60)
+        loop = asyncio.get_running_loop()
+        while True:
+            with background.iteration(CANONICAL_TELEMETRY_RECONCILE_LOOP):
+                rows = await self._history.telemetry_history_rows(_RECONCILE_INVENTORY)
+                summary = await loop.run_in_executor(
+                    self._executor, self.ledger.reconcile_native_rows, rows
+                )
+                self._reconcile_summary = {**summary, "at": time.time(), "inventory": len(rows)}
+            await asyncio.sleep(_RECONCILE_SECONDS)
+
     async def _rollup(self) -> None:
         await asyncio.sleep(30)
         loop = asyncio.get_running_loop()
@@ -270,6 +303,10 @@ class CanonicalTelemetryService:
                         self._executor, self.ledger.rebuild_next_closed_day
                     )
                     if rebuilt is None:
+                        rebuilt = await loop.run_in_executor(
+                            self._executor, self.ledger.rebuild_next_closed_hour
+                        )
+                    if rebuilt is None:
                         sealed = await loop.run_in_executor(
                             self._executor, self.ledger.seal_next_segment
                         )
@@ -287,12 +324,14 @@ class CanonicalTelemetryService:
                 await asyncio.sleep(60)
 
     async def stop(self) -> None:
-        if self._rollup_task is not None:
-            await background.stop(CANONICAL_TELEMETRY_ROLLUP_LOOP)
-            self._rollup_task = None
-        if self._backfill_task is not None:
-            await background.stop(CANONICAL_TELEMETRY_BACKFILL_LOOP)
-            self._backfill_task = None
+        for name, attribute in (
+            (CANONICAL_TELEMETRY_ROLLUP_LOOP, "_rollup_task"),
+            (CANONICAL_TELEMETRY_BACKFILL_LOOP, "_backfill_task"),
+            (CANONICAL_TELEMETRY_RECONCILE_LOOP, "_reconcile_task"),
+        ):
+            if getattr(self, attribute) is not None:
+                await background.stop(name)
+                setattr(self, attribute, None)
         if self._queue is not None and self._events is not None:
             self._events.unsubscribe(self._queue)  # type: ignore[arg-type]
             await self._queue.put(None)
@@ -314,6 +353,7 @@ class CanonicalTelemetryService:
             "backfill_last_pass_at": self._backfill_last_pass_at,
             "provider_batches": self._provider_batches,
             "provider_dropped": self._provider_dropped,
+            "reconciliation": dict(self._reconcile_summary),
             "last_sealed_period": self._last_sealed_period,
             "last_sealed_at": self._last_sealed_at,
             "storage": dict(self._storage),
@@ -337,96 +377,95 @@ class CanonicalTelemetryService:
         self._schema = result
         return result
 
-    async def tool_summary(
+    async def reconcile_now(self) -> dict[str, Any]:
+        """One reconciliation pass on demand (the audit tool and tests use this)."""
+
+        if self._history is None:
+            return {"scanned": 0, "skipped": 0, "errors": 0, "inserted": 0}
+        rows = await self._history.telemetry_history_rows(_RECONCILE_INVENTORY)
+        summary: dict[str, Any] = await self._call(self.ledger.reconcile_native_rows, rows)
+        self._reconcile_summary = {**summary, "at": time.time(), "inventory": len(rows)}
+        return self._reconcile_summary
+
+    async def _windowed(
         self,
+        function: Any,
         *,
         from_ts: float,
         to_ts: float,
-        origin: str | None = "mux_owned",
-        filters: Filters | None = None,
+        origin: str | None,
+        filters: Filters | None,
+        **extra: Any,
     ) -> dict[str, Any]:
         result: dict[str, Any] = await self._call(
-            self.ledger.tool_summary,
-            from_ts=from_ts,
-            to_ts=to_ts,
-            origin=origin,
-            filters=filters,
+            function, from_ts=from_ts, to_ts=to_ts, origin=origin, filters=filters, **extra
         )
         return result
 
+    async def tool_summary(self, **scope: Any) -> dict[str, Any]:
+        return await self._windowed(self.ledger.tool_summary, **scope)
+
+    async def skill_summary(self, **scope: Any) -> dict[str, Any]:
+        return await self._windowed(self.ledger.skill_summary, **scope)
+
+    async def verification_summary(self, **scope: Any) -> dict[str, Any]:
+        return await self._windowed(self.ledger.verification_summary, **scope)
+
+    async def workload_summary(self, **scope: Any) -> dict[str, Any]:
+        return await self._windowed(self.ledger.workload_summary, **scope)
+
+    async def compaction_summary(self, **scope: Any) -> dict[str, Any]:
+        return await self._windowed(self.ledger.compaction_summary, **scope)
+
+    async def quality_summary(self, **scope: Any) -> dict[str, Any]:
+        return await self._windowed(self.ledger.quality_summary, **scope)
+
+    async def metric_summary(self, **scope: Any) -> dict[str, Any]:
+        return await self._windowed(self.ledger.metric_summary, **scope)
+
+    async def inefficiency_findings(self, **scope: Any) -> dict[str, Any]:
+        return await self._windowed(self.ledger.inefficiency_findings, **scope)
+
+    async def compare_cohorts(self, **scope: Any) -> dict[str, Any]:
+        return await self._windowed(self.ledger.compare_cohorts, **scope)
+
     async def tool_page(self, **filters: Any) -> dict[str, Any]:
         result: dict[str, Any] = await self._call(self.ledger.tool_page, **filters)
+        return result
+
+    async def entity_page(self, **arguments: Any) -> dict[str, Any]:
+        result: dict[str, Any] = await self._call(self.ledger.entity_page, **arguments)
         return result
 
     async def tool_audit(self, tool_call_id: str) -> dict[str, Any] | None:
         result: dict[str, Any] | None = await self._call(self.ledger.tool_audit, tool_call_id)
         return result
 
-    async def inefficiency_findings(
-        self,
-        *,
-        from_ts: float,
-        to_ts: float,
-        origin: str | None = "mux_owned",
-        filters: Filters | None = None,
-    ) -> dict[str, Any]:
-        result: dict[str, Any] = await self._call(
-            self.ledger.inefficiency_findings,
-            from_ts=from_ts,
-            to_ts=to_ts,
-            origin=origin,
-            filters=filters,
-        )
+    async def run_audit(self, run_id: str) -> dict[str, Any] | None:
+        result: dict[str, Any] | None = await self._call(self.ledger.run_audit, run_id)
         return result
 
-    async def quality_summary(
-        self,
-        *,
-        from_ts: float,
-        to_ts: float,
-        origin: str | None = "mux_owned",
-        filters: Filters | None = None,
-    ) -> dict[str, Any]:
-        result: dict[str, Any] = await self._call(
-            self.ledger.quality_summary,
-            from_ts=from_ts,
-            to_ts=to_ts,
-            origin=origin,
-            filters=filters,
-        )
+    async def turn_audit(self, turn_id: str) -> dict[str, Any] | None:
+        result: dict[str, Any] | None = await self._call(self.ledger.turn_audit, turn_id)
         return result
 
-    async def workload_summary(
-        self,
-        *,
-        from_ts: float,
-        to_ts: float,
-        origin: str | None = "mux_owned",
-        filters: Filters | None = None,
-    ) -> dict[str, Any]:
-        result: dict[str, Any] = await self._call(
-            self.ledger.workload_summary,
-            from_ts=from_ts,
-            to_ts=to_ts,
-            origin=origin,
-            filters=filters,
-        )
+    async def review_finding(self, **arguments: Any) -> dict[str, Any]:
+        result: dict[str, Any] = await self._call(self.ledger.review_finding, **arguments)
         return result
 
-    async def compaction_summary(
-        self,
-        *,
-        from_ts: float,
-        to_ts: float,
-        origin: str | None = "mux_owned",
-        filters: Filters | None = None,
-    ) -> dict[str, Any]:
+    async def shadow_comparison(self, *, from_ts: float, to_ts: float) -> dict[str, Any]:
+        if self._legacy_database is None:
+            return {
+                "from": from_ts,
+                "to": to_ts,
+                "runs": 0,
+                "pairs": 0,
+                "classes": {},
+                "examples": [],
+                "interpretation": "no legacy database is attached to this daemon",
+            }
         result: dict[str, Any] = await self._call(
-            self.ledger.compaction_summary,
-            from_ts=from_ts,
-            to_ts=to_ts,
-            origin=origin,
-            filters=filters,
+            self.ledger.shadow_comparison, self._legacy_database, from_ts=from_ts, to_ts=to_ts
         )
         return result
 

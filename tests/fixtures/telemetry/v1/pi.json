@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "backend": "pi",
+  "records": [
+    {"type": "session", "id": "native-pi", "version": 3, "cwd": "/work"},
+    {"type": "model_change", "id": "model-1", "parentId": null, "timestamp": "2026-08-07T00:00:00Z", "provider": "openai", "modelId": "gpt-5.4"},
+    {"type": "message", "id": "assistant-tool", "parentId": "model-1", "timestamp": "2026-08-07T00:00:01Z", "message": {"role": "assistant", "content": [{"type": "toolCall", "id": "tool-1", "name": "bash", "arguments": {"command": "<sanitized>"}}, {"type": "toolCall", "id": "tool-2", "name": "skill", "arguments": {"name": "review-code"}}]}},
+    {"type": "message", "id": "tool-result-1", "parentId": "assistant-tool", "timestamp": "2026-08-07T00:00:02Z", "message": {"role": "toolResult", "toolCallId": "tool-1", "toolName": "bash", "isError": true, "duration": 412, "content": [{"type": "text", "text": "<sanitized>"}]}},
+    {"type": "message", "id": "tool-result-2", "parentId": "tool-result-1", "timestamp": "2026-08-07T00:00:03Z", "message": {"role": "toolResult", "toolCallId": "tool-2", "toolName": "skill", "isError": false, "duration": 8, "content": [{"type": "text", "text": "loaded"}]}},
+    {"type": "compaction", "id": "compact-1", "parentId": "tool-result-2", "timestamp": "2026-08-07T00:00:04Z", "tokensBefore": 41000},
+    {"type": "future_record", "id": "unknown-1"}
+  ],
+  "expected": {"tools": 4, "skills": 1, "compactions": 1, "unknown": 1, "errors": 1}
+}

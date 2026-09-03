@@ -19,6 +19,7 @@ const TELEMETRY = {
   from: NOW - 7 * 86400,
   to: NOW,
   origin: 'mux_owned',
+  coverage: { rolled_days: 6, rolled_hours: 14, raw_spans: 2, raw_seconds: 3600 },
   dimensions: [
     { backend: 'codex', model: 'gpt-5.6-sol', runs: 32, ended_runs: 31, average_wall_duration_s: 8403.96, average_turn_duration_ms: 94500, average_tool_duration_ms: 4300, average_model_wait_ms: 12400, model_requests: 212, model_request_failures: 2, input_tokens: 9_664_898_958, output_tokens: 38_032_396, cache_read_tokens: 4_000_000_000, cache_write_tokens: 0, average_final_context_pct: 0.4338, average_peak_context_pct: 0.5432, turns: 143, completed_turns: 141, model_tool_calls: 880, runtime_tool_calls: 602, completed_tool_calls: 862, failed_tool_calls: 18, approval_events: 8, stall_events: 2, subagent_events: 12, verifications: 44, successful_verifications: 41 },
     { backend: 'claude', model: 'claude-opus-5', runs: 26, ended_runs: 23, average_wall_duration_s: 5691.24, average_turn_duration_ms: 71200, average_tool_duration_ms: 2100, input_tokens: 35_087_852, output_tokens: 276_238, cache_read_tokens: 20_000_000, cache_write_tokens: 100_000, average_final_context_pct: 0.2592, average_peak_context_pct: 0.2662, turns: 98, completed_turns: 96, model_tool_calls: 461, runtime_tool_calls: 0, completed_tool_calls: 450, failed_tool_calls: 11, approval_events: 5, stall_events: 3, subagent_events: 18, verifications: 36, successful_verifications: 34 },
@@ -56,11 +57,16 @@ const CANONICAL = {
   to: NOW,
   origin: 'mux_owned',
   matching_calls: 4821,
+  filters: {},
+  coverage: { rolled_days: 6, rolled_hours: 14, raw_spans: 2, raw_seconds: 3600 },
+  qualities: { native: 3900, transcript: 710, none: 211 },
+  approval_wait: { measured: 12, average_ms: 8000 },
   groups: [
-    { backend: 'claude', model: 'claude-opus-5', project_id: 'project-aaaaaaaa', origin: 'mux_owned', invocation_layer: 'model', family: 'file', operation: 'write', transport: 'native', raw_name: 'Edit', calls: 4821, statuses: { succeeded: 4610, failed: 211 }, duration_count: 4700, average_duration_ms: 143.7 },
+    { backend: 'claude', model: 'claude-opus-5', project_id: 'project-aaaaaaaa', origin: 'mux_owned', invocation_layer: 'model', family: 'file', operation: 'write', transport: 'native', raw_name: 'Edit', calls: 4821, statuses: { succeeded: 4610, failed: 211 }, qualities: { native: 3900, transcript: 710, none: 211 }, duration_count: 4700, average_duration_ms: 143.7, approval_wait_count: 12, average_approval_wait_ms: 8000 },
   ],
   skills: {
     matching_invocations: 12,
+    coverage: { rolled_days: 6, rolled_hours: 0, raw_spans: 2, raw_seconds: 3600 },
     groups: [
       { backend: 'claude', model: 'claude-opus-5', project_id: 'project-aaaaaaaa', skill_name: 'documentation', invocation_trigger: 'claude-proactive', skill_source: 'userSettings', skill_scope: 'user', invocations: 12 },
     ],
@@ -68,15 +74,39 @@ const CANONICAL = {
   collection: { backfilled: 1200, backfill_completed: false, backfill_stream: 'tool_events', provider_dropped: 0 },
 }
 
+const QUALITY_COUNTS = { calls: 4821, with_request: 4821, with_result: 4610, with_provider_result: 3900, with_duration: 4700, with_input_hash: 4800, with_executed_input_hash: 3900, with_output_hash: 4550, with_output_size: 4300, with_harness_version: 3900, with_approval_wait: 12, truncated_outputs: 2, runtime_parent_unavailable: 0, other_family: 0 }
 const QUALITY = {
-  totals: { calls: 4821, with_request: 4821, with_result: 4610, with_provider_result: 3900, with_duration: 4700, with_input_hash: 4800, with_executed_input_hash: 3900, with_output_hash: 4550, with_output_size: 4300, with_harness_version: 3900, truncated_outputs: 2, runtime_parent_unavailable: 0, other_family: 0 },
-  backends: [
-    { backend: 'claude', calls: 4821, with_request: 4821, with_result: 4610, with_provider_result: 3900, with_duration: 4700, with_input_hash: 4800, with_executed_input_hash: 3900, with_output_hash: 4550, with_output_size: 4300, with_harness_version: 3900, truncated_outputs: 2, runtime_parent_unavailable: 0, other_family: 0 },
-  ],
+  totals: QUALITY_COUNTS,
+  backends: [{ backend: 'claude', ...QUALITY_COUNTS }],
+  versions: [{ backend: 'claude', harness_version: '2.1.259', ...QUALITY_COUNTS }],
+  runs: { runs: 26, declared_start: 26, first_evidence_start: 0, ended: 23 },
+  capabilities: { claude: { tool_duration: 'measured', runtime_parent: 'unmeasured' }, codex: { tool_duration: 'measured', runtime_parent: 'measured' }, omp: { tool_duration: 'no_native_telemetry', runtime_parent: 'no_native_telemetry' } },
   parsers: [
     { backend: 'claude', harness_version: '2.1.259', parser_version: 'otlp-json-v2', event_name: 'tool_result', recognized: 1, occurrences: 3900, first_seen_at: NOW - 86400, last_seen_at: NOW - 60 },
   ],
+  reconciliation: { runs: 26, by_backend: [{ backend: 'claude', parser_version: 'claude-phase2-v3+canonical-v1', status: 'ready', runs: 26, tool_events: 4821 }] },
   collection: CANONICAL.collection,
+}
+const COVERAGE = { rolled_days: 6, rolled_hours: 14, raw_spans: 2, raw_seconds: 3600 }
+const VERIFICATIONS = {
+  totals: { verifications: 36, successful: 34, passed: 4100, failed: 3, errors: 0, skipped: 12 },
+  coverage: COVERAGE,
+  groups: [{ backend: 'claude', model: 'claude-opus-5', project_id: 'project-aaaaaaaa', framework: 'pytest', verifications: 36, successful: 34, passed: 4100, failed: 3, errors: 0, skipped: 12, success_rate: 0.944 }],
+}
+const METRICS = {
+  metrics: [{ backend: 'codex', harness_version: '0.153.0', metric: 'codex.tool.call', kind: 'sum', points: 12, count: 0, total: 880, min: null, max: null }],
+  tool_call_agreement: { runs: 32, agree: 31, ledger_more: 0, provider_more: 1, examples: [{ run_id: 'run-bbbbbbbb', provider_reported: 30, ledger: 28, verdict: 'provider_more' }] },
+}
+const COMPARISON = {
+  split: 'model', comparable: true, why_not_comparable: null, interpretation: 'observational_within_cohort_not_a_ranking',
+  cohorts: [{ cohort: 'claude-opus-5', runs: 26, completed_turns: 96, tool_calls: 461, completed_tool_calls: 450, failed_tool_calls: 11, verifications: 36, successful_verifications: 34, skill_activations: 12, tool_failure_rate: 0.024, verification_success_rate: 0.944, skill_activations_per_run: 0.46, other_dimensions: { backend: ['claude'], project_id: ['project-aaaaaaaa'] } }],
+}
+const SHADOW = { from: NOW - 7 * 86400, to: NOW, runs: 58, pairs: 200, classes: { agree: 190, canonical_native_only: 6, canonical_more: 1, legacy_more_not_yet_imported: 2, legacy_only: 1, canonical_only: 0 }, examples: [], interpretation: 'agree: legacy tool_use rows equal canonical requests', legacy_dashboard_enabled: true }
+const INEFFICIENCIES = {
+  interpretation: 'deterministic_candidates_not_causal_claims', reviewed: 0, coverage: COVERAGE,
+  adaptive_changes: { offered: 0, policy: 'none is generated automatically' },
+  findings: [{ kind: 'high_failure_rate', finding_key: 'f'.repeat(64), tool: { backend: 'claude', model: 'claude-opus-5', project_id: 'project-aaaaaaaa', invocation_layer: 'model', raw_name: 'Edit', family: 'file', operation: 'write', transport: 'native' }, evidence: { failed: 211, completed: 4821 }, coverage: 1, confidence: 'high', suggestion: 'Inspect recurring errors.', review: null }],
+  collection: { matching_calls: 4821, duration: { measured: 4700, completed: 4821, average_ms: 143.7 }, approval_wait: { measured: 12, average_ms: 8000 } },
 }
 
 const COMPACTIONS = {
@@ -101,6 +131,11 @@ const ROUTES: Array<[string, unknown]> = [
   ['/api/telemetry/v2/tools?', TOOL_PAGE],
   ['/api/telemetry/v2/quality', QUALITY],
   ['/api/telemetry/v2/compactions', COMPACTIONS],
+  ['/api/telemetry/v2/verifications/summary', VERIFICATIONS],
+  ['/api/telemetry/v2/metrics/summary', METRICS],
+  ['/api/telemetry/v2/compare', COMPARISON],
+  ['/api/telemetry/v2/shadow', SHADOW],
+  ['/api/telemetry/v2/inefficiencies', INEFFICIENCIES],
   ['/api/telemetry/operational', OPERATIONAL],
 ]
 

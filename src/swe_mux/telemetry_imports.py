@@ -164,7 +164,7 @@ class LegacyImportMixin:
                         "model": row["model"],
                         "origin": "imported" if row["external"] else "mux_owned",
                         "source_locator": row["transcript_path"],
-                        "run_started_at": row["spawned_at"] or row["observed_at"],
+                        "run_started_at": row["spawned_at"],
                     },
                 )
             )
@@ -313,7 +313,7 @@ class LegacyImportMixin:
                         "model": row["model"],
                         "origin": "imported" if row["external"] else "mux_owned",
                         "source_locator": row["transcript_path"],
-                        "run_started_at": row["spawned_at"] or row["created_at"],
+                        "run_started_at": row["spawned_at"],
                     },
                 )
             )
@@ -369,7 +369,7 @@ class LegacyImportMixin:
                 "model": None,
                 "origin": "imported" if row["external"] else "mux_owned",
                 "source_locator": row["transcript_path"],
-                "run_started_at": row["spawned_at"] or row["turn_started_at"],
+                "run_started_at": row["spawned_at"],
             }
             common = {
                 "turn_epoch": turn_ordinal,
@@ -460,7 +460,7 @@ class LegacyImportMixin:
                         "model": row["model"],
                         "origin": "imported" if row["external"] else "mux_owned",
                         "source_locator": row["transcript_path"],
-                        "run_started_at": row["spawned_at"] or row["observed_at"],
+                        "run_started_at": row["spawned_at"],
                     },
                 )
             )

@@ -20,6 +20,7 @@ from ..provider_accounts import (
 from ..telemetry_queries import (
     EXPORT_KINDS,
     FILTER_COLUMNS,
+    PAGE_EXTRA_FILTERS,
     TOOL_FILTER_COLUMNS,
     clean_filters,
 )
@@ -91,6 +92,7 @@ def _canonical_scope(
             "invocation_layer": request.query.get("layer"),
             "family": request.query.get("family"),
             "status": request.query.get("status"),
+            "evidence_quality": request.query.get("evidence"),
         },
         allowed,
     )
@@ -99,6 +101,50 @@ def _canonical_scope(
         "to_ts": end,
         "origin": None if origin == "all" else origin,
         "filters": filters,
+    }
+
+
+def _page_arguments(request: web.Request, kind: str) -> dict[str, Any]:
+    """Cursor, limit, and every exact-match filter a detail page of `kind` accepts."""
+
+    scope = _canonical_scope(request, allowed=FILTER_COLUMNS)
+    extra = {
+        column: request.query.get(alias)
+        for column, alias in (
+            ("invocation_layer", "layer"),
+            ("family", "family"),
+            ("status", "status"),
+            ("evidence_quality", "evidence"),
+            ("raw_name", "tool"),
+            ("run_id", "run"),
+            ("turn_id", "turn"),
+            ("session_id", "session"),
+            ("skill_name", "skill"),
+            ("invocation_trigger", "trigger"),
+            ("framework", "framework"),
+            ("successful", "successful"),
+            ("query_source", "query_source"),
+            ("metric_name", "metric"),
+            ("event_type", "event"),
+            ("source_kind", "source"),
+        )
+    }
+    filters = dict(scope["filters"])
+    filters.update(
+        clean_filters(extra, {*FILTER_COLUMNS, *PAGE_EXTRA_FILTERS.get(kind, ())})
+    )
+    try:
+        limit = int(request.query.get("limit", 100))
+    except ValueError:
+        raise web.HTTPBadRequest(text="limit must be an integer") from None
+    return {
+        "kind": kind,
+        "from_ts": scope["from_ts"],
+        "to_ts": scope["to_ts"],
+        "origin": scope["origin"],
+        "filters": filters,
+        "limit": limit,
+        "cursor": request.query.get("cursor"),
     }
 
 
@@ -116,36 +162,56 @@ async def canonical_tool_summary(request: web.Request) -> web.Response:
 async def canonical_tool_calls(request: web.Request) -> web.Response:
     """Cursor-bounded details; the matching total remains exact and uncapped."""
 
-    start, end = _telemetry_window(request)
+    service = request.app[keys.CANONICAL_TELEMETRY]
     try:
-        limit = int(request.query.get("limit", 100))
-        service = request.app[keys.CANONICAL_TELEMETRY]
-        result = await service.tool_page(
-            from_ts=start,
-            to_ts=end,
-            limit=limit,
-            cursor=request.query.get("cursor"),
-            project_id=request.query.get("project"),
-            backend=request.query.get("backend"),
-            model=request.query.get("model"),
-            origin=(
-                None
-                if request.query.get("origin") == "all"
-                else request.query.get("origin", "mux_owned")
-            ),
-            invocation_layer=request.query.get("layer"),
-            family=request.query.get("family"),
-            status=request.query.get("status"),
-        )
+        result = await service.entity_page(**_page_arguments(request, "tool_calls"))
     except ValueError as exc:
         raise web.HTTPBadRequest(text=str(exc)) from None
+    result["matching_calls"] = result["matching"]
     result["collection"] = service.health()
+    return json_response(result)
+
+
+async def canonical_entity_page(request: web.Request) -> web.Response:
+    """Newest-first page of runs, turns, skills, verifications, requests, or metrics."""
+
+    kind = request.match_info["kind"].replace("-", "_")
+    if kind not in EXPORT_KINDS or kind == "tool_calls":
+        raise web.HTTPNotFound(text="unknown telemetry entity kind")
+    service = request.app[keys.CANONICAL_TELEMETRY]
+    try:
+        result = await service.entity_page(**_page_arguments(request, kind))
+    except ValueError as exc:
+        raise web.HTTPBadRequest(text=str(exc)) from None
     return json_response(result)
 
 
 async def canonical_workload(request: web.Request) -> web.Response:
     service = request.app[keys.CANONICAL_TELEMETRY]
     result = await service.workload_summary(**_canonical_scope(request))
+    result["collection"] = service.health()
+    return json_response(result)
+
+
+async def canonical_skill_summary(request: web.Request) -> web.Response:
+    service = request.app[keys.CANONICAL_TELEMETRY]
+    result = await service.skill_summary(**_canonical_scope(request))
+    result["collection"] = service.health()
+    return json_response(result)
+
+
+async def canonical_verification_summary(request: web.Request) -> web.Response:
+    service = request.app[keys.CANONICAL_TELEMETRY]
+    result = await service.verification_summary(**_canonical_scope(request))
+    result["collection"] = service.health()
+    return json_response(result)
+
+
+async def canonical_metric_summary(request: web.Request) -> web.Response:
+    """Provider self-reported counters beside the ledger's own counts, per run."""
+
+    service = request.app[keys.CANONICAL_TELEMETRY]
+    result = await service.metric_summary(**_canonical_scope(request))
     result["collection"] = service.health()
     return json_response(result)
 
@@ -159,12 +225,61 @@ async def canonical_tool_audit(request: web.Request) -> web.Response:
     return json_response(result)
 
 
+async def canonical_run_audit(request: web.Request) -> web.Response:
+    result = await request.app[keys.CANONICAL_TELEMETRY].run_audit(request.match_info["run_id"])
+    if result is None:
+        raise web.HTTPNotFound(text="unknown canonical run")
+    return json_response(result)
+
+
+async def canonical_turn_audit(request: web.Request) -> web.Response:
+    result = await request.app[keys.CANONICAL_TELEMETRY].turn_audit(
+        request.match_info["turn_id"]
+    )
+    if result is None:
+        raise web.HTTPNotFound(text="unknown canonical turn")
+    return json_response(result)
+
+
 async def canonical_inefficiencies(request: web.Request) -> web.Response:
     service = request.app[keys.CANONICAL_TELEMETRY]
     result = await service.inefficiency_findings(
-        **_canonical_scope(request, allowed=TOOL_FILTER_COLUMNS)
+        **_canonical_scope(request, allowed=TOOL_FILTER_COLUMNS),
+        include_reviewed=request.query.get("reviewed", "1") != "0",
     )
     result["collection_health"] = service.health()
+    return json_response(result)
+
+
+async def review_inefficiency(request: web.Request) -> web.Response:
+    """Record the operator's verdict on a finding; the only feedback channel there is."""
+
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise web.HTTPBadRequest(text="body must be an object")
+    service = request.app[keys.CANONICAL_TELEMETRY]
+    try:
+        result = await service.review_finding(
+            finding_key=str(body.get("finding_key") or ""),
+            kind=str(body.get("kind") or "unknown")[:80],
+            verdict=str(body.get("verdict") or ""),
+            note=(str(body["note"]) if body.get("note") is not None else None),
+        )
+    except ValueError as exc:
+        raise web.HTTPBadRequest(text=str(exc)) from None
+    return json_response(result)
+
+
+async def canonical_compare(request: web.Request) -> web.Response:
+    """Cohorts split on one dimension, comparable only when the rest is fixed."""
+
+    service = request.app[keys.CANONICAL_TELEMETRY]
+    split = request.query.get("split", "model")
+    try:
+        result = await service.compare_cohorts(split=split, **_canonical_scope(request))
+    except ValueError as exc:
+        raise web.HTTPBadRequest(text=str(exc)) from None
+    result["collection"] = service.health()
     return json_response(result)
 
 
@@ -195,6 +310,26 @@ async def canonical_parsers(request: web.Request) -> web.Response:
     )
 
 
+async def canonical_shadow(request: web.Request) -> web.Response:
+    """Legacy tool table against the canonical ledger, every disagreement classified."""
+
+    start, end = _telemetry_window(request)
+    service = request.app[keys.CANONICAL_TELEMETRY]
+    result = await service.shadow_comparison(from_ts=start, to_ts=end)
+    result["legacy_dashboard_enabled"] = bool(
+        request.app[keys.CONFIG].canonical_telemetry_legacy_dashboard_enabled
+    )
+    result["collection"] = service.health()
+    return json_response(result)
+
+
+async def canonical_reconcile(request: web.Request) -> web.Response:
+    """One direct native-store reconciliation pass now, and its result."""
+
+    service = request.app[keys.CANONICAL_TELEMETRY]
+    return json_response(await service.reconcile_now())
+
+
 def _csv_cell(value: Any) -> str:
     if value is None:
         return ""
@@ -212,7 +347,7 @@ async def canonical_export(request: web.Request) -> web.StreamResponse:
     the whole window, not a capped slice.
     """
 
-    kind = request.match_info["kind"]
+    kind = request.match_info["kind"].replace("-", "_")
     if kind not in EXPORT_KINDS:
         raise web.HTTPNotFound(text="unknown telemetry export kind")
     output = request.query.get("format", "jsonl")
@@ -476,11 +611,21 @@ ROUTES: tuple[web.RouteDef, ...] = (
     web.get("/api/telemetry/v2/tools", canonical_tool_calls),
     web.get("/api/telemetry/v2/tools/{tool_call_id}", canonical_tool_audit),
     web.get("/api/telemetry/v2/workload", canonical_workload),
+    web.get("/api/telemetry/v2/skills/summary", canonical_skill_summary),
+    web.get("/api/telemetry/v2/verifications/summary", canonical_verification_summary),
+    web.get("/api/telemetry/v2/metrics/summary", canonical_metric_summary),
+    web.get("/api/telemetry/v2/runs/{run_id}", canonical_run_audit),
+    web.get("/api/telemetry/v2/turns/{turn_id}", canonical_turn_audit),
     web.get("/api/telemetry/v2/inefficiencies", canonical_inefficiencies),
+    web.post("/api/telemetry/v2/inefficiencies/review", review_inefficiency),
+    web.get("/api/telemetry/v2/compare", canonical_compare),
     web.get("/api/telemetry/v2/quality", canonical_quality),
     web.get("/api/telemetry/v2/compactions", canonical_compactions),
     web.get("/api/telemetry/v2/parsers", canonical_parsers),
+    web.get("/api/telemetry/v2/shadow", canonical_shadow),
+    web.post("/api/telemetry/v2/reconcile", canonical_reconcile),
     web.get("/api/telemetry/v2/export/{kind}", canonical_export),
+    web.get("/api/telemetry/v2/{kind}", canonical_entity_page),
     web.get("/api/telemetry/quota-series", quota_telemetry_series),
     web.post("/api/telemetry/quota-resets/review", review_quota_resets),
     web.get("/api/provider-accounts", get_provider_accounts),

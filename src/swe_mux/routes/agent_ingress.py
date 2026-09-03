@@ -469,5 +469,6 @@ async def telemetry_otlp_logs(request: web.Request) -> web.Response:
 ROUTES: tuple[web.RouteDef, ...] = (
     web.post("/api/hooks/{sid}", hook_ingress),
     web.post("/api/telemetry/otlp/{sid}/v1/logs", telemetry_otlp_logs),
+    web.post("/api/telemetry/otlp/{sid}/v1/metrics", telemetry_otlp_logs),
     web.post("/mcp", mcp_endpoint),
 )

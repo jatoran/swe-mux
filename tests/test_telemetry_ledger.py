@@ -44,6 +44,20 @@ def event(
     return MuxEvent(ts, "session-1", source, event_type, payload, seq=42)
 
 
+def figures(summary: Any) -> Any:
+    """A summary without its `coverage` block, which says *how* it was answered.
+
+    Rolled-up and raw reads must agree on every figure; they legitimately differ on
+    whether a day came from a rollup, which is exactly what `coverage` reports.
+    """
+
+    if isinstance(summary, dict):
+        return {key: figures(value) for key, value in summary.items() if key != "coverage"}
+    if isinstance(summary, list):
+        return [figures(item) for item in summary]
+    return summary
+
+
 def test_tool_classification_is_multidimensional() -> None:
     assert classify_tool("exec", backend="codex", source="transcript") == {
         "family": "shell",
@@ -582,7 +596,8 @@ def test_closed_day_rollup_stays_exact_after_late_evidence(tmp_path: Path) -> No
 
     assert ledger.rebuild_next_closed_day(now=day_start + 2 * 86400) == "2026-01-01"
     rolled = ledger.tool_summary(from_ts=day_start, to_ts=day_start + 86400)
-    assert rolled == before
+    assert figures(rolled) == figures(before)
+    assert rolled["coverage"]["rolled_days"] == 1 and before["coverage"]["rolled_days"] == 0
 
     ledger.record_event(
         event(
@@ -600,7 +615,9 @@ def test_closed_day_rollup_stays_exact_after_late_evidence(tmp_path: Path) -> No
     assert dirty["totals"]["failed"] == 1
     assert dirty["totals"]["succeeded"] == 0
     assert ledger.rebuild_next_closed_day(now=day_start + 2 * 86400) == "2026-01-01"
-    assert ledger.tool_summary(from_ts=day_start, to_ts=day_start + 86400) == dirty
+    assert figures(ledger.tool_summary(from_ts=day_start, to_ts=day_start + 86400)) == figures(
+        dirty
+    )
     ledger.close()
 
 

@@ -52,8 +52,26 @@ def test_operational_evidence_survives_the_split_without_identity_overclaim() ->
     assert "/api/telemetry/v2/tools/summary" in fleet
     assert "/api/telemetry/v2/quality" in fleet
     assert "/api/telemetry/v2/compactions" in fleet
+    assert "/api/telemetry/v2/verifications/summary" in fleet
+    assert "/api/telemetry/v2/metrics/summary" in fleet
+    assert "/api/telemetry/v2/compare" in fleet
+    assert "/api/telemetry/v2/inefficiencies/review" in fleet
+    assert "/api/telemetry/v2/runs/" in fleet and "/api/telemetry/v2/turns/" in fleet
     assert "/api/telemetry/v2/export/" in fleet
     assert "/api/telemetry/quota-series" in source("usageAnalytics.ts")
+    # The legacy tool table survives only in its own component, behind the shadow
+    # comparison and the switch that retires it; nothing else reads the snapshot.
+    legacy = source("LegacyToolTelemetry.tsx")
+    assert "OPERATIONAL_TELEMETRY_PATH" in legacy
+    assert "/api/telemetry/v2/shadow" in legacy
+    assert "canonical_telemetry_legacy_dashboard_enabled" in legacy
+    assert "legacy_dashboard_enabled" in fleet
+    assert "canonical_telemetry_legacy_dashboard_enabled" in source("Settings.tsx")
+    # Every total names its range, cohort, denominator, and coverage through one component.
+    caption = source("telemetryCaption.tsx")
+    assert "data-telemetry-caption" in caption
+    assert fleet.count("<TelemetryCaption") >= 6
+    assert "<TelemetryCaption" in source("WorkloadTelemetry.tsx")
 
     # Quota keeps its account semantics and its refusal to overclaim them.
     assert "<QuotaAnalytics" in modal
@@ -70,7 +88,8 @@ def test_operational_evidence_survives_the_split_without_identity_overclaim() ->
     assert "{active.footer}" in modal
 
     # Tool, skill, and compaction evidence, with every caveat it carried before the move.
-    assert "tools + skills" in fleet
+    assert "['tools', 'tools']" in fleet
+    assert "skills + verification" in fleet
     assert "context + compaction" in fleet
     assert "project/layer" in fleet
     assert "Token drops alone remain unknown" in fleet
@@ -86,12 +105,15 @@ def test_operational_evidence_survives_the_split_without_identity_overclaim() ->
     assert "runtime_parent_unavailable" in fleet
     assert "schema drift" in fleet
     # The controls are one query for every tab, so switching tabs never changes the question.
-    assert "telemetryQuery({days,origin,backend,layer})" in fleet
+    assert "const query=telemetryQuery(filters)" in fleet
+    for control in ("Project", "Model", "Family", "Outcome", "Evidence", "Layer"):
+        assert f"<label>{control}<select" in fleet, control
 
     # Money is deliberately absent here. The Usage dialog is the whole cost picture, and a
     # second table of one number under a second name is the drift this split removed.
     for money in ("cost_usd", "AutomationSpendView", "formatMoney"):
         assert money not in fleet
+        assert money not in legacy
 
 
 def test_reset_indicator_is_purple_deduplicated_and_sound_is_per_device_profile() -> None:
