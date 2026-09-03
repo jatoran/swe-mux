@@ -443,6 +443,11 @@ async def get_background_health(request: web.Request) -> web.Response:
             # What the inspector has lowered to keep the fleet below this process.
             "process_priority": request.app[keys.PROCESS_INSPECTOR].priority_stats(),
             "event_bus": events.drop_stats(),
+            "canonical_telemetry": (
+                request.app[keys.CANONICAL_TELEMETRY].health()
+                if keys.CANONICAL_TELEMETRY in request.app
+                else {"running": False, "accepted": 0, "queue_depth": 0}
+            ),
             "tier0_capture": tier0.capture_stats(),
             "git_provenance": request.app[keys.GIT_PROVENANCE].status(),
             # A detector that stopped producing findings is indistinguishable from

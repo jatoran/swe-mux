@@ -212,6 +212,25 @@
   see the same call, and the richer record wins whichever arrives first.
   Both columns are additive migrations (schema version 2) and are NULL for facts recorded
   before them and for facts that are not tool calls.
+- `<data_dir>/telemetry/catalog.sqlite3`: canonical telemetry catalog with monthly-segment
+  inventory, entity locations, resumable legacy-import cursors, dirty rollup days, the exact
+  closed-day `tool_daily` and `workload_daily` rollups, segment seals, metric checkpoints, and
+  `parser_signatures` (provider event names by harness version, recognised or not).
+  `ledger_meta` carries the schema version.
+  It contains no provider transcript content.
+- `<data_dir>/telemetry/segments/YYYY-MM.sqlite3`: monthly canonical activity segments, each
+  carrying its own schema version in `segment_meta` and migrated additively on open.
+  `telemetry_evidence` stores content-free source identity, timestamps, source locator, payload
+  hash and size, and privacy class.
+  `telemetry_runs`, `telemetry_turns`, `telemetry_tool_calls`, `telemetry_model_requests`,
+  `telemetry_compactions`, `telemetry_skill_invocations`, and `telemetry_verifications` hold
+  queryable lifecycle entities.
+  `telemetry_entity_evidence` records which observation contributed which entity side and its
+  precedence.
+  A catalog location makes entity identity global across segments, so a call beginning before a
+  month boundary and ending after it remains one call.
+  The ledger never deletes or rewrites `history`, `events`, `tool_events`, `tier0_facts`, or native
+  harness transcripts during migration.
 - Project context has no SQLite entity.
   Its source of truth is the bounded user-owned `<project>/.swe-mux/project-context.md` file with content-derived revisions (`features/project-card.md`).
 - `project_cards` is a retained legacy table from the retired generated-card implementation.

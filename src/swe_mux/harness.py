@@ -435,6 +435,30 @@ class HarnessLevel(IntEnum):
 
 
 @dataclass(frozen=True, slots=True)
+class NativeTelemetry:
+    """How this CLI is told to export OTLP to the daemon, measured on a real run.
+
+    Declared here so the telemetry reducer asks the registry rather than naming a
+    harness: a CLI with no entry exports nothing and is reported as unsupported,
+    never given another vendor's exporter contract by default.
+    """
+
+    # `env` hands the exporter its OTEL_* environment; `config_arg` passes the
+    # exporter as a configuration argument on the command line.
+    transport: Literal["env", "config_arg"]
+    # The CLI version the attribute set was captured from
+    # (`tests/fixtures/telemetry/otlp-<name>-<version>.json`).
+    measured_version: str
+    # Call-id prefix under which a nested execution is reported beside the
+    # model-facing call that dispatched it, or None when the provider reports
+    # only one layer.
+    runtime_call_id_prefix: str | None = None
+    # Whether `api_request` events are HTTP plumbing (listings, connection
+    # setup) rather than model requests; model traffic then completes elsewhere.
+    http_requests_are_plumbing: bool = False
+
+
+@dataclass(frozen=True, slots=True)
 class HarnessDescriptor:
     """Declared identity and capabilities for one agent harness."""
 
@@ -611,6 +635,18 @@ class HarnessDescriptor:
     # Non-interactive invocations the live conformance canary drives against the real
     # CLI. See :class:`HeadlessProbes`.
     headless_probes: HeadlessProbes
+    # The native OTLP export contract, or None when none has been measured. See
+    # :class:`NativeTelemetry`.
+    native_telemetry: NativeTelemetry | None
+    # The model-facing tool that runs code which itself dispatches runtime tool
+    # calls (Codex's `exec`), so its transport is classified as code mode rather
+    # than as a shell. None for a harness whose every model call is a direct call.
+    code_mode_tool: str | None
+    # Whether this CLI's tool hooks report the nested runtime execution rather than
+    # the model-facing call. Codex fires PreToolUse/PostToolUse for the command its
+    # code-mode `exec` dispatches, so a hook-observed call is a runtime-layer entity
+    # and never a peer of the transcript's model-layer call.
+    hook_reports_runtime_layer: bool
 
     submission: str
     root_completion: str
@@ -1111,6 +1147,10 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         skill_install_roots=("project-claude", "user-data-home"),
         npm_entrypoint=("@anthropic-ai/claude-code/", "/cli.js"),
         requires_direct_entrypoint=False,
+        # Reads OTEL_* from its environment and posts to the logs endpoint verbatim.
+        native_telemetry=NativeTelemetry(transport="env", measured_version="2.1.259"),
+        code_mode_tool=None,
+        hook_reports_runtime_layer=False,
         headless_probes=HeadlessProbes(
             read_only=("--print", "--safe-mode", "--tools", ""),
             read_tool=("--print", "--permission-mode", "dontAsk", "--allowedTools", "Read"),
@@ -1229,6 +1269,18 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         skill_install_roots=("project-agents", "user-data-home"),
         npm_entrypoint=("@openai/codex/", "/codex.js"),
         requires_direct_entrypoint=True,
+        # Takes its exporter as `-c otel.exporter=...`; reports the nested code-mode
+        # execution under an `exec-` call id beside the model-facing `call_...`, and
+        # its `api_request` is an HTTP call whose model traffic completes as
+        # `sse_event`.
+        native_telemetry=NativeTelemetry(
+            transport="config_arg",
+            measured_version="0.153.0",
+            runtime_call_id_prefix="exec-",
+            http_requests_are_plumbing=True,
+        ),
+        code_mode_tool="exec",
+        hook_reports_runtime_layer=True,
         # One invocation covers all three: `exec` is already non-interactive and the
         # read-only sandbox still permits reads and subagent threads.
         headless_probes=HeadlessProbes(
@@ -1348,6 +1400,9 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         skill_install_roots=("project-claude", "project-agents", "user-agents"),
         npm_entrypoint=None,
         requires_direct_entrypoint=False,
+        native_telemetry=None,
+        code_mode_tool=None,
+        hook_reports_runtime_layer=False,
         # `-p` is print mode; `--no-tools` is the read-only guarantee. Its `task`
         # tool is what makes a subagent probe meaningful, so the default tool set is
         # left in place for that one.
@@ -1466,6 +1521,9 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         skill_install_roots=("project-agents", "user-agents"),
         npm_entrypoint=None,
         requires_direct_entrypoint=False,
+        native_telemetry=None,
+        code_mode_tool=None,
+        hook_reports_runtime_layer=False,
         # No subagent probe: pi's documented tool set is read/write/edit/bash/glob/
         # grep/list with no task tool, so there is no subagent for a canary to
         # observe. Declaring one would demand evidence the CLI cannot produce.
@@ -1593,6 +1651,9 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         skill_install_roots=("project-agents", "user-agents"),
         npm_entrypoint=None,
         requires_direct_entrypoint=False,
+        native_telemetry=None,
+        code_mode_tool=None,
+        hook_reports_runtime_layer=False,
         # `opencode run` is the non-interactive form. Its read-only guarantee is
         # configuration (`permission` in opencode.json) rather than a flag, so a
         # probe that needs one writes it; the argv is the same either way. Excluded

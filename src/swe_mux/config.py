@@ -854,6 +854,9 @@ class Config:
     ghost_window_poll_seconds: float = 5.0
     process_evidence_retention_days: int = 30
     operational_telemetry_retention_days: int = 180
+    # Native provider OTLP is opt-in. It is routed only to this daemon over
+    # authenticated loopback and reduced to metadata before storage.
+    canonical_telemetry_native_otel_enabled: bool = False
     # Durable per-session detection timeline (status_timeline.py): chattier
     # than the other telemetry (every ledger entry, including a busy turn's
     # detail churn), so its window is its own knob.

@@ -608,6 +608,36 @@ async def test_semantic_events_are_deduplicated_across_hook_and_transcript() -> 
     assert queue.qsize() == 1
 
 
+async def test_parallel_calls_of_the_same_tool_keep_distinct_native_identities() -> None:
+    events = EventBus()
+    queue = events.subscribe()
+    first = await events.emit(
+        "tool_use",
+        session_id="mux-id",
+        source="transcript",
+        tool="Read",
+        call_id="call-1",
+    )
+    second = await events.emit(
+        "tool_use",
+        session_id="mux-id",
+        source="transcript",
+        tool="Read",
+        call_id="call-2",
+    )
+    duplicate = await events.emit(
+        "tool_use",
+        session_id="mux-id",
+        source="hook",
+        tool="Read",
+        call_id="call-1",
+    )
+
+    assert second is not first
+    assert duplicate is first
+    assert queue.qsize() == 2
+
+
 async def test_claude_sidechain_end_turn_never_completes_root() -> None:
     session = cast(Any, SimpleNamespace(record=record("claude")))
     session.record.state = "working"
@@ -1006,6 +1036,44 @@ async def test_tool_completion_retires_an_approval_the_transcript_is_driving() -
     await apply_hook_observation(session, "PostToolUse", {}, events)
 
     assert session.observation_state.get("pending_approval") is None
+
+
+async def test_post_tool_hook_sends_content_free_duration_to_canonical_telemetry() -> None:
+    session = cast(Any, ReplaySession("claude"))
+    events = EventBus()
+    ordinary = events.subscribe(name="ordinary")
+    canonical = events.subscribe(name="canonical-telemetry")
+    await apply_hook_observation(
+        session,
+        "PreToolUse",
+        {
+            "tool_name": "Bash",
+            "tool_use_id": "call-1",
+            "tool_input": {"command": "pytest -q"},
+        },
+        events,
+    )
+    drain(ordinary)
+    drain(canonical)
+    await apply_hook_observation(
+        session,
+        "PostToolUse",
+        {
+            "tool_name": "Bash",
+            "tool_use_id": "call-1",
+            "tool_response": {"stdout": "secret output", "stderr": ""},
+            "duration_ms": 321,
+        },
+        events,
+    )
+
+    item = next(event for event in drain(canonical) if event.type == "canonical_tool_result")
+    assert item.type == "canonical_tool_result"
+    assert item.payload["duration_ms"] == 321
+    assert item.payload["output_chars"] > 0
+    assert item.payload["output_sha256"]
+    assert "secret output" not in str(item.payload)
+    assert "canonical_tool_result" not in [event.type for event in drain(ordinary)]
 
 
 async def test_an_approval_on_screen_survives_a_parallel_tool_completing() -> None:

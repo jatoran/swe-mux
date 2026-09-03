@@ -187,6 +187,7 @@ export const SETTINGS_CONFIG_FIXTURE = {
   "openrouter_request_timeout_seconds": 30.0,
   "openrouter_standard_model": "",
   "operational_telemetry_retention_days": 180,
+  "canonical_telemetry_native_otel_enabled": false,
   "pinned_directories": [],
   "port": 8765,
   "process_evidence_retention_days": 30,

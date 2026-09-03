@@ -705,8 +705,10 @@
   whether a session id happens to be empty.
 - Changing headless-browser ghost-window detection, the sweep predicate, or its remediation:
   `design/features/ghost-windows.md`, `technical/backend/packages.md`
-- Changing durable process/quota/reset/compaction/tool evidence or retention:
-  `design/features/operational-telemetry.md`, `design/data-model.md`, `design/interfaces.md`
+- Changing durable process/quota/reset/compaction/tool evidence, the canonical activity ledger,
+  historical telemetry migration, or retention: `design/features/operational-telemetry.md`,
+  `design/data-model.md`, `design/interfaces.md`,
+  `development/TELEMETRY_HARDENING.md`, `technical/backend/packages/processes-and-devices.md`
 - Changing launch profiles (shell or agent), profile resolution, or reserved harness argv: `design/features/launch-profiles.md`
 - Evaluating or changing host-OS support, Windows shell compatibility, WSL behavior,
   platform packaging, or the external compatibility matrix:

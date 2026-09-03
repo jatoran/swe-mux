@@ -1,7 +1,7 @@
 # Backend: processes, Previews, clipboard, and devices
 
 Index: `../packages.md`.
-Design: `../../../design/features/processes-and-previews.md`, `../../../design/features/ghost-windows.md`, `../../../design/features/device-presence.md`, `../../../design/features/notifications.md`.
+Design: `../../../design/features/processes-and-previews.md`, `../../../design/features/ghost-windows.md`, `../../../design/features/device-presence.md`, `../../../design/features/notifications.md`, `../../../design/features/operational-telemetry.md`.
 
 Each entry lists what the module owns, then **Not:** what it deliberately does not.
 
@@ -89,3 +89,64 @@ It fails open on every staleness path.
 VAPID identity, subscriptions, per-endpoint focus presence, event-to-notification classification including the running-work and startup suppressions, stable route verdict and reason codes, decision-ledger emission, and both hold lifecycles - the `waiting` settle and the other-device deferral.
 
 **Not:** durable decision storage (`operational_telemetry.py`), which device is active (`device_presence.py`), notification preferences (`settings_store.py`), or what counts as running work - `session.RUNNING_ACTIVITY_KINDS` owns that set; this module restates it and a test pins them equal.
+
+## `operational_telemetry.py`
+
+Legacy durable process, quota, reset, compaction, and tool observations in `mux.db`.
+It remains readable while canonical activity migration runs.
+
+**Not:** the canonical cross-session activity ledger or long-term detailed analytics.
+
+## `telemetry_schema.py`
+
+The catalog and segment schemas, the versioned additive migrations that bring an older file to
+them, per-file structural signatures, and the pure helpers the reducer shares (canonical JSON,
+digests, UTC period and day keys, source precedence ranks, tool classification).
+
+**Not:** any write of evidence, or any decision about what a file's rows mean.
+
+## `telemetry_ledger.py`
+
+The synchronous write path of the canonical ledger under `<data_dir>/telemetry/`: entity
+identity, field-level source precedence, evidence links, closed-day rollup rebuilds, segment
+sealing, and storage and schema status.
+Reduces content-free evidence into run, turn, tool-call, model-request, compaction,
+skill-invocation, and verification entities, one home segment per entity across months.
+`LegacyImportMixin` and `LedgerQueryMixin` are mixed in here so one class is the ledger.
+
+**Not:** provider transcript content, the browser presentation, causal performance claims,
+deletion of legacy telemetry, or anything async.
+
+## `telemetry_imports.py`
+
+Resumable, non-destructive importers for the legacy `tool_events`, `history`, status-timeline
+turn, `context_compactions`, and Tier 0 test-outcome streams in `mux.db`, each past a durable
+cursor and each re-read periodically after it first catches up.
+
+**Not:** parsing a native transcript itself; that remains the legacy store's reconciler.
+
+## `telemetry_queries.py`
+
+Exact aggregates over the whole requested window (closed days from rollups, everything else
+from entities, consecutive raw days merged into one query per month), exact-match filters,
+cursor-bounded detail and export pages, the tool-call audit, deterministic inefficiency
+candidates, field-completeness quality, and the parser-signature readout.
+
+**Not:** any total derived from a displayed page.
+
+## `telemetry_service.py`
+
+The daemon adapter: one worker thread owning every ledger call, batched EventBus ingestion,
+the legacy catch-up loop, the rollup and sealing worker, schema-drift logging, and the health
+block `GET /api/diagnostics/background` reports.
+
+**Not:** the reducer's rules; it only schedules them.
+
+## `telemetry_otlp.py`
+
+Reduction of provider OTLP/JSON log and metric batches to canonical events, the exporter
+environment and arguments a new session is launched with, and the per-batch signature of event
+names seen, measured against Claude Code 2.1.259 and Codex CLI 0.153.0.
+
+**Not:** storage of any content or identity attribute; both classes are hashed or dropped
+before the batch is released.

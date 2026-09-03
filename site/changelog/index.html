@@ -1068,11 +1068,14 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
         <span class="fill"></span>
       </div>
       <div class="relgroups">
-        <div><span class="k">Added</span> <span class="sep">4 entries</span></div>
+        <div><span class="k">Added</span> <span class="sep">5 entries</span></div>
       </div>
       <details class="relmore">
-        <summary>all 4 entries</summary>
+        <summary>all 5 entries</summary>
         <div class="changetype">Added</div>
+        <ul class="bullets">
+          <li><span><b>A canonical activity ledger, and the fleet's own telemetry feeding it.</b> Tool calls, turns, runs, model requests, compactions, skill activations, and test outcomes are reduced into one provenance-preserving ledger under <code>&lt;data_dir&gt;/telemetry/</code> - monthly segments, content-free evidence (hashes, sizes, locators, never tool output), field-level source precedence with every contributing observation linked, exact closed-day rollups, and additive versioned migrations so a data directory written by an older build is upgraded on open rather than failing on the first write. Legacy telemetry and native transcripts are imported non-destructively and kept; nothing is deleted. <code>canonical_telemetry_native_otel_enabled</code> (Settings → Usage) hands each new Claude Code and Codex session an OTLP exporter pointed at the daemon over authenticated loopback; the contracts were measured against Claude Code 2.1.259 and Codex CLI 0.153.0, identity attributes are dropped and content attributes hashed before anything is stored, and every provider event name is counted per harness version so a renamed attribute shows as drift instead of silence. Resources → Fleet activity reads the ledger: exact totals over the selected window, cohort, backend, and layer; a tool-call audit down to its evidence; a collection-health readout with per-backend field coverage and parser signatures; deterministic inefficiency candidates with their denominators; and JSONL/CSV exports (<code>GET /api/telemetry/v2/export/{kind}</code>) that carry evidence identifiers and source locators.</span></li>
+        </ul>
         <ul class="bullets">
           <li><span><b>A stalled daemon now says where it was stuck, and the fleet no longer outranks it.</b> When the event loop stops for three seconds or more, every thread's stack is dumped to <code>&lt;data_dir&gt;/loop-stalls.log</code> from a thread that needs no GIL, and the stall is explained once in <code>daemon.log</code>, kept in <code>mux.db</code>, and shown under <code>stall_watchdog</code> on <code>/api/diagnostics/background</code> - including whether a canary thread was starved too, which separates synchronous work on the loop from a native call holding the GIL. Session process trees run below normal priority and the daemon runs above it (<code>session_process_priority</code>, <code>daemon_process_priority</code>), so a wave of concurrent builds slows the builds rather than the person at the keyboard.</span></li>
           <li><span><b>Reading a Project's config file no longer blocks the daemon.</b> Every Projects poll read each Project's <code>.swe-mux/config.toml</code> on the event loop; the stall watchdog caught that read blocking for 6.6 s on a disk saturated by concurrent builds, and it now runs in a thread.</span></li>

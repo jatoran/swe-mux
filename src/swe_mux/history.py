@@ -16,7 +16,12 @@ from typing import Any, TypeVar
 
 from .errors import NotFound
 from .git_projects import ProjectIdentity
-from .harness import AGENT_BACKENDS, has_observable_transcript, is_agent_harness
+from .harness import (
+    AGENT_BACKENDS,
+    conversation_store_path,
+    has_observable_transcript,
+    is_agent_harness,
+)
 from .models import MuxEvent, ProjectGroupRecord, ProjectRecord, SessionRecord
 from .spawn_contract import infer_agent_executable_backend
 from .sqlite_store import (
@@ -44,6 +49,10 @@ log = logging.getLogger(__name__)
 AGENT_SEARCH_BUDGET_MS = 6_000
 _AGENT_BACKEND_ARGS = tuple(sorted(AGENT_BACKENDS))
 _AGENT_BACKEND_SQL = ",".join("?" for _ in _AGENT_BACKEND_ARGS)
+_STORE_BACKEND_ARGS = tuple(
+    backend for backend in _AGENT_BACKEND_ARGS if conversation_store_path(backend) is not None
+)
+_STORE_BACKEND_SQL = ",".join("?" for _ in _STORE_BACKEND_ARGS)
 #: Ids per `history_naming_rows` statement. The id list is bound twice (id and
 #: note_id), so this stays well inside SQLite's default 999-variable ceiling.
 _NAMING_ROW_CHUNK = 400
@@ -4008,9 +4017,10 @@ class HistoryIndex:
             rows = self._db.execute(
                 "SELECT id,backend,project_id,model,transcript_path,transcript_mtime_ns,"
                 "transcript_size FROM history WHERE agent_visible=1 "
-                "AND transcript_path IS NOT NULL "
-                "AND transcript_path!='' ORDER BY spawned_at DESC LIMIT ?",
-                (max(1, min(limit, 10000)),),
+                "AND ((transcript_path IS NOT NULL AND transcript_path!='') "
+                f"OR backend IN ({_STORE_BACKEND_SQL})) "
+                "ORDER BY spawned_at DESC LIMIT ?",
+                (*_STORE_BACKEND_ARGS, max(1, min(limit, 10000))),
             ).fetchall()
             return [dict(row) for row in rows]
 

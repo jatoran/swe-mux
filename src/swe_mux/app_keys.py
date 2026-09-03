@@ -91,6 +91,7 @@ if TYPE_CHECKING:
     from .status_timeline import StatusTimelineStore
     from .storage_usage import StorageUsage
     from .supervisor_client import SupervisorClient
+    from .telemetry_service import CanonicalTelemetryService
     from .tier0_store import Tier0Store
     from .update_check import UpdateChecker
     from .update_install import UpdateInstaller
@@ -205,6 +206,9 @@ SETTINGS_STORE: web.AppKey[SettingsStore] = web.AppKey("settings_store")
 STATUS_TIMELINE: web.AppKey[StatusTimelineStore] = web.AppKey("status_timeline")
 STORAGE_USAGE: web.AppKey[StorageUsage] = web.AppKey("storage_usage")
 TELEMETRY: web.AppKey[OperationalTelemetryStore] = web.AppKey("telemetry")
+CANONICAL_TELEMETRY: web.AppKey[CanonicalTelemetryService] = web.AppKey(
+    "canonical_telemetry"
+)
 TIER0: web.AppKey[Tier0Store] = web.AppKey("tier0")
 UPDATE_CHECK: web.AppKey[UpdateChecker] = web.AppKey("update_check")
 UPDATE_INSTALL: web.AppKey[UpdateInstaller] = web.AppKey("update_install")

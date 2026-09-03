@@ -343,6 +343,7 @@ Every per-session harness artifact it materializes is written under its own data
 | --- | --- |
 | `mux.db` (plus `-wal`, `-shm`) | One WAL database shared by History, Automation, Operational Telemetry, the Status Timeline, Voice clip rows, Tier 0 facts, the Prompt Queue, Schedules, Clipboard history, the code graph, and the durable session registry. |
 | `land-queue.sqlite3` (plus `-wal`, `-shm`) | The land queue's requests and event trails. |
+| `telemetry/catalog.sqlite3`, `telemetry/segments/*.sqlite3` (plus `-wal`, `-shm`) | The content-free canonical activity ledger, monthly detail segments, provenance links, and migration cursors. Provider transcript and tool-output bodies are not copied here. |
 
 **Credentials.**
 
@@ -585,6 +586,8 @@ Copy, from the data directory:
 
 - `mux.db`, with its `-wal` and `-shm` siblings if present. This is history, transcript indexing, telemetry, the status timeline, Tier 0 facts, the prompt queue, schedules, clipboard history, the code graph, and the durable session registry.
 - `land-queue.sqlite3`, with its `-wal` and `-shm` siblings.
+- `telemetry/`, including every SQLite `-wal` and `-shm` sibling present.
+  This is the long-term canonical activity ledger and its provenance catalog.
 - `config.toml`, `settings.json`, `keybindings.json`, `rules.toml`, `hooks.toml`.
 - `prompts/`, `notes/`, `media/`, `agent-context-backups/`.
 - `prompt-library-state.json`, `previews.json`, `project-action-trust.json`, `push-subscriptions.json`.

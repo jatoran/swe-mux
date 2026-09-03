@@ -390,6 +390,7 @@ export function demoConfig(): Record<string, unknown> {
     ghost_window_poll_seconds: 5.0,
     process_evidence_retention_days: 30,
     operational_telemetry_retention_days: 180,
+    canonical_telemetry_native_otel_enabled: false,
     status_timeline_retention_days: 30,
     provider_quota_poll_minutes: 15,
     provider_quota_turn_refresh_enabled: false,

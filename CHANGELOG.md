@@ -17,6 +17,12 @@ The release procedure that maintains this file is [`RELEASING.md`](RELEASING.md)
 
 ### Added
 
+- **A canonical activity ledger, and the fleet's own telemetry feeding it.**
+  Tool calls, turns, runs, model requests, compactions, skill activations, and test outcomes are reduced into one provenance-preserving ledger under `<data_dir>/telemetry/` - monthly segments, content-free evidence (hashes, sizes, locators, never tool output), field-level source precedence with every contributing observation linked, exact closed-day rollups, and additive versioned migrations so a data directory written by an older build is upgraded on open rather than failing on the first write.
+  Legacy telemetry and native transcripts are imported non-destructively and kept; nothing is deleted.
+  `canonical_telemetry_native_otel_enabled` (Settings → Usage) hands each new Claude Code and Codex session an OTLP exporter pointed at the daemon over authenticated loopback; the contracts were measured against Claude Code 2.1.259 and Codex CLI 0.153.0, identity attributes are dropped and content attributes hashed before anything is stored, and every provider event name is counted per harness version so a renamed attribute shows as drift instead of silence.
+  Resources → Fleet activity reads the ledger: exact totals over the selected window, cohort, backend, and layer; a tool-call audit down to its evidence; a collection-health readout with per-backend field coverage and parser signatures; deterministic inefficiency candidates with their denominators; and JSONL/CSV exports (`GET /api/telemetry/v2/export/{kind}`) that carry evidence identifiers and source locators.
+
 - **A stalled daemon now says where it was stuck, and the fleet no longer outranks it.**
   When the event loop stops for three seconds or more, every thread's stack is dumped to `<data_dir>/loop-stalls.log` from a thread that needs no GIL, and the stall is explained once in `daemon.log`, kept in `mux.db`, and shown under `stall_watchdog` on `/api/diagnostics/background` - including whether a canary thread was starved too, which separates synchronous work on the loop from a native call holding the GIL.
   Session process trees run below normal priority and the daemon runs above it (`session_process_priority`, `daemon_process_priority`), so a wave of concurrent builds slows the builds rather than the person at the keyboard.
