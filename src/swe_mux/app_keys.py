@@ -138,6 +138,10 @@ PREVIEW_WS_SEMAPHORE: web.AppKey[asyncio.Semaphore] = web.AppKey("preview_ws_sem
 HOOK_INGRESS_WINDOWS: web.AppKey[dict[str, deque[float]]] = web.AppKey("hook_ingress_windows")
 MCP_RATE_WINDOWS: web.AppKey[dict[str, deque[float]]] = web.AppKey("mcp_rate_windows")
 MCP_TOOLS_WINDOWS: web.AppKey[dict[str, deque[float]]] = web.AppKey("mcp_tools_windows")
+#: One browser history *search* at a time. Not a rate limit: it is what lets a
+#: superseded search notice its reader has gone before it spends the single
+#: history executor thread (`routes/history._search_turn`).
+HISTORY_SEARCH_GATE: web.AppKey[asyncio.Lock] = web.AppKey("history_search_gate")
 #: Keyed by (attachment workspace root, session id): one lock per workspace a
 #: session writes into, not one per session.
 ATTACHMENT_LOCKS: web.AppKey[dict[tuple[str, str], asyncio.Lock]] = web.AppKey("attachment_locks")

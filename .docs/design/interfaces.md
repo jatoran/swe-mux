@@ -2204,6 +2204,9 @@ GET    /history/{id}/handoff
 
 `time_basis` both orders the page (newest first) and scopes `date_from`/`date_to`, and defaults to `last_message` - the most recent conversations, which is what every caller of this listing means. Ordering falls back through last message → exit → native start → spawn so a run with no indexed messages still has a position; the date range does not fall back, so it excludes such a run outright (`features/history.md`).
 `cursor` is opaque and keyed on the same ordering expression, so a cursor taken under one `time_basis` must be used with that same basis; changing the basis restarts the listing.
+A request carrying `q` is a **search** and is bounded and serialized; one without it is a listing and is neither (`features/history.md`).
+A search that outruns the daemon's ceiling answers `503 search_budget_exceeded` and is stopped mid-statement, so the refusal is also the release of the thread every other history read shares.
+A search whose client has already disconnected by the time it reaches the front of the queue answers `{items: [], next_cursor: null, abandoned: true}` without running; nothing reads that body, and it exists so the case is one branch rather than an exception.
 Resume/review confirmation must target an existing Project and starts at its root.
 Every route that reads a run row's conversation - `GET /history/{id}/transcript`, `GET /history/{id}/branch-points`, `POST /history/{id}/resume` and a fork - resolves the conversation by id when the row's recorded `transcript_path` no longer exists, and writes the corrected path back to the row (`features/history.md`).
 A `409 transcript_unavailable` from any of them therefore means no file answers to that conversation id, not that mux lost track of where the CLI moved it.

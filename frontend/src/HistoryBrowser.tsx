@@ -54,7 +54,9 @@ type ScanRecord={
    rewinds. They are not in `messages` because they are not what the conversation
    says; the count is here so a retried run does not read as one with pieces cut out. */
 type Transcript={entry:HistoryEntry;messages:TranscriptMessage[];abandoned_messages?:number;annotations:DerivedAnnotation[];matches:HistoryMatch[];scan_records?:ScanRecord[]}
-type HistoryPage={items:HistoryEntry[];next_cursor:string|null}
+/** `abandoned` marks a search the daemon dropped because this client had already
+ *  disconnected; its `items` are empty and mean nothing about the archive. */
+type HistoryPage={items:HistoryEntry[];next_cursor:string|null;abandoned?:boolean}
 type HistoryProject={project_id:string|null;label:string;root?:string;removed_at?:number;sessions:number;last_activity:number}
 type BackfillJob={
   id:string;project_id:string;project_name:string;status:string;phase:string;scanned:number;total:number;processed:number
@@ -135,6 +137,7 @@ export function HistoryBrowser({projects,initialProjectId,initialEntryId,onClose
   const [timelineExpanded,setTimelineExpanded]=useState(false)
   const [job,setJob]=useState<BackfillJob|null>(null)
   const requestSequence=useRef(0)
+  const inFlight=useRef<AbortController|null>(null)
   const transcriptBody=useRef<HTMLDivElement>(null)
   const manualCopyArea=useRef<HTMLTextAreaElement>(null)
   const panel=useRef<HTMLElement>(null)
@@ -159,15 +162,39 @@ export function HistoryBrowser({projects,initialProjectId,initialEntryId,onClose
     return value
   }
 
+  // Aborting a superseded search is not cosmetic. The daemon runs one search at a
+  // time on the thread every history read shares, and a search box types faster
+  // than a large archive can answer - so five keystroke pauses used to leave five
+  // searches queued, of which four were already stale when they started. The
+  // abort closes the socket, and the daemon drops a queued search whose reader has
+  // gone (`routes/history._search_turn`). The sequence guard stays: it is what
+  // makes a late answer harmless, and an abort is not delivered everywhere.
   const load=async(append=false)=>{
     const sequence=++requestSequence.current
+    inFlight.current?.abort()
+    const controller=new AbortController()
+    inFlight.current=controller
     setLoading(true);setError('')
     try{
-      const page=await api<HistoryPage>('GET',`/api/history?${parameters(append?nextCursor||undefined:undefined)}`)
+      const page=await api<HistoryPage>('GET',`/api/history?${parameters(append?nextCursor||undefined:undefined)}`,undefined,{signal:controller.signal})
       if(sequence!==requestSequence.current)return
+      // The daemon answers a search it dropped rather than raising, and that answer
+      // is an empty page. It is addressed to a socket that has already gone, so this
+      // should never see one - and rendering "no matches" if it ever did would be a
+      // lie about the archive rather than about this request.
+      if(page.abandoned)return
       setItems(current=>append?[...current,...page.items]:page.items)
       setNextCursor(page.next_cursor)
-    }catch(cause){if(sequence===requestSequence.current)setError(cause instanceof Error?cause.message:String(cause))}
+    }catch(cause){
+      if(sequence!==requestSequence.current)return
+      if(cause instanceof Error&&cause.name==='AbortError')return
+      // The budget refusal says what to do about it; anything else is reported as
+      // itself. A search that outran the daemon's ceiling is not a broken History.
+      const failure=cause as ApiError
+      setError(failure?.detail?.code==='search_budget_exceeded'
+        ? 'That search took too long and was stopped. Narrow it - a longer phrase, one Project, or a date range.'
+        : cause instanceof Error?cause.message:String(cause))
+    }
     finally{if(sequence===requestSequence.current)setLoading(false)}
   }
 
