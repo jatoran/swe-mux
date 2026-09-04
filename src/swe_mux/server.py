@@ -88,7 +88,7 @@ from .harness import (
     HARNESSES,
     enabled_backends,
 )
-from .history import HistoryIndex
+from .history import HistoryIndex, HistorySearchBudgetExceeded
 from .history_backfill import HistoryBackfillManager
 from .history_scan import HistoryScanManager
 from .http_support import (
@@ -333,6 +333,18 @@ async def error_middleware(request: web.Request, handler: Handler) -> web.Stream
             exc.key,
         )
         return json_response({"error": str(exc), "code": "not_found", "kind": exc.kind}, 404)
+    except HistorySearchBudgetExceeded as exc:
+        # Not an error in the request and not a daemon fault: the search was
+        # stopped mid-statement so the history thread could go back to serving
+        # everything else. 503 rather than 400 because retrying a narrower query
+        # is the remedy, and the browser prints the sentence the exception
+        # carries rather than inventing one.
+        log.warning(
+            "history search exceeded its budget path=%s budget_ms=%d",
+            request.path,
+            exc.budget_ms,
+        )
+        return json_response({"error": str(exc), "code": "search_budget_exceeded"}, 503)
     except ProviderAccountConflict as exc:
         # Distinct from a bad request: the caller must resolve an ownership
         # clash or explicitly force the action.
@@ -673,6 +685,7 @@ def create_app(
     app[keys.RUNTIME_INVENTORIES] = mcp_tools.LiveSnapshotStore()
     app[keys.MCP_TOOLS_WINDOWS] = {}
     app[keys.ATTACHMENT_LOCKS] = {}
+    app[keys.HISTORY_SEARCH_GATE] = asyncio.Lock()
     # Mutable holder because aiohttp freezes app keys once started; carries the
     # externally-signaled shutdown intent (quit vs restart/detach) to cleanup.
     app[keys.SHUTDOWN_STATE] = {"intent": None}

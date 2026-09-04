@@ -57,6 +57,40 @@
   them all. The Project dropdown is how a reader asks for one Project; the headings are
   orientation. The unassigned bucket still sorts last, being a catch-all rather than a
   Project.
+- **A search asks each index a number of questions that does not depend on how many
+  conversations it finds, and every search is bounded.**
+  The cost of a search is a query *shape*, and the two shapes that were wrong were both
+  invisible on any fixture and quadratic on a real archive.
+  A **correlated** `EXISTS (... MATCH ...)` re-runs the full-text scan once per candidate
+  conversation - and the page's `ORDER BY` needs every row before it can sort, so "per
+  candidate" means the whole archive; the uncorrelated `IN (SELECT ...)` the page uses now
+  materializes the id set once.
+  A **statement per result row** for the page's excerpts asks the same question fifty times
+  and keeps a fiftieth of each answer, because a `MATCH` restricted by `history_id` still
+  scans the entire match set: the restriction is on the joined table, not on the index.
+  One statement fetches the page's excerpts and the per-row caps are applied in Python,
+  where a global `LIMIT` would have starved the page's later rows.
+  Measured 2026-09-04 on a 3.07 GB archive of 5,735 conversations: 5.59 s → 0.033 s for the
+  page query, 2.9 s → 0.052 s for its excerpts.
+- **Every search carries a wall-clock budget; a listing carries none.**
+  The exemption the browser's own search used to hold rested on a premise the daemon
+  disproves: that a human watching a spinner can abandon the query.
+  Abandoning the *view* releases nothing.
+  Nothing above SQLite can stop a running statement, and aiohttp does not cancel a handler
+  when its client disconnects, so an unbounded search outlived its reader while holding the
+  single history executor thread that every other history read queues behind.
+  A page with no query is index-driven and cursor-keyed, has no scan to bound, and a budget
+  there could only ever refuse an ordinary listing on a slow disk.
+- **Searches run one at a time, and one whose reader has gone does not run at all.**
+  A search box fires per keystroke pause, so a typed phrase queues several searches of which
+  only the last is wanted.
+  Superseded ones wait on the event loop, which costs nothing, and are dropped at the front
+  of the queue when their connection has closed - which is what makes the browser's own
+  abort meaningful, since the abort by itself stops nothing in the daemon.
+  On 2026-09-04 five searches typed in nineteen seconds each ran to completion: they took
+  20 s, 68 s, 65 s and 55 s, and behind them `/api/sessions` took 46 s and live agents' hook
+  posts took 50 s. The daemon read as frozen, and the reader saw an empty result list for a
+  minute - which is what "search is broken" turned out to mean.
 - **A search with no word characters matches no messages rather than quietly matching
   something else.**
   `MATCH ''` is an FTS syntax error, so a query like `???` has nothing to look for in the

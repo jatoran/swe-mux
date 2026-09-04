@@ -47,6 +47,21 @@ log = logging.getLogger(__name__)
 #: Same reasoning as the assistant's: nobody is watching a spinner they can
 #: abandon, and the search holds the single history executor thread while it runs.
 AGENT_SEARCH_BUDGET_MS = 6_000
+#: Wall-clock ceiling on a browser-driven history *search* (`GET /api/history?q=`).
+#:
+#: A human watching a spinner can abandon the view; they cannot abandon the query.
+#: Nothing above SQLite can stop a running statement, and aiohttp does not cancel a
+#: handler when its client disconnects, so an unbounded search went on holding the
+#: single history executor thread long after the reader had given up on it. Measured
+#: 2026-09-04: five searches typed in nineteen seconds took 20 s, 68 s, 65 s and 55 s,
+#: and behind them `/api/sessions` took 46 s and live agents' hook posts took 50 s.
+#: Larger than the agent's budget because a person is waiting on a specific answer
+#: and can narrow the query, where an agent should be told to narrow it sooner.
+BROWSER_SEARCH_BUDGET_MS = 8_000
+#: Search excerpts kept per conversation on a history page: three are shown, and the
+#: fourth is only counted, so "3 of 4+ matches" can be said without ranking the rest.
+_PAGE_MATCH_PREVIEW = 3
+_PAGE_MATCH_CAP = 4
 _AGENT_BACKEND_ARGS = tuple(sorted(AGENT_BACKENDS))
 _AGENT_BACKEND_SQL = ",".join("?" for _ in _AGENT_BACKEND_ARGS)
 _STORE_BACKEND_ARGS = tuple(
@@ -3312,6 +3327,94 @@ class HistoryIndex:
 
         return await self._run(op)
 
+    def _page_message_matches(
+        self,
+        history_ids: list[str],
+        *,
+        query: str,
+        match_query: str,
+        search_scope: str,
+        search_index_ready: bool,
+    ) -> dict[str, tuple[list[dict[str, Any]], int]]:
+        """Excerpts for a whole page of search results in one statement.
+
+        Runs inside the executor, called from `history_page`'s operation.
+
+        The shape is the point. One query per result row asks the full-text index
+        the same question fifty times and discards all but that row's answer each
+        time: a `MATCH` restricted by `history_id` still scans the entire match
+        set, because the restriction is on the joined table rather than on the
+        index. Measured 2026-09-04 against the 3.07 GB primary archive, 57 ms per
+        row - 2.9 s for a fifty-row page, on the thread every other history read
+        queues behind. Asking once for the page's rows costs 52 ms.
+
+        The per-row caps move to Python for the same reason a `LIMIT` cannot come
+        back: a global limit would starve the page's later rows of the excerpts
+        the earlier ones got, and per-row limits are what the fifty statements
+        were buying. Rows arrive in each row's own ranking order (`bm25` then
+        ordinal for the index, ordinal alone for the fallback), so taking the
+        first `_PAGE_MATCH_CAP` per conversation selects exactly what the
+        per-row `LIMIT 4` selected.
+        """
+        if not history_ids:
+            return {}
+        role = search_scope if search_scope in {"user", "assistant"} else None
+        role_sql = " AND hm.role=?" if role else ""
+        placeholders = ",".join("?" for _ in history_ids)
+        args: list[Any]
+        if search_index_ready:
+            sql = (
+                "SELECT hm.history_id,hm.ordinal,hm.role,hm.ts,"
+                "snippet(history_messages_fts,0,'','',' … ',24) AS excerpt "
+                "FROM history_messages_fts JOIN history_messages hm "
+                "ON hm.id=history_messages_fts.rowid "
+                f"WHERE history_messages_fts MATCH ? AND hm.history_id IN ({placeholders})"
+                f"{role_sql} ORDER BY bm25(history_messages_fts),hm.ordinal"
+            )
+            args = [match_query, *history_ids]
+        else:
+            predicate, query_args = _like_query_predicate(query, "all_terms")
+            sql = (
+                "SELECT hm.history_id,hm.ordinal,hm.role,hm.ts,hm.text "
+                f"FROM history_messages hm WHERE {predicate} "
+                f"AND hm.history_id IN ({placeholders})"
+                f"{role_sql} ORDER BY hm.history_id,hm.ordinal"
+            )
+            args = [*query_args, *history_ids]
+        if role:
+            args.append(role)
+        found: dict[str, tuple[list[dict[str, Any]], int]] = {}
+        # Stop reading once every conversation on the page has its four. Without
+        # this the statement walks every message the query matched in all fifty
+        # of them - which for a common word is most of the archive, and each row
+        # walked costs a `snippet()` read of the message text it discards.
+        outstanding = len(set(history_ids))
+        with contextlib.closing(self._db.execute(sql, args)) as cursor:
+            for row in cursor:
+                history_id = str(row["history_id"])
+                matches, count = found.get(history_id, ([], 0))
+                if count >= _PAGE_MATCH_CAP:
+                    continue
+                if len(matches) < _PAGE_MATCH_PREVIEW:
+                    matches.append(
+                        {
+                            "ordinal": row["ordinal"],
+                            "role": row["role"],
+                            "ts": row["ts"],
+                            "excerpt": (
+                                row["excerpt"]
+                                if search_index_ready
+                                else _search_excerpt(str(row["text"]), query)
+                            ),
+                        }
+                    )
+                found[history_id] = (matches, count + 1)
+                if count + 1 == _PAGE_MATCH_CAP:
+                    outstanding -= 1
+                    if not outstanding:
+                        break
+        return found
+
     async def history_page(
         self,
         *,
@@ -3342,10 +3445,16 @@ class HistoryIndex:
         yesterday outranks a short one spawned an hour ago and abandoned.
 
         `budget_ms` bounds the SQLite work and raises `HistorySearchBudgetExceeded`
-        rather than running to completion. It exists for callers that are not a
-        human watching a spinner they can abandon - an assistant tool call has no
-        such human, and an unbounded one takes the whole daemon's history thread
-        with it. A human-driven page passes None and behaves exactly as before.
+        rather than running to completion, and every *search* now passes one
+        (`BROWSER_SEARCH_BUDGET_MS` for the browser, `AGENT_SEARCH_BUDGET_MS` for
+        an agent). The exemption the human path used to hold rested on a premise
+        this class disproves elsewhere: abandoning the spinner does not release
+        the executor thread, so an unbounded search outlives the reader who
+        wanted it and freezes every other history read behind it.
+
+        A page with no query still passes None. That path is index-driven and
+        cursor-keyed, so it has no scan to bound - and a budget there could only
+        ever refuse an ordinary listing on a slow disk.
         """
         limit = max(1, min(limit, 200))
         if search_scope not in {"all", "user", "assistant", "metadata"}:
@@ -3380,10 +3489,18 @@ class HistoryIndex:
                 # about names and paths.
                 message_sql = "0"
             elif search_index_ready:
+                # `IN (uncorrelated SELECT)` rather than `EXISTS (... h.id ...)`,
+                # and the difference is the whole cost of a search. Correlated,
+                # SQLite re-runs the full-text scan once per candidate row - and
+                # the `ORDER BY` needs every row before it can sort, so "once per
+                # candidate" means every conversation in the archive. Uncorrelated,
+                # the planner materializes the id set once (`LIST SUBQUERY`) and
+                # probes it. Measured 2026-09-04 against the 3.07 GB primary
+                # archive, 5,735 conversations: 5.59 s correlated, 0.033 s here.
                 message_sql = (
-                    "EXISTS (SELECT 1 FROM history_messages hm "
-                    "JOIN history_messages_fts ON history_messages_fts.rowid=hm.id "
-                    "WHERE hm.history_id=h.id AND history_messages_fts MATCH ?"
+                    "h.id IN (SELECT hm.history_id FROM history_messages_fts "
+                    "JOIN history_messages hm ON hm.id=history_messages_fts.rowid "
+                    "WHERE history_messages_fts MATCH ?"
                 )
                 message_args = [match_query]
                 if search_scope in {"user", "assistant"}:
@@ -3393,8 +3510,7 @@ class HistoryIndex:
             else:
                 predicate, message_args = _like_query_predicate(query, "all_terms")
                 message_sql = (
-                    "EXISTS (SELECT 1 FROM history_messages hm WHERE hm.history_id=h.id AND "
-                    f"{predicate}"
+                    f"h.id IN (SELECT hm.history_id FROM history_messages hm WHERE {predicate}"
                 )
                 if search_scope in {"user", "assistant"}:
                     message_sql += " AND hm.role=?"
@@ -3452,48 +3568,17 @@ class HistoryIndex:
                 item.pop(_HISTORY_ORDER_KEY, None)
                 items.append(item)
             if query and match_query:
-                role = search_scope if search_scope in {"user", "assistant"} else None
+                decorated = self._page_message_matches(
+                    [str(item["id"]) for item in items],
+                    query=query,
+                    match_query=match_query,
+                    search_scope=search_scope,
+                    search_index_ready=search_index_ready,
+                )
                 for item in items:
-                    match_args: list[Any]
-                    role_sql = ""
-                    if role:
-                        role_sql = " AND hm.role=?"
-                    if search_index_ready:
-                        match_args = [match_query, item["id"]]
-                        if role:
-                            match_args.append(role)
-                        matches = self._db.execute(
-                            "SELECT hm.ordinal,hm.role,hm.ts,"
-                            "snippet(history_messages_fts,0,'','',' … ',24) AS excerpt "
-                            "FROM history_messages hm JOIN history_messages_fts "
-                            "ON history_messages_fts.rowid=hm.id "
-                            "WHERE history_messages_fts MATCH ? AND hm.history_id=?"
-                            f"{role_sql} ORDER BY bm25(history_messages_fts),hm.ordinal LIMIT 4",
-                            match_args,
-                        ).fetchall()
-                        public_matches = [dict(match) for match in matches[:3]]
-                    else:
-                        predicate, query_args = _like_query_predicate(query, "all_terms")
-                        match_args = [*query_args, item["id"]]
-                        if role:
-                            match_args.append(role)
-                        matches = self._db.execute(
-                            "SELECT hm.ordinal,hm.role,hm.ts,hm.text FROM history_messages hm "
-                            f"WHERE {predicate} AND hm.history_id=?{role_sql} "
-                            "ORDER BY hm.ordinal LIMIT 4",
-                            match_args,
-                        ).fetchall()
-                        public_matches = [
-                            {
-                                "ordinal": match["ordinal"],
-                                "role": match["role"],
-                                "ts": match["ts"],
-                                "excerpt": _search_excerpt(str(match["text"]), query),
-                            }
-                            for match in matches[:3]
-                        ]
-                    item["matches"] = public_matches
-                    item["match_count"] = len(matches) if len(matches) < 4 else 4
+                    matches, count = decorated.get(str(item["id"]), ([], 0))
+                    item["matches"] = matches
+                    item["match_count"] = count
             next_cursor = (
                 f"{page[-1][_HISTORY_ORDER_KEY]}:{page[-1]['id']}"
                 if has_more and page

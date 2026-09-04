@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from aiohttp import web
@@ -16,6 +19,7 @@ from ..harness import (
     AGENT_BACKENDS,
     has_observable_transcript,
 )
+from ..history import BROWSER_SEARCH_BUDGET_MS
 from ..http_support import json_response
 from ..layouts import attach_terminal
 from ..session import (
@@ -32,22 +36,99 @@ from . import sessions
 log = logging.getLogger(__name__)
 
 
+class SearchAbandoned(Exception):
+    """The reader who asked for this search is gone; do not run it."""
+
+
+@asynccontextmanager
+async def _search_turn(request: web.Request, *, active: bool) -> AsyncIterator[None]:
+    """Serialize browser searches and drop the ones nobody is waiting for.
+
+    Two facts make an unguarded search box a denial of service against the
+    daemon's own history thread. A search box fires per keystroke pause, so a
+    typed phrase queues several searches; and aiohttp does not cancel a handler
+    when its client disconnects, so aborting the request in the browser stops
+    nothing here. On 2026-09-04 five searches typed in nineteen seconds ran to
+    completion one after another, and `/api/sessions` and live agents' hook posts
+    queued for the best part of a minute behind them.
+
+    The lock is what makes the abandonment check possible rather than being the
+    fix by itself: superseded searches wait here on the event loop, costing
+    nothing, and by the time each reaches the front the browser has closed its
+    connection and this refuses to spend the executor on it. What still runs is
+    the newest one, which is the only one whose answer anybody will read.
+    """
+    gate = request.app.get(keys.HISTORY_SEARCH_GATE)
+    if not active or gate is None:
+        # No query is an index-driven listing and has nothing to serialize; a
+        # missing gate is a partially-built app in a test, where the budget and
+        # the abandonment check are the parts under test rather than the queue.
+        yield
+        return
+    waited = time.monotonic()
+    async with gate:
+        transport = request.transport
+        if transport is None or transport.is_closing():
+            raise SearchAbandoned
+        queued_ms = (time.monotonic() - waited) * 1000
+        if queued_ms > 250:
+            log.debug("history search queued behind another for %.0f ms", queued_ms)
+        yield
+
+
 async def list_history(request: web.Request) -> web.Response:
     external_value = request.query.get("external")
-    page = await request.app[keys.HISTORY].history_page(
-        query=request.query.get("q", ""),
-        search_scope=request.query.get("scope", "all"),
-        backend=request.query.get("backend"),
-        project_id=request.query.get("project"),
-        state=request.query.get("state"),
-        external=(external_value.lower() == "true") if external_value is not None else None,
-        date_from=float(request.query["date_from"]) if request.query.get("date_from") else None,
-        date_to=float(request.query["date_to"]) if request.query.get("date_to") else None,
-        time_basis=request.query.get("time_basis", "last_message"),
-        cursor=request.query.get("cursor"),
-        limit=int(request.query.get("limit", min(50, request.app[keys.CONFIG].history_limit))),
-    )
-    await request.app[keys.HISTORY].refresh_time_summaries(page["items"])
+    query = request.query.get("q", "")
+    history = request.app[keys.HISTORY]
+    started = time.monotonic()
+    try:
+        async with _search_turn(request, active=bool(query)):
+            # Re-stamped past the queue wait: a search that queued behind another
+            # is not a slow search, and timing the wait as if it were would make
+            # the slow-search warning fire hardest exactly when nothing is wrong.
+            started = time.monotonic()
+            page = await history.history_page(
+                query=query,
+                search_scope=request.query.get("scope", "all"),
+                backend=request.query.get("backend"),
+                project_id=request.query.get("project"),
+                state=request.query.get("state"),
+                external=(
+                    external_value.lower() == "true" if external_value is not None else None
+                ),
+                date_from=(
+                    float(request.query["date_from"]) if request.query.get("date_from") else None
+                ),
+                date_to=float(request.query["date_to"]) if request.query.get("date_to") else None,
+                time_basis=request.query.get("time_basis", "last_message"),
+                cursor=request.query.get("cursor"),
+                limit=int(
+                    request.query.get("limit", min(50, request.app[keys.CONFIG].history_limit))
+                ),
+                # A search is bounded; a plain listing is not, because it has no
+                # scan to bound (`HistoryIndex.history_page`).
+                budget_ms=BROWSER_SEARCH_BUDGET_MS if query else None,
+            )
+    except SearchAbandoned:
+        # 499-shaped, but nothing reads it: the socket is already gone. Logged
+        # because a run of these is the signature of a search that got slow again.
+        log.info("history search abandoned before it ran scope=%s", request.query.get("scope"))
+        return json_response({"items": [], "next_cursor": None, "abandoned": True})
+    if query:
+        # Every search is timed, not only the ones that trip the budget: a search
+        # that has become slow is visible here as a trend before it is visible to
+        # a reader as a freeze, and the budget's own log line only ever fires
+        # after the damage is a refusal.
+        elapsed_ms = (time.monotonic() - started) * 1000
+        log.log(
+            logging.WARNING if elapsed_ms > 2_000 else logging.DEBUG,
+            "history search scope=%s chars=%d results=%d elapsed_ms=%.0f",
+            request.query.get("scope", "all"),
+            len(query),
+            len(page["items"]),
+            elapsed_ms,
+        )
+    await history.refresh_time_summaries(page["items"])
     await sessions._decorate_generated_titles(request.app, page["items"])
     sessions._decorate_conversation_holders(request.app, page["items"])
     return json_response(page)
