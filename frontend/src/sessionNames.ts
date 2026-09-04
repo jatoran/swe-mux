@@ -35,3 +35,18 @@ export function sessionDisplayName(session: NamedSession): string {
 export function runDisplayName(run: NamedRun): string {
   return run.auto_named !== 0 && run.generated_title ? run.generated_title : run.name || ''
 }
+
+/**
+ * The lifecycle state of the auto-title currently on screen for a session, or `undefined`
+ * when none is (a manual name wins, or the title predates lifecycle tracking). A
+ * `provisional` title is still refining and may change again as the task takes shape; a
+ * `settled` one is frozen. Surfaces use this to mark churn as expected convergence rather
+ * than letting a title that revises a few times read as a bug.
+ */
+export function titleStability(
+  session: NamedSession & { generated_title_annotation?: { stability?: string | null } },
+): 'provisional' | 'settled' | undefined {
+  if (session.auto_named === false || !session.generated_title) return undefined
+  const stability = session.generated_title_annotation?.stability
+  return stability === 'provisional' || stability === 'settled' ? stability : undefined
+}

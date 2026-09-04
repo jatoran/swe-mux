@@ -2348,7 +2348,8 @@ body {
 .project-authority-summary>div{display:flex;justify-content:space-between;gap:10px}
 .project-authority-summary dt{color:var(--muted)}
 .project-authority-summary dd{margin:0}
-.automation-limits-drawer,.automation-rules-drawer{margin-top:10px;border:1px solid var(--line);background:var(--panel)}
+.automation-limits-drawer,.automation-global-observers{margin-top:10px;border:1px solid var(--line);background:var(--panel)}
+.automation-global-observers{padding:10px 0}.automation-global-observers>h3,.automation-global-observers>h4,.automation-global-observers>p{padding-left:10px;padding-right:10px}.automation-global-observers>h3{display:flex;align-items:center;gap:7px}
 @media(max-width:760px){.automation-masterbar .automation-project-toolbar{margin-left:0;width:100%}}
 .automation-panel .usage-table{margin-top:10px}.automation-panel .usage-tables .usage-table{margin-top:0}
 /* The summary strip is a header for the two columns beneath it, not a cell in them. Left as
@@ -2394,6 +2395,14 @@ body {
 .automation-pill.observer{border-color:var(--accent);color:var(--accent)}
 .automation-pill.feature{border-color:var(--green);color:var(--green)}
 .automation-pill.retired,.automation-pill.off{border-color:var(--amber);color:var(--amber)}
+/* Scope badge: which axis a switch lives on - global (one install-wide switch) or
+   per-project (the matrix). Filled rather than outlined so it reads as a category
+   marker beside the outlined type pills (system/custom). */
+.automation-pill.scope{background:var(--panel2)}
+.automation-pill.scope.global{border-color:var(--muted);color:var(--muted)}
+.automation-pill.scope.project{border-color:var(--accent);color:var(--accent)}
+.automation-global-observers h4{margin-top:14px}
+.automation-title-refining{margin:4px 8px;color:var(--muted);font-style:italic}
 .settings-warning{border-left:2px solid var(--accent);padding:7px 9px;background:var(--bg)}
 /* BudgetControl: one spending cap, drawn as the mode that decides what binds and
    the two figures under it. The unenforced axis stays legible and editable rather

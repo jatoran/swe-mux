@@ -16,14 +16,14 @@ import type { StartingSetCatalog } from './projectCreate'
 import { revealSetting } from './settingReveal'
 import type { Project } from './types'
 
-type Rule={id:string;name:string;enabled:boolean;shadow:boolean;trigger:string;revision:string;source:string;actions?:Array<{kind:string;model?:string;on_result?:{kind?:string}}>}
-type BuiltInRule={id:string;name:string;enabled:boolean;shadow:boolean;trigger:string;source:'builtin';setting_key:string;setting_label:string;input:string;model:string;result:string;description:string}
+type Rule={id:string;name:string;enabled:boolean;shadow:boolean;trigger:string;revision:string;source:string;scope?:string;actions?:Array<{kind:string;model?:string;on_result?:{kind?:string}}>}
+type BuiltInRule={id:string;name:string;enabled:boolean;shadow:boolean;trigger:string;source:'builtin';scope:string;setting_key:string;setting_label:string;input:string;model:string;result:string;description:string}
 type Firing={id:string;event_seq:number;event_type:string;rule_id:string;status:string;shadow:number;created_at:number;error?:string;condition_trace:Array<{field:string;matched:boolean;actual:unknown;expected:unknown}>}
 type ActionResult={id:string;firing_id:string;action_index:number;kind:string;status:string;detail:unknown;error?:string;created_at:number}
 type ObserverCall={id:string;firing_id:string;rule_id:string;status:string;requested_model?:string;resolved_model?:string;input_bytes:number;input_tokens:number;output_tokens:number;cost_usd?:number;latency_ms?:number;provider_name?:string;finish_reason?:string;response_content_type?:string;response_content_length?:number;http_status?:number;retryable?:number;error?:string;created_at:number}
 type AutomationData={
   controls:{automation_enabled:boolean;scan_timeline_enabled:boolean}
-  engine:{enabled:boolean;diagnostic?:string;rules:Rule[];built_in_rules:BuiltInRule[];queue:{size:number;capacity:number;dropped:number;loop_rejections:number};capabilities:{triggers:string[];observer_schemas:string[]}}
+  engine:{enabled:boolean;diagnostic?:string;rules:Rule[];built_in_rules:BuiltInRule[];queue:{size:number;capacity:number;dropped:number;loop_rejections:number;title_retries?:{pending:number;exhausted:number}};capabilities:{triggers:string[];observer_schemas:string[]}}
   provider:{secret:{configured:boolean;source:string};models:{models:unknown[];stale:boolean;error?:string};cheap_model:string;standard_model:string}
   spend_today:{tokens:number;cost_usd:number};observer_calls:Record<string,number>;annotations:Record<string,number>;unread_notifications:number
   recent_firings:Firing[];recent_action_results:ActionResult[];recent_observer_calls:ObserverCall[]
@@ -179,17 +179,23 @@ export function AutomationDashboard({onClose,onOpenSession,projects=[],initialVi
             <summary>Limits &amp; budgets<em> · global only</em></summary>
             <AutomationPolicyView initialSetting={initialSetting} revealToken={revealToken}/>
           </details>
-          <details class="automation-advanced automation-rules-drawer">
-            <summary>Rules &amp; observers<em> · {(data?.engine.built_in_rules||[]).filter(item=>item.enabled).length} system on · {data?.engine.rules.length||0} custom</em></summary>
-            <section class="usage-table"><h3>System observers</h3><p>Built-in, read-only rules; the three attention observers share one setting.</p>{data?.engine.built_in_rules?.map(rule=><article class="automation-row automation-rule-row"><span class={`state-dot ${rule.enabled?'idle':'running'}`}/><div><div class="automation-rule-heading"><strong>{rule.name}</strong><span class="automation-pill">system</span></div><span>{rule.description}</span><small>when::{rule.trigger} · reads::{rule.input}</small><em><ModelName model={rule.model}/> → {rule.result} · setting::{rule.setting_label}</em></div><div class="automation-row-actions"><button onClick={()=>void updateBuiltin(rule)}>{rule.enabled?'disable':'enable'}{rule.setting_key==='attention_observers_enabled'?' group':''}</button></div></article>)}</section>
-            <section class="usage-table"><h3>Custom rules</h3><p>Saved in the daemon rules file; the editor below owns the full TOML definition.</p>{data?.engine.rules.length?data.engine.rules.map(rule=><article class="automation-row automation-rule-row"><span class={`state-dot ${rule.enabled?'idle':'running'}`}/><div><div class="automation-rule-heading"><strong>{rule.name}</strong><span class="automation-pill">custom</span></div><small>{rule.id} · when::{rule.trigger} · {rule.shadow?'shadow only':'live'}</small><em>{actionSummary(rule)} · revision::{rule.revision}</em></div><div class="automation-row-actions"><button onClick={()=>void updateRule(rule,{enabled:!rule.enabled})}>{rule.enabled?'disable':'enable'}</button><button onClick={()=>void updateRule(rule,{shadow:!rule.shadow})}>{rule.shadow?'make live':'shadow'}</button></div></article>):<div class="automation-empty"><strong>No custom rules</strong><span>Only the system observers listed here are currently configured.</span><button onClick={()=>setRulesOpen(true)}>edit custom rules</button></div>}
+          <section class="usage-table automation-global-observers">
+            <h3>Global automations<span class="automation-pill scope global">global</span></h3>
+            <p>These run install-wide - one switch each, applied to every Project - unlike the per-Project matrix above. That difference is why they sit in their own group rather than in the matrix.</p>
+            <h4>System observers</h4>
+            <p>Built-in, read-only observers. The Session titler names a pane from its opening request and refines that title up to three times while the work is still taking shape, then freezes it; the three attention observers share one setting.</p>
+            {data?.engine.built_in_rules?.map(rule=><article class="automation-row automation-rule-row"><span class={`state-dot ${rule.enabled?'idle':'running'}`}/><div><div class="automation-rule-heading"><strong>{rule.name}</strong><span class="automation-pill scope global">global</span><span class="automation-pill">system</span></div><span>{rule.description}</span><small>when::{rule.trigger} · reads::{rule.input}</small><em><ModelName model={rule.model}/> → {rule.result} · setting::{rule.setting_label}</em></div><div class="automation-row-actions"><button onClick={()=>void updateBuiltin(rule)}>{rule.enabled?'disable':'enable'}{rule.setting_key==='attention_observers_enabled'?' group':''}</button></div></article>)}
+            {(data?.engine.queue.title_retries?.pending||0)>0&&<p class="automation-title-refining">{data?.engine.queue.title_retries?.pending} session title{(data?.engine.queue.title_retries?.pending||0)===1?'':'s'} still refining - a provisional title revises until the task settles.</p>}
+            <h4>Custom rules</h4>
+            <p>Saved in the daemon rules file and also global; the editor below owns the full TOML definition.</p>
+            {data?.engine.rules.length?data.engine.rules.map(rule=><article class="automation-row automation-rule-row"><span class={`state-dot ${rule.enabled?'idle':'running'}`}/><div><div class="automation-rule-heading"><strong>{rule.name}</strong><span class="automation-pill scope global">global</span><span class="automation-pill">custom</span></div><small>{rule.id} · when::{rule.trigger} · {rule.shadow?'shadow only':'live'}</small><em>{actionSummary(rule)} · revision::{rule.revision}</em></div><div class="automation-row-actions"><button onClick={()=>void updateRule(rule,{enabled:!rule.enabled})}>{rule.enabled?'disable':'enable'}</button><button onClick={()=>void updateRule(rule,{shadow:!rule.shadow})}>{rule.shadow?'make live':'shadow'}</button></div></article>):<div class="automation-empty"><strong>No custom rules</strong><span>Only the system observers listed here are currently configured.</span><button onClick={()=>setRulesOpen(true)}>edit custom rules</button></div>}
             <details class="automation-advanced automation-rules-editor" open={rulesOpen} onToggle={event=>setRulesOpen(event.currentTarget.open)}><summary>rules.toml editor{rulesText!==savedRulesText?' · unsaved':''}</summary>
               <p>Saving validates the complete file first; an invalid file changes nothing. Repository .swe-mux/rules.toml files remain diagnostic and inert.</p>
               <textarea value={rulesText} spellcheck={false} onInput={event=>setRulesText(event.currentTarget.value)}/>
               {rulesError&&<p class="usage-error" role="alert">{rulesError}</p>}
               <div class="automation-inline"><button class="primary" disabled={rulesText===savedRulesText} onClick={()=>void saveRules()}>validate + save</button><button disabled={rulesText===savedRulesText} onClick={()=>{setRulesText(savedRulesText);setRulesError('')}}>discard edits</button></div>
-            </details></section>
-          </details>
+            </details>
+          </section>
         </div>}
         {view==='usage'&&<div class="usage-tables">
           <div class="usage-summary"><article><span>automation</span><strong>{data?.engine.enabled?'on':'off'}</strong></article><article><span>calls today</span><strong>{formatCount(data?.spend_breakdown?.totals?.today_calls||0)}</strong></article><article><span>tokens today</span><strong title={integer.format(data?.spend_today.tokens||0)}>{formatCount(data?.spend_today.tokens||0)}</strong></article><article><span>cost today</span><strong>{formatMoney(data?.spend_today.cost_usd||0)}</strong></article></div>

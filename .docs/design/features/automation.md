@@ -316,11 +316,24 @@ and the declared minimum observation capability.
 - The status strip's `calls today` reads the ledger, like the two spend tiles beside it. It
   previously summed the lifetime observer-call status counts, which was neither today's figure
   nor a count of anything the reader had asked for.
-- The Policy tab's "Rules & observers" disclosure is the complete effective inventory: built-in system observers and canonical `rules.toml` rules with their editor.
-  Disabled controls and built-ins remain visible.
+- The Policy tab surfaces the built-in system observers and canonical `rules.toml` rules as a
+  visible **Global automations** group beside the per-Project matrix, rather than buried in a
+  disclosure - the observers sat one level down from the toggles and read as unreachable.
+  Every row in the group carries a `global` scope badge, because a built-in observer and a
+  custom rule both run install-wide - one switch each, applied to every Project - which is the
+  axis a matrix row's per-Project cell does not have.
+  The distinction is now labelled rather than implied, which is the whole reason the two
+  surfaces can sit together without the observers reading as "another Project toggle".
+  Disabled controls and built-ins remain visible, and the `rules.toml` editor stays a
+  sub-disclosure inside the group.
 - Each built-in row exposes trigger, bounded input slice, model tier, result destination, and
   owning config setting. The titler toggles on `observer_titler_enabled`; stall, approval, and
   context observers share the `attention_observers_enabled` attention setting.
+  The Session titler's row description states the refine-then-settle behaviour rather than
+  claiming it names a pane once, and a live "N titles still refining" line reads the title-retry
+  queue so a provisional title that is still converging is visible where the observer is
+  configured. The generated-title annotation a session snapshot carries also reports its
+  `stability` (`provisional`/`settled`), parsed from the titler's `title_lifecycle` evidence.
   **The Session titler is install-wide and gated by no per-Project opt-in.** Its built-in rules
   are a pure function of `automation_enabled` and `observer_titler_enabled`, so it names panes
   in every Project including one that opted into nothing. Worth saying out loud because the
@@ -377,6 +390,14 @@ request settles immediately. A setup-only opener such as “review/learn this re
 provisional, then recomputed when a later request reveals the real task. Automatic work is bounded
 to the first three distinct requests and at most three provider calls; a settled result freezes.
 Every replacement is append-only, and the newest title annotation is the displayed title.
+The prompt anchors the title on the first concrete task or subject and its distinguishing term,
+and treats later requests as refinements of it rather than replacements - it shifts only when a
+genuinely different task has taken over. That bias exists because the earlier prompt told the
+model to drop the "setup step" for whatever the accumulated requests had in common, which
+generalised a specific opening title (`Review Retrofit Campaign`) into a blander one
+(`Review Campaign Rules`) on each provisional pass - a re-title that lost the distinguishing
+context is worse than no re-title, so a distinguishing word is now kept over filler when the
+2-4 word budget forces a cut.
 
 `builtin.session-titler` still fires on `turn_ended` and reads the completed turn, but only for a
 run whose request was never captured, such as an adopted session or a Codex run whose hooks were
