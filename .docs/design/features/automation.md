@@ -526,6 +526,15 @@ shim decoding UTF-8 with the Windows code page, fixed at that boundary too — `
 has the byte-level account. Both layers are kept: the shim fix stops new corruption, and the
 scrub means no future bad byte from a transcript, a paste, or a CLI can cost a run its name.
 
+**The status a body carries beats the status its headers wear.**
+OpenRouter answers an upstream refusal - a 429 above all - with HTTP **200** and a body that is an error envelope: an `id`, an `error` object, and no `choices` at all.
+Parsed as a success that becomes `content=None`, so the call failed as "OpenRouter structured response must be an object" - the schema blamed for a rate limit - and, because 200 is in no retry set, the transport gave up on the first attempt and left the ledger a row with zero tokens, no provider, and a generation id that `/generation` 404s on.
+Measured 2026-09-04: 30 of 79 session-title calls in two days, and one session that never got a title at all, five ladder attempts apart.
+`_request` now adopts the embedded `error.code` as the effective status whenever it names a real 4xx/5xx, and takes exactly the path an honest response of that status would have taken - the same equal-jitter backoff, the same `Retry-After`, the same retryability.
+Only a body with none of `choices`, `data`, `models`, or `results` counts as an envelope, so a response that answered *and* annotated the answer with `error` is still an answer.
+A `code` outside that range earns no invented retry policy: providers put their own vocabulary in that field, so it is left to the caller's longer-horizon ladder as a retryable fault rather than guessed at here.
+The same frame arrives on the streaming path as a `data:` event, where the accumulator used to count it as an event and rebuild an envelope with no content - a rate limit answered with silence; it is now raised, retried before any text has been spoken and never after, which is the rule a mid-reply disconnect already followed.
+
 `OpenRouterError` carries `status`, `retryable` and `retry_after`.
 For statuses that describe the far side's health (`RETRY_STATUSES`) and safe routing/parameter failures, the message also carries the provider's own explanation from `error.metadata.raw` plus `provider_name`.
 That detail is required to distinguish incompatible parameters, an unknown model, and temporary provider unavailability instead of collapsing all three into "HTTP 404".

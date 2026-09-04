@@ -38,6 +38,14 @@ The release procedure that maintains this file is [`RELEASING.md`](RELEASING.md)
 - **The UI says when the daemon is not answering.**
   A slim banner appears after two missed health probes, counts the seconds, and clears on the first answer, so a stalled daemon reads as stalled rather than as a crashed app.
 
+### Fixed
+
+- **An upstream rate limit no longer reads as a broken schema, and is retried.**
+  OpenRouter answers an upstream refusal with HTTP 200 and a body carrying only an error, so the call failed as "structured response must be an object" and - because 200 is in no retry set - was never retried, leaving a ledger row with zero tokens and no provider.
+  The embedded status is now adopted whenever it names a real one, and the call takes the same bounded equal-jitter backoff any honest 429 would have; a body that answered and merely annotated the answer with an error is still an answer, and an unrecognisable code is handed to the caller's own ladder rather than guessed at.
+  Measured over two days before the fix: 30 of 79 session-title calls lost this way, and one session that never got a title at all.
+  The same frame on the streaming path used to leave the assistant answering a rate limit with silence; it is now raised, and retried only while nothing has been spoken.
+
 ## [0.2.1] - 2026-09-01
 
 ### Added
