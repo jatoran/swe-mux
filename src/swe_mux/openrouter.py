@@ -59,6 +59,10 @@ MAX_RETRY_SLEEP_SECONDS = 8.0
 # a request error rather than an auth error, and key-shaped text is scrubbed from
 # the detail regardless (`_provider_error`).
 SAFE_ERROR_DETAIL_STATUSES = RETRY_STATUSES | {400, 404, 412, 413, 422}
+# Keys whose presence means the body carried an answer, so an `error` beside them
+# is a partial-result annotation rather than the whole response. Only a body with
+# none of them is an error envelope wearing a success status.
+SUCCESS_ENVELOPE_KEYS = ("choices", "data", "models", "results")
 # A provider that understood the request and rejected its streaming parameters
 # can still answer unstreamed, so these statuses fall back rather than fail.
 STREAM_UNSUPPORTED_STATUSES = {400, 422}
@@ -217,6 +221,7 @@ class _ToolStreamAccumulator:
 
     content: str = ""
     saw_data: bool = False
+    error: dict[str, Any] | None = None
     finish_reason: str | None = None
     generation_id: str | None = None
     resolved_model: str | None = None
@@ -241,6 +246,13 @@ class _ToolStreamAccumulator:
         if not isinstance(chunk, dict):
             return ""
         self.saw_data = True
+        # The same 200-with-an-error-body shape as the unstreamed path, arriving as
+        # a data frame. Kept rather than raised from here so the caller can tell an
+        # error that preceded any text from one that interrupted it.
+        embedded = _embedded_error(chunk)
+        if embedded is not None:
+            self.error = embedded
+            return ""
         if chunk.get("id"):
             self.generation_id = str(chunk["id"])
         if chunk.get("model"):
@@ -539,6 +551,53 @@ class OpenRouterClient:
                             f"{name} returned an invalid response envelope",
                             status=response.status,
                             retryable=True,
+                        )
+                    embedded = _embedded_error(value)
+                    if embedded is not None:
+                        # OpenRouter reports an upstream refusal — a 429 above all —
+                        # as an error envelope wearing HTTP 200, carrying an `id` and
+                        # no `choices`. Read as a success it becomes a parse failure
+                        # ("structured response must be an object") that loses both
+                        # the reason and the retry: 200 is in no retry set, so the
+                        # transport gave up on the first attempt and handed the
+                        # caller a row blaming the schema for a rate limit. Measured
+                        # 2026-09-04: 30 of 79 session-title calls in two days, and
+                        # one session that never got a title at all. Adopt the
+                        # embedded code as the effective status and take exactly the
+                        # path an honest response of that status would have taken.
+                        code = _embedded_error_status(embedded)
+                        # OpenRouter stamps an id on the refusal too, and it is the
+                        # only handle the ledger can be joined back to the provider
+                        # on. It bills nothing and `/generation` 404s on it, which is
+                        # itself the confirmation that no call was ever made.
+                        envelope_id = str(value["id"]) if value.get("id") else None
+                        if code is None:
+                            # An error we cannot classify. The caller's own
+                            # longer-horizon retry is the right owner of it, which is
+                            # what `retryable` says; retrying it here would be
+                            # guessing that it is transient.
+                            raise OpenRouterError(
+                                f"{name} returned an error envelope with no status",
+                                status=response.status,
+                                retryable=True,
+                                retry_after=retry_after,
+                                generation_id=envelope_id,
+                            )
+                        detail = (
+                            _error_detail(embedded)
+                            if code in SAFE_ERROR_DETAIL_STATUSES
+                            else ""
+                        )
+                        if code in RETRY_STATUSES and attempt < last_attempt:
+                            await asyncio.sleep(self._retry_delay(attempt, retry_after))
+                            continue
+                        raise OpenRouterError(
+                            f"{name} request failed with HTTP {code}"
+                            + (f": {detail}" if detail else ""),
+                            status=code,
+                            retryable=_retryable_http_error(code, detail),
+                            retry_after=retry_after,
+                            generation_id=envelope_id,
                         )
                     return value
             except (aiohttp.ClientError, TimeoutError) as exc:
@@ -1182,6 +1241,39 @@ class OpenRouterClient:
                     if trailing:
                         delivered = True
                         await on_content(trailing)
+                    if accumulator.error is not None:
+                        code = _embedded_error_status(accumulator.error)
+                        detail = (
+                            _error_detail(accumulator.error)
+                            if code is not None and code in SAFE_ERROR_DETAIL_STATUSES
+                            else ""
+                        )
+                        if delivered:
+                            # Text is already spoken; a retry would repeat it, which
+                            # is the same rule the mid-reply disconnect follows.
+                            raise OpenRouterError(
+                                f"{name} ended the stream mid-reply"
+                                + (f": {detail}" if detail else ""),
+                                status=code,
+                                retryable=False,
+                            )
+                        if code is None:
+                            raise OpenRouterError(
+                                f"{name} returned an error envelope with no status",
+                                retryable=True,
+                            )
+                        if code in RETRY_STATUSES and attempt < last_attempt:
+                            await asyncio.sleep(
+                                self._retry_delay(attempt, _retry_after(response))
+                            )
+                            continue
+                        raise OpenRouterError(
+                            f"{name} request failed with HTTP {code}"
+                            + (f": {detail}" if detail else ""),
+                            status=code,
+                            retryable=_retryable_http_error(code, detail),
+                            retry_after=_retry_after(response),
+                        )
                     if not accumulator.saw_data:
                         raise _StreamUnsupported("the completion stream carried no events")
                     return accumulator.envelope(model)
@@ -1270,6 +1362,16 @@ def _provider_error(body: bytes | bytearray) -> str:
     error = payload.get("error") if isinstance(payload, dict) else None
     if not isinstance(error, dict):
         return ""
+    return _error_detail(error)
+
+
+def _error_detail(error: dict[str, Any]) -> str:
+    """`_provider_error`'s formatting, for an error object already in hand.
+
+    The streaming and embedded-envelope paths hold the parsed object rather than
+    the bytes it came in, and re-serializing one to parse it back would be the
+    only reason to keep a single entry point.
+    """
     metadata = error.get("metadata")
     metadata = metadata if isinstance(metadata, dict) else {}
     parts = [str(metadata.get("raw") or error.get("message") or "").strip()]
@@ -1278,6 +1380,38 @@ def _provider_error(body: bytes | bytearray) -> str:
         parts.append(f"(provider: {provider})")
     text = " ".join(part for part in parts if part)[:MAX_PROVIDER_ERROR_CHARS]
     return SECRET_SHAPED.sub("[redacted]", text)
+
+
+def _embedded_error(payload: dict[str, Any]) -> dict[str, Any] | None:
+    """The error object of a body that is an error and nothing else.
+
+    Guarded by `SUCCESS_ENVELOPE_KEYS` rather than by the status: a response that
+    answered *and* annotated the answer with `error` is still an answer, and
+    turning one into a raise would trade a silent failure for a loud regression.
+    """
+    error = payload.get("error")
+    if not isinstance(error, dict):
+        return None
+    if any(payload.get(key) for key in SUCCESS_ENVELOPE_KEYS):
+        return None
+    return error
+
+
+def _embedded_error_status(error: dict[str, Any]) -> int | None:
+    """The HTTP status an embedded error names, when it names a usable one.
+
+    Anything outside the 4xx/5xx range is refused rather than coerced: providers
+    put their own vocabulary in `code` too, and mapping an unknown token onto a
+    status would invent a retry policy for it.
+    """
+    raw = error.get("code")
+    if isinstance(raw, bool):
+        return None
+    try:
+        code = int(raw)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    return code if 400 <= code <= 599 else None
 
 
 def _retryable_http_error(status: int, detail: str) -> bool:

@@ -651,6 +651,144 @@ async def test_rate_limit_names_the_upstream_provider_and_marks_itself_retryable
     assert captured.value.retryable is True
 
 
+def error_envelope(
+    code: object = 429, message: str = "temporarily rate-limited upstream"
+) -> dict[str, Any]:
+    """OpenRouter's refusal shape: an id, an error, and no `choices` at all."""
+    error: dict[str, Any] = {"message": "Provider returned error", "metadata": {"raw": message}}
+    if code is not None:
+        error["code"] = code
+    return {"id": "gen-refused", "error": error}
+
+
+async def test_an_error_envelope_wearing_http_200_is_retried_on_its_own_status() -> None:
+    """The status a body carries beats the status its headers wear.
+
+    Measured 2026-09-04: OpenRouter answers an upstream 429 with HTTP **200** and
+    an error body. Parsed as a success it became "structured response must be an
+    object" — the schema blamed for a rate limit — and, because 200 is in no retry
+    set, the transport gave up on the first attempt. 30 of 79 session-title calls
+    in two days died that way and one session never got a title at all.
+    """
+    session = FakeSession([FakeResponse(200, error_envelope()) for _ in range(RETRY_ATTEMPTS)])
+    client = OpenRouterClient(MemorySecrets(), session=session, retry_base_seconds=0)  # type: ignore[arg-type]
+
+    with pytest.raises(OpenRouterError) as captured:
+        await client.complete_json(
+            model="vendor/exact",
+            messages=[{"role": "user", "content": "bounded transcript"}],
+            schema_name="title_v2",
+            schema={"type": "object"},
+            max_tokens=64,
+        )
+
+    error = captured.value
+    assert error.status == 429
+    assert error.retryable is True
+    assert "rate-limited upstream" in str(error)
+    assert error.generation_id == "gen-refused"
+    assert len(session.requests) == RETRY_ATTEMPTS, "every attempt is spent before giving up"
+
+
+async def test_a_retried_error_envelope_recovers_within_the_same_call() -> None:
+    """The point of the retry: a burst that clears is not a failed call."""
+    good = {
+        "id": "gen-ok",
+        "model": "vendor/exact",
+        "choices": [{"message": {"content": json.dumps({"title": "envelope fix"})}}],
+        "usage": {"prompt_tokens": 12, "completion_tokens": 6},
+    }
+    session = FakeSession(
+        [
+            FakeResponse(200, error_envelope()),
+            FakeResponse(200, error_envelope()),
+            FakeResponse(200, good),
+        ]
+    )
+    client = OpenRouterClient(MemorySecrets(), session=session, retry_base_seconds=0)  # type: ignore[arg-type]
+
+    result = await client.complete_json(
+        model="vendor/exact",
+        messages=[{"role": "user", "content": "bounded transcript"}],
+        schema_name="title_v2",
+        schema={"type": "object"},
+        max_tokens=64,
+    )
+
+    assert result.value == {"title": "envelope fix"}
+    assert len(session.requests) == 3
+
+
+async def test_an_embedded_status_that_cannot_come_back_is_not_retried() -> None:
+    """A 402 is an account, not a burst; spending four more attempts on it is waste."""
+    session = FakeSession(
+        [FakeResponse(200, error_envelope(code=402, message="insufficient credits"))]
+    )
+    client = OpenRouterClient(MemorySecrets(), session=session, retry_base_seconds=0)  # type: ignore[arg-type]
+
+    with pytest.raises(OpenRouterError) as captured:
+        await client.test_key()
+
+    assert captured.value.status == 402
+    assert captured.value.retryable is False
+    assert len(session.requests) == 1
+
+
+@pytest.mark.parametrize("code", [None, "insufficient_quota", 200, True])
+async def test_an_unclassifiable_error_envelope_is_left_to_the_caller(code: object) -> None:
+    """An unusable `code` earns no invented retry policy.
+
+    Providers put their own vocabulary in that field, and mapping an unknown token
+    onto a status would be guessing which curve to retry it on. The caller's own
+    longer-horizon retry already owns exactly that decision, which is what
+    `retryable` hands back to it.
+    """
+    session = FakeSession([FakeResponse(200, error_envelope(code=code))])
+    client = OpenRouterClient(MemorySecrets(), session=session, retry_base_seconds=0)  # type: ignore[arg-type]
+
+    with pytest.raises(OpenRouterError) as captured:
+        await client.test_key()
+
+    assert captured.value.status == 200
+    assert captured.value.retryable is True
+    assert captured.value.generation_id == "gen-refused"
+    assert len(session.requests) == 1
+
+
+async def test_a_body_that_answered_is_still_an_answer_when_it_also_carries_an_error() -> None:
+    """Only a body with no result at all is an error envelope.
+
+    A response that carried `choices` *and* an `error` annotation used to parse
+    fine and must keep doing so — trading the silent failure for a loud regression
+    would be the worse bug.
+    """
+    session = FakeSession(
+        [
+            FakeResponse(
+                200,
+                {
+                    "id": "gen-partial",
+                    "model": "vendor/exact",
+                    "error": {"code": 429, "message": "one upstream host declined"},
+                    "choices": [{"message": {"content": json.dumps({"title": "still fine"})}}],
+                },
+            )
+        ]
+    )
+    client = OpenRouterClient(MemorySecrets(), session=session, retry_base_seconds=0)  # type: ignore[arg-type]
+
+    result = await client.complete_json(
+        model="vendor/exact",
+        messages=[{"role": "user", "content": "bounded transcript"}],
+        schema_name="title_v2",
+        schema={"type": "object"},
+        max_tokens=64,
+    )
+
+    assert result.value == {"title": "still fine"}
+    assert len(session.requests) == 1
+
+
 async def test_an_unusable_key_is_not_marked_retryable() -> None:
     """A refused key fails identically forever; retrying it only spends the budget."""
     session = FakeSession([FakeResponse(401, {"error": {"message": "No auth credentials"}})])
@@ -1012,6 +1150,49 @@ async def test_a_stream_that_breaks_after_speaking_is_not_retried() -> None:
         await collect(client, deltas)
     assert deltas == ["Half a sen"]
     assert len(session.requests) == 1, "a spoken reply must never be re-requested"
+
+
+async def test_a_streamed_error_frame_is_retried_before_any_text_is_spoken() -> None:
+    """The same 200-with-an-error-body, arriving as a data frame.
+
+    The accumulator counted it as an event and rebuilt an envelope with no content,
+    so the assistant answered a rate limit with silence. Nothing has been spoken
+    yet, so the retry is free.
+    """
+    session = FakeSession(
+        [
+            FakeResponse(200, sse(error_envelope())),
+            FakeResponse(
+                200,
+                sse(
+                    content_chunk("Three sessions are working."),
+                    {"id": "gen-1", "choices": [{"delta": {}, "finish_reason": "stop"}]},
+                ),
+            ),
+        ]
+    )
+    client = OpenRouterClient(MemorySecrets(), session=session, retry_base_seconds=0)  # type: ignore[arg-type]
+
+    deltas: list[str] = []
+    turn = await collect(client, deltas)
+    assert turn.content == "Three sessions are working."
+    assert deltas == ["Three sessions are working."]
+    assert len(session.requests) == 2
+
+
+async def test_a_streamed_error_frame_after_text_is_never_retried() -> None:
+    """Same rule as a mid-reply disconnect: a spoken reply is not said twice."""
+    session = FakeSession([FakeResponse(200, sse(content_chunk("Half a sen"), error_envelope()))])
+    client = OpenRouterClient(MemorySecrets(), session=session, retry_base_seconds=0)  # type: ignore[arg-type]
+
+    deltas: list[str] = []
+    with pytest.raises(OpenRouterError) as captured:
+        await collect(client, deltas)
+
+    assert "mid-reply" in str(captured.value)
+    assert captured.value.retryable is False
+    assert deltas == ["Half a sen"]
+    assert len(session.requests) == 1
 
 
 async def test_an_unstreamed_completion_still_takes_the_buffered_path() -> None:
