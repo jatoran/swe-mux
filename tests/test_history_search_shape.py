@@ -29,9 +29,14 @@ from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer, make_mocked_request
 
 from swe_mux import app_keys as keys
-from swe_mux.history import BROWSER_SEARCH_BUDGET_MS, HistoryIndex
+from swe_mux.history import (
+    BROWSER_SEARCH_BUDGET_MS,
+    HistoryIndex,
+    HistorySearchBudgetExceeded,
+)
 from swe_mux.models import SessionRecord
 from swe_mux.routes.history import SearchAbandoned, _search_turn, list_history
+from swe_mux.server import error_middleware
 
 PROJECT = "project-id"
 
@@ -261,6 +266,28 @@ async def test_the_route_budgets_a_search_and_leaves_a_listing_alone() -> None:
         assert (await client.get("/api/history?q=beacon")).status == 200
         assert (await client.get("/api/history")).status == 200
     assert seen == [BROWSER_SEARCH_BUDGET_MS, None]
+
+
+async def test_an_overrun_search_answers_503_with_a_code_the_browser_explains() -> None:
+    """Translated centrally, so a route that raises this cannot answer 500 by omission.
+
+    The status matters as much as the code: a 500 tells the reader the daemon
+    broke, when what happened is that their search was stopped so the daemon
+    could go on serving everything else.
+    """
+    app = web.Application(middlewares=[error_middleware])
+
+    async def overrun(_request: web.Request) -> web.Response:
+        raise HistorySearchBudgetExceeded(BROWSER_SEARCH_BUDGET_MS)
+
+    app.router.add_get("/api/history", overrun)
+    async with TestClient(TestServer(app)) as client:
+        response = await client.get("/api/history?q=beacon")
+        assert response.status == 503
+        body = await response.json()
+    assert body["code"] == "search_budget_exceeded"
+    assert f"{BROWSER_SEARCH_BUDGET_MS} ms" in body["error"]
+    assert "narrow" in body["error"].lower(), "the refusal has to say what to do about it"
 
 
 async def test_a_queued_search_whose_reader_left_is_not_run() -> None:
