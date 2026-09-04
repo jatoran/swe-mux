@@ -2318,6 +2318,11 @@ body {
 .automation-matrix-row.globally-off .automation-matrix-name{opacity:.45}
 .automation-matrix-name{min-width:0;padding-left:calc(var(--depth,0)*14px)}
 .automation-matrix-name .project-setting-name{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+/* The name is a disclosure button for the row's description. Reset to the span it
+   replaced so the grid is unchanged when nothing is expanded. */
+.automation-matrix-name button.project-setting-name{width:100%;margin:0;padding:0;border:0;background:none;color:inherit;font:inherit;text-align:left;cursor:pointer}
+.automation-matrix-name button.project-setting-name:hover b,.automation-matrix-name button.project-setting-name:focus-visible b{text-decoration:underline}
+.automation-matrix-name .project-setting-mark{flex:none;width:7px;color:var(--muted);font-size:8px}
 .automation-matrix-cell{display:flex!important;grid-template-columns:none!important;justify-content:center;padding:0!important;margin:0}
 .automation-matrix-fleet{color:var(--muted);white-space:nowrap}
 .automation-matrix-grid .project-automation-group{display:flex;align-items:baseline;gap:8px;margin:0;padding:7px 8px 4px;color:var(--accent);border-top:1px solid var(--line)}
