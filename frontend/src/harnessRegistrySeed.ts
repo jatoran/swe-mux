@@ -37,6 +37,8 @@ export const HARNESS_REGISTRY_SEED: HarnessRegistryPayload = {
       "composer_clear_keys": "\u001b\u001b",
       "composer_newline": "\u001b\r",
       "paste_leading_newline_submits": false,
+      "paste_submit_settle_seconds": 0.18,
+      "paste_submit_settle_per_kib_seconds": 0.08,
       "capabilities": {
         "observed": true,
         "transcript": true,
@@ -84,6 +86,8 @@ export const HARNESS_REGISTRY_SEED: HarnessRegistryPayload = {
       "composer_clear_keys": "\u0015",
       "composer_newline": "\u001b\r",
       "paste_leading_newline_submits": true,
+      "paste_submit_settle_seconds": 0.6,
+      "paste_submit_settle_per_kib_seconds": 0.25,
       "capabilities": {
         "observed": true,
         "transcript": true,
@@ -129,6 +133,8 @@ export const HARNESS_REGISTRY_SEED: HarnessRegistryPayload = {
       "composer_clear_keys": "\u0015",
       "composer_newline": "\u001b\r",
       "paste_leading_newline_submits": false,
+      "paste_submit_settle_seconds": 0.18,
+      "paste_submit_settle_per_kib_seconds": 0.08,
       "capabilities": {
         "observed": true,
         "transcript": true,
@@ -175,6 +181,8 @@ export const HARNESS_REGISTRY_SEED: HarnessRegistryPayload = {
       "composer_clear_keys": "\u0015",
       "composer_newline": "\u001b\r",
       "paste_leading_newline_submits": false,
+      "paste_submit_settle_seconds": 0.18,
+      "paste_submit_settle_per_kib_seconds": 0.08,
       "capabilities": {
         "observed": true,
         "transcript": true,
@@ -218,6 +226,8 @@ export const HARNESS_REGISTRY_SEED: HarnessRegistryPayload = {
       "composer_clear_keys": "\u0015",
       "composer_newline": "\u001b\r",
       "paste_leading_newline_submits": false,
+      "paste_submit_settle_seconds": 0.18,
+      "paste_submit_settle_per_kib_seconds": 0.08,
       "capabilities": {
         "observed": true,
         "transcript": true,

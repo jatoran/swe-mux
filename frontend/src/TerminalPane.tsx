@@ -15,7 +15,7 @@ import { api, openWebSocket, uploadTerminalAttachment } from './api'
 import { takeBranchSeed } from './branchSeed'
 import type { Session } from './types'
 import { sessionDisplayName } from './sessionNames'
-import { applicationTouchScrollProfile, assignsConversationId, harnessDisplayName, isAgentBackend, repaintsScrollback, resolvesTranscriptByCwd, supportsBranch, webglUnsafe } from './harnessRegistry.ts'
+import { applicationTouchScrollProfile, assignsConversationId, harnessDisplayName, isAgentBackend, pasteSubmitSettle, repaintsScrollback, resolvesTranscriptByCwd, supportsBranch, webglUnsafe } from './harnessRegistry.ts'
 import { consoleContentionNotice } from './consoleContention.ts'
 import { resolveInputBackend } from './inputBackend.ts'
 import { terminalPanePropsEqual } from './terminalPaneMemo.ts'
@@ -87,7 +87,7 @@ import {
   type UploadedTerminalAttachment,
 } from './terminalAttachments'
 import { localPreviewUrl } from './previewLinks'
-import { insertionRefusal, settleTerminalInsertion } from './terminalActions.ts'
+import { insertionRefusal, settleTerminalInsertion, terminalSubmitSettleMs } from './terminalActions.ts'
 import { HANDSHAKE_TIMEOUT_MS, retryDelay, terminalAttachAllowed, watchLiveness, type ConnectionPhase } from './liveness'
 import {
   shouldLoadWebgl,
@@ -3858,6 +3858,10 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         if(termRef.current!==target)throw new Error('The target terminal changed before submit. Draft kept.')
         sendKey('\r')
       },
+      undefined,
+      // Sized to this CLI and to this body, not to a constant: a multi-kilobyte
+      // skill or template is exactly the insert whose Enter gets swallowed.
+      terminalSubmitSettleMs(text,pasteSubmitSettle(session.backend)),
     )
     if(!submit&&!keyboardOffRef.current&&!mobileDraftOpenRef.current)focusAfterTerminalActionRef.current()
   }

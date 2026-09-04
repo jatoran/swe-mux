@@ -108,6 +108,11 @@ class Harness:
             self.readiness,
             lambda session, data: self.writes.append((session.record.id, data)),
             submit_delay=0.0,
+            # A CLI that never opens a turn is what the submit ladder is for;
+            # these suites are about the layers above it, so they pay none of
+            # its wall-clock.
+            submit_confirm_seconds=0.0,
+            submit_retry_delays=(),
         )
         defaults: dict[str, Any] = {
             "auto_delivery_enabled": True,

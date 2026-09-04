@@ -124,6 +124,54 @@ class ComposerState:
         return self.chars > 0
 
 
+@dataclass(frozen=True, slots=True)
+class PendingSubmit:
+    """A queue delivery whose bytes are in the composer and were never submitted.
+
+    Not an estimate, unlike :class:`ComposerState`: it is recorded only when the
+    delivery path pressed Enter, watched for a turn to open, and saw none — so it
+    is a positive, witnessed fact about a specific message, and it is exactly the
+    fact the 2026-09-04 incident had nowhere to put. Four messages sat in a Codex
+    composer while the queue reported them sent, and the deliveries that followed
+    pasted on top of them; the CLI eventually received three separate peer
+    messages as one prompt.
+
+    It is deliberately per-session rather than per-message: what it protects is
+    the *composer*, and a second delivery into one already holding an unsubmitted
+    body is the thing that merges them.
+    """
+
+    message_id: str
+    at: float
+    byte_count: int
+
+
+def note_unsubmitted_delivery(
+    session: object, message_id: str, byte_count: int, now: float
+) -> None:
+    """Mark this session's composer as holding a delivery the CLI never took."""
+    if hasattr(session, "pending_submit"):
+        session.pending_submit = PendingSubmit(
+            message_id=message_id, at=now, byte_count=byte_count
+        )
+
+
+def clear_pending_submit(session: object) -> PendingSubmit | None:
+    """Retire the mark, returning what it held. ``None`` when nothing was standing.
+
+    Called from the two seams that *prove* the composer no longer holds the body:
+    a turn opening (whatever wrote the carriage return), and an operator write
+    that submits or discards the composer. Nothing expires it on a timer — an
+    unsubmitted paste does not become submitted by waiting, and a mark that
+    lapsed on its own would restore exactly the silent pile-up it exists to stop.
+    """
+    standing = getattr(session, "pending_submit", None)
+    if standing is None:
+        return None
+    session.pending_submit = None  # type: ignore[attr-defined]
+    return standing if isinstance(standing, PendingSubmit) else None
+
+
 def _composable_length(text: str) -> int:
     """Characters in ``text`` that occupy the composer.
 
@@ -228,6 +276,19 @@ def note_composer_write(
     typist's every character.
     """
     write = classify_composer_write(data, state.in_paste, clear_keys, newline_keys)
+    return apply_composer_write(state, write, now)
+
+
+def apply_composer_write(state: ComposerState, write: ComposerWrite, now: float) -> str | None:
+    """Apply an already-classified write, reporting the same crossing.
+
+    Split out from :func:`note_composer_write` for the one caller that needs the
+    verdict as well as the crossing: the daemon's operator-input path has to know
+    whether a write *submitted or discarded* the composer, because that is what
+    retires a queue delivery the CLI never took (`prompt_queue.PendingSubmit`).
+    Classifying a multi-kilobyte paste twice to recover a field the first pass
+    already computed is the kind of small waste that ends up in a hot path.
+    """
     state.in_paste = write.in_paste
     if write.kind == "none":
         return None

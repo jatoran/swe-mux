@@ -28,7 +28,7 @@ from .adapters.claude import claude_data_home
 from .agent_environment import capture_config_baseline
 from .background_tasks import background
 from .cli_state import CliStateMonitor, ConversationHolder, ParkedMove
-from .composer_input import ComposerState, clear_composer
+from .composer_input import ComposerState, PendingSubmit, clear_composer, clear_pending_submit
 from .console_contention import (
     ConsoleCensus,
     ConsoleEvidence,
@@ -770,9 +770,21 @@ def apply_state_transition(
     # accepts typing mid-turn (Claude queues it) would otherwise have the
     # operator's half-written follow-up erased by the next tool the agent ran.
     composer = getattr(session, "composer", None)
-    if composer is not None and previous != state and state in {"working", "exited", "crashed"}:
-        if clear_composer(composer) and ledger is not None:
+    if previous != state and state in {"working", "exited", "crashed"}:
+        if composer is not None and clear_composer(composer) and ledger is not None:
             ledger.append({"ts": now, "kind": "composer", "action": "cleared", "reason": state})
+        # The same proof retires a delivery the CLI was not seen to take: whatever
+        # opened this turn submitted the composer, so the body the queue left
+        # there is no longer standing and the next delivery must not stay blocked
+        # on it (`prompt_queue`, `composer_input.PendingSubmit`).
+        retired = clear_pending_submit(session)
+        if retired is not None:
+            log.info(
+                "session %s: queue delivery %s is no longer unsubmitted (%s)",
+                getattr(record, "id", "?"),
+                retired.message_id,
+                state,
+            )
     record.state = state
     record.state_detail = detail
     if hasattr(record, "awaiting_reason"):
@@ -2315,6 +2327,14 @@ class Session:
         # indistinguishable from one a person typed, so the queue leaves this
         # behind for the observer to consume and expire.
         self.queue_delivery_mark: tuple[float, bool] | None = None
+        # A queue delivery whose bytes reached this composer and whose Enter the
+        # CLI never took. Blocks the next delivery to this target so a second
+        # body cannot be pasted on top of the first, and clears itself at the two
+        # seams that prove the composer emptied (`composer_input.PendingSubmit`).
+        # Run-scoped and process-scoped like the composer estimate beside it: a
+        # daemon restart forgets it, which is the honest reading of "not
+        # observed", and the block it carries is one a human can override.
+        self.pending_submit: PendingSubmit | None = None
         # Set when this PTY was promoted around a nested agent CLI; used to
         # ignore shell-prompt echoes from just before/around the promotion.
         self.agent_promoted_at: float | None = None

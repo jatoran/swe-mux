@@ -96,6 +96,11 @@ class Harness:
             ReadinessStub(),
             lambda session, data: self.writes.append((session.record.id, data)),
             submit_delay=0.0,
+            # A CLI that never opens a turn is what the submit ladder is for;
+            # these suites are about the layers above it, so they pay none of
+            # its wall-clock.
+            submit_confirm_seconds=0.0,
+            submit_retry_delays=(),
         )
         self.config = Config(**config_overrides)
         for session in sessions:

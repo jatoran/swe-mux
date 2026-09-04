@@ -45,8 +45,13 @@ from pathlib import Path
 from typing import Any, TypeVar
 
 from .background_tasks import background
-from .composer_input import composer_insertion
-from .harness import composer_insertion_rules, delivers_prompts_through_pty
+from .composer_input import composer_insertion, note_unsubmitted_delivery
+from .harness import (
+    MAX_PASTE_SUBMIT_SETTLE_SECONDS,
+    composer_insertion_rules,
+    delivers_prompts_through_pty,
+    paste_submit_settle_seconds,
+)
 from .sqlite_store import (
     connect_or_quarantine,
     database_operation_lock,
@@ -56,7 +61,7 @@ from .sqlite_store import (
 
 T = TypeVar("T")
 
-QUEUE_SCHEMA_VERSION = 6
+QUEUE_SCHEMA_VERSION = 7
 QUEUE_EVENT_LOOP = "prompt-queue-events"
 
 # States exactly per the roadmap. `delivering` is transient but persisted so a
@@ -103,28 +108,55 @@ MAX_SCHEDULE_HORIZON_SECONDS = 30 * 86400
 log = logging.getLogger("swe_mux.prompt_queue")
 
 SUBMIT_SEQUENCE = "\r"
-SUBMIT_DELAY_SECONDS = 0.18
-# A CLI turns a large paste into a placeholder chip and is busy while it does,
-# so a fixed 180 ms settle sized for a spoken sentence is not a settle at all
-# for a multi-kilobyte relay: the submit lands mid-consumption and is swallowed,
+# A CLI turns a large paste into a placeholder chip and is busy while it does, so
+# a fixed 180 ms settle sized for a spoken sentence is not a settle at all for a
+# multi-kilobyte relay: the submit lands mid-consumption and is swallowed,
 # leaving the body sitting in the composer while the queue reports it sent
 # (observed live 2026-08-13: two relay messages parked as
-# `[Pasted Content 2784 chars][Pasted Content 4230 chars]` in a codex composer).
-# The settle therefore scales with the payload, bounded so a huge body cannot
-# stall the delivery path.
-SUBMIT_DELAY_PER_KIB_SECONDS = 0.08
-MAX_SUBMIT_DELAY_SECONDS = 2.0
-# Only a paste big enough to become a placeholder chip is at risk of eating its
-# own submit, and only that case earns a second carriage return: an extra one is
-# a no-op on an empty composer, but it is still a write into someone else's
-# session and is not worth spending on the short bodies that never had the
-# problem.
+# `[Pasted Content 2784 chars][Pasted Content 4230 chars]` in a codex composer;
+# again on 2026-09-04, where the swallowed carriage returns landed in the
+# composer as newlines and joined three messages into one prompt).
+#
+# So the settle scales with the payload and both of its terms belong to the
+# *harness* (`HarnessDescriptor.paste_submit_settle_seconds`): one constant for
+# every CLI is what made the Codex case unfixable without slowing Claude down.
+# What remains here is the service's own floor — a knob for a test or an operator
+# who wants every delivery slower, which can raise the harness's figure and never
+# lower it. Its default is the historical constant, so an unconfigured service
+# and an unmeasured harness agree.
+SUBMIT_DELAY_SECONDS = 0.18
+MAX_SUBMIT_DELAY_SECONDS = MAX_PASTE_SUBMIT_SETTLE_SECONDS
+# A paste big enough to become a placeholder chip. Nothing branches on it any
+# more - the submit ladder is spent on evidence rather than on size, because a
+# short body whose Enter was swallowed is exactly as stuck as a long one - but it
+# is the size at which the failure was first measured and the fixtures that
+# reproduce it are built from it.
 LARGE_PASTE_BYTES = 1024
-# How long to watch for the CLI reacting before deciding the submit went
-# nowhere. A consumed submit redraws immediately, so this resolves in a frame or
-# two on the happy path.
-SUBMIT_CONFIRM_SECONDS = 0.6
+# How long to watch for proof the CLI took the submit before pressing again. The
+# evidence resolves in a frame or two on the happy path (the screen repaints into
+# its working affordance); a hook or transcript boundary for the same turn can
+# take a second longer, and this window covers both.
+SUBMIT_CONFIRM_SECONDS = 1.2
 SUBMIT_CONFIRM_POLL_SECONDS = 0.05
+# Further presses after an unconfirmed one, spaced so each waits longer than the
+# last for the CLI to finish whatever swallowed the previous. Escalating rather
+# than a single retry because the failure is a race against the CLI's own input
+# loop under unknown load: the 2026-09-04 incident had one retry at ~0.6 s
+# rescue one message in three, and the two it did not rescue sat in the composer
+# for 9 and 54 minutes until a person pressed Enter.
+#
+# Pressing again is safe precisely when the body is *still* in the composer: an
+# Enter on an already-empty composer is a no-op on every harness mux drives. It
+# is spent only while the oracle below can still see no turn.
+SUBMIT_RETRY_DELAYS = (0.8, 1.6, 3.2)
+
+# The states that mean a turn is already running, and therefore that this
+# delivery has no turn *boundary* to witness. Deliberately narrower than
+# readiness's `root_agent_working` set, which also holds `starting`: a session
+# whose CLI is still booting has no open turn, so a submit into it is observable
+# in the ordinary way and `starting` -> `working` is exactly the transition that
+# proves it landed.
+TURN_OPEN_STATES = frozenset({"working", "running"})
 
 # Blocked/unknown readiness can be overridden by an explicit, per-send user
 # confirmation — except for the protections the roadmap forbids bypassing:
@@ -320,6 +352,12 @@ CREATE TABLE IF NOT EXISTS queue_deliveries (
   confirmed INTEGER NOT NULL DEFAULT 0,
   interjected INTEGER NOT NULL DEFAULT 0,
   initiator TEXT NOT NULL DEFAULT 'user',
+  -- Whether a turn was witnessed to open after the submit: 1 yes, 0 no (the
+  -- composer kept the body), NULL not observable (a write into an already
+  -- running turn, which has no turn boundary to witness). Nullable on purpose —
+  -- collapsing "we did not see it" into "it did not happen" is the same
+  -- conflation on the audit side that the oracle exists to remove on the live one.
+  submitted INTEGER,
   outcome TEXT NOT NULL,
   error TEXT,
   bytes INTEGER,
@@ -477,6 +515,12 @@ class PromptQueueStore:
             self._db.execute(
                 "ALTER TABLE queue_deliveries ADD COLUMN interjected INTEGER NOT NULL DEFAULT 0"
             )
+        if delivery_columns and "submitted" not in delivery_columns:
+            # Whether the CLI took the Enter. No default and no backfill: every
+            # row written before this column existed was audited by a predicate
+            # that could not tell a consumed submit from a swallowed one, so the
+            # honest value for all of them is NULL.
+            self._db.execute("ALTER TABLE queue_deliveries ADD COLUMN submitted INTEGER")
         policy_columns = {
             str(row["name"])
             for row in self._db.execute("PRAGMA table_info(queue_auto_policy)").fetchall()
@@ -1107,6 +1151,7 @@ class PromptQueueStore:
         reasons: list[str] | None = None,
         confirmed: bool = False,
         interjected: bool = False,
+        submitted: bool | None = None,
         error: str | None = None,
         byte_count: int | None = None,
         blocked_reasons: list[str] | None = None,
@@ -1122,7 +1167,7 @@ class PromptQueueStore:
             # Sent and failed attempts keep theirs (failed may have written).
             self._db.execute(
                 "UPDATE queue_deliveries SET outcome=?, delivery_state=?, reasons_json=?,"
-                " confirmed=?, interjected=?, error=?, bytes=?, completed_at=?,"
+                " confirmed=?, interjected=?, submitted=?, error=?, bytes=?, completed_at=?,"
                 " idempotency_key=CASE WHEN ?='refused' THEN NULL ELSE idempotency_key END"
                 " WHERE id=?",
                 (
@@ -1131,6 +1176,7 @@ class PromptQueueStore:
                     _dumps(reasons),
                     int(confirmed),
                     int(interjected),
+                    None if submitted is None else int(submitted),
                     error,
                     byte_count,
                     now,
@@ -1174,6 +1220,11 @@ class PromptQueueStore:
                 item = dict(row)
                 raw = item.pop("reasons_json", None)
                 item["reasons"] = json.loads(raw) if raw else None
+                # Three-valued, and it has to stay that way through the API: a
+                # row from before the column, and an interject with no turn
+                # boundary to witness, are both "unknown" rather than "no".
+                submitted = item.get("submitted")
+                item["submitted"] = None if submitted is None else bool(submitted)
                 result.append(item)
             return result
 
@@ -1805,6 +1856,8 @@ class PromptQueueService:
         write_operator_input: Callable[[Any, str], None],
         *,
         submit_delay: float = SUBMIT_DELAY_SECONDS,
+        submit_confirm_seconds: float = SUBMIT_CONFIRM_SECONDS,
+        submit_retry_delays: Sequence[float] = SUBMIT_RETRY_DELAYS,
     ) -> None:
         self.store = store
         self.sessions = sessions
@@ -1812,6 +1865,11 @@ class PromptQueueService:
         self.readiness = readiness
         self._write = write_operator_input
         self._submit_delay = submit_delay
+        # The two halves of the submit ladder, injectable for the same reason
+        # `submit_delay` is: a test that has to spend the real six seconds of a
+        # failing delivery is a test nobody runs in a loop.
+        self._submit_confirm_seconds = submit_confirm_seconds
+        self._submit_retry_delays = tuple(submit_retry_delays)
         self._queue: asyncio.Queue[Any] | None = None
 
     # -- lifecycle ------------------------------------------------------------
@@ -1903,50 +1961,130 @@ class PromptQueueService:
 
     # -- delivery mechanics ---------------------------------------------------
 
-    def _paste_settle(self, byte_count: int) -> float:
-        """How long to wait between the paste and the submit, sized to the body."""
-        scaled = self._submit_delay + (byte_count / 1024.0) * SUBMIT_DELAY_PER_KIB_SECONDS
-        return min(MAX_SUBMIT_DELAY_SECONDS, max(self._submit_delay, scaled))
+    def _paste_settle(self, byte_count: int, backend: object = None) -> float:
+        """How long to wait between the paste and the submit, sized to the body.
 
-    async def _reacted(self, session: Any, since: float) -> bool:
-        """Watch for the CLI producing output after a submit.
-
-        Any PTY byte is the evidence: a consumed submit redraws the composer and
-        starts the turn. Session *state* is the wrong signal here — it is derived
-        from transcripts and hooks that can lag seconds behind the keystroke, so
-        it would call a healthy delivery unconfirmed.
+        Both terms come from the harness (`paste_submit_settle_rules`), because
+        the CLIs differ by more than a factor of three here and one constant for
+        all of them could only ever be right for one. The service-level
+        ``submit_delay`` remains a floor so a test or an operator can slow every
+        delivery down, and never a ceiling: lowering it must not undo a harness's
+        own measured need.
         """
-        deadline = time.monotonic() + SUBMIT_CONFIRM_SECONDS
+        return paste_submit_settle_seconds(backend, byte_count, floor=self._submit_delay)
+
+    def _screen_state(self, session: Any) -> str:
+        """What the CLI's own screen is showing, or ``unknown``.
+
+        Read through the readiness tracker so delivery and readiness classify one
+        screen with one set of rules. A caller that cannot answer (an older stub,
+        a tracker without the method) degrades to ``unknown``, which this module
+        treats as no evidence rather than as bad news.
+        """
+        reader = getattr(self.readiness, "screen_state", None)
+        if reader is None:
+            return "unknown"
+        try:
+            return str(reader(session))
+        except Exception:  # pragma: no cover - a classifier fault is not a delivery fault
+            log.debug("screen classification failed during delivery", exc_info=True)
+            return "unknown"
+
+    def _submit_baseline(self, session: Any) -> dict[str, Any]:
+        """The facts a submit would visibly change, sampled just before pressing."""
+        record = session.record
+        return {
+            "turn_epoch": int(getattr(record, "turn_epoch", 0) or 0),
+            "state": str(getattr(record, "state", "") or ""),
+            "turn_started_at": float(getattr(record, "turn_started_at", 0.0) or 0.0),
+            "screen": self._screen_state(session),
+        }
+
+    def _turn_began(self, session: Any, baseline: Mapping[str, Any]) -> bool:
+        """Whether a *new* turn has visibly opened since ``baseline``.
+
+        This is the oracle the queue lacked. Its predecessor accepted any PTY
+        byte inside 600 ms, which cannot distinguish the two outcomes it exists
+        to tell apart: a CLI that took the Enter and started a turn, and a CLI
+        that inserted it into the composer as a newline. Both repaint, both emit
+        bytes, and on 2026-09-04 the second one was reported as the first for
+        four of seven messages.
+
+        A turn opening is what a submit *is*, so every source that can witness
+        one counts, and any one of them is enough:
+
+        - the observed root turn epoch advanced, or the session left idle for a
+          running state (hooks and the transcript, ordered but seconds late), or
+        - the CLI's own screen changed into its working affordance ("esc to
+          interrupt"), which is immediate and is the only source a harness with
+          no hooks and no transcript has at all.
+
+        A session that was *already* working has no such transition available,
+        which is why an interject is classified separately and never retried.
+        """
+        record = session.record
+        if int(getattr(record, "turn_epoch", 0) or 0) > int(baseline["turn_epoch"]):
+            return True
+        state = str(getattr(record, "state", "") or "")
+        if state in TURN_OPEN_STATES and str(baseline["state"]) not in TURN_OPEN_STATES:
+            return True
+        started = float(getattr(record, "turn_started_at", 0.0) or 0.0)
+        if started > float(baseline["turn_started_at"]):
+            return True
+        screen = self._screen_state(session)
+        return screen == "working" and str(baseline["screen"]) != "working"
+
+    async def _await_turn(self, session: Any, baseline: Mapping[str, Any]) -> bool:
+        """Watch for the submit to open a turn, for one confirmation window."""
+        deadline = time.monotonic() + self._submit_confirm_seconds
         while time.monotonic() < deadline:
             await asyncio.sleep(SUBMIT_CONFIRM_POLL_SECONDS)
             if str(getattr(session.record, "state", "")) in {"exited", "crashed"}:
                 raise RuntimeError("the target session ended during delivery")
-            if float(getattr(session.record, "last_activity_ts", 0.0) or 0.0) > since:
+            if self._turn_began(session, baseline):
                 return True
         return False
 
-    async def _submit(self, session: Any, message_id: str, byte_count: int) -> bool:
-        """Press submit, and press once more if a large paste ate the first one.
+    async def _submit(self, session: Any, message_id: str, byte_count: int) -> bool | None:
+        """Press submit until a turn opens, or report that none did.
 
-        Returns whether the CLI was seen to react. `False` is not a failed write —
-        the bytes are in the composer either way — it is the difference between
-        "delivered" and "delivered and the CLI took it", which the queue used to
-        report as the same clean send.
+        Returns `True` for a submit witnessed to start a turn, `False` for one
+        that provably did not (the bytes are in the composer, unsubmitted, and
+        the caller must say so), and `None` when this delivery is unobservable —
+        a write into a turn that was already running, where no turn *boundary*
+        exists to witness. `None` is not a quiet `True`: it is recorded as
+        unknown, because an interject that Codex merged into the running turn's
+        prompt and one it dropped look identical from here.
+
+        Retries are the guarantee, not the settle. Each press is preceded by a
+        longer wait than the last, and the ladder stops the instant a turn opens,
+        so the happy path is still exactly one carriage return.
         """
-        before = float(getattr(session.record, "last_activity_ts", 0.0) or 0.0)
+        baseline = self._submit_baseline(session)
+        if str(baseline["state"]) in TURN_OPEN_STATES:
+            self._write(session, SUBMIT_SEQUENCE)
+            return None
         self._write(session, SUBMIT_SEQUENCE)
-        if await self._reacted(session, before):
+        if await self._await_turn(session, baseline):
             return True
-        if byte_count < LARGE_PASTE_BYTES:
-            return False
-        log.info(
-            "queue delivery %s: no reaction to the submit after a %d byte paste,"
-            " pressing once more",
-            message_id,
-            byte_count,
-        )
-        self._write(session, SUBMIT_SEQUENCE)
-        return await self._reacted(session, before)
+        for index, delay in enumerate(self._submit_retry_delays, start=2):
+            log.info(
+                "queue delivery %s: no turn opened after submit %d of a %d byte paste,"
+                " waiting %.1fs and pressing again",
+                message_id,
+                index - 1,
+                byte_count,
+                delay,
+            )
+            await asyncio.sleep(delay)
+            if self._turn_began(session, baseline):
+                return True
+            if str(getattr(session.record, "state", "")) in {"exited", "crashed"}:
+                raise RuntimeError("the target session ended during delivery")
+            self._write(session, SUBMIT_SEQUENCE)
+            if await self._await_turn(session, baseline):
+                return True
+        return False
 
     # -- target resolution ----------------------------------------------------
 
@@ -2306,7 +2444,7 @@ class PromptQueueService:
         byte_count = len(data.encode("utf-8")) + len(SUBMIT_SEQUENCE)
         try:
             self._write(session, data)
-            await asyncio.sleep(self._paste_settle(byte_count))
+            await asyncio.sleep(self._paste_settle(byte_count, session.record.backend))
             if session.record.state in {"exited", "crashed"}:
                 raise RuntimeError("the target session ended during delivery")
             submitted = await self._submit(session, message_id, byte_count)
@@ -2347,30 +2485,45 @@ class PromptQueueService:
             raise QueueError(
                 "delivery_failed", f"delivery failed: {exc}", status=502
             ) from exc
-        if not submitted:
+        if submitted is False:
             # The bytes landed and the composer holds them; what did not happen
             # is the submit. Recording a clean `sent` here is what let a relay
             # message sit in a CLI's paste placeholder for half an hour while
-            # the queue reported success (observed live 2026-08-13, codex).
+            # the queue reported success (observed live 2026-08-13, codex; again
+            # on 2026-09-04, where the next two deliveries then pasted on top and
+            # the CLI received three messages as one prompt).
+            #
+            # So the target is marked as holding an unsubmitted delivery. That
+            # mark is what stops the pile-up: readiness blocks the next delivery
+            # with a reason that names this message instead of the misleading
+            # "the operator typed something", and it clears itself the moment a
+            # turn opens or the composer is emptied.
+            note_unsubmitted_delivery(session, message_id, byte_count, time.time())
             log.warning(
-                "queue delivery %s wrote %d bytes to %s but the target never left"
-                " idle: the composer may still hold it unsubmitted",
+                "queue delivery %s wrote %d bytes to %s and pressed submit %d"
+                " times without a turn opening: the composer still holds it,"
+                " and further deliveries to this target are blocked until it is"
+                " submitted or cleared",
                 message_id,
                 byte_count,
                 target_id,
+                len(self._submit_retry_delays) + 1,
             )
         final = await self.store.finalize_delivery(
             delivery_id,
             message_id,
             # The audit outcome stays `sent`: the write happened, and widening an
             # enum other readers branch on would be a compatibility change for a
-            # fact that belongs beside it rather than inside it.
+            # fact that belongs beside it rather than inside it. Whether the CLI
+            # *took* it rides beside it, in its own column, where a reader that
+            # wants the difference can have it and one that does not is unchanged.
             outcome="sent",
             message_state="sent",
             delivery_state=delivery_state,
             reasons=reasons,
             confirmed=confirmed,
             interjected=interjected,
+            submitted=submitted,
             byte_count=byte_count,
         )
         await self._emit_updated(message_id, target_id, "sent")

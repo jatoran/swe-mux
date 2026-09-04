@@ -281,6 +281,26 @@ CLI transcript discovery, schema coverage, root start/completion, and child acti
 checking model prose. They should run on CLI upgrades and periodically in a protected
 authenticated lane, not on every pull request.
 
+**A delivery the CLI never took blocks the next one, by name.** The composer estimate described
+below cannot see this and never could: `prompt_queue` writes a body, presses Enter, watches for a turn to open,
+and sometimes sees none - the CLI kept the text and typed the carriage return into its composer
+(`prompt-queue.md`, the 2026-09-04 incident). The delivery path records that on the session as a
+`PendingSubmit`, and it is a hard block here under its own reason,
+`unsubmitted_delivery_in_composer`.
+
+Its own reason rather than the `terminal_input_after_completion` it used to surface as, because
+that one says *the operator typed something* about bytes mux itself wrote - true in the letter,
+since the input revision did move, and misleading in every way an operator could act on. Four
+messages queued behind a jam nothing named, while the three deliveries that were sent anyway
+pasted on top of the stuck body and the agent received them as one prompt.
+
+It is a positive witnessed fact rather than an estimate, which is what earns it a place in this
+contract at all, and it is deliberately **overridable**: the automatic controller never confirms
+and so stops, while a human who has looked at the pane may still say the mark is wrong. It clears
+only on evidence that the composer emptied - a turn opening, or a non-queue operator write that
+submits or discards it - and never on a timer, because an unsubmitted paste does not become
+submitted by waiting.
+
 **The unsent-composer estimate is not evidence here.** `composer_input.py` keeps a
 finer-grained reading of the same PTY writes — it decrements on backspace, clears on `Esc`, and
 treats a bracketed paste as content — and publishes it as `unsent_input` for the session row
@@ -299,6 +319,7 @@ That left three staleness regimes on one line of UI.
 Lifecycle reasons (`root_agent_working`, `awaiting_*`, `session_ended`) ride `state_changed`,
 which the browser already treats as a reason to re-read the fleet, so those were live.
 Composer and screen reasons (`terminal_input_after_completion`, `operator_recently_typed`,
+`unsubmitted_delivery_in_composer`,
 `screen_not_at_agent_prompt`) turn on `terminal_input` and `terminal_mode_changed`, both
 deliberately excluded from fleet refresh because they arrive at keystroke rate - so those
 were stale for up to the browser's sixty-second safety poll.

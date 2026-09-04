@@ -7,7 +7,9 @@ import pytest
 
 from swe_mux.harness import (
     AGENT_BACKENDS,
+    DEFAULT_PASTE_SUBMIT_SETTLE,
     HARNESSES,
+    MAX_PASTE_SUBMIT_SETTLE_SECONDS,
     HarnessLevel,
     agent_harnesses,
     delivers_prompts_through_pty,
@@ -16,6 +18,7 @@ from swe_mux.harness import (
     has_observable_transcript,
     is_agent_harness,
     needs_resize_repaint,
+    paste_submit_settle_seconds,
     provider_account_harnesses,
     public_harness_registry,
     replay_needs_repaint,
@@ -763,3 +766,62 @@ def test_public_registry_exposes_frontend_capability_gates() -> None:
     assert items["claude"]["capabilities"]["transcript"] is True
     assert items["claude"]["capabilities"]["repaints_scrollback"] is False
     assert items["omp"]["capabilities"]["repaints_scrollback"] is True
+
+
+# ------------------------------------------------- the paste-to-submit settle
+
+
+def test_every_harness_declares_how_long_its_paste_needs() -> None:
+    """A CLI applies a paste on its own render loop, and they differ.
+
+    Required of every row for the same reason `composer_clear_keys` is: the
+    single constant that preceded this was Claude's, and it was sent to Codex
+    too - where an Enter that arrives mid-paste is not dropped but typed into the
+    composer, leaving the body unsubmitted (`features/prompt-queue.md`).
+    """
+    for name, harness in HARNESSES.items():
+        assert harness.paste_submit_settle_seconds > 0, name
+        assert harness.paste_submit_settle_per_kib_seconds >= 0, name
+
+
+def test_codex_needs_longer_than_claude_at_every_size() -> None:
+    for size in (0, 1024, 4096, 64 * 1024):
+        assert paste_submit_settle_seconds("codex", size) >= paste_submit_settle_seconds(
+            "claude", size
+        )
+    # And the gap is real at the size the failure was measured at, rather than a
+    # rounding difference: 4 KB needed more than the ~1.1s two presses bought it.
+    assert paste_submit_settle_seconds("codex", 4096) > 1.1
+
+
+def test_an_unmeasured_backend_keeps_the_historical_pace() -> None:
+    base, per_kib = DEFAULT_PASTE_SUBMIT_SETTLE
+    assert paste_submit_settle_seconds("shell", 0) == base
+    assert paste_submit_settle_seconds(None, 1024) == base + per_kib
+
+
+def test_a_caller_floor_raises_the_settle_and_never_lowers_it() -> None:
+    """An operator slowing deliveries down must not undo a measured need."""
+    assert paste_submit_settle_seconds("codex", 0, floor=0.0) == (
+        paste_submit_settle_seconds("codex", 0)
+    )
+    assert paste_submit_settle_seconds("claude", 0, floor=1.5) == 1.5
+    assert paste_submit_settle_seconds("codex", 0, floor=0.01) > 0.01
+
+
+def test_the_settle_is_bounded() -> None:
+    assert paste_submit_settle_seconds("codex", 500_000) == MAX_PASTE_SUBMIT_SETTLE_SECONDS
+
+
+def test_every_stage_and_submit_path_resolves_the_settle_through_the_registry() -> None:
+    """No fourth copy of the constant.
+
+    There were three - the queue's, the voice path's, and the browser's - and two
+    of them held Claude's number for every CLI. This reads the sources rather than
+    the behaviour because the failure mode is a *new* call site reintroducing a
+    literal, which no behavioural test of the existing ones can see.
+    """
+    root = Path(__file__).resolve().parents[1] / "src" / "swe_mux"
+    for relative in ("prompt_queue.py", "routes/voice.py"):
+        source = (root / relative).read_text(encoding="utf-8")
+        assert "paste_submit_settle_seconds(" in source, relative

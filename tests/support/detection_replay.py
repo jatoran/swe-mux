@@ -9,6 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+from swe_mux.composer_input import PendingSubmit
 from swe_mux.delivery_readiness import DeliveryReadinessTracker
 from swe_mux.event_bus import EventBus
 from swe_mux.harness import HARNESSES, is_agent_harness
@@ -163,6 +164,10 @@ class ReplaySession:
         self.subscribers: set[str] = {"replay-browser"}
         self.input_revision = 0
         self.last_input_event_ts = 0.0
+        # A queue delivery this composer is holding unsubmitted, which readiness
+        # blocks on. `None` is the ordinary state and what every fixture that
+        # says nothing about it means.
+        self.pending_submit: PendingSubmit | None = None
         # The daemon's own screen reading, which a live session feeds from the PTY
         # stream. A fixture that says nothing about the screen leaves it unknown,
         # exactly as a session whose switch predates the retained scrollback does.

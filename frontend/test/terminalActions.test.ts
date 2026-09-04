@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { requestTerminalAction, settleTerminalInsertion, TERMINAL_SUBMIT_SETTLE_MS } from '../src/terminalActions.ts'
+import { MAX_TERMINAL_SUBMIT_SETTLE_MS, requestTerminalAction, settleTerminalInsertion, terminalSubmitSettleMs, TERMINAL_SUBMIT_SETTLE_MS } from '../src/terminalActions.ts'
+import { pasteSubmitSettle } from '../src/harnessRegistry.ts'
 
 test('a submitted insertion appends, waits out the settle window, then submits', async () => {
   const events:string[]=[]
@@ -70,4 +71,50 @@ test('a refused terminal action rejects with the pane\'s reason', async () => {
     },{once:true})
     await assert.rejects(requestTerminalAction('session-1',{action:'copy'}),/No selection/)
   })
+})
+
+test('the settle belongs to the harness and scales with the body', () => {
+  // A CLI applies a paste on its own render loop, and Codex needs materially
+  // longer than Claude for the same body - which the flat constant this replaces
+  // could not express, so every insert was paced for Claude.
+  const claude = pasteSubmitSettle('claude')
+  const codex = pasteSubmitSettle('codex')
+  const body = 'x'.repeat(4096)
+  assert.ok(terminalSubmitSettleMs(body, codex) > terminalSubmitSettleMs(body, claude))
+  assert.ok(terminalSubmitSettleMs(body, claude) > terminalSubmitSettleMs('hi', claude))
+  // A harness the daemon has not characterised keeps the constant it always had.
+  assert.deepEqual(pasteSubmitSettle('nothing-like-this'), {
+    baseMs: TERMINAL_SUBMIT_SETTLE_MS,
+    perKibMs: 80,
+  })
+  // Bounded, so a huge insert cannot leave the button spinning.
+  assert.equal(
+    terminalSubmitSettleMs('x'.repeat(5_000_000), codex),
+    MAX_TERMINAL_SUBMIT_SETTLE_MS,
+  )
+})
+
+test('a caller that names no settle keeps the historical one', async () => {
+  const events:string[]=[]
+  await settleTerminalInsertion(
+    'hello',
+    true,
+    value=>events.push(`append:${value}`),
+    ()=>events.push('submit'),
+    async delay=>{events.push(`wait:${delay}`)},
+  )
+  assert.deepEqual(events,['append:hello',`wait:${TERMINAL_SUBMIT_SETTLE_MS}`,'submit'])
+})
+
+test('a named settle is the one waited out', async () => {
+  const events:string[]=[]
+  await settleTerminalInsertion(
+    'hello',
+    true,
+    value=>events.push(`append:${value}`),
+    ()=>events.push('submit'),
+    async delay=>{events.push(`wait:${delay}`)},
+    1234,
+  )
+  assert.deepEqual(events,['append:hello','wait:1234','submit'])
 })

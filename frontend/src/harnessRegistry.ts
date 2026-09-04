@@ -1,4 +1,5 @@
 import { HARNESS_REGISTRY_SEED } from './harnessRegistrySeed.ts'
+import { TERMINAL_SUBMIT_SETTLE_MS, TERMINAL_SUBMIT_SETTLE_PER_KIB_MS } from './terminalActions.ts'
 
 export type HarnessLevel = 'launchable' | 'identified' | 'observed' | 'hooked' | 'managed'
 
@@ -132,6 +133,11 @@ export interface HarnessDescriptor {
    *  as Enter. Absent means "not declared", which is read as false - the bytes
    *  mux has always sent. */
   paste_leading_newline_submits?: boolean
+  /** How long this CLI needs between a paste and the Enter that submits it, as a
+   *  base plus a per-KiB term. Absent from older daemon payloads; a missing value
+   *  defaults to the flat 180 ms the browser sent every agent before the trait. */
+  paste_submit_settle_seconds?: number
+  paste_submit_settle_per_kib_seconds?: number
   capabilities: HarnessCapabilities
 }
 
@@ -353,6 +359,26 @@ export const composerNewline = (name: string | undefined): string =>
  */
 export const pasteLeadingNewlineSubmits = (name: string | undefined): boolean =>
   harnessDescriptor(name)?.paste_leading_newline_submits === true
+
+/**
+ * How long this CLI needs between a paste and its Enter, in milliseconds.
+ *
+ * Declared per harness rather than assumed, because the CLIs differ here by more
+ * than a factor of three and the flat constant this replaces was Claude's. A
+ * harness the daemon has not characterised - or a daemon older than the trait -
+ * keeps that constant, which is what it has always been sent.
+ */
+export const pasteSubmitSettle = (
+  name: string | undefined,
+): { baseMs: number; perKibMs: number } => {
+  const descriptor = harnessDescriptor(name)
+  const base = descriptor?.paste_submit_settle_seconds
+  const perKib = descriptor?.paste_submit_settle_per_kib_seconds
+  return {
+    baseMs: typeof base === 'number' ? base * 1000 : TERMINAL_SUBMIT_SETTLE_MS,
+    perKibMs: typeof perKib === 'number' ? perKib * 1000 : TERMINAL_SUBMIT_SETTLE_PER_KIB_MS,
+  }
+}
 
 export const harnessDisplayName = (name: string): string => harnessDescriptor(name)?.display_name || name
 // Every registered harness, ignoring enablement. Kept for the display/history

@@ -21,11 +21,11 @@ from ..event_bus import EventBus
 from ..harness import (
     delivers_prompts_through_pty,
     is_agent_harness,
+    paste_submit_settle_seconds,
 )
 from ..http_support import json_response
 from ..prompt_queue import (
     NON_OVERRIDABLE_REASONS,
-    SUBMIT_DELAY_SECONDS,
     SUBMIT_SEQUENCE,
 )
 from ..scrollback import SCREEN_TAIL_BYTES
@@ -575,13 +575,22 @@ async def voice_submit(request: web.Request) -> web.Response:
         # delivery bytes instead: bracketed paste with newlines as CR, then a
         # separate Enter after the same settle delay. Single-line prompts keep the
         # one-write path they have always used.
+        payload = terminal._composer_insertion(session.record.backend, text)
         terminal._record_operator_input(
             request.app[keys.EVENTS],
             session,
-            terminal._composer_insertion(session.record.backend, text),
+            payload,
             source="voice",
         )
-        await asyncio.sleep(SUBMIT_DELAY_SECONDS)
+        # Sized to this CLI and this body, through the same helper the queue uses.
+        # The flat constant that stood here was Claude's, and an edited dictation
+        # long enough to become a paste chip is exactly the one whose Enter a CLI
+        # swallows (`features/prompt-queue.md`).
+        await asyncio.sleep(
+            paste_submit_settle_seconds(
+                session.record.backend, len(payload.encode("utf-8"))
+            )
+        )
         if session.record.state in {"exited", "crashed"}:
             return json_response({"error": "the agent session ended during delivery"}, 409)
         terminal._record_operator_input(

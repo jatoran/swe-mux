@@ -15,7 +15,35 @@ export type TerminalInsertRequest = TerminalActionRequest & {
 export type TerminalActionResult = { requestId: string; ok: boolean; error?: string }
 type TerminalWait = (delayMs: number) => Promise<void>
 
+/**
+ * The settle a harness that declares nothing keeps.
+ *
+ * Exactly `composer_input.DEFAULT_PASTE_SUBMIT_SETTLE` on the daemon side, and
+ * the flat constant this file sent every CLI before the trait existed.
+ */
 export const TERMINAL_SUBMIT_SETTLE_MS = 180
+export const TERMINAL_SUBMIT_SETTLE_PER_KIB_MS = 80
+/** Bounded so a huge insert cannot leave the button spinning. Matches the daemon. */
+export const MAX_TERMINAL_SUBMIT_SETTLE_MS = 4000
+
+/**
+ * How long to let this CLI commit a paste of this size before sending Enter.
+ *
+ * The browser's insert-and-submit path had the same defect the daemon queue did,
+ * and worse: a flat 180 ms with no scaling and no retry. A CLI applies a paste on
+ * its own render loop and turns a large one into a placeholder chip; an Enter
+ * that arrives mid-consumption is not merely dropped - on Codex it lands in the
+ * composer as a newline, leaving the text visible and unsubmitted. Both halves
+ * now read the same per-harness trait off the registry rather than each holding a
+ * number (`HarnessDescriptor.paste_submit_settle_seconds`).
+ */
+export function terminalSubmitSettleMs(
+  text: string,
+  settle: { baseMs: number; perKibMs: number },
+): number {
+  const kib = new TextEncoder().encode(text).length / 1024
+  return Math.min(MAX_TERMINAL_SUBMIT_SETTLE_MS, settle.baseMs + kib * settle.perKibMs)
+}
 
 /**
  * The awaiting sub-reasons that mean a dialog, not a composer, is under the cursor.
@@ -71,10 +99,11 @@ export async function settleTerminalInsertion(
   append: (value: string) => void,
   send: () => void,
   wait: TerminalWait = waitForTerminal,
+  settleMs: number = TERMINAL_SUBMIT_SETTLE_MS,
 ): Promise<void> {
   append(text)
   if (!submit) return
-  await wait(TERMINAL_SUBMIT_SETTLE_MS)
+  await wait(settleMs)
   send()
 }
 
