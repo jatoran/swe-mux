@@ -54,6 +54,10 @@ export type MatrixProject={
   /** What this Project's file says, null where it left the field alone - the
    *  same two readings the authority pair carries, and for the same reason. */
   scan_timeline_auto_enable_own?:boolean|null
+  /** The titler's refinement count, the same two readings: effective, and the
+   *  Project's own (null where it inherits). */
+  title_refinements?:number
+  title_refinements_own?:number|null
   // What this Project's own file says (null = unset, which is what lets the
   // Project cell offer "Follow global" as a real third position) and what the
   // daemon resolves after the install default and ceiling are layered on.
@@ -70,6 +74,8 @@ export type MatrixData={
    *  untouched row untouched. */
   project_defaults?:Record<string,boolean>
   scan_timeline_auto_enable_default?:boolean
+  title_refinements_default?:number
+  title_refinements_max?:number
   install_switches:{automation_enabled:boolean;scan_timeline_enabled:boolean;scheduled_runs_enabled:boolean;land_queue_enabled:boolean}
   authority_fields:AuthorityFieldSpec[]
   authority_default:Record<string,string>
@@ -188,6 +194,7 @@ export function AutomationPolicyMatrix({data,projectId,onSelectProject,catalog,l
         // The Project's *own* answer, null included: echoing the effective one
         // would pin the inherited value into the file on any unrelated edit.
         scan_timeline_auto_enable:project.scan_timeline_auto_enable_own??null,
+        title_refinements:project.title_refinements_own??null,
         revision:project.revision,
       })
       forgetProjectAutomations(project.project_id)
@@ -205,7 +212,8 @@ export function AutomationPolicyMatrix({data,projectId,onSelectProject,catalog,l
     try{
       await api('PUT',`/api/projects/${project.project_id}/automations`,{
         automations:project.requested,
-        scan_timeline_auto_enable:project.scan_timeline_auto_enable,
+        scan_timeline_auto_enable:project.scan_timeline_auto_enable_own??null,
+        title_refinements:project.title_refinements_own??null,
         authority,
         revision:project.revision,
       })
@@ -240,14 +248,19 @@ export function AutomationPolicyMatrix({data,projectId,onSelectProject,catalog,l
     }
     void writeProject(next)
   }
-  const setAutoArm=(value:boolean|null)=>{
+  /** Write one of the two Project fields that qualify an opt-in rather than
+   *  being one, carrying the other one's *own* answer so a write to either
+   *  never pins the inherited value of the other. */
+  const writeQualifier=(fields:{scan_timeline_auto_enable?:boolean|null;title_refinements?:number|null})=>{
     if(!project)return
     setSaving(true)
     void (async()=>{
       try{
         await api('PUT',`/api/projects/${project.project_id}/automations`,{
           automations:project.requested,
-          scan_timeline_auto_enable:value,
+          scan_timeline_auto_enable:project.scan_timeline_auto_enable_own??null,
+          title_refinements:project.title_refinements_own??null,
+          ...fields,
           revision:project.revision,
         })
         forgetProjectAutomations(project.project_id)
@@ -256,6 +269,11 @@ export function AutomationPolicyMatrix({data,projectId,onSelectProject,catalog,l
       finally{setSaving(false)}
     })()
   }
+  const setAutoArm=(value:boolean|null)=>writeQualifier({scan_timeline_auto_enable:value})
+  const setTitleRefinements=(value:number|null)=>writeQualifier({title_refinements:value})
+  const refinementsMax=data.title_refinements_max??5
+  const refinementsDefault=data.title_refinements_default??2
+  const refinementOptions=Array.from({length:refinementsMax+1},(_,count)=>({value:String(count),label:count===0?'0 · name once':String(count)}))
 
   const fleetCount=(id:string)=>data.projects.filter(row=>row.enabled.includes(id)).length
   const unverified=new Set(project?.unverified||[])
@@ -269,24 +287,28 @@ export function AutomationPolicyMatrix({data,projectId,onSelectProject,catalog,l
   // Grouped the way the dependencies actually flow, same grouping the old
   // editor drew: the structure IS the "needs X" story, so rows carry no
   // per-row dependency prose.
-  const readsTimeline=(item:AutomationRegistryEntry)=>closure(item.id,new Set()).has('scan_timeline')
-  // A consumer with no substrate under it is one of two things: a capability
-  // (what agents and schedules may do, model-free) or an observer (a model read
-  // of the live conversation - the session titler, the attention observers).
-  // The split is `needs_llm`, which is the fact that separates them; observers
-  // sit directly above the timeline distillations, beside the re-titler that
-  // reads the timeline, so titling is one region of the list rather than two.
-  const isObserver=(item:AutomationRegistryEntry)=>!item.requires.length&&item.needs_llm===true
+  // Grouped by what a row is *about* - the registry's `family` - never by what it
+  // depends on: dependency is already drawn per row by the depth indentation and
+  // the greying cascade, and grouping by it a second time put the session titler
+  // two groups away from the re-titler. Rows keep the daemon's order (registry
+  // order) inside a family, so placement is the registry's decision and not the
+  // id's spelling. The family table itself (`automation_registry.FAMILIES`) is
+  // the daemon's too; this list only fixes the drawing order and the hints, and a
+  // family the daemon sends that is not named here is drawn last rather than lost.
   const groups:[string,string,AutomationRegistryEntry[]][]=useMemo(()=>{
-    const substrate=data.automations.filter(item=>item.kind==='substrate')
-    const consumers=data.automations.filter(item=>item.kind==='consumer')
-    return [
-      ['Foundations','record facts, never act',substrate],
-      ['Deterministic checks','model-free reads over the recorded facts',consumers.filter(item=>item.requires.length>0&&!readsTimeline(item))],
-      ['Capabilities','what agents and schedules may do',consumers.filter(item=>!item.requires.length&&!isObserver(item))],
-      ['Observers','model reads of the live conversation',consumers.filter(isObserver)],
-      ['Reads the timeline','distillations of the scan timeline',consumers.filter(item=>readsTimeline(item))],
+    const known:[string,string,string][]=[
+      ['facts','Foundations','record facts, never act'],
+      ['checks','Deterministic checks','model-free reads over the recorded facts'],
+      ['titling','Titling','name a pane, then keep the name honest'],
+      ['attention','Attention','what needs you, and why'],
+      ['timeline','Reads the timeline','distillations of the scan timeline'],
+      ['capabilities','Capabilities','what agents and schedules may do'],
     ]
+    const named=new Set(known.map(([family])=>family))
+    const rows=known.map(([family,title,hint]):[string,string,AutomationRegistryEntry[]]=>
+      [title,hint,data.automations.filter(item=>(item.family||'capabilities')===family)])
+    const extra=data.automations.filter(item=>item.family&&!named.has(item.family))
+    return extra.length?[...rows,['Other','',extra]]:rows
   },[data.automations])
 
   const depth=(item:AutomationRegistryEntry):number=>{
@@ -448,7 +470,37 @@ export function AutomationPolicyMatrix({data,projectId,onSelectProject,catalog,l
       <div class="automation-matrix-head" role="row" data-setting="automations"><span>automation</span><span data-setting="automation_project_defaults">global</span><span>{project?.project_name||'project'}</span><span>projects on</span></div>
       {groups.map(([title,hint,items])=>items.length?<div key={title}>
         <h5 class="project-automation-group">{title}<span>{hint}</span></h5>
-        {items.map(row)}
+        {items.map(item=>[
+          row(item),
+          // The titler's refinement count, drawn directly under the titler it
+          // qualifies - the same shape as the arming rule under the timeline:
+          // an install default and a Project answer that may follow it.
+          item.id==='session_titler'&&project?<div class={`automation-matrix-row${requestedOn(item)?'':' globally-off'}`} key="title_refinements">
+            <div class="automation-matrix-name" style="--depth:1">
+              <span class="project-setting-name" data-setting="title_refinements">Title refinements</span>
+              <p class="project-automation-deps">How many times a provisional title may be revised after the first while the work is still taking shape. 0 names a pane once and never revises it.</p>
+            </div>
+            <div class="automation-matrix-cell automation-authority-global">
+              <label class="check" data-setting="title_refinements_default" title="What a Project that has not decided inherits">
+                <Dropdown ariaLabel="Default title refinements" value={String(refinementsDefault)} disabled={saving}
+                  options={refinementOptions}
+                  onChange={value=>void patchConfig({title_refinements_default:Number(value)})}/>
+                <span>default</span>
+              </label>
+              <div class="automation-authority-meta">
+                <small>{data.projects.filter(row=>row.title_refinements_own==null).length} inherit</small>
+              </div>
+            </div>
+            <div class="automation-matrix-cell">
+              <Dropdown ariaLabel="Title refinements in this Project"
+                value={project.title_refinements_own==null?'':String(project.title_refinements_own)}
+                disabled={saving||!requestedOn(item)||globallyDisabled.has('session_titler')}
+                options={[{value:'',label:`Follow global (${refinementsDefault})`},...refinementOptions]}
+                onChange={value=>setTitleRefinements(value===''?null:Number(value))}/>
+            </div>
+            <span class="automation-matrix-fleet">{data.projects.filter(row=>row.title_refinements_own!=null).length} custom</span>
+          </div>:null,
+        ])}
         {title==='Foundations'&&project&&<div class={`automation-matrix-row${requestedOn(byId.get('scan_timeline')||({} as never))?'':' globally-off'}`}>
           <div class="automation-matrix-name" style="--depth:3">
             <span class="project-setting-name" data-setting="scan_timeline_auto_enable">Arm every new conversation</span>

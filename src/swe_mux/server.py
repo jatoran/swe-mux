@@ -55,6 +55,7 @@ from .automation_registry import (
     install_automations,
     install_defaults,
     resolve_scan_auto_enable,
+    resolve_title_refinements,
 )
 from .automation_registry import resolve_config as resolve_automation_config
 from .automation_store import AutomationStore
@@ -842,6 +843,37 @@ def _make_session_automations(
         return install_automations(config, llm_ready=bool((await llm_ready()).ready))
 
     return session_automations
+
+
+def _make_session_title_refinements(
+    session_project_root: Callable[[str], tuple[Any, str] | None],
+    projects: Any,
+    config: Config,
+) -> Callable[[str], Awaitable[int]]:
+    """How many times the titler may revise a provisional title, per session.
+
+    The Project's own `title_refinements` under the install default, read from
+    the Project's file the same way `scan_context` reads the arming rule; a
+    session outside every registered Project, or one whose file cannot be read,
+    gets the install default. Module-level for the same C901 reason as
+    `_make_session_automations`.
+    """
+
+    async def title_refinements(session_id: str) -> int:
+        resolved = session_project_root(session_id)
+        if resolved is None:
+            return int(config.title_refinements_default)
+        record, root = resolved
+        registered = projects.projects.get(record.project_id) if record.project_id else None
+        portable = await read_project_config(
+            root, project=_registered_identity(registered) if registered else None
+        )
+        values = portable["values"] if portable["status"] in {"ready", "read-only"} else {}
+        return resolve_title_refinements(
+            values.get("title_refinements"), default=int(config.title_refinements_default)
+        )
+
+    return title_refinements
 
 
 async def _hydrate_llm_capabilities(capabilities: CapabilityStore, store: AutomationStore) -> None:
@@ -2222,6 +2254,9 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
     )
     automation.session_automations = _session_automations
     fleet.session_automations = _session_automations
+    automation.session_title_refinements = _make_session_title_refinements(
+        _session_project_root, projects, config
+    )
 
     async def consumer_context(session_id: str) -> ConsumerContext | None:
         resolved = _session_project_root(session_id)

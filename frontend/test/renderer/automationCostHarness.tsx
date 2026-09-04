@@ -97,6 +97,8 @@ const MATRIX = {
   global_allow: { doc_debt: false },
   project_defaults: { raw_store: true, tier0: true, loop_detection: true },
   scan_timeline_auto_enable_default: false,
+  title_refinements_default: 2,
+  title_refinements_max: 5,
   install_switches: { automation_enabled: true, scan_timeline_enabled: true, scheduled_runs_enabled: true, land_queue_enabled: true },
   authority_fields: [
     { field: 'session_control_grant', label: 'Interrupt and end sessions', levels: ['draft', 'granted'], builtin: 'granted', gated_by: 'session_control' },

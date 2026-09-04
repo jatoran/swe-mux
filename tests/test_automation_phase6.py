@@ -701,6 +701,79 @@ async def test_provisional_title_recomputes_once_when_the_real_task_arrives(
 
 
 @pytest.mark.asyncio
+async def test_a_zero_refinement_project_names_a_pane_once(tmp_path: Path) -> None:
+    # `title_refinements = 0` is strict one-shot naming: the provisional first
+    # title stands, and the request that would have refined it is never sent.
+    item = record(tmp_path)
+    session = SimpleNamespace(
+        record=item,
+        transcript_path=None,
+        first_user_prompt="review and learn this repository",
+        last_user_prompt="review and learn this repository",
+    )
+    store = AutomationStore(tmp_path / "mux.db")
+    provider = TitleLifecycleProvider(
+        [("Repository Review", "provisional"), ("Auth Race Fix", "settled")]
+    )
+    engine = _titler_engine(tmp_path, session, store, provider=provider)
+    engine.config.title_refinements_default = 0
+
+    await engine.evaluate(normalized_event(item, 10, event_type="turn_started"))
+    session.last_user_prompt = "fix the authentication callback race"
+    await engine.evaluate(
+        normalized_event(item, 11, event_type="transcript_message", payload={"role": "user"})
+    )
+
+    rows = await store.annotations(agent_run_id="run-1", tag="title")
+    assert [row["content"] for row in rows] == ["Repository Review"]
+    assert len(provider.prompts) == 1
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_the_refinement_count_is_resolved_per_session(tmp_path: Path) -> None:
+    # With the composition root's closure bound, the Project's answer wins over
+    # the install default: a Project that allows one refinement gets exactly one.
+    item = record(tmp_path)
+    session = SimpleNamespace(
+        record=item,
+        transcript_path=None,
+        first_user_prompt="review and learn this repository",
+        last_user_prompt="review and learn this repository",
+    )
+    store = AutomationStore(tmp_path / "mux.db")
+    provider = TitleLifecycleProvider(
+        [
+            ("Repository Review", "provisional"),
+            ("Auth Race Fix", "provisional"),
+            ("Never Sent", "settled"),
+        ]
+    )
+    engine = _titler_engine(tmp_path, session, store, provider=provider)
+    engine.config.title_refinements_default = 0
+    asked: list[str] = []
+
+    async def one_refinement(session_id: str) -> int:
+        asked.append(session_id)
+        return 1
+
+    engine.session_title_refinements = one_refinement
+
+    await engine.evaluate(normalized_event(item, 10, event_type="turn_started"))
+    for seq, prompt in ((11, "fix the authentication callback race"), (12, "now run tests")):
+        session.last_user_prompt = prompt
+        await engine.evaluate(
+            normalized_event(item, seq, event_type="transcript_message", payload={"role": "user"})
+        )
+
+    rows = await store.annotations(agent_run_id="run-1", tag="title")
+    assert [row["content"] for row in rows] == ["Auth Race Fix", "Repository Review"]
+    assert len(provider.prompts) == 2
+    assert asked and set(asked) == {item.id}
+    store.close()
+
+
+@pytest.mark.asyncio
 async def test_explicit_regenerate_uses_latest_prompt_and_then_freezes(tmp_path: Path) -> None:
     item = record(tmp_path)
     session = SimpleNamespace(

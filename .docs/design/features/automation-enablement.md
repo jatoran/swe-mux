@@ -209,9 +209,14 @@ has to stay sayable, and the file is the only place it can be said.
   ceiling it *keeps* the three dedicated-switch ids: the switch is that automation's
   ceiling, and "what does an undecided Project do" is a different question the switch does
   not answer.
+- `title_refinements` (how many times the session titler may revise a provisional title after
+  the first; `0` names a pane once) inherits the same way, through
+  `Config.title_refinements_default` and `registry.resolve_title_refinements`, and is drawn as
+  the row directly under `session_titler`. It is a value rather than a state, so it is
+  deliberately absent from every grant allowlist.
 - `scan_timeline_auto_enable` inherits the same way, through
   `Config.scan_timeline_auto_enable_default` and `registry.resolve_scan_auto_enable`. It is
-  the one Project field that *qualifies* an opt-in rather than being one, and it needed a
+  the first Project field that *qualifies* an opt-in rather than being one, and it needed a
   default for the same reason: the creation form wrote it into every Project it armed, so
   an operator could never change their mind about it in one place. Its route takes three
   positions - key absent leaves it alone, explicit `null` removes it (follow global), a
@@ -439,7 +444,7 @@ those writes read as an external edit to the others. Refusals are `409 revision_
 (naming the fields in `conflicts`) and `409 automation_not_implemented` for a reserved id.
 Opting out of `scan_timeline` still clears `scan_timeline_auto_enable`, whichever guard was
 used: a permission the Project gave up must not silently re-arm every run when it is granted
-again. The typed project config endpoints (`GET|PUT /api/project/config`) still carry the
+again. Opting out of `session_titler` clears `title_refinements` for the same reason. The typed project config endpoints (`GET|PUT /api/project/config`) still carry the
 same table.
 `GET /api/automation/projects` is the fleet aggregation of the same per-Project
 resolution — one row per registered Project, including Projects that opted into nothing —

@@ -1352,3 +1352,120 @@ async def test_an_unimplemented_automation_cannot_be_switched_on(tmp_path: Path)
     )
     assert response.status == 409
     assert json.loads(response.body)["code"] == "automation_not_implemented"
+
+
+def test_every_shipped_automation_belongs_to_a_drawn_family() -> None:
+    # The matrix groups rows by what they are about, never by dependency shape,
+    # so every shipped id names a family the surface draws, and the titler and
+    # the re-titler share one - which is what keeps them on adjacent rows.
+    families = [family for family, _, _ in registry.FAMILIES]
+    assert len(families) == len(set(families))
+    for automation in registry.REGISTRY.values():
+        assert automation.family in families, automation.id
+    assert registry.REGISTRY["session_titler"].family == "titling"
+    assert registry.REGISTRY["continuous_title"].family == "titling"
+    assert registry.REGISTRY["attention_observers"].family == "attention"
+    # Registry order is the drawing order inside a family: the titler first.
+    titling = [a.id for a in registry.REGISTRY.values() if a.family == "titling"]
+    assert titling == ["session_titler", "continuous_title"]
+
+
+def test_the_install_default_refinement_count_matches_the_registry_constant() -> None:
+    # `Config` cannot import the registry at class-definition time (the registry
+    # is imported lazily there), so the dataclass default is a literal; this is
+    # what keeps it the registry's number.
+    assert Config().title_refinements_default == registry.TITLE_REFINEMENTS_DEFAULT
+    assert 0 <= registry.TITLE_REFINEMENTS_DEFAULT <= registry.TITLE_REFINEMENTS_MAX
+
+
+def test_title_refinements_inherit_the_same_way_as_the_arming_rule() -> None:
+    # The Project's own integer wins; unset, a stray boolean, or a value outside
+    # the bound inherits the install default.
+    assert registry.resolve_title_refinements(None, default=2) == 2
+    assert registry.resolve_title_refinements(0, default=2) == 0
+    assert registry.resolve_title_refinements(4, default=0) == 4
+    assert registry.resolve_title_refinements(True, default=2) == 2
+    assert registry.resolve_title_refinements(-1, default=2) == 2
+    assert (
+        registry.resolve_title_refinements(registry.TITLE_REFINEMENTS_MAX + 1, default=1) == 1
+    )
+
+
+def test_title_refinements_round_trip_and_zero_survives_the_write() -> None:
+    from swe_mux.project_files import parse_project_config, serialize_project_config
+
+    # `0` is a choice (name once, never revise) and must be written, not dropped
+    # as falsy.
+    written = serialize_project_config({"automations": {}, "title_refinements": 0})
+    assert parse_project_config(written)["title_refinements"] == 0
+    assert "title_refinements" not in parse_project_config(
+        serialize_project_config({"automations": {}})
+    )
+    with pytest.raises(ValueError, match="title_refinements must be an integer"):
+        parse_project_config(b"version = 1\ntitle_refinements = true\n")
+    with pytest.raises(ValueError, match="title_refinements must be an integer"):
+        parse_project_config(b"version = 1\ntitle_refinements = 99\n")
+
+
+@pytest.mark.asyncio
+async def test_title_refinements_can_be_returned_to_the_install_default(
+    tmp_path: Path,
+) -> None:
+    # The same three positions as the arming rule: an integer pins, an absent key
+    # leaves the pin alone, an explicit null gives the field back to the install.
+    from types import SimpleNamespace
+
+    from swe_mux.routes.automation import get_project_automations, put_project_automations
+
+    project = SimpleNamespace(id="p1", name="Main", root=str(tmp_path))
+    registry_stub = SimpleNamespace(
+        projects={"p1": project}, ordered_projects=lambda: [project]
+    )
+
+    class Events:
+        async def emit(self, kind: str, **_payload: object) -> None:
+            del kind
+
+    config = Config(data_dir=tmp_path, title_refinements_default=2)
+    app = {keys.PROJECTS: registry_stub, keys.EVENTS: Events(), keys.CONFIG: config}
+    opted_in = {"session_titler": True}
+
+    async def write(body: dict[str, object]) -> object:
+        async def resolved() -> dict[str, object]:
+            return body
+
+        return await put_project_automations(  # type: ignore[arg-type]
+            SimpleNamespace(match_info={"project_id": "p1"}, app=app, json=resolved)
+        )
+
+    payload = json.loads(
+        (await write({"automations": opted_in, "title_refinements": 0})).body  # type: ignore[attr-defined]
+    )
+    assert payload["title_refinements"] == 0
+    assert payload["title_refinements_own"] == 0
+
+    payload = json.loads((await write({"automations": opted_in})).body)  # type: ignore[attr-defined]
+    assert payload["title_refinements_own"] == 0
+
+    payload = json.loads(
+        (await write({"automations": opted_in, "title_refinements": None})).body  # type: ignore[attr-defined]
+    )
+    assert payload["title_refinements_own"] is None
+    assert payload["title_refinements"] == 2
+    read = json.loads(
+        (
+            await get_project_automations(  # type: ignore[arg-type]
+                SimpleNamespace(match_info={"project_id": "p1"}, app=app)
+            )
+        ).body
+    )
+    assert read["title_refinements"] == 2
+
+    # Out of range is refused, and opting the titler out clears the pin.
+    with pytest.raises(ValueError, match="title_refinements must be an integer"):
+        await write({"automations": opted_in, "title_refinements": 99})
+    await write({"automations": opted_in, "title_refinements": 1})
+    payload = json.loads(
+        (await write({"automations": {"session_titler": False}})).body  # type: ignore[attr-defined]
+    )
+    assert payload["title_refinements_own"] is None

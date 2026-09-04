@@ -56,12 +56,22 @@ class Automation:
     # that did not opt in", but a permission whose every act is separately
     # bounded and attributable only decides who approves.
     default_on: bool = False
+    # Which block of the policy matrix this row is drawn in: what the automation
+    # is *about* (`FAMILIES`), never what it depends on. Dependency is already
+    # drawn per row by the depth indentation and the greying cascade, and grouping
+    # by it a second time scattered rows that belong together - the session titler
+    # sat two groups away from the re-titler because one reads the timeline and
+    # the other does not. Rows keep registry order inside a family, so placement
+    # is a decision made here rather than an accident of the id's spelling.
+    # Empty only on ad-hoc instances a test builds; `_validate_families` refuses it
+    # for anything shipped.
+    family: str = ""
 
 
 _AUTOMATIONS: tuple[Automation, ...] = (
     # Substrate.
-    Automation("raw_store", SUBSTRATE, "Raw transcript store"),
-    Automation("tier0", SUBSTRATE, "Deterministic fact capture", ("raw_store",)),
+    Automation("raw_store", SUBSTRATE, "Raw transcript store", family="facts"),
+    Automation("tier0", SUBSTRATE, "Deterministic fact capture", ("raw_store",), family="facts"),
     Automation(
         "scan_timeline",
         SUBSTRATE,
@@ -69,35 +79,39 @@ _AUTOMATIONS: tuple[Automation, ...] = (
         ("tier0", "raw_store"),
         spends=True,
         needs_llm=True,
+        family="facts",
     ),
     # Consumers. The deterministic four (control-plane step 3) are model-free
     # queries over Tier 0 and ship together; everything below them needs a layer
     # that does not exist yet and is marked unimplemented rather than toggleable.
-    Automation("provenance_graph", CONSUMER, "Provenance graph", ("tier0",)),
-    Automation("declared_vs_verified", CONSUMER, "Declared vs verified", ("tier0",)),
-    Automation("loop_detection", CONSUMER, "Loop / stall detection", ("tier0",)),
+    Automation("provenance_graph", CONSUMER, "Provenance graph", ("tier0",), family="checks"),
+    Automation(
+        "declared_vs_verified", CONSUMER, "Declared vs verified", ("tier0",), family="checks"
+    ),
+    Automation("loop_detection", CONSUMER, "Loop / stall detection", ("tier0",), family="checks"),
     # Doc debt derives its file → owning-doc map from the repository's own docs,
     # so it needs Tier 0 and nothing else. It previously claimed a project_card
     # dependency that its implementation does not use.
-    Automation("doc_debt", CONSUMER, "Doc-debt ledger", ("tier0",)),
+    Automation("doc_debt", CONSUMER, "Doc-debt ledger", ("tier0",), family="checks"),
     Automation(
         "dead_end_memory",
         CONSUMER,
         "Dead-end memory",
         ("tier0", "scan_timeline"),
+        family="timeline",
     ),
     # Phase 7.9: the deterministic code-structure graph. Model-free — it parses
     # the Tier 0 file_write stream with tree-sitter and stores nodes/edges, so it
     # reads Tier 0 and nothing else. Gates the blast-radius/navigation/context/
     # test-gap MCP reads, the human blast-radius annotations, and the per-session
     # change map. Off by default; costs no tokens.
-    Automation("code_graph", CONSUMER, "Code-structure graph", ("tier0",)),
+    Automation("code_graph", CONSUMER, "Code-structure graph", ("tier0",), family="checks"),
     # Phase 7.5: the per-project opt-in that gates the `mux.prior_resolutions`
     # MCP read. It reads the experience corpus (model-scored verified fixes,
     # keyed by normalized error signature), which no detector produces, so it is
     # its own consumer id rather than a read over another automation's output. It
     # needs Tier 0 as the base fact record the experience corpus is derived from.
-    Automation("prior_resolutions", CONSUMER, "Prior resolutions", ("tier0",)),
+    Automation("prior_resolutions", CONSUMER, "Prior resolutions", ("tier0",), family="checks"),
     # The built-in observers: model reads of the live conversation rather than of
     # recorded facts, so they depend on no substrate. Each is a per-Project
     # opt-in resolved through this DAG exactly like every other consumer, with
@@ -116,24 +130,25 @@ _AUTOMATIONS: tuple[Automation, ...] = (
     # broadens an already-named run on a scan-detected scope pivot: two features
     # whose labels both began "session title" once read as one switch, which is
     # why the second is labelled "Re-title on scope change".
-    Automation("session_titler", CONSUMER, "Session titler", (), spends=True, needs_llm=True),
+    Automation(
+        "session_titler",
+        CONSUMER,
+        "Session titler",
+        (),
+        spends=True,
+        needs_llm=True,
+        family="titling",
+    ),
     # The three attention observers (stalled-run triage, approval-request triage,
     # context-handoff suggestion) and the periodic attention digest, as one id:
     # they answer one question - does this need the user - and were always
     # switched as a group.
-    Automation(
-        "attention_observers",
-        CONSUMER,
-        "Attention observers",
-        (),
-        spends=True,
-        needs_llm=True,
-    ),
     # Phase 7.7: re-title a session when its scope changes. It broadens an
     # auto-named run's title only on a genuine scope pivot detected over that
     # run's scan records, so it reads the scan timeline. Off by default and
     # independently toggleable; with it off, titling stays the one-shot
-    # behaviour.
+    # behaviour. Registry order puts it directly after the titler, and the
+    # `titling` family keeps the two on adjacent rows of the matrix.
     Automation(
         "continuous_title",
         CONSUMER,
@@ -141,6 +156,16 @@ _AUTOMATIONS: tuple[Automation, ...] = (
         ("scan_timeline",),
         spends=True,
         needs_llm=True,
+        family="titling",
+    ),
+    Automation(
+        "attention_observers",
+        CONSUMER,
+        "Attention observers",
+        (),
+        spends=True,
+        needs_llm=True,
+        family="attention",
     ),
     Automation(
         "cross_session_interlocks",
@@ -148,12 +173,14 @@ _AUTOMATIONS: tuple[Automation, ...] = (
         "Cross-session interlocks",
         ("provenance_graph",),
         implemented=False,
+        family="attention",
     ),
     Automation(
         "absence_report",
         CONSUMER,
         "Absence report / digest",
         ("scan_timeline",),
+        family="attention",
     ),
     # Phase 7.7 near-term scan-timeline consumers. Each is a cheap derivation over
     # the per-record behavioral spine, independently toggleable, and reads the
@@ -162,16 +189,32 @@ _AUTOMATIONS: tuple[Automation, ...] = (
     # Phase-transition signals emit an event on a genuine work_phase pivot or a
     # prolonged flat-novelty stall, feeding the attention channels. It shares the
     # adaptive titler's one pivot definition, so the two never disagree.
-    Automation("phase_transitions", CONSUMER, "Phase-transition signals", ("scan_timeline",)),
+    Automation(
+        "phase_transitions",
+        CONSUMER,
+        "Phase-transition signals",
+        ("scan_timeline",),
+        family="timeline",
+    ),
     # Timeline-based handoff regenerates the handoff export from a run's scan
     # spine rather than from raw annotations, so it is phase-structured.
-    Automation("timeline_handoff", CONSUMER, "Timeline-based handoff", ("scan_timeline",)),
+    Automation(
+        "timeline_handoff",
+        CONSUMER,
+        "Timeline-based handoff",
+        ("scan_timeline",),
+        family="timeline",
+    ),
     # Catch-me-up is an on-demand per-session / per-Project rollup of the scan
     # spine: phases gone through, claims, and what is blocking.
-    Automation("catch_me_up", CONSUMER, "Catch-me-up digest", ("scan_timeline",)),
+    Automation(
+        "catch_me_up", CONSUMER, "Catch-me-up digest", ("scan_timeline",), family="timeline"
+    ),
     # Live blockers aggregates the `blockers` field across active sessions into a
     # fleet glance without opening any of them.
-    Automation("live_blockers", CONSUMER, "Live blockers view", ("scan_timeline",)),
+    Automation(
+        "live_blockers", CONSUMER, "Live blockers view", ("scan_timeline",), family="timeline"
+    ),
     # Semantic history search resolves a query against distilled scan
     # summary/intent/target records rather than a raw transcript grep.
     Automation(
@@ -179,6 +222,7 @@ _AUTOMATIONS: tuple[Automation, ...] = (
         CONSUMER,
         "Semantic history search",
         ("scan_timeline",),
+        family="timeline",
     ),
     # Phase 7.11: whether *agents* may read this Project's scan timeline through
     # the `scan_timeline` MCP tool. Its own consumer id rather than the
@@ -186,7 +230,9 @@ _AUTOMATIONS: tuple[Automation, ...] = (
     # ways more revealing than the transcript excerpt it was derived from, and
     # gating agent reads on the substrate would leave no way to keep the timeline
     # while withholding it from siblings. Off by default; costs no tokens.
-    Automation("scan_reads", CONSUMER, "Agent scan-timeline reads", ("scan_timeline",)),
+    Automation(
+        "scan_reads", CONSUMER, "Agent scan-timeline reads", ("scan_timeline",), family="timeline"
+    ),
     # "← everything" in the design: ranking has nothing to rank without the
     # detectors and the timeline that feed it. The old `("tier0",)` would have let
     # the toggle surface present a one-dependency tree as complete.
@@ -201,6 +247,7 @@ _AUTOMATIONS: tuple[Automation, ...] = (
             "declared_vs_verified",
             "doc_debt",
         ),
+        family="attention",
     ),
     # The model tier, and the only automation here that spends tokens. It is a
     # "why" over items ranking has already produced, so it depends on ranking
@@ -212,12 +259,13 @@ _AUTOMATIONS: tuple[Automation, ...] = (
         ("attention_ranking",),
         spends=True,
         needs_llm=True,
+        family="attention",
     ),
     # Keep the persisted id for settings compatibility. The human observation
     # inbox UI is retired; this now names review of agent spawn requests in the
     # Fleet Queue.
-    Automation("observation_inbox", CONSUMER, "Spawn request review"),
-    Automation("screenshot_to_agent", CONSUMER, "Screenshot to agent"),
+    Automation("observation_inbox", CONSUMER, "Spawn request review", family="capabilities"),
+    Automation("screenshot_to_agent", CONSUMER, "Screenshot to agent", family="capabilities"),
     # Phase 7.6: the per-Project opt-in that makes the `interrupt` and
     # `end_session` MCP tools reachable at all (and, with it off, collapses
     # `spawn_grant` back to drafting). It gates a capability rather than a read
@@ -228,7 +276,14 @@ _AUTOMATIONS: tuple[Automation, ...] = (
     # attributable, and a Project withdraws it with an explicit
     # `session_control = false`. The authority level beside it
     # (`session_control_grant`) defaults to `granted` the same way.
-    Automation("session_control", CONSUMER, "Agent session control", (), default_on=True),
+    Automation(
+        "session_control",
+        CONSUMER,
+        "Agent session control",
+        (),
+        default_on=True,
+        family="capabilities",
+    ),
     # Scheduled runs: cron/interval/one-off spawns of an agent session in this
     # Project, authored by a human ahead of time. Like `session_control` it gates
     # a capability rather than a read over another automation's output, so it
@@ -236,7 +291,7 @@ _AUTOMATIONS: tuple[Automation, ...] = (
     # nothing: the schedules themselves are machine-local rows in the daemon's
     # database, so a clone that inherits this opt-in has none of them
     # (`schedule_store.py`).
-    Automation("scheduled_runs", CONSUMER, "Scheduled runs", ()),
+    Automation("scheduled_runs", CONSUMER, "Scheduled runs", (), family="capabilities"),
     # Phase 14: serialized branch landing. Like `session_control` and
     # `scheduled_runs` it gates a *capability* rather than a read over another
     # automation's output, so it depends on no substrate. Its own id rather than a
@@ -244,10 +299,37 @@ _AUTOMATIONS: tuple[Automation, ...] = (
     # acts on a repository, and they deserve separate switches and separate
     # budgets. Off by default, and permission alone lands nothing - the Project's
     # `land_grant` stays at the inert `draft` until a human raises it.
-    Automation("land_queue", CONSUMER, "Land queue", ()),
+    Automation("land_queue", CONSUMER, "Land queue", (), family="capabilities"),
 )
 
 REGISTRY: dict[str, Automation] = {automation.id: automation for automation in _AUTOMATIONS}
+
+#: The blocks of the policy matrix, in the order they are drawn, each with the
+#: hint the toggle surface prints beside its title. One table here rather than a
+#: grouping rule in the browser: the rule used to be "by dependency shape", which
+#: the depth indentation already draws, and it put the session titler two groups
+#: away from the re-titler. `session_titler` is a `titling` row directly above
+#: `continuous_title`, whatever either depends on.
+FAMILIES: tuple[tuple[str, str, str], ...] = (
+    ("facts", "Foundations", "record facts, never act"),
+    ("checks", "Deterministic checks", "model-free reads over the recorded facts"),
+    ("titling", "Titling", "name a pane, then keep the name honest"),
+    ("attention", "Attention", "what needs you, and why"),
+    ("timeline", "Reads the timeline", "distillations of the scan timeline"),
+    ("capabilities", "Capabilities", "what agents and schedules may do"),
+)
+
+
+def _validate_families() -> None:
+    known = {family for family, _, _ in FAMILIES}
+    for automation in _AUTOMATIONS:
+        if automation.family not in known:
+            raise ValueError(
+                f"automation {automation.id} names unknown family {automation.family!r}"
+            )
+
+
+_validate_families()
 
 #: Automations whose install-wide ceiling is a dedicated boolean `Config`
 #: switch rather than an `automation_global_allow` entry - one switch, one key.
@@ -358,6 +440,32 @@ def resolve_scan_auto_enable(project_value: object, *, default: bool) -> bool:
     about it in one place.
     """
     return project_value if isinstance(project_value, bool) else default
+
+
+#: How many times a provisional session title may be revised after the first,
+#: at most. The default is the behaviour the titler had while the bound was a
+#: constant (three calls: the first title plus two refinements), so nothing
+#: changes on upgrade; `0` is strict one-shot naming.
+TITLE_REFINEMENTS_DEFAULT = 2
+TITLE_REFINEMENTS_MAX = 5
+
+
+def resolve_title_refinements(project_value: object, *, default: int) -> int:
+    """How many times a provisional title may be revised in this Project.
+
+    The second Project field that qualifies an opt-in (`session_titler`) rather
+    than being one, resolved the same way as `resolve_scan_auto_enable`: the
+    Project's own integer wins, anything else - unset, a stray boolean, a value
+    outside the bound - inherits the install default. Lives here so the daemon's
+    titler gate and the matrix payload answer it identically.
+    """
+    if (
+        isinstance(project_value, int)
+        and not isinstance(project_value, bool)
+        and 0 <= project_value <= TITLE_REFINEMENTS_MAX
+    ):
+        return project_value
+    return default
 
 
 def _validate_registry() -> None:

@@ -124,8 +124,12 @@ PROMPT_TITLE_RULE_ID = "builtin.session-titler-initial"
 FALLBACK_TITLE_RULE_ID = "builtin.session-titler"
 TITLE_RULE_IDS = {PROMPT_TITLE_RULE_ID, FALLBACK_TITLE_RULE_ID}
 TITLE_STATE_CHECKPOINT_PREFIX = "title-state:"
-TITLE_MAX_AUTOMATIC_CALLS = 3
-TITLE_MAX_AUTOMATIC_PROMPTS = 3
+# How many automatic title calls a run gets - the first title plus its
+# provisional refinements - and how many distinct opening prompts may drive
+# them, are one per-Project value: `title_refinements` (install default
+# `Config.title_refinements_default`), resolved per session by the composition
+# root. Both bounds used to be the constant 3 here, which was the one part of
+# titling an operator could not read off or change from the policy matrix.
 # A title lost to a provider rate limit used to wait for the next turn boundary,
 # which on an idle pane never comes: sessions were observed sitting nameless for
 # 20+ minutes with the user waiting on nothing. Retry in the background instead.
@@ -186,8 +190,9 @@ BUILTIN_OBSERVER_CATALOG: tuple[dict[str, str], ...] = (
         "model": "Cheap model",
         "result": "Run note used as the generated session title",
         "description": (
-            "Names a pane from its opening request, then refines the title up to three "
-            "times while the work is still taking shape, and freezes it once it settles."
+            "Names a pane from its opening request, refines a provisional title a bounded "
+            "number of times (Title refinements, in the policy matrix) while the work is "
+            "still taking shape, and freezes it once it settles."
         ),
     },
     {
@@ -975,6 +980,10 @@ class AutomationEngine:
         # engine is built); absent, the built-ins resolve against the install
         # defaults alone, which is what a test with no daemon around it gets.
         self.session_automations = session_automations
+        # The per-Project refinement count for the session titler, by session id,
+        # bound late by the composition root beside `session_automations`; absent,
+        # the install default applies.
+        self.session_title_refinements: Callable[[str], Awaitable[int]] | None = None
         self.rules: list[Rule] = []
         self._builtin_rule_cache: dict[tuple[str, bool, bool], list[Rule]] = {}
         self.diagnostic: str | None = None
@@ -1719,10 +1728,13 @@ class AutomationEngine:
                     prompt_count = int((prompt_state or {}).get("prompt_count") or 0)
                     titled_count = int(state.get("titled_prompt_count") or 0)
                     automatic_calls = int(state.get("automatic_calls") or 0)
+                    # The first title plus this Project's refinement count is the
+                    # call budget, and only that many opening prompts may drive it.
+                    call_budget = await self._title_refinements(event) + 1
                     if (
                         prompt_count <= titled_count
-                        or prompt_count > TITLE_MAX_AUTOMATIC_PROMPTS
-                        or automatic_calls >= TITLE_MAX_AUTOMATIC_CALLS
+                        or prompt_count > call_budget
+                        or automatic_calls >= call_budget
                     ):
                         return False
             unique_key = self._unique_guard_key(rule, event)
@@ -1761,23 +1773,31 @@ class AutomationEngine:
             return rule.id, event.agent_run_id
         return None
 
+    async def _title_refinements(self, event: NormalizedEvent) -> int:
+        """How many times this event's session may revise a provisional title."""
+        if self.session_title_refinements is not None and event.session_id:
+            return await self.session_title_refinements(event.session_id)
+        return int(self.config.title_refinements_default)
+
     async def _run_prompt(self, event: NormalizedEvent, *, pin: bool = True) -> str | None:
         """Bounded user-request context for the title lifecycle.
 
-        The first three distinct prompts support automatic provisional revision;
-        ``latest`` keeps an explicit regenerate useful later. A failed provider call
-        pins its active input separately, so a scheduled retry asks the same question
-        even if the user has moved on. ``pin=False`` leaves dry runs read-only.
+        The first ``title_refinements + 1`` distinct prompts support automatic
+        provisional revision; ``latest`` keeps an explicit regenerate useful later. A
+        failed provider call pins its active input separately, so a scheduled retry
+        asks the same question even if the user has moved on. ``pin=False`` leaves
+        dry runs read-only.
         """
         if not event.agent_run_id:
             return None
+        prompt_window = await self._title_refinements(event) + 1
         key = f"{RUN_PROMPT_CHECKPOINT_PREFIX}{event.agent_run_id}"
         pinned = dict(await self.store.checkpoint(key) or {})
         prompts = [
             str(item)
             for item in pinned.get("prompts", [])
             if isinstance(item, str) and item
-        ][:TITLE_MAX_AUTOMATIC_PROMPTS]
+        ][:prompt_window]
         first = str(pinned.get("text") or "")
         if first and not prompts:
             prompts = [first]
@@ -1796,7 +1816,7 @@ class AutomationEngine:
             ):
                 latest = live
                 prompt_count += 1
-                if len(prompts) < TITLE_MAX_AUTOMATIC_PROMPTS:
+                if len(prompts) < prompt_window:
                     prompts.append(live)
                 if not first:
                     first = live

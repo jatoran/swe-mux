@@ -2946,12 +2946,17 @@ model provider), `globally_disabled` (opted in, turned off by the install-wide c
 own field for the same one-actionable-answer reason: the fix is global policy, not a grant,
 and the Project's stored choice is retained), the `llm` verdict the row was resolved under,
 `scan_timeline_auto_enable` (the effective answer, install default included) and
-`scan_timeline_auto_enable_own` (what this Project's file says, `null` where it said nothing)
+`scan_timeline_auto_enable_own` (what this Project's file says, `null` where it said nothing),
+and the same pair for the titler's refinement count, `title_refinements` /
+`title_refinements_own` (an integer, `0` = name once)
 — plus `global_allow` (the `automation_global_allow` map as stored, which the matrix's
 "off everywhere" lock writes through `PATCH /api/config`), `project_defaults` (the
 `automation_project_defaults` map as stored, which the Default checkbox writes),
-`scan_timeline_auto_enable_default`, and `install_switches` (`automation_enabled`,
-`scan_timeline_enabled`, `scheduled_runs_enabled`, `land_queue_enabled`).
+`scan_timeline_auto_enable_default`, `title_refinements_default` with its bound
+`title_refinements_max`, and `install_switches` (`automation_enabled`,
+`scan_timeline_enabled`, `scheduled_runs_enabled`, `land_queue_enabled`). Every registry
+entry also carries `family`, the matrix block it is drawn in (`automation_registry.FAMILIES`),
+and entries arrive in registry order rather than sorted by id.
 Both readings of each install layer ship because neither is derivable from the other: the
 resolved one is what a Project inherits, the stored one is what the operator actually said,
 and a surface with only the resolved one cannot tell a row somebody set from one the registry
