@@ -182,8 +182,6 @@ type Config = {
   attention_incident_window_seconds:number;attention_breakpoint_markers:boolean
   attention_narration_enabled:boolean;attention_narration_model:string
   openrouter_standard_model:string;openrouter_request_timeout_seconds:number
-  observer_titler_enabled:boolean
-  attention_observers_enabled:boolean
   tts_enabled:boolean;tts_default_mode:'off'|'on_demand'|'auto';tts_content:'summary'|'verbatim'
   tts_engine:'sapi'|'kokoro'|'edge';tts_kokoro_voice:string;tts_kokoro_speed:number
   tts_kokoro_lexicon:Record<string,string>

@@ -6,9 +6,11 @@ import json
 import re
 import time
 from collections import defaultdict, deque
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
+from .automation_registry import install_automations
 from .automation_store import AutomationStore
 from .background_tasks import background
 from .config import Config
@@ -59,6 +61,7 @@ class FleetIntelligence:
         processes: ProcessInspector,
         previews: PreviewRegistry,
         config: Config,
+        session_automations: Callable[[str], Awaitable[frozenset[str]]] | None = None,
     ) -> None:
         self.sessions = sessions
         self.events = events
@@ -66,6 +69,10 @@ class FleetIntelligence:
         self.processes = processes
         self.previews = previews
         self.config = config
+        # The per-Project enablement resolution by session id, bound late by the
+        # composition root. The attention digest is fleet-wide, so it runs while
+        # `attention_observers` is on for any live agent session's Project.
+        self.session_automations = session_automations
         self._task: asyncio.Task[None] | None = None
         self._event_task: asyncio.Task[None] | None = None
         self._claim_checks: set[asyncio.Task[None]] = set()
@@ -297,6 +304,22 @@ class FleetIntelligence:
                 by_session[item.session_id].append(item)
         return by_session
 
+    async def _attention_observers_on(self) -> bool:
+        """Whether the attention observers are on anywhere the digest could speak for.
+
+        On for any live agent session's Project, or - with no enablement closure
+        bound, as in a test - by the install default. A fleet-wide digest has no
+        single Project to consult, so "anywhere" is the honest reading.
+        """
+        if self.session_automations is None:
+            return "attention_observers" in install_automations(self.config)
+        for session in list(self.sessions.sessions.values()):
+            if not session.record.agent_run_id:
+                continue
+            if "attention_observers" in await self.session_automations(session.record.id):
+                return True
+        return False
+
     async def inspect(self) -> None:
         now = time.time()
         index = self._index_processes()
@@ -305,7 +328,7 @@ class FleetIntelligence:
                 continue
             await self._attention(session, now, index)
         await self._interlocks(now, index)
-        if self.config.attention_observers_enabled and now - self._last_digest >= DIGEST_SECONDS:
+        if now - self._last_digest >= DIGEST_SECONDS and await self._attention_observers_on():
             self._last_digest = now
             items = await self.store.notifications(unread=True, limit=50)
             if items:

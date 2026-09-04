@@ -489,7 +489,7 @@ async def test_builtin_titler_reserves_one_paid_call_per_agent_run(tmp_path: Pat
         Config(
             data_dir=tmp_path,
             automation_enabled=True,
-            observer_titler_enabled=True,
+            automation_project_defaults={"session_titler": True},
             openrouter_cheap_model="vendor/cheap",
         ),
         provider,  # type: ignore[arg-type]
@@ -569,7 +569,7 @@ def _titler_engine(
         Config(
             data_dir=tmp_path,
             automation_enabled=True,
-            observer_titler_enabled=True,
+            automation_project_defaults={"session_titler": True},
             automation_rule_daily_budget=Budget(tokens=4_000_000, usd=2.0, mode="either"),
             openrouter_cheap_model="vendor/cheap",
             openrouter_standard_model=standard_model,
@@ -1573,7 +1573,7 @@ async def test_phase7_observers_are_bounded_on_both_backend_fixtures(
         Config(
             data_dir=tmp_path,
             automation_enabled=True,
-            attention_observers_enabled=True,
+            automation_project_defaults={"attention_observers": True},
             openrouter_cheap_model="vendor/cheap",
             openrouter_standard_model="vendor/standard",
         ),
@@ -1613,7 +1613,7 @@ async def test_phase7_provider_failure_does_not_change_agent_state(
         Config(
             data_dir=tmp_path,
             automation_enabled=True,
-            attention_observers_enabled=True,
+            automation_project_defaults={"attention_observers": True},
             openrouter_cheap_model="vendor/cheap",
         ),
         FailingPhase7Provider(),  # type: ignore[arg-type]
@@ -1636,7 +1636,7 @@ def test_builtin_rules_are_cached_and_rebuild_on_flag_change(tmp_path: Path) -> 
         EventBus(),
         SimpleNamespace(sessions={}),  # type: ignore[arg-type]
         AutomationStore(tmp_path / "mux.db"),
-        Config(data_dir=tmp_path, observer_titler_enabled=True),
+        Config(data_dir=tmp_path, automation_project_defaults={"session_titler": True}),
         FakeProvider(),  # type: ignore[arg-type]
     )
     record = SessionRecord(
@@ -1646,18 +1646,19 @@ def test_builtin_rules_are_cached_and_rebuild_on_flag_change(tmp_path: Path) -> 
     record.state = "working"
     event = normalized_event(record, 1, "turn_ended")
 
-    first = engine._builtin_rules(event)
-    second = engine._builtin_rules(event)
+    enabled = engine._install_automations()
+    first = engine._builtin_rules(event, enabled)
+    second = engine._builtin_rules(event, enabled)
     assert first is second  # memoised: same list object, not re-parsed
     assert any(rule.id == "builtin.session-titler" for rule in first)
 
     # A different event type keys a distinct entry.
-    other = engine._builtin_rules(normalized_event(record, 2, "stalled"))
+    other = engine._builtin_rules(normalized_event(record, 2, "stalled"), enabled)
     assert other is not first
 
-    # Flipping a tracked flag invalidates via a new key.
-    engine.config.observer_titler_enabled = False
-    third = engine._builtin_rules(event)
+    # A changed enablement answer invalidates via a new key: the same event in a
+    # Project that did not opt the titler in yields no titler rule.
+    third = engine._builtin_rules(event, frozenset())
     assert third is not first
     assert all(rule.id != "builtin.session-titler" for rule in third)
 
@@ -1672,8 +1673,7 @@ def test_status_lists_enabled_and_disabled_builtin_observers(tmp_path: Path) -> 
         AutomationStore(tmp_path / "mux.db"),
         Config(
             data_dir=tmp_path,
-            observer_titler_enabled=True,
-            attention_observers_enabled=False,
+            automation_project_defaults={"session_titler": True},
         ),
         FakeProvider(),  # type: ignore[arg-type]
     )
@@ -1689,12 +1689,16 @@ def test_status_lists_enabled_and_disabled_builtin_observers(tmp_path: Path) -> 
         "builtin.approval_needed-triage",
         "builtin.context-handoff",
     }
+    # `enabled` is the install-wide answer - what an undecided Project inherits -
+    # since the observers are per-Project automations rather than switches.
     assert builtins["builtin.session-titler"]["enabled"] is True
-    assert builtins["builtin.stalled-triage"]["setting_key"] == "attention_observers_enabled"
+    assert builtins["builtin.stalled-triage"]["enabled"] is False
+    # Each built-in names the registry automation that governs it, which is the
+    # matrix row an operator switches it from.
+    assert builtins["builtin.session-titler-initial"]["automation_id"] == "session_titler"
+    assert builtins["builtin.stalled-triage"]["automation_id"] == "attention_observers"
+    assert builtins["builtin.context-handoff"]["automation_id"] == "attention_observers"
     assert builtins["builtin.context-handoff"]["model"] == "Standard model"
-    # Every built-in observer is install-wide, so the control plane can label it
-    # apart from the per-Project matrix it now sits beside.
-    assert all(item["scope"] == "global" for item in builtins.values())
     # The titler description tells the truth about refining a provisional title
     # rather than claiming it names a pane exactly once.
     titler_description = builtins["builtin.session-titler-initial"]["description"].lower()
@@ -1711,7 +1715,7 @@ def test_builtin_rules_skip_without_agent_run(tmp_path: Path) -> None:
         EventBus(),
         SimpleNamespace(sessions={}),  # type: ignore[arg-type]
         AutomationStore(tmp_path / "mux.db"),
-        Config(data_dir=tmp_path, observer_titler_enabled=True),
+        Config(data_dir=tmp_path, automation_project_defaults={"session_titler": True}),
         FakeProvider(),  # type: ignore[arg-type]
     )
     record = SessionRecord(
@@ -1719,7 +1723,7 @@ def test_builtin_rules_skip_without_agent_run(tmp_path: Path) -> None:
     )
     # No agent_run_id -> short-circuit before any cache use.
     event = normalized_event(record, 1, "turn_ended", agent_run_id=None)
-    assert engine._builtin_rules(event) == []
+    assert engine._builtin_rules(event, engine._install_automations()) == []
     engine.store.close()
 
 

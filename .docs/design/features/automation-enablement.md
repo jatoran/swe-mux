@@ -93,6 +93,7 @@ has to stay sayable, and the file is the only place it can be said.
   Project context is user-owned data rather than an automation and never causes a model call (`project-card.md`, `scan-timeline.md`).
 - **Consumer**: a feature assembled from substrate (`provenance_graph`,
   `declared_vs_verified`, `loop_detection`, `doc_debt`, `dead_end_memory`, `prior_resolutions`,
+  `session_titler`, `attention_observers`,
   `continuous_title`, `cross_session_interlocks`, `absence_report`, `attention_ranking`,
   `model_narration`, `observation_inbox`, `screenshot_to_agent`, `session_control`,
   `phase_transitions`, `timeline_handoff`, `catch_me_up`, `live_blockers`,
@@ -390,8 +391,9 @@ behaviour because a constant did.
 - `RECOMMENDED_PROJECT_AUTOMATIONS` (defaulted on): the model-free set - the four detectors
   plus `code_graph`, with `raw_store` and `tier0` under them.
   `_validate_recommended` refuses at import to let a spending automation into it.
-- `LLM_PROJECT_AUTOMATIONS` (off): the model tier - `scan_timeline`, `continuous_title`,
-  `model_narration` - whose closure drags in `attention_ranking` and the detectors under it;
+- `LLM_PROJECT_AUTOMATIONS` (off): the model tier - `scan_timeline`, `session_titler`,
+  `attention_observers`, `continuous_title`, `model_narration` - whose closure drags in
+  `attention_ranking` and the detectors under it;
   its values half (`grants.LLM_PROJECT_VALUES`) sets `scan_timeline_auto_enable` so the
   timeline arms per run. `_validate_llm_set` holds every member to `needs_llm` and the
   closure to `implemented`.

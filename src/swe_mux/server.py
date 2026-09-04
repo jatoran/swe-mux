@@ -52,6 +52,7 @@ from .automation import (
 )
 from .automation_registry import (
     effective_global_allow,
+    install_automations,
     install_defaults,
     resolve_scan_auto_enable,
 )
@@ -811,6 +812,36 @@ async def _build_runtime(
         if stop_event is not None:
             stop_event.set()
         raise
+
+
+def _make_session_automations(
+    session_project_root: Callable[[str], tuple[Any, str] | None],
+    enabled_automations: Callable[[str], Awaitable[frozenset[str]]],
+    llm_ready: Callable[[], Awaitable[Any]],
+    config: Config,
+) -> Callable[[str], Awaitable[frozenset[str]]]:
+    """The enablement resolution for one session, by session id.
+
+    The built-in observers (session titler, attention observers) gate on this
+    rather than on an install-wide switch, through the same cached closure Tier 0
+    capture and the detectors use, so no observer runs under a stale opt-in answer
+    one of them already refreshed. A session outside every registered Project
+    resolves to the install-wide answer - the operator's default template under
+    the ceiling - because it has no `.swe-mux/config.toml` to consult and that is
+    what the old install-wide switch meant for it.
+
+    A module-level factory rather than one more closure inside the composition
+    root, which sits exactly at the C901 ceiling: the cap is today's worst
+    function, and nothing may be written worse than it.
+    """
+
+    async def session_automations(session_id: str) -> frozenset[str]:
+        resolved = session_project_root(session_id)
+        if resolved is not None:
+            return await enabled_automations(resolved[1])
+        return install_automations(config, llm_ready=bool((await llm_ready()).ready))
+
+    return session_automations
 
 
 async def _hydrate_llm_capabilities(capabilities: CapabilityStore, store: AutomationStore) -> None:
@@ -2184,6 +2215,13 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
             project = projects.projects.get(record.project_id)
             root = project.root if project else None
         return (record, root) if root else None
+
+    # Bound late: both were constructed before the enablement closures above existed.
+    _session_automations = _make_session_automations(
+        _session_project_root, _enabled_automations, _llm_ready, config
+    )
+    automation.session_automations = _session_automations
+    fleet.session_automations = _session_automations
 
     async def consumer_context(session_id: str) -> ConsumerContext | None:
         resolved = _session_project_root(session_id)

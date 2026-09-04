@@ -73,7 +73,6 @@ _DETERMINISTIC: dict[str, Any] = {
     "land_queue_enabled": True,
     "automation_enabled": False,
     "scan_timeline_enabled": False,
-    "attention_observers_enabled": False,
 }
 
 
@@ -105,10 +104,16 @@ def tier_changes(tier: str) -> dict[str, Any]:
             land_queue_enabled=False,
         )
     elif tier == "automations":
+        # The two install masters. The model-backed observers (session titler,
+        # attention observers) are per-Project automations since schema 36 and
+        # are opted in through the "AI timeline" starting set at Project
+        # creation rather than switched install-wide here - a tier assigns
+        # ordinary keys absolutely, and writing the whole default template from
+        # it would erase every entry the operator (or the schema-36 migration)
+        # had put there.
         changes.update(
             automation_enabled=True,
             scan_timeline_enabled=True,
-            attention_observers_enabled=True,
         )
     changes["experience_tier"] = tier
     return changes

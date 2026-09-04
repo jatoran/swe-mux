@@ -646,5 +646,9 @@ def test_config_drops_retired_summarizer_flag(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     cfg = load_config(path)
-    assert cfg.observer_titler_enabled is True
+    # The install-wide titler switch became the per-Project `session_titler`
+    # automation (schema 36); an enabled switch migrates into the default template
+    # so the upgraded install keeps naming its panes.
+    assert cfg.automation_project_defaults["session_titler"] is True
+    assert not hasattr(cfg, "observer_titler_enabled")
     assert not hasattr(cfg, "observer_summarizer_enabled")

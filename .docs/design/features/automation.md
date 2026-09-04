@@ -316,36 +316,49 @@ and the declared minimum observation capability.
 - The status strip's `calls today` reads the ledger, like the two spend tiles beside it. It
   previously summed the lifetime observer-call status counts, which was neither today's figure
   nor a count of anything the reader had asked for.
-- The Policy tab surfaces the built-in system observers and canonical `rules.toml` rules as a
-  visible **Global automations** group beside the per-Project matrix, rather than buried in a
-  disclosure - the observers sat one level down from the toggles and read as unreachable.
-  Every row in the group carries a `global` scope badge, because a built-in observer and a
-  custom rule both run install-wide - one switch each, applied to every Project - which is the
-  axis a matrix row's per-Project cell does not have.
-  The distinction is now labelled rather than implied, which is the whole reason the two
-  surfaces can sit together without the observers reading as "another Project toggle".
-  Disabled controls and built-ins remain visible, and the `rules.toml` editor stays a
-  sub-disclosure inside the group.
+- **The built-in observers are rows in the policy matrix** (since 2026-09-04, config schema
+  36): `session_titler` and `attention_observers` are consumers in the enablement registry,
+  switched globally (install default plus ceiling) and per Project through the same DAG as
+  every other automation, and drawn in an **Observers** group directly above the timeline
+  reads - so the titler sits beside `continuous_title`, the re-titler, and titling is one
+  region of the list rather than a switch in the matrix and a switch somewhere else.
+  They were install-wide `Config` booleans gated by no Project opt-in until then, drawn as a
+  "System observers" section one disclosure down from the toggles, which is exactly the
+  reading this removes: an operator could not see or set session titling where the rest of
+  the automations were.
+  The rule engine still synthesises their rules (`BUILTIN_OBSERVER_CATALOG`), gating each on
+  its automation id under the session's Project resolution - the same cached closure Tier 0
+  capture and the detectors use - and a session outside every registered Project resolves
+  to the install default, which is what the old install-wide switch meant for it.
+  The `rules.toml` custom rules stay a visible block below the matrix with a `global` scope
+  badge, because a user-authored rule with shadow/live state and an editor is a different
+  shape from a toggle; the editor is a sub-disclosure inside that block.
 - Each built-in row exposes trigger, bounded input slice, model tier, result destination, and
-  owning config setting. The titler toggles on `observer_titler_enabled`; stall, approval, and
-  context observers share the `attention_observers_enabled` attention setting.
+  owning automation (`automation_id`). The titler toggles on `session_titler`; stall, approval,
+  and context observers - and the periodic attention digest - share `attention_observers`.
+  The status payload's `enabled` for a built-in is the install-wide answer (on for an
+  undecided Project), which is the one reading a surface with no Project in hand can make;
+  the matrix answers per Project.
   The Session titler's row description states the refine-then-settle behaviour rather than
   claiming it names a pane once, and a live "N titles still refining" line reads the title-retry
   queue so a provisional title that is still converging is visible where the observer is
   configured. The generated-title annotation a session snapshot carries also reports its
   `stability` (`provisional`/`settled`), parsed from the titler's `title_lifecycle` evidence.
-  **The Session titler is install-wide and gated by no per-Project opt-in.** Its built-in rules
-  are a pure function of `automation_enabled` and `observer_titler_enabled`, so it names panes
-  in every Project including one that opted into nothing. Worth saying out loud because the
-  `continuous_title` automation sits in the enablement registry beside it and was labelled
-  "Adaptive session title" until 2026-08-31 - two features whose names both began "session
-  title", only one of them per-Project, which made declining the model-backed starting set
-  read as declining session titles. That one is now "Re-title on scope change", and it
-  broadens an already-named run's title on a scan-detected scope pivot.
-  That setting was named `phase7_observers_enabled` before config schema 31 and is migrated by
-  value on load, because `load_config` copies only known dataclass fields: an unmigrated rename
-  would silently drop an enabled switch and re-save the config without it, turning three
-  observers off on upgrade with no record that they had ever been on.
+  `continuous_title` sits beside `session_titler` in the registry and was labelled "Adaptive
+  session title" until 2026-08-31 - two features whose names both began "session title", which
+  made declining the model-backed starting set read as declining session titles. That one is
+  "Re-title on scope change": it broadens an already-named run's title on a scan-detected scope
+  pivot, and both are members of the `LLM_PROJECT_AUTOMATIONS` starting set.
+  The schema-36 migration carries an *enabled* `observer_titler_enabled` or
+  `attention_observers_enabled` (itself `phase7_observers_enabled` before schema 31) into
+  `automation_project_defaults` on load, because `load_config` copies only known dataclass
+  fields: a bare removal would silently drop an enabled switch and re-save the config without
+  it, turning titling off on upgrade with no record that it had ever been on. A disabled switch
+  is the registry's own default and is not pinned, so a Project's later opt-in is not fighting
+  a template entry nobody chose; an entry the operator already wrote is never overwritten.
+  The experience tiers no longer carry an observer key for the same reason a tier assigns
+  ordinary keys absolutely: writing the whole default template from a tier would erase every
+  entry the operator or the migration had put there.
 - `Run notes` is the user-facing label for persisted annotations. `Attention` contains
   notification records that may require user action.
 - Attention records are **dismissible from the surface that lists them** — the drawer's

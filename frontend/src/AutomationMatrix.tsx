@@ -270,13 +270,21 @@ export function AutomationPolicyMatrix({data,projectId,onSelectProject,catalog,l
   // editor drew: the structure IS the "needs X" story, so rows carry no
   // per-row dependency prose.
   const readsTimeline=(item:AutomationRegistryEntry)=>closure(item.id,new Set()).has('scan_timeline')
+  // A consumer with no substrate under it is one of two things: a capability
+  // (what agents and schedules may do, model-free) or an observer (a model read
+  // of the live conversation - the session titler, the attention observers).
+  // The split is `needs_llm`, which is the fact that separates them; observers
+  // sit directly above the timeline distillations, beside the re-titler that
+  // reads the timeline, so titling is one region of the list rather than two.
+  const isObserver=(item:AutomationRegistryEntry)=>!item.requires.length&&item.needs_llm===true
   const groups:[string,string,AutomationRegistryEntry[]][]=useMemo(()=>{
     const substrate=data.automations.filter(item=>item.kind==='substrate')
     const consumers=data.automations.filter(item=>item.kind==='consumer')
     return [
       ['Foundations','record facts, never act',substrate],
       ['Deterministic checks','model-free reads over the recorded facts',consumers.filter(item=>item.requires.length>0&&!readsTimeline(item))],
-      ['Capabilities','what agents and schedules may do',consumers.filter(item=>!item.requires.length)],
+      ['Capabilities','what agents and schedules may do',consumers.filter(item=>!item.requires.length&&!isObserver(item))],
+      ['Observers','model reads of the live conversation',consumers.filter(isObserver)],
       ['Reads the timeline','distillations of the scan timeline',consumers.filter(item=>readsTimeline(item))],
     ]
   },[data.automations])

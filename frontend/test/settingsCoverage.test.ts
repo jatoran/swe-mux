@@ -111,8 +111,6 @@ const CONFIG_ONLY: Record<string, string> = {
   provider_accounts_prompt_dismissed: 'Written by the "hide" control on the sidebar\'s empty account block. It puts away an invitation, not a feature: the block is derived from whether a credential exists on this host, so signing in brings the rows back whatever this says, and an un-hide control would offer to restore something that restores itself.',
   notes_default_open: 'Retired by workspace layout v6 and stripped from public_dict, so the browser never receives it.',
   pinned_directories: 'Written by the directory picker as you pin a folder, which is the control.',
-  observer_titler_enabled: "Owned by the Automation dashboard's built-in rule rows, which is where a rule is enabled or disabled.",
-  attention_observers_enabled: 'Same: the dashboard enables the attention observer group as one rule.',
   agent_authority_default: "Owned by the Automation dashboard's agent authority rows, where the install default sits beside the per-Project override it applies to. A Settings control could show only one of the three resolution layers.",
   agent_authority_ceiling: 'Same rows, the "enforce everywhere" lock beside each default. It is meaningless without the fleet coverage count rendered next to it, which Settings has no way to show.',
 }
