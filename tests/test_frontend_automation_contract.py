@@ -73,8 +73,12 @@ def test_every_switch_has_one_owner_matrix_global_dashboard_per_rule() -> None:
     assert "attention_observers_enabled" not in settings
     assert "observer_titler_enabled" not in dashboard
     assert "attention_observers_enabled" not in dashboard
-    # ...and the matrix draws them as an Observers group beside the timeline reads.
-    assert "'Observers'" in matrix
+    # ...and the matrix draws rows by the registry's `family` - the titler in a
+    # Titling block directly above the re-titler, the attention observers under
+    # Attention - never by dependency shape, which the depth indentation already draws.
+    assert "'titling'" in matrix
+    assert "'attention'" in matrix
+    assert "item.family" in matrix
 
 
 def test_the_matrix_is_the_one_editor_and_greys_the_ceiling_rather_than_hiding_it() -> None:

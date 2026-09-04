@@ -33,11 +33,14 @@ from ..automation import (
 )
 from ..automation_registry import (
     DEDICATED_INSTALL_SWITCHES,
+    TITLE_REFINEMENTS_DEFAULT,
+    TITLE_REFINEMENTS_MAX,
     dependency_closure,
     effective_global_allow,
     install_defaults,
     requested_from_config,
     resolve_scan_auto_enable,
+    resolve_title_refinements,
 )
 from ..automation_registry import REGISTRY as AUTOMATION_REGISTRY
 from ..automation_registry import resolve_config as resolve_automation_config
@@ -989,6 +992,9 @@ def _automation_registry_payload(config: Config | None = None) -> list[dict[str,
             "id": automation.id,
             "kind": automation.kind,
             "label": automation.label,
+            # The matrix block this row is drawn in (`FAMILIES`), what it is about
+            # rather than what it depends on.
+            "family": automation.family,
             "requires": list(automation.requires),
             "implemented": automation.implemented,
             # Whether switching this on can cost money. Read by the toggle surface and
@@ -1011,7 +1017,10 @@ def _automation_registry_payload(config: Config | None = None) -> list[dict[str,
                 else {}
             ),
         }
-        for automation in sorted(AUTOMATION_REGISTRY.values(), key=lambda a: a.id)
+        # Registry order, not the id's spelling: the matrix keeps this order inside
+        # a family, which is how the session titler stays directly above the
+        # re-titler rather than wherever "c" sorts against "s".
+        for automation in AUTOMATION_REGISTRY.values()
     ]
 
 
@@ -1091,6 +1100,20 @@ async def _project_automation_state(  # type: ignore[no-untyped-def]
         "scan_timeline_auto_enable_own": (
             values["scan_timeline_auto_enable"]
             if isinstance(values.get("scan_timeline_auto_enable"), bool)
+            else None
+        ),
+        # The same two readings for the titler's refinement count, the second
+        # Project field that qualifies an opt-in rather than being one.
+        "title_refinements": resolve_title_refinements(
+            values.get("title_refinements"),
+            default=install.title_refinements_default
+            if install
+            else TITLE_REFINEMENTS_DEFAULT,
+        ),
+        "title_refinements_own": (
+            values["title_refinements"]
+            if isinstance(values.get("title_refinements"), int)
+            and not isinstance(values.get("title_refinements"), bool)
             else None
         ),
         # Two readings, because the matrix needs both and cannot derive one from
@@ -1178,6 +1201,8 @@ async def automation_project_matrix(request: web.Request) -> web.Response:
             # ceilings, and a fifth key with different semantics in it is how a
             # payload starts meaning two things.
             "scan_timeline_auto_enable_default": config.scan_timeline_auto_enable_default,
+            "title_refinements_default": config.title_refinements_default,
+            "title_refinements_max": TITLE_REFINEMENTS_MAX,
             "install_switches": {
                 "automation_enabled": config.automation_enabled,
                 "scan_timeline_enabled": config.scan_timeline_enabled,
@@ -1257,6 +1282,15 @@ async def put_project_automations(request: web.Request) -> web.Response:
     auto_enable = body.get("scan_timeline_auto_enable", _UNSET)
     if auto_enable is not _UNSET and auto_enable is not None and not isinstance(auto_enable, bool):
         raise ValueError("scan_timeline_auto_enable must be a boolean or null")
+    refinements = body.get("title_refinements", _UNSET)
+    if refinements is not _UNSET and refinements is not None and (
+        isinstance(refinements, bool)
+        or not isinstance(refinements, int)
+        or not 0 <= refinements <= TITLE_REFINEMENTS_MAX
+    ):
+        raise ValueError(
+            f"title_refinements must be an integer from 0 to {TITLE_REFINEMENTS_MAX} or null"
+        )
     # Agent authority arrives on the same write as the opt-ins it qualifies,
     # because the matrix edits both and a Project's file is one revision. A
     # field mapped to None is the "Follow global" position: the key is *removed*
@@ -1301,12 +1335,19 @@ async def put_project_automations(request: web.Request) -> web.Response:
     # it set would silently re-arm every run the moment the Project is opted in
     # again. Opting out clears it - back to inheriting, which is the only thing
     # clearing can mean now that the install has a default for it too.
-    if "scan_timeline" not in requested_from_config(
+    effective_requested = requested_from_config(
         automations, _project_defaults(request.app[keys.CONFIG])
-    ):
+    )
+    if "scan_timeline" not in effective_requested:
         changes["scan_timeline_auto_enable"] = None
     elif auto_enable is not _UNSET:
         changes["scan_timeline_auto_enable"] = auto_enable
+    # The refinement count rides the titler the same way: with the titler opted
+    # out it is meaningless, and clearing it means inheriting.
+    if "session_titler" not in effective_requested:
+        changes["title_refinements"] = None
+    elif refinements is not _UNSET:
+        changes["title_refinements"] = refinements
     base = body.get("base")
     if isinstance(base, dict):
         # `ProjectConfigConflict` is answered by the error middleware, which names

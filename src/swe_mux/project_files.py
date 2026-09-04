@@ -21,6 +21,7 @@ from typing import Any
 
 from .agent_authority import ENVELOPE_COMPACT, ENVELOPE_FULL
 from .automation_registry import REGISTRY as AUTOMATION_REGISTRY
+from .automation_registry import TITLE_REFINEMENTS_MAX
 from .git_projects import ProjectIdentity, rebase_identity, resolve_project
 from .harness import is_agent_harness
 from .leaf_names import validate_leaf_name
@@ -53,6 +54,11 @@ PROJECT_CONFIG_FIELDS = {
     # this Project. It only ever creates a grant for a run that has none: a run
     # the human switched off stays off.
     "scan_timeline_auto_enable",
+    # How many times the session titler may revise a provisional title after the
+    # first in this Project (`0` = name once, never revise). The second field
+    # that qualifies an opt-in (`session_titler`) rather than being one; unset
+    # inherits `Config.title_refinements_default`.
+    "title_refinements",
     # Phase 7.6: the authority level for agent session control in this Project,
     # once the `session_control` automation is opted in (itself on by default
     # since 2026-08-25). "granted" (the default when unset) lets an agent act
@@ -1634,6 +1640,14 @@ def parse_project_config(data: bytes) -> dict[str, Any]:
         parsed["scan_timeline_auto_enable"], bool
     ):
         raise ValueError("scan_timeline_auto_enable must be a boolean")
+    if "title_refinements" in parsed and (
+        isinstance(parsed["title_refinements"], bool)
+        or not isinstance(parsed["title_refinements"], int)
+        or not 0 <= parsed["title_refinements"] <= TITLE_REFINEMENTS_MAX
+    ):
+        raise ValueError(
+            f"title_refinements must be an integer from 0 to {TITLE_REFINEMENTS_MAX}"
+        )
     if "ignore_patterns" in parsed and (
         not isinstance(parsed["ignore_patterns"], list)
         or not all(isinstance(item, str) for item in parsed["ignore_patterns"])
@@ -1706,6 +1720,10 @@ def serialize_project_config(values: dict[str, Any]) -> bytes:
             "scan_timeline_auto_enable = "
             + ("true" if values["scan_timeline_auto_enable"] else "false")
         )
+    # `in values`, not truthiness: an explicit `0` (name once, never revise) is a
+    # choice and has to survive the write.
+    if "title_refinements" in values:
+        lines.append(f"title_refinements = {int(values['title_refinements'])}")
     if agent_profiles := values.get("default_agent_profiles"):
         pairs = ", ".join(
             f"{json.dumps(str(key))} = {json.dumps(str(value))}"

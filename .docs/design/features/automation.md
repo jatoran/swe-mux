@@ -401,7 +401,11 @@ output can only become a scan record or an explicitly enabled dead-end annotatio
 the opening trigger. Its `title_v2` result includes `stability=provisional|settled`. A concrete
 request settles immediately. A setup-only opener such as “review/learn this repository” may be
 provisional, then recomputed when a later request reveals the real task. Automatic work is bounded
-to the first three distinct requests and at most three provider calls; a settled result freezes.
+by the Project's **`title_refinements`** (the matrix row directly under the titler, with
+`Config.title_refinements_default` as its install default, resolved by
+`registry.resolve_title_refinements`): the first title plus that many revisions, driven by that
+many plus one distinct opening requests. `0` names a pane once and never revises it; the default
+`2` is what the bound was while it lived in a constant. A settled result freezes regardless.
 Every replacement is append-only, and the newest title annotation is the displayed title.
 The prompt anchors the title on the first concrete task or subject and its distinguishing term,
 and treats later requests as refinements of it rather than replacements - it shifts only when a
@@ -430,8 +434,9 @@ its active request context; the bounded provisional recomputation is the only pa
 intentionally incorporates a later prompt.
 
 Prompt state is durable twice over. `Session.first_user_prompt` and `last_user_prompt` are updated
-from authenticated hook and transcript evidence, and the observer stores the first three distinct
-requests plus the latest in `automation_checkpoints` at `run-prompt:<agent_run_id>`. A provider
+from authenticated hook and transcript evidence, and the observer stores the first
+`title_refinements + 1` distinct requests plus the latest in `automation_checkpoints` at
+`run-prompt:<agent_run_id>`. A provider
 retry also pins the exact active input in `title-state:<agent_run_id>`, so a daemon restart or a
 later request cannot change the question an in-flight retry is answering.
 

@@ -188,6 +188,10 @@ export const SETTING_TARGETS = {
     surface: 'automation', setting: 'scan_timeline_auto_enable',
     label: 'Arm every new conversation', where: 'Automation → Projects',
   },
+  'project.titleRefinements': {
+    surface: 'automation', setting: 'title_refinements',
+    label: 'Title refinements', where: 'Automation → Projects',
+  },
   'project.codeGraph': {
     surface: 'automation', setting: 'automation:code_graph',
     label: 'Code-structure graph', where: 'Automation → Projects',

@@ -170,6 +170,7 @@ export function revisionConflict(cause: unknown): ProjectConfigConflict | null {
 const CONFLICT_LABELS: Record<string, string> = {
   automations: 'the automation opt-ins',
   scan_timeline_auto_enable: 'the scan timeline arming rule',
+  title_refinements: 'the title refinement count',
   session_control_grant: 'the session-control authority',
   spawn_grant: 'the spawn authority',
   land_grant: 'the landing authority',

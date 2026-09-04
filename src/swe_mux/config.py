@@ -1054,6 +1054,17 @@ class Config:
     # so once per Project and could never change their mind in one place. A
     # Project that wrote the field still wins.
     scan_timeline_auto_enable_default: bool = False
+    # Install-wide default for a Project's `title_refinements`: how many times
+    # the session titler may revise a provisional title after the first, `0`
+    # for strict one-shot naming. The second Project field that qualifies an
+    # opt-in (`session_titler`) rather than being one, and it gets the same two
+    # scopes as `scan_timeline_auto_enable`: this default, and a Project's own
+    # value that wins where written. `2` is what the bound was while it lived
+    # in a constant, so an upgraded install titles exactly as before. A literal
+    # rather than `automation_registry.TITLE_REFINEMENTS_DEFAULT` because that
+    # module is imported lazily here (it imports this one); a test pins the two
+    # equal.
+    title_refinements_default: int = 2
     # Install-wide *default* for the per-Project agent authority fields
     # (`agent_authority.AUTHORITY_FIELDS`): field id -> level. It applies only
     # where a Project left the field unset, so it can never change what a
@@ -2161,6 +2172,15 @@ def _automation_policy_errors(config: Config) -> dict[str, str]:
         # one that would not go on.
         errors["automation_project_defaults"] = "not implemented yet: " + ", ".join(
             sorted(unimplemented)
+        )
+    refinements = config.title_refinements_default
+    if (
+        isinstance(refinements, bool)
+        or not isinstance(refinements, int)
+        or not 0 <= refinements <= _registry.TITLE_REFINEMENTS_MAX
+    ):
+        errors["title_refinements_default"] = (
+            f"must be an integer from 0 to {_registry.TITLE_REFINEMENTS_MAX}"
         )
     return errors
 

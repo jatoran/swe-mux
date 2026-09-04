@@ -68,6 +68,7 @@ export const SETTINGS_CONFIG_FIXTURE = {
   "automation_global_allow": {},
   "automation_project_defaults": {},
   "scan_timeline_auto_enable_default": false,
+  "title_refinements_default": 2,
   "agent_authority_default": {},
   "agent_authority_ceiling": {},
   "automation_hourly_call_cap": 1200,

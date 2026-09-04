@@ -50,6 +50,10 @@ export type ProjectAutomationState = {
 
 export type AutomationRegistryEntry = {
   id: string; kind: string; label: string; requires: string[]; implemented: boolean
+  /** The policy-matrix block this row is drawn in - what it is about, not what it
+   *  depends on (`automation_registry.FAMILIES`). Rows keep registry order inside
+   *  a family, so the session titler sits directly above the re-titler. */
+  family?: string
   /** Whether switching it on can cost money. Read from the registry, never asserted
    *  by a surface: "free" is the fact a one-click grant most needs to get right. */
   spends: boolean
