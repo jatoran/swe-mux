@@ -68,6 +68,11 @@ const EXPLANATIONS: Record<string, Explanation> = {
     summary: 'someone is typing in this terminal right now',
     clears: 'It clears a moment after the typing stops.',
   },
+  unsubmitted_delivery_in_composer: {
+    summary: 'the last message mux sent is still sitting in this composer, unsubmitted',
+    clears:
+      'The CLI took the text but not the Enter, so sending again would paste the next message on top of it and the agent would receive both as one. Press Enter in the pane to send what is there, or clear the composer — either one releases the queue.',
+  },
   screen_not_at_agent_prompt: {
     summary: 'this terminal is not showing the agent’s prompt',
     clears: 'Leave whatever is on top — a pager, a picker, a viewer — and get back to the prompt.',

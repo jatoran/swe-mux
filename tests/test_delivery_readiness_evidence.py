@@ -25,12 +25,14 @@ from __future__ import annotations
 import time
 from typing import Any
 
+from swe_mux.composer_input import clear_pending_submit, note_unsubmitted_delivery
 from swe_mux.delivery_readiness import (
     AGENT_FIRST_PROMPT_SETTLE_SECONDS,
     READINESS_DEBOUNCE_SECONDS,
     DeliveryReadinessTracker,
 )
 from swe_mux.models import MuxEvent
+from swe_mux.prompt_queue import protected_reasons
 from tests.support.detection_replay import ReplaySession, VirtualClock
 
 
@@ -527,3 +529,49 @@ def test_a_read_only_evaluation_still_reports_the_current_verdict() -> None:
     session, tracker, _clock = _idle_agent()
     session.screen.feed(b"\x1b[?1049h")
     assert tracker.evaluate(session, adopt=False)["delivery_state"] == "safe"
+
+
+def test_an_unsubmitted_delivery_blocks_the_next_one_by_name() -> None:
+    """The stall the 2026-09-04 incident produced, with its real reason attached.
+
+    A delivery whose Enter the CLI never took leaves the body in the composer.
+    The next one used to be blocked as `terminal_input_after_completion` - true
+    in the letter (the input revision did move) and misleading in every way that
+    matters, because the bytes were mux's own and the operator had typed nothing.
+    Four messages then queued behind a jam nothing named.
+
+    Overridable on purpose: `auto_delivery` never confirms and so stops here,
+    while a human who has looked at the pane keeps the ability to say otherwise.
+    """
+    session, tracker, _clock = _idle_agent()
+    assert tracker.evaluate(session)["delivery_state"] == "safe"
+
+    note_unsubmitted_delivery(session, "msg-1", 4186, time.time())
+    blocked = tracker.evaluate(session)
+
+    assert blocked["delivery_state"] == "blocked"
+    assert "unsubmitted_delivery_in_composer" in blocked["reasons"]
+    assert blocked["evidence"]["unsubmitted_delivery"] == "msg-1"
+    assert "unsubmitted_delivery_in_composer" not in protected_reasons(
+        session.record, blocked["reasons"]
+    )
+
+    # And it retires on evidence, not on a timer: the mark clears the moment the
+    # composer is proven empty.
+    clear_pending_submit(session)
+    assert tracker.evaluate(session)["delivery_state"] == "safe"
+
+
+def test_a_turn_opening_retires_an_unsubmitted_delivery() -> None:
+    """Whatever wrote the carriage return, a turn proves the composer emptied.
+
+    Through the production transition contract rather than by clearing the mark
+    directly: the seam that has to do this is the one every status source funnels
+    into, and a test that reached past it would pass while the seam rotted.
+    """
+    session, _tracker, _clock = _idle_agent()
+    note_unsubmitted_delivery(session, "msg-1", 4186, time.time())
+
+    session.transition("working", None, source="hook", evidence="turn_started")
+
+    assert session.pending_submit is None

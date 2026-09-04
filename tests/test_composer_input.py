@@ -7,10 +7,13 @@ from swe_mux.composer_input import (
     BRACKETED_PASTE_START,
     DEFAULT_NEWLINE_KEYS,
     ComposerState,
+    PendingSubmit,
     classify_composer_write,
     clear_composer,
+    clear_pending_submit,
     composer_insertion,
     note_composer_write,
+    note_unsubmitted_delivery,
 )
 from swe_mux.harness import HARNESSES, composer_insertion_rules
 from tests.support.detection_replay import ReplaySession
@@ -290,3 +293,36 @@ def test_a_lifted_insertion_reads_back_as_composed_text_not_a_submit() -> None:
     assert note_composer_write(state, payload, NOW + 1, newline_keys=newline_keys) is None
     assert state.pending
     assert state.chars == len("half typed") + 1 + len("appended")
+
+
+# ----------------------------------------------- an unsubmitted queue delivery
+
+
+class _Target:
+    """The two attributes the mark is carried on, and nothing else."""
+
+    def __init__(self) -> None:
+        self.pending_submit: PendingSubmit | None = None
+
+
+def test_an_unsubmitted_delivery_is_marked_and_retired() -> None:
+    target = _Target()
+    assert clear_pending_submit(target) is None
+    note_unsubmitted_delivery(target, "msg-1", 4096, NOW)
+    standing = target.pending_submit
+    assert standing is not None
+    assert (standing.message_id, standing.byte_count, standing.at) == ("msg-1", 4096, NOW)
+    retired = clear_pending_submit(target)
+    assert retired is not None and retired.message_id == "msg-1"
+    assert target.pending_submit is None
+
+
+def test_a_target_that_cannot_hold_the_mark_is_left_alone() -> None:
+    """A stand-in older than the field is not an error, it simply has no mark.
+
+    The delivery path calls this on whatever session object it was handed, and a
+    delivery must never fail because the receiver predates a diagnostic.
+    """
+    stranger = object()
+    note_unsubmitted_delivery(stranger, "msg-1", 10, NOW)
+    assert clear_pending_submit(stranger) is None

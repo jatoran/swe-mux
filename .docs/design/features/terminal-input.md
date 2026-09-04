@@ -277,7 +277,10 @@ work, while a claim that changes owners must use the freshly registered viewport
 - File/image attachment references are unicast regardless of the pane's broadcast membership.
   They still travel through xterm's paste/input path so replay bounds and bracketed-paste rules
   apply; only the broadcast bit is forced off for the synchronous attachment insertion.
-- Synthetic paste-and-submit actions append through the mounted pane, wait 180 ms for an interactive TUI to commit bracketed paste, and only then send carriage return.
+- Synthetic paste-and-submit actions append through the mounted pane, wait for the target CLI to commit the bracketed paste, and only then send carriage return.
+  How long that is comes from the harness registry and scales with the body (`paste_submit_settle_seconds`, `pasteSubmitSettle(name)`), because it is a per-CLI fact and the flat 180 ms this replaces was Claude's.
+  A body large enough to become a placeholder chip is exactly the one whose Enter arrives mid-consumption, and on Codex a swallowed Enter is not dropped - it lands in the composer as a newline, leaving the text visible and unsubmitted (`features/prompt-queue.md`, the 2026-09-04 incident).
+  The browser gets the settle and not the daemon queue's escalating retry: it has no way to witness a turn opening, and a blind second carriage return could submit whatever the operator typed next.
   Append-only actions do not wait or submit.
   The action acknowledgement follows the carriage return, so a caller cannot clear its source draft before submission was actually attempted.
 - Native terminal text paste and the command-rail Paste action converge on the mounted pane's paste path.

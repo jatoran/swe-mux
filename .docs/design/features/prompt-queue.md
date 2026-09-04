@@ -87,7 +87,7 @@ separately opt-in.
   whole object, so the browser merges over the item's existing constraints - scheduling a
   message must not silently drop its delivery mode, nor the mode its schedule.
 - **Delivery bytes mirror the browser paste path.** Bracketed paste with newlines as CR,
-  a 180 ms settle, then a separate `\r` — both writes through the shared operator-input
+  a per-harness settle, then a separate `\r` — both writes through the shared operator-input
   accounting helper (`source="queue"`, `input_owner=False`), so `input_revision` /
   `last_input_event_ts` / `terminal_input` evidence stays whole
   (`delivery-readiness.md`).
@@ -272,26 +272,63 @@ separately opt-in.
 The body is written wrapped in bracketed paste, then the submit is a separate
 write after a settle.
 
-- **The settle scales with the payload.** A CLI turns a large paste into a
-  placeholder chip and is busy building one, so a fixed delay sized for a spoken
-  sentence lands the submit mid-consumption and the keystroke is swallowed. The
-  body then sits in the composer, unsent, while the queue reports success
-  (observed live 2026-08-13: two relay messages parked as
+A swallowed submit is not a slow delivery, it is a **corrupted** one, and the
+2026-09-04 fantasy-football incident is the record of why every rule below is
+written the way it is. Seven peer messages, one Codex target. Four were never
+submitted; the composer kept them. Three of those four were then pasted on top of
+each other and reached the CLI as a single 11,499-character prompt carrying three
+separate `[mux] from` headers - which is 3896 + 4245 + 3356 characters plus the
+two joins, because **the carriage returns themselves landed in the composer as
+newlines**. One message is unaccounted for entirely. The queue reported all seven
+`sent`.
+
+- **The settle belongs to the harness, and scales with the payload.** A CLI turns
+  a large paste into a placeholder chip and is busy building one, so a delay sized
+  for a spoken sentence lands the submit mid-consumption. The body then sits in
+  the composer, unsent, while the queue reports success (observed live
+  2026-08-13: two relay messages parked as
   `[Pasted Content 2784 chars][Pasted Content 4230 chars]` in a codex composer).
-  The settle is bounded so a huge body cannot stall delivery.
-- **A large paste gets one more submit if nothing reacted.** An extra carriage
-  return on an empty composer is a no-op, while a swallowed one loses the
-  message outright; the costs are asymmetric. Bodies under the large-paste
-  threshold never had the problem and get exactly one submit.
-- **Reaction, not state, is the confirmation signal.** Any PTY byte after the
-  submit is the evidence, because a consumed submit redraws immediately. Session
-  state is derived from transcripts and hooks that lag seconds behind a
-  keystroke, so it would report healthy deliveries as unconfirmed.
-- **An unconfirmed submit is reported, not hidden.** The write happened either
-  way, so the audit outcome stays `sent`; `submit_confirmed` on the
-  `queue_delivery` event and the send result carry the difference, with a log
-  line naming the message and target. Silence here is what made a lost relay
-  message look delivered.
+  Both terms are declared per harness
+  (`HarnessDescriptor.paste_submit_settle_seconds`) because the CLIs differ here
+  by more than a factor of three, and the single constant that preceded them was
+  Claude's - which is what made the Codex case unfixable without slowing Claude
+  down. The settle is bounded so a huge body cannot stall delivery, and it is a
+  first guess rather than the guarantee; the ladder below is the guarantee.
+- **A turn opening is the confirmation signal, and the only one.** Its
+  predecessor accepted any PTY byte inside 600 ms, which cannot distinguish the
+  two outcomes the check exists to tell apart: a CLI that took the Enter and
+  started a turn, and a CLI that typed it into the composer as a newline. Both
+  repaint, and both emit bytes. Three sources can witness a turn and any one of
+  them suffices - the observed turn epoch advancing, the session leaving idle, or
+  the CLI's own screen entering its working affordance. The screen matters most
+  for a harness with neither hooks nor a transcript, where nothing else can ever
+  speak, and it is also the fastest of the three.
+- **Submits escalate until a turn opens.** One retry rescued exactly one message
+  in three on 2026-09-04; the two it missed sat for 9 and 54 minutes until a
+  person pressed Enter. Each press waits longer than the last, and the ladder
+  stops at the press that works, so a healthy delivery is still exactly one
+  carriage return. Pressing again is safe precisely when the body is still in the
+  composer - an Enter on an empty one is a no-op - and it is spent only while no
+  turn has been seen.
+- **A write into a running turn claims neither answer.** An interject has no turn
+  boundary to witness, so it is recorded as `submitted = NULL`: reporting `false`
+  would jam the queue over a delivery that very likely landed, and reporting
+  `true` would be the old lie in a new place.
+- **An unsubmitted delivery marks its target, and the mark blocks the next one.**
+  The write happened, so the audit outcome stays `sent` and the message stays
+  `sent` - the bytes are in the composer and re-sending would duplicate them -
+  while `queue_deliveries.submitted` and `submit_confirmed` on the
+  `queue_delivery` event carry what the CLI actually did. Beside that, the target
+  session carries a `PendingSubmit`, and readiness blocks the next delivery with
+  `unsubmitted_delivery_in_composer` (`delivery-readiness.md`). That block is the
+  half that stops the pile-up: without it the queue keeps pasting and the agent
+  receives several messages as one. It clears on evidence and never on a timer - a
+  turn opening, or an operator write that submits or discards the composer. The
+  queue's own carriage return is excluded from that second seam, because it
+  classifies as a submit whether or not the CLI took it.
+- **Overridable, not protected.** Auto-delivery never confirms, so it stops at the
+  block; a human who has looked at the pane keeps the ability to say the mark is
+  wrong.
 
 ## Key files
 

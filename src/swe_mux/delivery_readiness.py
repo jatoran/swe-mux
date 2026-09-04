@@ -46,6 +46,10 @@ class ReadinessSession(Protocol):
     # a stand-in without a PTY simply has no daemon evidence.
     screen: Any
     scrollback: Any
+    # A queue delivery whose bytes are in this composer and whose Enter the CLI
+    # was not seen to take (`composer_input.PendingSubmit`). Read through
+    # ``getattr`` so a stand-in that predates it simply has none.
+    pending_submit: Any
 
 
 @dataclass(slots=True)
@@ -144,6 +148,16 @@ class DeliveryReadinessTracker:
             state = "unknown"
         self._snapshot_pty_states[session_id] = (run_id, now, state)
         return state
+
+    def screen_state(self, session: ReadinessSession) -> str:
+        """Classify this session's screen now, for a caller acting on it.
+
+        The public half of :meth:`_pty_state`, pinned to the only bound
+        authorization may use: measured fresh, never read from the cache. The
+        queue's submit oracle consumes it, so a delivery and the readiness verdict
+        that authorized it are reading one screen through one set of rules.
+        """
+        return self._pty_state(session, snapshot_max_age=0.0)
 
     def _memory(self, session: ReadinessSession) -> ReadinessMemory:
         session_id = str(session.record.id)
@@ -569,6 +583,21 @@ class DeliveryReadinessTracker:
             hard_block_reasons.append("terminal_input_after_completion")
         if not operator_quiet:
             hard_block_reasons.append("operator_recently_typed")
+        if getattr(session, "pending_submit", None) is not None:
+            # A previous delivery's body is still in this composer: the daemon
+            # pressed Enter, watched for a turn, and saw none
+            # (`prompt_queue.PendingSubmit`). Pasting the next one on top merges
+            # two messages into one prompt, which is what the CLI received on
+            # 2026-09-04 — three peer messages, three `[mux] from` headers, one
+            # turn.
+            #
+            # It is its own reason rather than the `terminal_input_after_completion`
+            # this used to surface as, because that one says "the operator typed
+            # something" about bytes mux itself wrote, and a reader who cannot
+            # tell those apart cannot act on either. Overridable, deliberately:
+            # auto-delivery never confirms and so stops here, while a human who
+            # has looked at the pane keeps the ability to say the mark is wrong.
+            hard_block_reasons.append("unsubmitted_delivery_in_composer")
         if getattr(record, "observation_stale_since", None):
             # The followed transcript is no longer the conversation this PTY runs
             # (an unfollowable in-CLI `/clear` or `/new`). Every positive readiness
@@ -647,6 +676,9 @@ class DeliveryReadinessTracker:
                 "input_revision": input_revision,
                 "completion_input_revision": memory.input_revision_at_completion,
                 "turn_start_input_revision": memory.input_revision_at_turn_start,
+                "unsubmitted_delivery": (
+                    getattr(getattr(session, "pending_submit", None), "message_id", None)
+                ),
                 "subagent_events_ignored": memory.subagent_events,
                 "recent_transitions": list(memory.transitions),
             },

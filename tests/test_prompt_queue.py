@@ -20,6 +20,7 @@ from typing import Any
 import pytest
 
 from swe_mux.composer_input import BRACKETED_PASTE_END, BRACKETED_PASTE_START
+from swe_mux.harness import paste_submit_settle_rules
 from swe_mux.prompt_queue import (
     ARGV_SEED_MAX_CHARS,
     LARGE_PASTE_BYTES,
@@ -45,13 +46,18 @@ def record(sid: str, **kw: Any) -> Any:
         agent_run_id=f"run-{sid}",
         project_id="p1",
         last_activity_ts=0.0,
+        # What a submit visibly changes, and therefore what the delivery path
+        # watches. A turn opening is the only proof mux has that the CLI took
+        # the carriage return rather than typing it into the composer.
+        turn_epoch=0,
+        turn_started_at=0.0,
     )
     defaults.update(kw)
     return SimpleNamespace(**defaults)
 
 
 def live_session(sid: str, **kw: Any) -> Any:
-    return SimpleNamespace(record=record(sid, **kw))
+    return SimpleNamespace(record=record(sid, **kw), pending_submit=None)
 
 
 class EventsStub:
@@ -87,6 +93,15 @@ class ReadinessStub:
             interject_reasons if interject_reasons is not None else ["not_a_running_turn"]
         )
 
+    def screen_state(self, session: Any) -> str:
+        """What the CLI's own screen shows, which the submit oracle also reads.
+
+        Defaults to unreadable so the turn-evidence half of the oracle is what
+        these cases exercise; the screen-only case sets it explicitly, because a
+        harness with no hooks and no transcript has nothing else.
+        """
+        return str(getattr(session, "screen", "unknown"))
+
     def evaluate(self, session: Any, **_options: Any) -> dict[str, Any]:
         # `**_options` because the display paths pass `record_metrics` and a
         # snapshot cache bound the delivery path never uses. Swallowing them here
@@ -101,7 +116,12 @@ class ReadinessStub:
 
 
 class Harness:
-    def __init__(self, tmp_path: Path, *sessions: Any, reacts: bool = False) -> None:
+    def __init__(
+        self,
+        tmp_path: Path,
+        *sessions: Any,
+        takes_submit_on: int | None = None,
+    ) -> None:
         self.store = PromptQueueStore(tmp_path / "queue.db")
         self.events = EventsStub()
         self.readiness = ReadinessStub()
@@ -109,16 +129,25 @@ class Harness:
             sessions={session.record.id: session for session in sessions}
         )
         self.writes: list[tuple[str, str]] = []
-        # `reacts` models a CLI that redraws when it takes the submit. Default off
-        # so the existing cases keep asserting the exact write sequence; the
-        # delivery-confirmation cases set it to distinguish a CLI that consumed
-        # the keystroke from one whose composer silently kept the body.
-        self.reacts = reacts
+        # Which carriage return this CLI actually consumes, 1-based, or `None`
+        # for one that never does — the composer keeps the body and no turn ever
+        # opens, which is the 2026-09-04 Codex failure. Modelled as a *turn*
+        # rather than as terminal output on purpose: output is what the old
+        # confirmation watched, and a CLI that types the Enter into its composer
+        # emits exactly as much of it as one that submits.
+        self.takes_submit_on = takes_submit_on
+        self.submits = 0
 
         def write(session: Any, data: str) -> None:
             self.writes.append((session.record.id, data))
-            if self.reacts:
-                session.record.last_activity_ts = time.time()
+            if data != SUBMIT_SEQUENCE:
+                return
+            self.submits += 1
+            if self.takes_submit_on is not None and self.submits >= self.takes_submit_on:
+                # Only the turn epoch, not the displayed state: leaving the stub
+                # idle keeps every later delivery in this test observable, which
+                # is what the cases about ordering and audit are actually about.
+                session.record.turn_epoch += 1
 
         self.service = PromptQueueService(
             self.store,
@@ -127,12 +156,22 @@ class Harness:
             self.readiness,
             write,
             submit_delay=0.0,
+            # The ladder's shape is what these tests are about; its wall-clock is
+            # a production constant and paying it here would cost six seconds a
+            # case.
+            submit_confirm_seconds=0.05,
+            submit_retry_delays=(0.0, 0.0, 0.0),
         )
 
 
 @pytest.fixture
 def harness(tmp_path: Path) -> Any:
-    built = Harness(tmp_path, live_session("s1"), live_session("s2"))
+    # A healthy CLI by default: it takes the first carriage return and opens a
+    # turn. The cases about a swallowed submit build their own harness, because
+    # a CLI that never opens one is the defect rather than the baseline.
+    built = Harness(
+        tmp_path, live_session("s1"), live_session("s2"), takes_submit_on=1
+    )
     yield built
     built.store.close()
 
@@ -331,16 +370,19 @@ async def test_queues_are_per_target(harness: Harness) -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_large_paste_that_swallows_its_submit_is_pressed_again(
+async def test_a_paste_that_swallows_its_submit_is_pressed_until_a_turn_opens(
     tmp_path: Path,
 ) -> None:
-    """The failure that lost a relay message: the CLI ate the Enter.
+    """The failure that lost relay messages: the CLI ate the Enter.
 
     A multi-kilobyte body becomes a placeholder chip and the CLI is busy while it
     builds one, so a submit sized for a spoken sentence lands mid-consumption and
     is swallowed. Observed live 2026-08-13 as
     `[Pasted Content 2784 chars][Pasted Content 4230 chars]` parked in a codex
-    composer while the queue reported both messages sent.
+    composer while the queue reported both messages sent, and again on 2026-09-04
+    where the swallowed carriage returns landed in the composer *as newlines* -
+    three bodies of 3896, 4245 and 3356 characters reached Codex as one
+    11,499-character prompt, which is 11,497 plus the two joins.
     """
     harness = Harness(tmp_path, live_session("s1"))
     try:
@@ -349,21 +391,71 @@ async def test_a_large_paste_that_swallows_its_submit_is_pressed_again(
         )
         result = await harness.service.send_next(message["id"], revision=1)
         submits = [data for _, data in harness.writes if data == SUBMIT_SEQUENCE]
-        assert len(submits) == 2
-        # The write landed either way; what is reported is that nobody saw the
-        # CLI take it, which is the fact the old code had no way to express.
+        assert len(submits) == 1 + len(harness.service._submit_retry_delays)
+        # The write landed either way; what is reported is that no turn opened,
+        # which is the fact the old confirmation could not see at all.
         assert result["submit_confirmed"] is False
     finally:
         harness.store.close()
 
 
 @pytest.mark.asyncio
-async def test_a_cli_that_reacts_is_never_pressed_twice(tmp_path: Path) -> None:
-    harness = Harness(tmp_path, live_session("s1"), reacts=True)
+async def test_a_cli_that_opens_a_turn_is_never_pressed_twice(tmp_path: Path) -> None:
+    harness = Harness(tmp_path, live_session("s1"), takes_submit_on=1)
     try:
         message = await harness.service.enqueue(
             target_session_id="s1", body="x" * (LARGE_PASTE_BYTES + 10)
         )
+        result = await harness.service.send_next(message["id"], revision=1)
+        submits = [data for _, data in harness.writes if data == SUBMIT_SEQUENCE]
+        assert len(submits) == 1
+        assert result["submit_confirmed"] is True
+        assert harness.manager.sessions["s1"].pending_submit is None
+    finally:
+        harness.store.close()
+
+
+@pytest.mark.asyncio
+async def test_the_ladder_stops_at_the_press_the_cli_takes(tmp_path: Path) -> None:
+    """One retry was not enough, which is the whole reason for a ladder.
+
+    The 2026-09-04 incident pressed twice for three of its messages and rescued
+    exactly one; the other two sat in the composer for 9 and 54 minutes until a
+    person pressed Enter. A CLI that takes the third press must cost three, not
+    four, and must report a confirmed submit.
+    """
+    harness = Harness(tmp_path, live_session("s1"), takes_submit_on=3)
+    try:
+        message = await harness.service.enqueue(target_session_id="s1", body="hello")
+        result = await harness.service.send_next(message["id"], revision=1)
+        submits = [data for _, data in harness.writes if data == SUBMIT_SEQUENCE]
+        assert len(submits) == 3
+        assert result["submit_confirmed"] is True
+    finally:
+        harness.store.close()
+
+
+@pytest.mark.asyncio
+async def test_the_screen_alone_can_confirm_a_submit(tmp_path: Path) -> None:
+    """A harness with no hooks and no transcript still has its own screen.
+
+    Nothing will ever advance `turn_epoch` for such a session, so requiring
+    lifecycle evidence would make every delivery to it read as unsubmitted and
+    then block the next one. The CLI's working affordance is the evidence, and it
+    is also the fastest of the three - it repaints in a frame.
+    """
+    session = live_session("s1")
+    session.screen = "idle"
+    harness = Harness(tmp_path, session)
+
+    def take_the_submit(target: Any, data: str) -> None:
+        harness.writes.append((target.record.id, data))
+        if data == SUBMIT_SEQUENCE:
+            target.screen = "working"
+
+    harness.service._write = take_the_submit
+    try:
+        message = await harness.service.enqueue(target_session_id="s1", body="hello")
         result = await harness.service.send_next(message["id"], revision=1)
         submits = [data for _, data in harness.writes if data == SUBMIT_SEQUENCE]
         assert len(submits) == 1
@@ -373,14 +465,53 @@ async def test_a_cli_that_reacts_is_never_pressed_twice(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_short_body_keeps_exactly_one_submit(tmp_path: Path) -> None:
-    """Short deliveries never had the problem and must not pay for the fix."""
-    harness = Harness(tmp_path, live_session("s1"))
+async def test_an_unsubmitted_delivery_marks_the_target(tmp_path: Path) -> None:
+    """The mark that stops the pile-up, and the audit row that records the fact."""
+    session = live_session("s1")
+    harness = Harness(tmp_path, session)
     try:
-        message = await harness.service.enqueue(target_session_id="s1", body="hi")
+        message = await harness.service.enqueue(target_session_id="s1", body="hello")
         await harness.service.send_next(message["id"], revision=1)
+        standing = session.pending_submit
+        assert standing is not None
+        assert standing.message_id == message["id"]
+        # `sent` stays `sent`: the bytes left the queue and are in the composer,
+        # so re-sending would duplicate them. What the CLI did with them is the
+        # separate fact beside it.
+        rows = await harness.store.deliveries(message["id"])
+        assert rows[0]["outcome"] == "sent"
+        assert rows[0]["submitted"] is False
+    finally:
+        harness.store.close()
+
+
+@pytest.mark.asyncio
+async def test_a_write_into_a_running_turn_is_recorded_as_unobservable(
+    tmp_path: Path,
+) -> None:
+    """An interject has no turn boundary to witness, so it claims neither answer.
+
+    Reporting `False` would mark the target as holding an unsubmitted body and
+    block the queue over a delivery that very likely landed; reporting `True`
+    would be the old lie in a new place. It is `None`, and it is pressed once.
+    """
+    session = live_session("s1", state="working")
+    harness = Harness(tmp_path, session)
+    harness.readiness.state = "blocked"
+    harness.readiness.reasons = ["root_agent_working"]
+    harness.readiness.interject_state = "safe"
+    harness.readiness.interject_reasons = []
+    try:
+        message = await harness.service.enqueue(
+            target_session_id="s1", body="now please", constraints={"delivery": "now"}
+        )
+        result = await harness.service.send_next(message["id"], revision=1)
         submits = [data for _, data in harness.writes if data == SUBMIT_SEQUENCE]
         assert len(submits) == 1
+        assert result["submit_confirmed"] is None
+        assert session.pending_submit is None
+        rows = await harness.store.deliveries(message["id"])
+        assert rows[0]["submitted"] is None
     finally:
         harness.store.close()
 
@@ -390,11 +521,20 @@ async def test_the_settle_scales_with_the_body(tmp_path: Path) -> None:
     harness = Harness(tmp_path, live_session("s1"))
     try:
         service = harness.service
-        assert service._paste_settle(0) >= service._submit_delay
-        assert service._paste_settle(10) < service._paste_settle(8 * 1024)
-        assert service._paste_settle(8 * 1024) < MAX_SUBMIT_DELAY_SECONDS
+        assert service._paste_settle(0, "claude") >= service._submit_delay
+        assert service._paste_settle(10, "claude") < service._paste_settle(8 * 1024, "claude")
+        assert service._paste_settle(8 * 1024, "claude") < MAX_SUBMIT_DELAY_SECONDS
         # Bounded, so a huge body cannot stall the delivery path.
-        assert service._paste_settle(50_000) == MAX_SUBMIT_DELAY_SECONDS
+        assert service._paste_settle(500_000, "claude") == MAX_SUBMIT_DELAY_SECONDS
+        # And per harness, which is the half a global constant could not express:
+        # Codex needs materially longer than Claude for the same body, and a
+        # backend nobody has characterised keeps Claude's historical pair.
+        for size in (0, 4 * 1024):
+            assert service._paste_settle(size, "codex") > service._paste_settle(size, "claude")
+            assert service._paste_settle(size, "shell") == service._paste_settle(size, "claude")
+        # The service-level delay is a floor, never a ceiling: it must not be
+        # able to undo a harness's own measured need.
+        assert service._paste_settle(0, "codex") >= paste_submit_settle_rules("codex")[0]
     finally:
         harness.store.close()
 

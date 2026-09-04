@@ -740,6 +740,33 @@ class HarnessDescriptor:
     # (`composer_input.composer_insertion`). False is also the answer for a
     # harness nobody has measured: it keeps the bytes mux has always sent.
     paste_leading_newline_submits: bool
+    # How long this CLI needs between a bracketed paste and the Enter that
+    # submits it, as a base plus a term scaled by the payload.
+    #
+    # An agent TUI applies a paste on its own render/input loop, and a large one
+    # becomes a placeholder chip it is busy building. An Enter that arrives while
+    # that is still happening is not merely ignored: on Codex it is *consumed as
+    # a newline into the composer*, so the body sits there unsubmitted and the
+    # next delivery pastes on top of it.
+    #
+    # The Codex figures are inferred from the 2026-09-04 fantasy-football
+    # incident rather than from a rig, and the arithmetic is on the record so a
+    # later measurement can replace them: seven relay messages of 3.4-4.3 KB,
+    # settled 0.46-0.52 s by the constants these fields replace. Four of the
+    # seven never submitted, and the one retry press (~0.6 s later, so ~1.1 s
+    # total) rescued exactly one of them. The three that reached the CLI as a
+    # single merged 11,499-character prompt were three bodies totalling 11,497
+    # characters joined by two newlines - the delivered carriage returns
+    # themselves, landed in the composer as text. So 4 KB needs more than 1.1 s
+    # here, and 0.6 + 0.25/KiB gives it 1.6 s.
+    #
+    # Claude's values are the constants that were global before this field
+    # existed, which is also what an unmeasured harness keeps
+    # (`prompt_queue.submit_settle_rules`). The settle is a first guess, never
+    # the guarantee: the queue's retry ladder is what actually closes the case,
+    # because no constant can be right for every host under every load.
+    paste_submit_settle_seconds: float
+    paste_submit_settle_per_kib_seconds: float
 
     native_hooks: bool
     transcript: str | None
@@ -766,6 +793,14 @@ class HarnessDescriptor:
             raise ValueError(f"harness {self.name} must declare a composer clear sequence")
         if not self.composer_newline:
             raise ValueError(f"harness {self.name} must declare a composer newline sequence")
+        if self.paste_submit_settle_seconds <= 0:
+            raise ValueError(
+                f"harness {self.name} must declare a positive paste-submit settle"
+            )
+        if self.paste_submit_settle_per_kib_seconds < 0:
+            raise ValueError(
+                f"harness {self.name} must not declare a negative paste-submit scaling term"
+            )
         if bool(self.spawn_id_argv) != self.assigns_conversation_id:
             # The two say the same thing from opposite ends. A harness that dictates
             # its conversation id has argv that carries it, and a harness with such
@@ -1207,6 +1242,8 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         composer_clear_keys="",
         composer_newline="\x1b\r",
         paste_leading_newline_submits=False,
+        paste_submit_settle_seconds=0.18,
+        paste_submit_settle_per_kib_seconds=0.08,
         native_hooks=True,
         transcript="semantic",
         pty="telemetry",
@@ -1356,6 +1393,8 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         composer_clear_keys="",
         composer_newline="\x1b\r",
         paste_leading_newline_submits=True,
+        paste_submit_settle_seconds=0.6,
+        paste_submit_settle_per_kib_seconds=0.25,
         native_hooks=True,
         transcript="semantic",
         pty="telemetry",
@@ -1470,6 +1509,8 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         composer_clear_keys="",
         composer_newline="\x1b\r",
         paste_leading_newline_submits=False,
+        paste_submit_settle_seconds=0.18,
+        paste_submit_settle_per_kib_seconds=0.08,
         native_hooks=True,
         transcript="semantic",
         pty="telemetry",
@@ -1589,6 +1630,8 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         composer_clear_keys="",
         composer_newline="\x1b\r",
         paste_leading_newline_submits=False,
+        paste_submit_settle_seconds=0.18,
+        paste_submit_settle_per_kib_seconds=0.08,
         native_hooks=True,
         transcript="semantic",
         pty="telemetry",
@@ -1721,6 +1764,8 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         composer_clear_keys="",
         composer_newline="\x1b\r",
         paste_leading_newline_submits=False,
+        paste_submit_settle_seconds=0.18,
+        paste_submit_settle_per_kib_seconds=0.08,
         native_hooks=True,
         # Semantic records, read from the store rather than tailed from a file.
         # This is the automation-evidence label, not a claim that a byte-offset
@@ -2118,6 +2163,52 @@ def composer_insertion_rules(name: object) -> tuple[str, bool]:
         return DEFAULT_NEWLINE_KEYS, False
     harness = HARNESSES[name]
     return harness.composer_newline, harness.paste_leading_newline_submits
+
+
+#: The settle a backend nobody has characterised keeps: the pair that was a
+#: global constant for every harness before the trait existed, so an unmeasured
+#: CLI is sent exactly the bytes, at exactly the pace, it always was.
+DEFAULT_PASTE_SUBMIT_SETTLE = (0.18, 0.08)
+
+#: Bounded so a huge body cannot stall a delivery path behind arithmetic. Beyond
+#: this the settle has stopped being a settle and the caller's retry - where it
+#: has one - is the mechanism that matters.
+MAX_PASTE_SUBMIT_SETTLE_SECONDS = 4.0
+
+
+def paste_submit_settle_rules(name: object) -> tuple[float, float]:
+    """``(base seconds, seconds per KiB)`` to wait between a paste and its Enter.
+
+    Resolved through the registry for the same reason
+    :func:`composer_insertion_rules` is: the daemon queue and the browser's own
+    insert-and-submit path both need it, and a second copy of the number is what
+    drifts. See ``HarnessDescriptor.paste_submit_settle_seconds`` for where the
+    measured values come from and why they are only a first guess.
+    """
+    if not isinstance(name, str) or name not in HARNESSES:
+        return DEFAULT_PASTE_SUBMIT_SETTLE
+    harness = HARNESSES[name]
+    return (
+        harness.paste_submit_settle_seconds,
+        harness.paste_submit_settle_per_kib_seconds,
+    )
+
+
+def paste_submit_settle_seconds(name: object, byte_count: int, *, floor: float = 0.0) -> float:
+    """How long to wait before submitting a ``byte_count`` paste to ``name``.
+
+    The one place the arithmetic lives, for the three callers that stage text and
+    then press Enter: the prompt queue, the voice dictation path, and - through
+    the registry payload rather than through this function - the browser. Each
+    had its own constant, and the two that shared one shared Claude's.
+
+    ``floor`` lets a caller hold a minimum of its own (the queue's configurable
+    ``submit_delay``). It raises the settle and can never lower it: an operator
+    slowing deliveries down must not be able to undo a harness's measured need.
+    """
+    base, per_kib = paste_submit_settle_rules(name)
+    start = max(base, floor)
+    return min(MAX_PASTE_SUBMIT_SETTLE_SECONDS, start + (byte_count / 1024.0) * per_kib)
 
 
 def branch_strategy(name: object) -> BranchStrategy | None:
@@ -2591,6 +2682,10 @@ def public_harness_registry(
                 "composer_clear_keys": harness.composer_clear_keys,
                 "composer_newline": harness.composer_newline,
                 "paste_leading_newline_submits": harness.paste_leading_newline_submits,
+                "paste_submit_settle_seconds": harness.paste_submit_settle_seconds,
+                "paste_submit_settle_per_kib_seconds": (
+                    harness.paste_submit_settle_per_kib_seconds
+                ),
                 "capabilities": {
                     "observed": harness.level >= HarnessLevel.observed,
                     "transcript": bool(harness.transcript),

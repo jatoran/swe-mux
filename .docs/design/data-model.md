@@ -380,7 +380,7 @@
   readiness state + reasons, explicit-confirmation flag, `interjected` (the write landed in a
   running turn — not derivable from the other two, since an interject is neither `safe` nor a
   human override, and it is the one delivery shape that had to be separately authorized),
-  `initiator` (`user|auto` — who pressed send), outcome (`pending|sent|refused|failed`), error, byte count, and a
+  `initiator` (`user|auto` — who pressed send), `submitted` (three-valued: a turn was witnessed to open after the Enter, none was, or - for a write into an already running turn - there was no turn boundary to witness and the column is NULL, as it is for every row written before the oracle existed), outcome (`pending|sent|refused|failed`), error, byte count, and a
   partial-unique `idempotency_key` (a repeated key replays the recorded outcome instead of
   delivering twice). Deliberately carries no prompt text; bodies live in `queue_messages`
   only.

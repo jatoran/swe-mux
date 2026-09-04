@@ -16,8 +16,10 @@ from .. import (
 from ..composer_input import (
     DEFAULT_CLEAR_KEYS,
     DEFAULT_NEWLINE_KEYS,
+    apply_composer_write,
+    classify_composer_write,
+    clear_pending_submit,
     composer_insertion,
-    note_composer_write,
 )
 from ..config import Config
 from ..event_bus import EventBus
@@ -72,7 +74,25 @@ def _note_composer_write(events: EventBus, session: Any, data: str | bytes, sour
     harness = HARNESSES.get(session.record.backend)
     clear_keys = harness.composer_clear_keys if harness else DEFAULT_CLEAR_KEYS
     newline_keys = harness.composer_newline if harness else DEFAULT_NEWLINE_KEYS
-    change = note_composer_write(composer, text, time.time(), clear_keys, newline_keys)
+    write = classify_composer_write(text, composer.in_paste, clear_keys, newline_keys)
+    # A write from anywhere *but* the queue that submits or discards the composer
+    # is proof the body a failed delivery left there is gone: the operator either
+    # pressed Enter over it themselves (which is how three of the 2026-09-04
+    # messages finally reached Codex) or cleared it. The queue's own carriage
+    # return is excluded deliberately — it classifies as a submit whether or not
+    # the CLI took it, so trusting it here would retire the mark on exactly the
+    # evidence that was wrong in the first place.
+    if source != "queue" and write.kind in {"submit", "clear"}:
+        retired = clear_pending_submit(session)
+        if retired is not None:
+            log.info(
+                "session %s: queue delivery %s left the composer by %s (%s)",
+                session.record.id,
+                retired.message_id,
+                write.kind,
+                source,
+            )
+    change = apply_composer_write(composer, write, time.time())
     if change is None:
         return
     ledger = getattr(session, "state_transitions", None)
