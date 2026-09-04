@@ -189,7 +189,6 @@ const OVERRIDE_COPY: Record<string, { label: string; hint: string }> = {
   land_queue_enabled: { label: 'Land queue', hint: 'Reconcile, verify, and fast-forward finished branches one at a time.' },
   automation_enabled: { label: 'Automation rules', hint: 'The model-backed pipeline; per-Project opt-ins and budgets still apply.' },
   scan_timeline_enabled: { label: 'Scan timeline', hint: 'Periodic model reads of session activity, under its own budget.' },
-  attention_observers_enabled: { label: 'Attention observers', hint: 'Model narration of what needs you, under the interrupt budget.' },
 }
 
 const OVERRIDE_ORDER = Object.keys(OVERRIDE_COPY)

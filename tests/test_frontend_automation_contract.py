@@ -19,10 +19,14 @@ def test_automation_dashboard_exposes_complete_user_facing_model() -> None:
     # Three tabs, and the tab is the question: what may run (and where), what
     # it costs, what it did.
     assert "export type AutomationView='policy'|'usage'|'activity'" in dashboard
-    assert "System observers" in dashboard
+    # The built-in observers (session titler, attention observers) are rows in the
+    # policy matrix since schema 36 - per-Project automations switched globally and
+    # per Project like every other consumer - so the dashboard draws no separate
+    # observer section and owns no observer switch of its own.
+    assert "System observers" not in dashboard
+    assert "updateBuiltin" not in dashboard
     assert "Custom rules" in dashboard
     assert "built_in_rules" in dashboard
-    assert "updateBuiltin" in dashboard
     assert "all-session health" in dashboard
     assert "Learned fixes" in dashboard
     assert "automation-knowledge-browser" in dashboard
@@ -61,11 +65,16 @@ def test_every_switch_has_one_owner_matrix_global_dashboard_per_rule() -> None:
     assert 'data-setting="automation_enabled"' not in policy
     assert 'data-setting="scan_timeline_enabled"' not in policy
     assert "updateControl" not in dashboard
-    # Per-rule switches: dashboard-only.
-    assert "updateBuiltin" in dashboard
-    assert "change('observer_titler_enabled'" not in settings
-    assert "change('observer_summarizer_enabled'" not in settings
-    assert "change('attention_observers_enabled'" not in settings
+    # Per-rule switches for custom rules stay dashboard-only; the built-in
+    # observers are matrix rows, so no surface writes an observer switch by name.
+    assert "updateRule" in dashboard
+    assert "observer_titler_enabled" not in settings
+    assert "observer_summarizer_enabled" not in settings
+    assert "attention_observers_enabled" not in settings
+    assert "observer_titler_enabled" not in dashboard
+    assert "attention_observers_enabled" not in dashboard
+    # ...and the matrix draws them as an Observers group beside the timeline reads.
+    assert "'Observers'" in matrix
 
 
 def test_the_matrix_is_the_one_editor_and_greys_the_ceiling_rather_than_hiding_it() -> None:

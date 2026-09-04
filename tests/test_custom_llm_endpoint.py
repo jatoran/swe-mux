@@ -471,8 +471,16 @@ def test_needing_a_model_is_asked_of_the_closure() -> None:
     # which does - the same rule `spends_money` follows.
     assert needs_llm(["catch_me_up"])
     assert not needs_llm(["loop_detection"])
+    # The built-in observers joined the registry as per-Project consumers (schema
+    # 36); every model read is here, so the closure the gate asks of is complete.
     assert llm_dependent_ids() == frozenset(
-        {"scan_timeline", "continuous_title", "model_narration"}
+        {
+            "scan_timeline",
+            "session_titler",
+            "attention_observers",
+            "continuous_title",
+            "model_narration",
+        }
     )
 
 

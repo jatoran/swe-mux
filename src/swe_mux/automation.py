@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from . import budget
+from .automation_registry import install_automations
 from .automation_store import AutomationStore
 from .background_tasks import background
 from .config import Config
@@ -168,19 +169,18 @@ ADAPTER_CAPABILITIES: dict[str, dict[str, Any]] = {
     },
 }
 
-# Built-ins execute through the rule engine but are configured as product settings rather
-# than rules.toml entries. Keep their user-facing inventory explicit so the control plane
-# can show the complete effective setup, including disabled observers. Every built-in is
-# install-wide (`scope="global"`): one switch governs it in every Project, unlike the
-# per-Project automation matrix - the control plane labels the two so the distinction is
-# visible where they now sit side by side.
+# Built-ins execute through the rule engine but are switched as automations rather than
+# as rules.toml entries: each names the `automation_registry` id that governs it
+# (`session_titler`, `attention_observers`), a per-Project opt-in resolved through the
+# enablement DAG like every other consumer, with the install default and ceiling as its
+# global layers. Keep their user-facing inventory explicit so the control plane can show
+# the complete effective setup, including disabled observers.
 BUILTIN_OBSERVER_CATALOG: tuple[dict[str, str], ...] = (
     {
         "id": "builtin.session-titler-initial",
         "name": "Session titler",
-        "setting_key": "observer_titler_enabled",
+        "automation_id": "session_titler",
         "setting_label": "Session titler",
-        "scope": "global",
         "trigger": "turn_started",
         "input": "The request the run opened with",
         "model": "Cheap model",
@@ -193,9 +193,8 @@ BUILTIN_OBSERVER_CATALOG: tuple[dict[str, str], ...] = (
     {
         "id": "builtin.session-titler",
         "name": "Session titler (no prompt)",
-        "setting_key": "observer_titler_enabled",
+        "automation_id": "session_titler",
         "setting_label": "Session titler",
-        "scope": "global",
         "trigger": "turn_ended",
         "input": "Last completed turn",
         "model": "Cheap model",
@@ -205,9 +204,8 @@ BUILTIN_OBSERVER_CATALOG: tuple[dict[str, str], ...] = (
     {
         "id": "builtin.stalled-triage",
         "name": "Stalled run triage",
-        "setting_key": "attention_observers_enabled",
+        "automation_id": "attention_observers",
         "setting_label": "Attention observers",
-        "scope": "global",
         "trigger": "stalled",
         "input": "Recent summary chain",
         "model": "Cheap model",
@@ -217,9 +215,8 @@ BUILTIN_OBSERVER_CATALOG: tuple[dict[str, str], ...] = (
     {
         "id": "builtin.approval_needed-triage",
         "name": "Approval request triage",
-        "setting_key": "attention_observers_enabled",
+        "automation_id": "attention_observers",
         "setting_label": "Attention observers",
-        "scope": "global",
         "trigger": "approval_needed",
         "input": "Last completed turn",
         "model": "Cheap model",
@@ -229,9 +226,8 @@ BUILTIN_OBSERVER_CATALOG: tuple[dict[str, str], ...] = (
     {
         "id": "builtin.context-handoff",
         "name": "Context handoff suggestion",
-        "setting_key": "attention_observers_enabled",
+        "automation_id": "attention_observers",
         "setting_label": "Attention observers",
-        "scope": "global",
         "trigger": "context_pressure",
         "input": "Last 18 transcript messages",
         "model": "Standard model",
@@ -964,6 +960,7 @@ class AutomationEngine:
         store: AutomationStore,
         config: Config,
         provider: OpenRouterClient,
+        session_automations: Callable[[str], Awaitable[frozenset[str]]] | None = None,
     ) -> None:
         self.path = path
         self.events = events
@@ -971,6 +968,13 @@ class AutomationEngine:
         self.store = store
         self.config = config
         self.provider = provider
+        # The per-Project enablement resolution for one session, by session id -
+        # the same closure Tier 0 capture and the detectors gate on, so a built-in
+        # observer can never run under a stale opt-in answer one of them already
+        # refreshed. Bound late by the composition root (it is defined after this
+        # engine is built); absent, the built-ins resolve against the install
+        # defaults alone, which is what a test with no daemon around it gets.
+        self.session_automations = session_automations
         self.rules: list[Rule] = []
         self._builtin_rule_cache: dict[tuple[str, bool, bool], list[Rule]] = {}
         self.diagnostic: str | None = None
@@ -1236,7 +1240,7 @@ class AutomationEngine:
         if not self.config.automation_enabled and not dry_run:
             return reports
         candidates = list(rules if rules is not None else self.rules)
-        candidates.extend(self._builtin_rules(event))
+        candidates.extend(self._builtin_rules(event, await self._observer_automations(event)))
         for rule in candidates:
             if not rule.enabled or rule.trigger != event.type:
                 continue
@@ -1459,7 +1463,14 @@ class AutomationEngine:
                     event = None
             # Both titlers are built-ins, and a built-in only exists as a Rule for the
             # event that produced it — which is exactly the event being replayed.
-            candidates = [] if event is None else [*self.rules, *self._builtin_rules(event)]
+            candidates = (
+                []
+                if event is None
+                else [
+                    *self.rules,
+                    *self._builtin_rules(event, await self._observer_automations(event)),
+                ]
+            )
             rule = next((item for item in candidates if item.id == value.get("rule_id")), None)
             if event is None or rule is None or not rule.enabled:
                 # Unreplayable, or the rule was disabled or edited out from under a
@@ -2367,20 +2378,39 @@ class AutomationEngine:
         )
         return {"observer_call_id": call_id, "notification_id": notification["id"]}
 
-    def _builtin_rules(self, event: NormalizedEvent) -> list[Rule]:
+    def _install_automations(self) -> frozenset[str]:
+        """The install-wide resolution: what a session outside every Project gets."""
+        return install_automations(self.config)
+
+    async def _observer_automations(self, event: NormalizedEvent) -> frozenset[str]:
+        """Which automations govern the built-in observers for this event's session.
+
+        The session's own Project resolution when the composition root has bound
+        one and the session belongs to a Project; otherwise the install-wide
+        answer. A session with no Project has no `.swe-mux/config.toml` to
+        consult, and the operator's install default is the honest reading for it -
+        which is also what the old install-wide switch meant there.
+        """
+        if self.session_automations is not None and event.session_id:
+            return await self.session_automations(event.session_id)
+        return self._install_automations()
+
+    def _builtin_rules(self, event: NormalizedEvent, enabled: frozenset[str]) -> list[Rule]:
+        """The built-in observer rules for one event, under one enablement answer.
+
+        `enabled` is the session's resolved automation set (`_observer_automations`),
+        so the same event in two Projects yields two answers.
+        """
         if not event.agent_run_id:
             return []
-        # Built-in rules are a pure function of (event.type, the three observer
-        # flags); revision is a deterministic sha256, so the parsed Rule set is
+        titler_on = "session_titler" in enabled
+        attention_on = "attention_observers" in enabled
+        # Built-in rules are a pure function of (event.type, the two observer
+        # answers); revision is a deterministic sha256, so the parsed Rule set is
         # byte-identical every time. Memoise it (loop-thread only, no lock) to skip
-        # re-parsing+validating+hashing on every event. A flipped flag yields a new
-        # key and a fresh build; the stale entry is harmless. Tracked inputs:
-        # event.type + observer_titler / phase7 flags.
-        cache_key = (
-            event.type,
-            self.config.observer_titler_enabled,
-            self.config.attention_observers_enabled,
-        )
+        # re-parsing+validating+hashing on every event. A changed answer yields a
+        # new key and a fresh build; the stale entry is harmless.
+        cache_key = (event.type, titler_on, attention_on)
         cached = self._builtin_rule_cache.get(cache_key)
         if cached is not None:
             return cached
@@ -2390,7 +2420,7 @@ class AutomationEngine:
             "turn_ended",
             "transcript_message",
             "title_regenerate_requested",
-        } and self.config.observer_titler_enabled:
+        } and titler_on:
             raw.append(
                 {
                     "id": PROMPT_TITLE_RULE_ID,
@@ -2435,7 +2465,7 @@ class AutomationEngine:
                     ],
                 }
             )
-        if event.type == "turn_ended" and self.config.observer_titler_enabled:
+        if event.type == "turn_ended" and titler_on:
             raw.append(
                 {
                     "id": FALLBACK_TITLE_RULE_ID,
@@ -2471,7 +2501,7 @@ class AutomationEngine:
                     ],
                 }
             )
-        if self.config.attention_observers_enabled and event.type in {
+        if attention_on and event.type in {
             "stalled",
             "approval_needed",
         }:
@@ -2508,7 +2538,7 @@ class AutomationEngine:
                     ],
                 }
             )
-        if self.config.attention_observers_enabled and event.type == "context_pressure":
+        if attention_on and event.type == "context_pressure":
             raw.append(
                 {
                     "id": "builtin.context-handoff",
@@ -2565,6 +2595,7 @@ class AutomationEngine:
                 item["parser_degraded"] += 1
             if self._source_probes.get(session.record.id, {}).get("degraded"):
                 item["hook_silence_degraded"] += 1
+        installed = self._install_automations()
         return {
             "enabled": self.config.automation_enabled,
             "rules_path": str(self.path),
@@ -2572,10 +2603,13 @@ class AutomationEngine:
             # built-in observers below - the control plane labels both "global" to
             # set them apart from the per-Project automation matrix.
             "rules": [{**rule.snapshot(), "scope": "global"} for rule in self.rules],
+            # `enabled` is the install-wide answer - on for an undecided Project -
+            # which is the one reading a status surface with no Project in hand
+            # can make; the matrix answers per Project.
             "built_in_rules": [
                 {
                     **item,
-                    "enabled": bool(getattr(self.config, item["setting_key"])),
+                    "enabled": item["automation_id"] in installed,
                     "shadow": False,
                     "source": "builtin",
                 }

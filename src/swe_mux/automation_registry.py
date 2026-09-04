@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
+from typing import Any
 
 # The enablement DAG for the control-plane substrate and consumers.
 #
@@ -97,19 +98,42 @@ _AUTOMATIONS: tuple[Automation, ...] = (
     # its own consumer id rather than a read over another automation's output. It
     # needs Tier 0 as the base fact record the experience corpus is derived from.
     Automation("prior_resolutions", CONSUMER, "Prior resolutions", ("tier0",)),
+    # The built-in observers: model reads of the live conversation rather than of
+    # recorded facts, so they depend on no substrate. Each is a per-Project
+    # opt-in resolved through this DAG exactly like every other consumer, with
+    # the install default and ceiling as its two global layers. Until 2026-09-04
+    # both were install-wide `Config` booleans (`observer_titler_enabled`,
+    # `attention_observers_enabled`) gated by no Project opt-in at all, which
+    # made "session titling" the one automation an operator could not read off
+    # or set from the same matrix as the rest; schema 36 migrates an enabled
+    # switch into `automation_project_defaults` so an upgraded install keeps
+    # naming panes. The rule engine (`automation.BUILTIN_OBSERVER_CATALOG`)
+    # synthesises the rules and gates each on the id here.
+    #
+    # `session_titler` names a pane from its opening request, refines a
+    # provisional title while the work is still taking shape, and freezes it once
+    # it settles. It sits beside `continuous_title` below, the *re*-titler that
+    # broadens an already-named run on a scan-detected scope pivot: two features
+    # whose labels both began "session title" once read as one switch, which is
+    # why the second is labelled "Re-title on scope change".
+    Automation("session_titler", CONSUMER, "Session titler", (), spends=True, needs_llm=True),
+    # The three attention observers (stalled-run triage, approval-request triage,
+    # context-handoff suggestion) and the periodic attention digest, as one id:
+    # they answer one question - does this need the user - and were always
+    # switched as a group.
+    Automation(
+        "attention_observers",
+        CONSUMER,
+        "Attention observers",
+        (),
+        spends=True,
+        needs_llm=True,
+    ),
     # Phase 7.7: re-title a session when its scope changes. It broadens an
     # auto-named run's title only on a genuine scope pivot detected over that
     # run's scan records, so it reads the scan timeline. Off by default and
     # independently toggleable; with it off, titling stays the one-shot
     # behaviour.
-    #
-    # The label says "re-title", not "session title", on purpose. Naming a pane
-    # in the first place is the built-in **Session titler**
-    # (`Config.observer_titler_enabled`, `automation.BUILTIN_OBSERVER_CATALOG`),
-    # which is an install-wide switch gated by no Project opt-in at all - it runs
-    # on a Project that ticked nothing here. Two features whose labels both began
-    # "session title" made this checkbox read as the one that turns session
-    # titling on, so declining it looked like declining titles.
     Automation(
         "continuous_title",
         CONSUMER,
@@ -528,6 +552,30 @@ def resolve_config(
     )
 
 
+def install_automations(config: Any, *, llm_ready: bool = True) -> frozenset[str]:
+    """What runs on this install for a session that belongs to no Project.
+
+    The install-wide answer: an undecided Project's resolution, which is the
+    operator's default template over the registry's own, under the global
+    ceiling. It is the one reading a surface with no Project in hand may make -
+    the built-in observers use it for a session outside every registered Project
+    (the old install-wide switch applied there too, and a session with no
+    `.swe-mux/config.toml` to consult has nothing narrower to say), and the
+    status surface uses it to report whether an observer is on anywhere by
+    default. Duck-typed on `Config` rather than importing it, because `config`
+    imports this module.
+    """
+    return resolve_config(
+        {},
+        install_defaults(getattr(config, "automation_project_defaults", None)),
+        llm_ready=llm_ready,
+        global_allow=effective_global_allow(
+            getattr(config, "automation_global_allow", None),
+            scan_timeline_enabled=bool(getattr(config, "scan_timeline_enabled", False)),
+        ),
+    ).enabled
+
+
 def llm_dependent_ids() -> frozenset[str]:
     """Every automation that cannot run without a language-model provider."""
     return frozenset(item.id for item in REGISTRY.values() if item.needs_llm)
@@ -617,6 +665,8 @@ _validate_recommended()
 # a field to is the grant allowlist's contract, not the DAG's.
 LLM_PROJECT_AUTOMATIONS: tuple[str, ...] = (
     "scan_timeline",
+    "session_titler",
+    "attention_observers",
     "continuous_title",
     "model_narration",
 )

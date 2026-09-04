@@ -12,8 +12,8 @@ import type { Project } from '../../src/types'
 
 const NOW = 1_770_000_000
 
-const builtin = (id: string, name: string, settingKey: string, settingLabel: string, enabled: boolean, description: string) => ({
-  id, name, setting_key: settingKey, setting_label: settingLabel, enabled, shadow: false,
+const builtin = (id: string, name: string, automationId: string, settingLabel: string, enabled: boolean, description: string) => ({
+  id, name, automation_id: automationId, setting_label: settingLabel, enabled, shadow: false,
   source: 'builtin', trigger: 'turn_ended', input: 'Last completed turn', model: 'Cheap model',
   result: 'Run note', description,
 })
@@ -28,9 +28,9 @@ const DASHBOARD = {
     enabled: true,
     rules: [{ id: 'custom.doc-drift', name: 'Doc drift watch', enabled: true, shadow: false, trigger: 'turn_ended', revision: 'r3', source: 'file', actions: [{ kind: 'llm', model: 'openai/gpt-5-mini', on_result: { kind: 'annotate' } }] }],
     built_in_rules: [
-      builtin('builtin.session-titler-initial', 'Session titler', 'observer_titler_enabled', 'Session titler', true, 'Names a pane once, from the request that started the run.'),
-      builtin('builtin.session-titler', 'Session titler (no prompt)', 'observer_titler_enabled', 'Session titler', true, 'Fallback for runs with no captured request, such as Codex.'),
-      builtin('builtin.stalled-triage', 'Stalled run triage', 'attention_observers_enabled', 'Attention observers', false, 'Explains whether a detected stall appears to need user attention.'),
+      builtin('builtin.session-titler-initial', 'Session titler', 'session_titler', 'Session titler', true, 'Names a pane from its opening request, then refines the title while the work is still taking shape.'),
+      builtin('builtin.session-titler', 'Session titler (no prompt)', 'session_titler', 'Session titler', true, 'Fallback for runs with no captured request, such as Codex.'),
+      builtin('builtin.stalled-triage', 'Stalled run triage', 'attention_observers', 'Attention observers', false, 'Explains whether a detected stall appears to need user attention.'),
     ],
     queue: { size: 0, capacity: 256, dropped: 0, loop_rejections: 0 },
     capabilities: { triggers: [], observer_schemas: [] },

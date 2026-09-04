@@ -503,8 +503,6 @@ export function demoConfig(): Record<string, unknown> {
     assistant_context_messages: 30,
     assistant_trust_reversible: 'cancel_window',
     assistant_stream_replies: true,
-    observer_titler_enabled: false,
-    attention_observers_enabled: false,
     tts_default_mode: 'off',
     tts_content: 'summary',
     tts_engine: 'kokoro',

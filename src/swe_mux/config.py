@@ -129,7 +129,7 @@ def is_foreign_host_path(value: str) -> bool:
     return text.casefold().endswith(_WINDOWS_EXECUTABLE_SUFFIXES)
 
 
-SCHEMA_VERSION = 35
+SCHEMA_VERSION = 36
 
 #: The quest log's closed set, capped at three by design rather than by review:
 #: a fourth entry is a change to this tuple and to the frontend registry beside
@@ -1430,19 +1430,17 @@ class Config:
     # model's provider streams tool calls badly; correctness does not depend on
     # it either way, only time-to-first-word.
     assistant_stream_replies: bool = True
-    observer_titler_enabled: bool = False
-    # The one switch behind the three attention observers (stalled-run triage,
-    # approval-request triage, context-handoff suggestion), which is why the
-    # dashboard enables or disables them as a group.
-    #
-    # It was named `phase7_observers_enabled` until schema 31. The turn
-    # summarizer it once sat beside was retired earlier; the scan timeline is
-    # the single behavioral-summary producer, and a config predating that
-    # removal still carries `observer_summarizer_enabled`. `load_config` copies
-    # only known dataclass fields, so a stale key is dropped on load and on the
-    # next write rather than erroring - which is exactly why the rename needs
-    # the explicit schema-31 migration below and could not be a bare rename.
-    attention_observers_enabled: bool = False
+    # The built-in observers - the session titler and the three attention
+    # observers - are per-Project automations (`session_titler`,
+    # `attention_observers` in `automation_registry`) since schema 36, switched
+    # through `automation_project_defaults` and `automation_global_allow` like
+    # every other consumer. They were the install-wide booleans
+    # `observer_titler_enabled` and `attention_observers_enabled` (itself
+    # `phase7_observers_enabled` until schema 31) before that; the schema-36
+    # migration in `load_config` carries an enabled switch into the default
+    # template, because `load_config` copies only known dataclass fields and a
+    # bare removal would have turned titling off on upgrade with a re-save that
+    # erased the evidence.
     tts_enabled: bool = False
     tts_default_mode: str = "off"
     tts_content: str = "summary"
@@ -3196,18 +3194,32 @@ def load_config(path: Path | None = None) -> Config:
             legacy_lexicon = raw.get("tts_lexicon")
             if isinstance(legacy_lexicon, dict):
                 cfg.tts_kokoro_lexicon = dict(legacy_lexicon)
-        if source_schema < 31 and "attention_observers_enabled" not in raw:
-            # `phase7_observers_enabled` was renamed to `attention_observers_enabled`:
-            # the old name leaked this project's roadmap numbering into `/api/config`
-            # and named a release rather than the thing it switches. The field-copy
-            # loop above only reads known dataclass fields, so without this the old
-            # key would be silently dropped and every install that had enabled the
-            # attention observers would find them off after one load - a switch
-            # flipping itself on upgrade, with a re-save that erases the evidence.
-            legacy_attention = raw.get("phase7_observers_enabled")
-            if isinstance(legacy_attention, bool):
-                cfg.attention_observers_enabled = legacy_attention
-                migrated = True
+        if source_schema < 36:
+            # The built-in observers became per-Project automations: the
+            # install-wide `observer_titler_enabled` and `attention_observers_enabled`
+            # switches (the latter `phase7_observers_enabled` until schema 31) are
+            # now the `session_titler` and `attention_observers` ids in the
+            # enablement registry. The field-copy loop above only reads known
+            # dataclass fields, so without this an enabled switch would be silently
+            # dropped and every install that named its panes would find titling off
+            # after one load - a switch flipping itself on upgrade, with a re-save
+            # that erases the evidence. An enabled switch becomes the install
+            # default template entry, which is exactly what it meant: on for every
+            # Project that has not said otherwise. A disabled one is the registry's
+            # own default and is not pinned, so a Project's later opt-in is not
+            # fighting a template entry nobody chose.
+            legacy_attention = raw.get("attention_observers_enabled")
+            if legacy_attention is None and source_schema < 31:
+                legacy_attention = raw.get("phase7_observers_enabled")
+            observer_defaults = dict(cfg.automation_project_defaults)
+            for observer_id, observer_switch in (
+                ("session_titler", raw.get("observer_titler_enabled")),
+                ("attention_observers", legacy_attention),
+            ):
+                if observer_switch is True and observer_id not in observer_defaults:
+                    observer_defaults[observer_id] = True
+                    migrated = True
+            cfg.automation_project_defaults = observer_defaults
         if source_schema < 32:
             # `project_ignore_patterns` is persisted in full, so an install written before
             # this release keeps its stored list forever and never sees a new default. That

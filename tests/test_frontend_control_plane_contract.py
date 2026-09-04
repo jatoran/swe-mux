@@ -8,8 +8,9 @@ ROOT = Path(__file__).parents[1] / "frontend" / "src"
 def test_automation_dashboard_exposes_outcomes_diagnostics_and_reviewed_batches() -> None:
     dashboard = (ROOT / "AutomationDashboard.tsx").read_text(encoding="utf-8")
 
+    # The built-in observers are policy-matrix rows since schema 36 (an "Observers"
+    # group in AutomationMatrix.tsx), so the dashboard draws no observer section.
     for surface in (
-        "System observers",
         "Custom rules",
         # The explainer of the deterministic checks stayed, in the help panel, where every
         # other explanation of this pipeline already lived.

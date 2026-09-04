@@ -56,7 +56,14 @@ def fleet(
         store,
         processes,  # type: ignore[arg-type]
         previews,  # type: ignore[arg-type]
-        Config(data_dir=tmp_path, attention_observers_enabled=attention_observers_enabled),
+        # The attention observers are a per-Project automation; with no enablement
+        # closure bound, the digest reads the install default template.
+        Config(
+            data_dir=tmp_path,
+            automation_project_defaults=(
+                {"attention_observers": True} if attention_observers_enabled else {}
+            ),
+        ),
     )
     return intelligence, bus, store, processes
 

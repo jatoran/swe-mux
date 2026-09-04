@@ -476,10 +476,50 @@ def test_the_worktree_pattern_migration_respects_the_ceiling_validation_enforces
     assert patterns[-1] == SCHEMA_32_IGNORE_ADDITIONS[0]
 
 
-def test_enabled_legacy_attention_observer_switch_survives_its_rename(tmp_path: Path) -> None:
-    # `load_config` copies only known dataclass fields, so a bare rename would drop
-    # the old key and re-save without it - three observers silently turning off on
-    # upgrade. The migration must carry the value, not merely tolerate the key.
+def test_enabled_observer_switches_migrate_into_the_default_template(tmp_path: Path) -> None:
+    # The install-wide observer switches became per-Project automations (schema
+    # 36). `load_config` copies only known dataclass fields, so dropping them would
+    # silently turn titling and the attention observers off on upgrade with a
+    # re-save that erased the evidence. An enabled switch is carried into the
+    # default template, which is exactly what it meant: on for every Project that
+    # has not said otherwise.
+    path = tmp_path / "config.toml"
+    path.write_text(
+        "schema_version = 35\nobserver_titler_enabled = true\n"
+        "attention_observers_enabled = true\n",
+        encoding="utf-8",
+    )
+
+    config = load_config(path)
+
+    assert config.automation_project_defaults == {
+        "session_titler": True,
+        "attention_observers": True,
+    }
+    persisted = tomllib.loads(path.read_text(encoding="utf-8"))
+    assert persisted["automation_project_defaults"]["session_titler"] is True
+    assert persisted["automation_project_defaults"]["attention_observers"] is True
+    assert "observer_titler_enabled" not in persisted
+    assert "attention_observers_enabled" not in persisted
+
+
+def test_disabled_observer_switches_are_not_pinned_into_the_template(tmp_path: Path) -> None:
+    # Off is the registry's own default, so it is not written down: a Project's
+    # later opt-in must not have to fight a template entry nobody chose.
+    path = tmp_path / "config.toml"
+    path.write_text(
+        "schema_version = 35\nobserver_titler_enabled = false\n"
+        "attention_observers_enabled = false\n",
+        encoding="utf-8",
+    )
+
+    assert load_config(path).automation_project_defaults == {}
+
+
+def test_the_pre_schema_31_attention_switch_still_migrates(tmp_path: Path) -> None:
+    # A config written before the schema-31 rename carries the observer switch
+    # under `phase7_observers_enabled`; the schema-36 migration reads that name
+    # when the schema-31 one is absent, so no install is stranded between them.
     path = tmp_path / "config.toml"
     path.write_text(
         "schema_version = 30\nphase7_observers_enabled = true\n",
@@ -488,38 +528,36 @@ def test_enabled_legacy_attention_observer_switch_survives_its_rename(tmp_path: 
 
     config = load_config(path)
 
-    assert config.attention_observers_enabled is True
+    assert config.automation_project_defaults == {"attention_observers": True}
     persisted = tomllib.loads(path.read_text(encoding="utf-8"))
-    assert persisted["attention_observers_enabled"] is True
     assert "phase7_observers_enabled" not in persisted
+    assert "attention_observers_enabled" not in persisted
 
 
-def test_disabled_legacy_attention_observer_switch_stays_disabled(tmp_path: Path) -> None:
-    # The off case is not covered by the default: it must migrate as a recorded
-    # choice, so a later change to the field's default cannot silently turn it on.
-    path = tmp_path / "config.toml"
-    path.write_text(
-        "schema_version = 30\nphase7_observers_enabled = false\n",
-        encoding="utf-8",
-    )
-
-    assert load_config(path).attention_observers_enabled is False
-
-
-def test_current_attention_observer_switch_wins_over_a_stale_legacy_key(
-    tmp_path: Path,
-) -> None:
-    # A config carrying both names was written by the new build; the legacy key is
-    # residue from a hand edit or a merged file and must not overwrite the live one.
+def test_the_schema_31_switch_wins_over_a_stale_legacy_key(tmp_path: Path) -> None:
+    # A config carrying both names was written by the newer build; the legacy key
+    # is residue from a hand edit or a merged file and must not overwrite it.
     path = tmp_path / "config.toml"
     path.write_text(
         "schema_version = 30\n"
-        "phase7_observers_enabled = false\n"
-        "attention_observers_enabled = true\n",
+        "phase7_observers_enabled = true\n"
+        "attention_observers_enabled = false\n",
         encoding="utf-8",
     )
 
-    assert load_config(path).attention_observers_enabled is True
+    assert load_config(path).automation_project_defaults == {}
+
+
+def test_an_operator_template_entry_outranks_a_migrated_switch(tmp_path: Path) -> None:
+    # A template the operator already wrote is not overwritten by the migration.
+    path = tmp_path / "config.toml"
+    path.write_text(
+        "schema_version = 35\nobserver_titler_enabled = true\n"
+        "[automation_project_defaults]\nsession_titler = false\n",
+        encoding="utf-8",
+    )
+
+    assert load_config(path).automation_project_defaults == {"session_titler": False}
 
 
 def test_harness_enabled_holds_only_explicit_choices_and_hot_reloads(tmp_path: Path) -> None:

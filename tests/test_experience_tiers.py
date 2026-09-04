@@ -69,12 +69,15 @@ def test_terminal_switches_off_everything_that_watches(tmp_path: Path) -> None:
     assert config.automation_enabled is False
 
 
-def test_automations_turns_on_exactly_the_three_masters(tmp_path: Path) -> None:
+def test_automations_turns_on_exactly_the_two_masters(tmp_path: Path) -> None:
     config = _fresh(tmp_path)
     update_config(config, tier_changes("automations"))
     assert config.automation_enabled is True
     assert config.scan_timeline_enabled is True
-    assert config.attention_observers_enabled is True
+    # The model-backed observers are per-Project automations (schema 36), opted
+    # in through the starting sets rather than switched here: a tier assigns
+    # ordinary keys absolutely, and it must not erase the default template.
+    assert config.automation_project_defaults == {}
     # Everything deterministic keeps its default; budgets are untouched.
     assert config.agent_messaging_enabled is True
     assert config.harness_instrument_enabled == {}
