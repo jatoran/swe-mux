@@ -170,24 +170,32 @@ ADAPTER_CAPABILITIES: dict[str, dict[str, Any]] = {
 
 # Built-ins execute through the rule engine but are configured as product settings rather
 # than rules.toml entries. Keep their user-facing inventory explicit so the control plane
-# can show the complete effective setup, including disabled observers.
+# can show the complete effective setup, including disabled observers. Every built-in is
+# install-wide (`scope="global"`): one switch governs it in every Project, unlike the
+# per-Project automation matrix - the control plane labels the two so the distinction is
+# visible where they now sit side by side.
 BUILTIN_OBSERVER_CATALOG: tuple[dict[str, str], ...] = (
     {
         "id": "builtin.session-titler-initial",
         "name": "Session titler",
         "setting_key": "observer_titler_enabled",
         "setting_label": "Session titler",
+        "scope": "global",
         "trigger": "turn_started",
         "input": "The request the run opened with",
         "model": "Cheap model",
         "result": "Run note used as the generated session title",
-        "description": "Names a pane once, from the request that started the run.",
+        "description": (
+            "Names a pane from its opening request, then refines the title up to three "
+            "times while the work is still taking shape, and freezes it once it settles."
+        ),
     },
     {
         "id": "builtin.session-titler",
         "name": "Session titler (no prompt)",
         "setting_key": "observer_titler_enabled",
         "setting_label": "Session titler",
+        "scope": "global",
         "trigger": "turn_ended",
         "input": "Last completed turn",
         "model": "Cheap model",
@@ -199,6 +207,7 @@ BUILTIN_OBSERVER_CATALOG: tuple[dict[str, str], ...] = (
         "name": "Stalled run triage",
         "setting_key": "attention_observers_enabled",
         "setting_label": "Attention observers",
+        "scope": "global",
         "trigger": "stalled",
         "input": "Recent summary chain",
         "model": "Cheap model",
@@ -210,6 +219,7 @@ BUILTIN_OBSERVER_CATALOG: tuple[dict[str, str], ...] = (
         "name": "Approval request triage",
         "setting_key": "attention_observers_enabled",
         "setting_label": "Attention observers",
+        "scope": "global",
         "trigger": "approval_needed",
         "input": "Last completed turn",
         "model": "Cheap model",
@@ -221,6 +231,7 @@ BUILTIN_OBSERVER_CATALOG: tuple[dict[str, str], ...] = (
         "name": "Context handoff suggestion",
         "setting_key": "attention_observers_enabled",
         "setting_label": "Attention observers",
+        "scope": "global",
         "trigger": "context_pressure",
         "input": "Last 18 transcript messages",
         "model": "Standard model",
@@ -2400,20 +2411,19 @@ class AutomationEngine:
                             "input": {"slice": "prompt_text"},
                             "minimum_capability": "telemetry",
                             "prompt": (
-                                "Create a compact task-oriented title for a terminal tab and "
-                                "sidebar from the ordered user requests. Later requests clarify "
-                                "earlier ones; do not title a setup step when a concrete task is "
-                                "present. Return stability=provisional only when the requests are "
-                                "still setup/orientation (for example learn, review, or read docs) "
-                                "and do not yet name concrete work. Otherwise return "
-                                "stability=settled. "
-                                "Prefer 2-3 words and "
-                                "never exceed 4; the tab is narrow, so shorter wins whenever it "
-                                "stays accurate. Describe the concrete user goal or work topic, "
-                                "and drop filler words rather than the distinguishing one. "
-                                "Never prefix with Terminal Session, Session, Claude, "
-                                "Codex, User, or Conversation. Do not label simple greetings as "
-                                "greetings. Return only the schema."
+                                "Create a compact, task-oriented title from the ordered user "
+                                "requests. Anchor on the first concrete task or subject and keep "
+                                "its distinguishing term; treat later requests as refinements of "
+                                "it, not replacements, and shift the title only when a genuinely "
+                                "different task has taken over. Return stability=provisional only "
+                                "while the requests are still setup or orientation (for example "
+                                "learn, review, or read docs) and name no concrete work yet; "
+                                "return stability=settled as soon as a concrete task or subject is "
+                                "present. Prefer 2-3 words and never exceed 4; when compressing, "
+                                "keep the most distinguishing word and drop filler. Never prefix "
+                                "with Terminal Session, Session, Claude, Codex, User, or "
+                                "Conversation. Do not label simple greetings as greetings. Return "
+                                "only the schema."
                             ),
                             "schema": "title_v2",
                             "on_result": {
@@ -2441,18 +2451,15 @@ class AutomationEngine:
                             "reasoning": False,
                             "input": {"slice": "last_turn"},
                             "prompt": (
-                                "Create a compact task-oriented title for a terminal tab and "
-                                "sidebar. Name what the user is trying to accomplish, not what "
-                                "the assistant just said or did — this turn is a step inside a "
-                                "longer session and the title has to survive the next ten. "
-                                "Prefer 2-3 words and never exceed 4; the tab is narrow, "
-                                "so shorter wins whenever it stays accurate. Describe the "
-                                "concrete user goal or work topic, and drop filler words rather "
-                                "than the distinguishing one. "
-                                "Never prefix with Terminal Session, Session, Claude, "
-                                "Codex, User, or Conversation. Do not label simple greetings as "
-                                "greetings, and never answer or acknowledge the conversation. "
-                                "Return only the schema."
+                                "Create a compact, task-oriented title. Name what the user is "
+                                "trying to accomplish, not what the assistant just said or did - "
+                                "this turn is a step inside a longer session and the title has to "
+                                "survive the next ten. Prefer 2-3 words and never exceed 4; when "
+                                "compressing, keep the most distinguishing word and drop filler. "
+                                "Never prefix with Terminal Session, Session, Claude, Codex, User, "
+                                "or Conversation. Do not label simple greetings as greetings, and "
+                                "never answer or acknowledge the conversation. Return only the "
+                                "schema."
                             ),
                             "schema": "title_v1",
                             "on_result": {
@@ -2561,7 +2568,10 @@ class AutomationEngine:
         return {
             "enabled": self.config.automation_enabled,
             "rules_path": str(self.path),
-            "rules": [rule.snapshot() for rule in self.rules],
+            # Custom rules run install-wide on the engine, the same scope as the
+            # built-in observers below - the control plane labels both "global" to
+            # set them apart from the per-Project automation matrix.
+            "rules": [{**rule.snapshot(), "scope": "global"} for rule in self.rules],
             "built_in_rules": [
                 {
                     **item,

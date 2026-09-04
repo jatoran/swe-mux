@@ -268,7 +268,7 @@ export interface Session {
    */
   unsent_input?:{since:number}|null
   auto_named?:boolean;generated_title?:string
-  generated_title_annotation?:{id:string;provenance:string;resolved_model?:string;confidence?:number;cost_usd?:number;created_at:number}
+  generated_title_annotation?:{id:string;provenance:string;resolved_model?:string;confidence?:number;cost_usd?:number;created_at:number;stability?:string|null}
   voice_mode?: VoiceMode | null
   voice_content?: VoiceContent | null
   /** Task/Project-Action shell whose exact spawn argv can be relaunched in place. */

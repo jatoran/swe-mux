@@ -1692,6 +1692,14 @@ def test_status_lists_enabled_and_disabled_builtin_observers(tmp_path: Path) -> 
     assert builtins["builtin.session-titler"]["enabled"] is True
     assert builtins["builtin.stalled-triage"]["setting_key"] == "attention_observers_enabled"
     assert builtins["builtin.context-handoff"]["model"] == "Standard model"
+    # Every built-in observer is install-wide, so the control plane can label it
+    # apart from the per-Project matrix it now sits beside.
+    assert all(item["scope"] == "global" for item in builtins.values())
+    # The titler description tells the truth about refining a provisional title
+    # rather than claiming it names a pane exactly once.
+    titler_description = builtins["builtin.session-titler-initial"]["description"].lower()
+    assert "names a pane once" not in titler_description
+    assert "refine" in titler_description
     engine.store.close()
 
 

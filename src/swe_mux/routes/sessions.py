@@ -139,8 +139,31 @@ async def _decorate_generated_titles(app: web.Application, items: list[dict[str,
         run_id = str(item.get("agent_run_id") or item.get("id") or "")
         titled = by_run.get(run_id)
         if titled:
+            # A provisional title is still refining and may change again; a settled
+            # one is frozen. Surfacing the lifecycle stability lets a client mark an
+            # auto-title that is still converging rather than reading its churn as a
+            # bug. Parsed from the title_lifecycle evidence the titler records; absent
+            # on legacy titles, which stay unmarked.
+            titled["stability"] = _title_stability(titled.get("evidence_json"))
             item["generated_title"] = titled["content"]
             item["generated_title_annotation"] = titled
+
+
+def _title_stability(evidence_json: Any) -> str | None:
+    """Read `stability` out of a title annotation's title_lifecycle evidence."""
+    if not isinstance(evidence_json, str) or not evidence_json:
+        return None
+    try:
+        evidence = json.loads(evidence_json)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(evidence, list):
+        return None
+    for entry in evidence:
+        if isinstance(entry, dict) and entry.get("kind") == "title_lifecycle":
+            stability = entry.get("stability")
+            return str(stability) if stability else None
+    return None
 
 
 def _decorate_conversation_holders(app: web.Application, items: list[dict[str, Any]]) -> None:
