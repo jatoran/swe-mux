@@ -79,6 +79,10 @@ def test_every_switch_has_one_owner_matrix_global_dashboard_per_rule() -> None:
     assert "'titling'" in matrix
     assert "'attention'" in matrix
     assert "item.family" in matrix
+    # Every row expands to what the switch does, and the copy comes from the
+    # daemon's registry rather than a second one written in the browser.
+    assert "item.description" in matrix
+    assert "aria-expanded" in matrix
 
 
 def test_the_matrix_is_the_one_editor_and_greys_the_ceiling_rather_than_hiding_it() -> None:

@@ -272,6 +272,13 @@ dropdown was built to avoid, and the reason that one has three positions too.
   a ceiling-blocked cell does: a level on a capability nobody may use is a control that does
   nothing. They write through the same per-Project route as the opt-ins, because the file is
   one revision and a second endpoint would race this one.
+- **Every row expands to what its switch does.** The name is a disclosure button; clicking it
+  opens one or two plain sentences from the registry's own `Automation.description`, and
+  `_validate_descriptions` refuses at import any shipped id without one - a row an operator can
+  open to nothing is worse than one that does not open. The copy travels in the registry payload
+  for the same reason `spends` and the dependency edges do: a second description written in the
+  browser is the one that drifts when the behaviour changes. Rows start collapsed, because the
+  matrix is only readable as a grid while each row is one line.
 - The file remains the source of truth; the editor is a two-way view over it and the write
   is revision-checked like every other project-config write.
 - The scan row also carries `scan_timeline_auto_enable` and the Project context editor,

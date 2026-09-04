@@ -1370,6 +1370,26 @@ def test_every_shipped_automation_belongs_to_a_drawn_family() -> None:
     assert titling == ["session_titler", "continuous_title"]
 
 
+def test_every_shipped_automation_says_what_it_does() -> None:
+    # The matrix row expands to this, so an id that ships without one is a switch
+    # an operator can open to nothing. Refused at import; asserted here so the
+    # reason is written down, along with the bound that keeps it a description
+    # rather than a paragraph.
+    for automation in registry.REGISTRY.values():
+        assert automation.description.strip(), automation.id
+        assert len(automation.description) <= 220, automation.id
+        assert automation.description.strip().endswith("."), automation.id
+
+
+def test_a_registry_entry_without_a_description_is_refused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    undescribed = registry.Automation("ghost", registry.CONSUMER, "Ghost", family="checks")
+    monkeypatch.setattr(registry, "_AUTOMATIONS", (undescribed,))
+    with pytest.raises(ValueError, match="ships without a description"):
+        registry._validate_descriptions()
+
+
 def test_the_install_default_refinement_count_matches_the_registry_constant() -> None:
     # `Config` cannot import the registry at class-definition time (the registry
     # is imported lazily there), so the dataclass default is a literal; this is

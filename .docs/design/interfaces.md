@@ -2956,7 +2956,8 @@ and the same pair for the titler's refinement count, `title_refinements` /
 `title_refinements_max`, and `install_switches` (`automation_enabled`,
 `scan_timeline_enabled`, `scheduled_runs_enabled`, `land_queue_enabled`). Every registry
 entry also carries `family`, the matrix block it is drawn in (`automation_registry.FAMILIES`),
-and entries arrive in registry order rather than sorted by id.
+and `description`, the sentence or two its row expands to; entries arrive in registry order
+rather than sorted by id.
 Both readings of each install layer ship because neither is derivable from the other: the
 resolved one is what a Project inherits, the stored one is what the operator actually said,
 and a surface with only the resolved one cannot tell a row somebody set from one the registry

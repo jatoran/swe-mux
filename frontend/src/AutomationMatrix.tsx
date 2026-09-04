@@ -1,3 +1,4 @@
+import type { ComponentChildren } from 'preact'
 import { useMemo, useState } from 'preact/hooks'
 import { api } from './api'
 import { AutomationAuthority } from './AutomationAuthority'
@@ -112,6 +113,32 @@ export function AutomationPolicyMatrix({data,projectId,onSelectProject,catalog,l
   onChanged:()=>Promise<void>|void
 }){
   const [saving,setSaving]=useState(false)
+  // Which rows have their description open. Collapsed by default and held here
+  // rather than persisted: the matrix is a grid of ~30 switches, and it is only
+  // readable as a grid while every row is one line. Expanding is a question about
+  // one row ("what does this actually do"), not a mode to come back to.
+  const [openRows,setOpenRows]=useState<Set<string>>(new Set())
+  const toggleRow=(id:string)=>setOpenRows(current=>{
+    const next=new Set(current)
+    if(next.has(id))next.delete(id)
+    else next.add(id)
+    return next
+  })
+  /** A row's name cell: the label and its chips, as the button that expands the
+   *  description under it. The name is the click target rather than the whole
+   *  row, because the row's other three cells are the controls themselves. */
+  const nameCell=(id:string,label:ComponentChildren,description:string)=>{
+    const open=openRows.has(id)
+    return <>
+      <button type="button" class="project-setting-name"
+        aria-expanded={open} aria-controls={`automation-about-${id}`}
+        onClick={()=>toggleRow(id)}>
+        <span class="project-setting-mark" aria-hidden="true">{open?'▾':'▸'}</span>
+        {label}
+      </button>
+      {open&&<p class="project-automation-deps" id={`automation-about-${id}`}>{description}</p>}
+    </>
+  }
   const [presetsOpen,setPresetsOpen]=useState(()=>!presetsSeen())
   const byId=useMemo(()=>new Map(data.automations.map(item=>[item.id,item])),[data.automations])
   const project=data.projects.find(item=>item.project_id===projectId)||data.projects[0]
@@ -380,11 +407,12 @@ export function AutomationPolicyMatrix({data,projectId,onSelectProject,catalog,l
       :`${data.projects.length-custom} inherit${custom?` · ${custom} custom`:''}`
     return <div class={`automation-matrix-row${ceilingOff?' globally-off':''}`} key={item.id} role="row">
       <div class="automation-matrix-name" style={`--depth:${depth(item)}`}>
-        <span class="project-setting-name"><b>{item.label}</b>
+        {nameCell(item.id,<>
+          <b>{item.label}</b>
           {item.spends&&<em class="project-setting-chip spends">spends</em>}
           {item.default_on&&<em class="project-setting-chip">on by default</em>}
           {!item.implemented&&<em class="project-setting-chip">not built yet</em>}
-        </span>
+        </>,item.description||'')}
         {/* The permission is real and the thing it permits has no model to call;
             a row that showed only a tick would be a silent downstream failure.
             The daemon's sentence is rendered verbatim - it distinguishes
@@ -476,9 +504,10 @@ export function AutomationPolicyMatrix({data,projectId,onSelectProject,catalog,l
           // qualifies - the same shape as the arming rule under the timeline:
           // an install default and a Project answer that may follow it.
           item.id==='session_titler'&&project?<div class={`automation-matrix-row${requestedOn(item)?'':' globally-off'}`} key="title_refinements">
-            <div class="automation-matrix-name" style="--depth:1">
-              <span class="project-setting-name" data-setting="title_refinements">Title refinements</span>
-              <p class="project-automation-deps">How many times a provisional title may be revised after the first while the work is still taking shape. 0 names a pane once and never revises it.</p>
+            {/* The deep-link mark sits on the name cell rather than on the label
+                itself, so a reveal scrolls to and flashes the whole row name. */}
+            <div class="automation-matrix-name" style="--depth:1" data-setting="title_refinements">
+              {nameCell('title_refinements','Title refinements','How many times a provisional title may be revised after the first, while the work is still taking shape. 0 names a pane once and never revises it.')}
             </div>
             <div class="automation-matrix-cell automation-authority-global">
               <label class="check" data-setting="title_refinements_default" title="What a Project that has not decided inherits">
@@ -502,9 +531,8 @@ export function AutomationPolicyMatrix({data,projectId,onSelectProject,catalog,l
           </div>:null,
         ])}
         {title==='Foundations'&&project&&<div class={`automation-matrix-row${requestedOn(byId.get('scan_timeline')||({} as never))?'':' globally-off'}`}>
-          <div class="automation-matrix-name" style="--depth:3">
-            <span class="project-setting-name" data-setting="scan_timeline_auto_enable">Arm every new conversation</span>
-            <p class="project-automation-deps">Off, each conversation starts unscanned and is armed in the Timeline tab. On, a new conversation arms itself on its first turn.</p>
+          <div class="automation-matrix-name" style="--depth:3" data-setting="scan_timeline_auto_enable">
+            {nameCell('scan_timeline_auto_enable','Arm every new conversation','Off, each conversation starts unscanned and is armed from its Timeline tab. On, a new conversation arms itself on its first turn.')}
           </div>
           {/* The one Project field that qualifies an opt-in rather than being
               one, so it gets the same two scopes as the rows above: an install

@@ -54,6 +54,10 @@ export type AutomationRegistryEntry = {
    *  depends on (`automation_registry.FAMILIES`). Rows keep registry order inside
    *  a family, so the session titler sits directly above the re-titler. */
   family?: string
+  /** What this switch does, in a sentence or two, shown when its row is expanded.
+   *  Read from the registry rather than restated here: a second copy of what a
+   *  switch means is the one that drifts when the behaviour changes. */
+  description?: string
   /** Whether switching it on can cost money. Read from the registry, never asserted
    *  by a surface: "free" is the fact a one-click grant most needs to get right. */
   spends: boolean

@@ -66,12 +66,38 @@ class Automation:
     # Empty only on ad-hoc instances a test builds; `_validate_families` refuses it
     # for anything shipped.
     family: str = ""
+    # One or two plain sentences saying what this automation does, shown when an
+    # operator expands its row in the policy matrix. It travels in the registry
+    # payload for the same reason `spends` and the dependency edges do: the toggle
+    # surface must not carry its own copy of what a switch means, because that copy
+    # is what drifts once the behaviour changes. Empty only on ad-hoc test
+    # instances; `_validate_descriptions` refuses it for anything shipped.
+    description: str = ""
 
 
 _AUTOMATIONS: tuple[Automation, ...] = (
     # Substrate.
-    Automation("raw_store", SUBSTRATE, "Raw transcript store", family="facts"),
-    Automation("tier0", SUBSTRATE, "Deterministic fact capture", ("raw_store",), family="facts"),
+    Automation(
+        "raw_store",
+        SUBSTRATE,
+        "Raw transcript store",
+        family="facts",
+        description=(
+            "Keeps each agent transcript so later automations have something to read. "
+            "It records only, and never acts."
+        ),
+    ),
+    Automation(
+        "tier0",
+        SUBSTRATE,
+        "Deterministic fact capture",
+        ("raw_store",),
+        family="facts",
+        description=(
+            "Extracts structured facts from every turn - commands run, files written, "
+            "tools used. This is the base record every model-free check reads."
+        ),
+    ),
     Automation(
         "scan_timeline",
         SUBSTRATE,
@@ -80,38 +106,101 @@ _AUTOMATIONS: tuple[Automation, ...] = (
         spends=True,
         needs_llm=True,
         family="facts",
+        description=(
+            "Periodically asks a cheap model to distil what a run is doing into a "
+            "timeline record. Everything under Reads the timeline is built on it."
+        ),
     ),
     # Consumers. The deterministic four (control-plane step 3) are model-free
     # queries over Tier 0 and ship together; everything below them needs a layer
     # that does not exist yet and is marked unimplemented rather than toggleable.
-    Automation("provenance_graph", CONSUMER, "Provenance graph", ("tier0",), family="checks"),
     Automation(
-        "declared_vs_verified", CONSUMER, "Declared vs verified", ("tier0",), family="checks"
+        "provenance_graph",
+        CONSUMER,
+        "Provenance graph",
+        ("tier0",),
+        family="checks",
+        description=(
+            "Links each commit and file change back to the session and turn that "
+            "produced it."
+        ),
     ),
-    Automation("loop_detection", CONSUMER, "Loop / stall detection", ("tier0",), family="checks"),
+    Automation(
+        "declared_vs_verified",
+        CONSUMER,
+        "Declared vs verified",
+        ("tier0",),
+        family="checks",
+        description=(
+            "Flags a claim that work is done or tested when nothing in the record "
+            "shows it actually ran."
+        ),
+    ),
+    Automation(
+        "loop_detection",
+        CONSUMER,
+        "Loop / stall detection",
+        ("tier0",),
+        family="checks",
+        description=(
+            "Watches for the same action repeating with no progress, and for runs "
+            "that have gone quiet."
+        ),
+    ),
     # Doc debt derives its file → owning-doc map from the repository's own docs,
     # so it needs Tier 0 and nothing else. It previously claimed a project_card
     # dependency that its implementation does not use.
-    Automation("doc_debt", CONSUMER, "Doc-debt ledger", ("tier0",), family="checks"),
+    Automation(
+        "doc_debt",
+        CONSUMER,
+        "Doc-debt ledger",
+        ("tier0",),
+        family="checks",
+        description="Notices when code changes and the documentation that owns it does not.",
+    ),
     Automation(
         "dead_end_memory",
         CONSUMER,
         "Dead-end memory",
         ("tier0", "scan_timeline"),
         family="timeline",
+        description=(
+            "Records the approaches a run tried and abandoned, so a later session "
+            "does not repeat them."
+        ),
     ),
     # Phase 7.9: the deterministic code-structure graph. Model-free — it parses
     # the Tier 0 file_write stream with tree-sitter and stores nodes/edges, so it
     # reads Tier 0 and nothing else. Gates the blast-radius/navigation/context/
     # test-gap MCP reads, the human blast-radius annotations, and the per-session
     # change map. Off by default; costs no tokens.
-    Automation("code_graph", CONSUMER, "Code-structure graph", ("tier0",), family="checks"),
+    Automation(
+        "code_graph",
+        CONSUMER,
+        "Code-structure graph",
+        ("tier0",),
+        family="checks",
+        description=(
+            "Parses edited files into a symbol and import graph. It powers the "
+            "blast-radius, navigation, and test-gap reads."
+        ),
+    ),
     # Phase 7.5: the per-project opt-in that gates the `mux.prior_resolutions`
     # MCP read. It reads the experience corpus (model-scored verified fixes,
     # keyed by normalized error signature), which no detector produces, so it is
     # its own consumer id rather than a read over another automation's output. It
     # needs Tier 0 as the base fact record the experience corpus is derived from.
-    Automation("prior_resolutions", CONSUMER, "Prior resolutions", ("tier0",), family="checks"),
+    Automation(
+        "prior_resolutions",
+        CONSUMER,
+        "Prior resolutions",
+        ("tier0",),
+        family="checks",
+        description=(
+            "Lets an agent look up how a matching error was actually fixed before, "
+            "from reviewed past runs."
+        ),
+    ),
     # The built-in observers: model reads of the live conversation rather than of
     # recorded facts, so they depend on no substrate. Each is a per-Project
     # opt-in resolved through this DAG exactly like every other consumer, with
@@ -138,11 +227,11 @@ _AUTOMATIONS: tuple[Automation, ...] = (
         spends=True,
         needs_llm=True,
         family="titling",
+        description=(
+            "Names a pane from the request it opened with, then refines that title "
+            "while the work is still taking shape."
+        ),
     ),
-    # The three attention observers (stalled-run triage, approval-request triage,
-    # context-handoff suggestion) and the periodic attention digest, as one id:
-    # they answer one question - does this need the user - and were always
-    # switched as a group.
     # Phase 7.7: re-title a session when its scope changes. It broadens an
     # auto-named run's title only on a genuine scope pivot detected over that
     # run's scan records, so it reads the scan timeline. Off by default and
@@ -157,7 +246,15 @@ _AUTOMATIONS: tuple[Automation, ...] = (
         spends=True,
         needs_llm=True,
         family="titling",
+        description=(
+            "Renames an already-named run when its timeline shows the work genuinely "
+            "moved on to something else."
+        ),
     ),
+    # The three attention observers (stalled-run triage, approval-request triage,
+    # context-handoff suggestion) and the periodic attention digest, as one id:
+    # they answer one question - does this need the user - and were always
+    # switched as a group.
     Automation(
         "attention_observers",
         CONSUMER,
@@ -166,6 +263,10 @@ _AUTOMATIONS: tuple[Automation, ...] = (
         spends=True,
         needs_llm=True,
         family="attention",
+        description=(
+            "Model triage of stalls, approval requests, and context pressure, plus a "
+            "periodic digest of what is waiting on you."
+        ),
     ),
     Automation(
         "cross_session_interlocks",
@@ -174,6 +275,9 @@ _AUTOMATIONS: tuple[Automation, ...] = (
         ("provenance_graph",),
         implemented=False,
         family="attention",
+        description=(
+            "Would flag two sessions working the same branch, port, or dev server."
+        ),
     ),
     Automation(
         "absence_report",
@@ -181,6 +285,7 @@ _AUTOMATIONS: tuple[Automation, ...] = (
         "Absence report / digest",
         ("scan_timeline",),
         family="attention",
+        description="Summarises what the fleet did while you were away.",
     ),
     # Phase 7.7 near-term scan-timeline consumers. Each is a cheap derivation over
     # the per-record behavioral spine, independently toggleable, and reads the
@@ -195,6 +300,9 @@ _AUTOMATIONS: tuple[Automation, ...] = (
         "Phase-transition signals",
         ("scan_timeline",),
         family="timeline",
+        description=(
+            "Signals when a run changes work phase, or stalls inside one for too long."
+        ),
     ),
     # Timeline-based handoff regenerates the handoff export from a run's scan
     # spine rather than from raw annotations, so it is phase-structured.
@@ -204,16 +312,36 @@ _AUTOMATIONS: tuple[Automation, ...] = (
         "Timeline-based handoff",
         ("scan_timeline",),
         family="timeline",
+        description=(
+            "Builds the handoff export from the run's phase timeline rather than from "
+            "raw notes."
+        ),
     ),
     # Catch-me-up is an on-demand per-session / per-Project rollup of the scan
     # spine: phases gone through, claims, and what is blocking.
     Automation(
-        "catch_me_up", CONSUMER, "Catch-me-up digest", ("scan_timeline",), family="timeline"
+        "catch_me_up",
+        CONSUMER,
+        "Catch-me-up digest",
+        ("scan_timeline",),
+        family="timeline",
+        description=(
+            "On demand, summarises a session or Project: the phases it went through, "
+            "what it claimed, and what is blocking."
+        ),
     ),
     # Live blockers aggregates the `blockers` field across active sessions into a
     # fleet glance without opening any of them.
     Automation(
-        "live_blockers", CONSUMER, "Live blockers view", ("scan_timeline",), family="timeline"
+        "live_blockers",
+        CONSUMER,
+        "Live blockers view",
+        ("scan_timeline",),
+        family="timeline",
+        description=(
+            "Collects what each active session says it is blocked on into one fleet "
+            "glance, without opening any of them."
+        ),
     ),
     # Semantic history search resolves a query against distilled scan
     # summary/intent/target records rather than a raw transcript grep.
@@ -223,6 +351,10 @@ _AUTOMATIONS: tuple[Automation, ...] = (
         "Semantic history search",
         ("scan_timeline",),
         family="timeline",
+        description=(
+            "Searches past work by meaning, over distilled timeline records rather "
+            "than by grepping transcripts."
+        ),
     ),
     # Phase 7.11: whether *agents* may read this Project's scan timeline through
     # the `scan_timeline` MCP tool. Its own consumer id rather than the
@@ -231,7 +363,15 @@ _AUTOMATIONS: tuple[Automation, ...] = (
     # gating agent reads on the substrate would leave no way to keep the timeline
     # while withholding it from siblings. Off by default; costs no tokens.
     Automation(
-        "scan_reads", CONSUMER, "Agent scan-timeline reads", ("scan_timeline",), family="timeline"
+        "scan_reads",
+        CONSUMER,
+        "Agent scan-timeline reads",
+        ("scan_timeline",),
+        family="timeline",
+        description=(
+            "Whether agents may read this Project's timeline, which is a separate "
+            "question from whether one is kept."
+        ),
     ),
     # "← everything" in the design: ranking has nothing to rank without the
     # detectors and the timeline that feed it. The old `("tier0",)` would have let
@@ -248,6 +388,10 @@ _AUTOMATIONS: tuple[Automation, ...] = (
             "doc_debt",
         ),
         family="attention",
+        description=(
+            "Ranks everything the detectors found into one ordered inbox, under an "
+            "interrupt budget."
+        ),
     ),
     # The model tier, and the only automation here that spends tokens. It is a
     # "why" over items ranking has already produced, so it depends on ranking
@@ -260,12 +404,30 @@ _AUTOMATIONS: tuple[Automation, ...] = (
         spends=True,
         needs_llm=True,
         family="attention",
+        description=(
+            "Adds a short model-written explanation of why a ranked item needs you."
+        ),
     ),
     # Keep the persisted id for settings compatibility. The human observation
     # inbox UI is retired; this now names review of agent spawn requests in the
     # Fleet Queue.
-    Automation("observation_inbox", CONSUMER, "Spawn request review", family="capabilities"),
-    Automation("screenshot_to_agent", CONSUMER, "Screenshot to agent", family="capabilities"),
+    Automation(
+        "observation_inbox",
+        CONSUMER,
+        "Spawn request review",
+        family="capabilities",
+        description=(
+            "A review queue for the new-session requests agents draft instead of "
+            "starting themselves."
+        ),
+    ),
+    Automation(
+        "screenshot_to_agent",
+        CONSUMER,
+        "Screenshot to agent",
+        family="capabilities",
+        description="Lets a screenshot you capture be sent into an agent session.",
+    ),
     # Phase 7.6: the per-Project opt-in that makes the `interrupt` and
     # `end_session` MCP tools reachable at all (and, with it off, collapses
     # `spawn_grant` back to drafting). It gates a capability rather than a read
@@ -283,6 +445,10 @@ _AUTOMATIONS: tuple[Automation, ...] = (
         (),
         default_on=True,
         family="capabilities",
+        description=(
+            "Lets an agent that holds the authority interrupt or end another session. "
+            "The authority level beside it decides whether it acts or only asks."
+        ),
     ),
     # Scheduled runs: cron/interval/one-off spawns of an agent session in this
     # Project, authored by a human ahead of time. Like `session_control` it gates
@@ -291,7 +457,17 @@ _AUTOMATIONS: tuple[Automation, ...] = (
     # nothing: the schedules themselves are machine-local rows in the daemon's
     # database, so a clone that inherits this opt-in has none of them
     # (`schedule_store.py`).
-    Automation("scheduled_runs", CONSUMER, "Scheduled runs", (), family="capabilities"),
+    Automation(
+        "scheduled_runs",
+        CONSUMER,
+        "Scheduled runs",
+        (),
+        family="capabilities",
+        description=(
+            "Starts agent sessions on a cron, interval, or one-off schedule you "
+            "author. Permission alone starts nothing."
+        ),
+    ),
     # Phase 14: serialized branch landing. Like `session_control` and
     # `scheduled_runs` it gates a *capability* rather than a read over another
     # automation's output, so it depends on no substrate. Its own id rather than a
@@ -299,7 +475,17 @@ _AUTOMATIONS: tuple[Automation, ...] = (
     # acts on a repository, and they deserve separate switches and separate
     # budgets. Off by default, and permission alone lands nothing - the Project's
     # `land_grant` stays at the inert `draft` until a human raises it.
-    Automation("land_queue", CONSUMER, "Land queue", (), family="capabilities"),
+    Automation(
+        "land_queue",
+        CONSUMER,
+        "Land queue",
+        (),
+        family="capabilities",
+        description=(
+            "Reconciles, verifies, and fast-forwards finished branches one at a time. "
+            "A conflict or a failed gate goes back to the branch's own agent."
+        ),
+    ),
 )
 
 REGISTRY: dict[str, Automation] = {automation.id: automation for automation in _AUTOMATIONS}
@@ -329,7 +515,20 @@ def _validate_families() -> None:
             )
 
 
+def _validate_descriptions() -> None:
+    """Every shipped automation says what it does, in a sentence or two.
+
+    Refused at import rather than checked by the surface: a row an operator can
+    expand to nothing is worse than one that does not expand, and the failure
+    would otherwise appear only for whoever happened to click the new switch.
+    """
+    for automation in _AUTOMATIONS:
+        if not automation.description.strip():
+            raise ValueError(f"automation {automation.id} ships without a description")
+
+
 _validate_families()
+_validate_descriptions()
 
 #: Automations whose install-wide ceiling is a dedicated boolean `Config`
 #: switch rather than an `automation_global_allow` entry - one switch, one key.

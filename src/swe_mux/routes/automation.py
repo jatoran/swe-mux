@@ -995,6 +995,10 @@ def _automation_registry_payload(config: Config | None = None) -> list[dict[str,
             # The matrix block this row is drawn in (`FAMILIES`), what it is about
             # rather than what it depends on.
             "family": automation.family,
+            # What the switch does, in a sentence or two, for the row's expander.
+            # From the registry so the toggle surface never carries its own copy of
+            # what a switch means.
+            "description": automation.description,
             "requires": list(automation.requires),
             "implemented": automation.implemented,
             # Whether switching this on can cost money. Read by the toggle surface and
