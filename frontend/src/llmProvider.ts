@@ -105,6 +105,7 @@ export type ProviderStatusPayload = {
   provider: string
   providers: LlmProviderEntry[]
   llm: LlmReadiness
+  activation?: LlmReadiness
 }
 
 export type VerifyResult = {
@@ -175,6 +176,7 @@ export async function verifyLlmProvider(provider?: string): Promise<VerifyResult
  */
 export function llmGateHeading(readiness: LlmReadiness): string {
   switch (readiness.code) {
+    case 'models_unverified': return 'Choose and verify the model roles before enabling this.'
     case 'no_key': return 'No model provider is configured, so this cannot run.'
     case 'no_endpoint':
     case 'no_model': return 'The custom model endpoint is incomplete, so this cannot run.'

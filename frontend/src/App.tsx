@@ -182,12 +182,17 @@ import { isModifierOnly, keyChord } from './keys'
 // is 3,000 lines of form that the workspace cannot draw until it has parsed,
 // and almost nobody opens it in the first seconds of a session.
 import type { Settings as SettingsPanel } from './Settings'
-import { HarnessSetup } from './HarnessSetup'
+import { OnboardingFlow } from './OnboardingFlow'
+import { GettingStarted } from './GettingStarted'
+import { useOnboarding, ONBOARDING_CHANGED } from './onboarding'
+import { ConnectPhone } from './ConnectPhone'
+import { ProviderSetup } from './ProviderSetup'
+import { DesktopSetup } from './DesktopSetup'
+import { SetupGuide } from './SetupGuide'
 import { VoiceSetup } from './VoiceSetup'
-import { QuestLog } from './QuestLog'
-import { withQuestDismissed, type QuestId, type QuestSignals } from './questRegistry.ts'
+import type { QuestSignals } from './questRegistry.ts'
 import { GuidedTutorial } from './GuidedTutorial'
-import { completeTutorial, emitTutorialAction, firstRunSurface, mobileTutorialChrome, resetTutorial, shouldStartTutorial, type TutorialStepId } from './tutorial'
+import { emitTutorialAction, firstRunSurface, mobileTutorialChrome, type TutorialStepId } from './tutorial'
 import { HelpModal } from './HelpModal'
 import { HELP_TOPICS, helpCommandId, helpTopicForDrawer } from './helpTopics'
 import { applyTheme, configureCustomTheme, type CustomTheme, type ThemeName } from './theme'
@@ -772,8 +777,12 @@ export function App() {
   // here rather than inside Settings because the gesture recognizer below is the shell's,
   // and it has to be able to work that drawer the way it works the workspace sidebar.
   const [settingsNavOpen, setSettingsNavOpen] = useState(false)
-  const [harnessSetupNeeded, setHarnessSetupNeeded] = useState(false)
-  const [experienceTierUnchosen, setExperienceTierUnchosen] = useState(false)
+  const onboarding=useOnboarding()
+  const [experienceTier,setExperienceTier]=useState('')
+  const [phoneSetupOpen,setPhoneSetupOpen]=useState(false)
+  const [providerSetupOpen,setProviderSetupOpen]=useState(false)
+  const [providerSetupBusy,setProviderSetupBusy]=useState(false)
+  const [desktopSetupOpen,setDesktopSetupOpen]=useState(false)
   const [voiceSetupOpen, setVoiceSetupOpen] = useState(false)
   const [questSignals, setQuestSignals] = useState<QuestSignals>({})
   // The sidebar's "add a provider account" invitation, which the status block shows
@@ -783,19 +792,6 @@ export function App() {
   // the phone. Undefined until `/api/config` settles, which is what keeps the
   // invitation from flashing on an install that has already dismissed it.
   const [accountPromptDismissed, setAccountPromptDismissed] = useState<boolean | undefined>(undefined)
-  const questAction = (id: QuestId): void => {
-    if (id === 'voice') setVoiceSetupOpen(true)
-    else if (id === 'worktrees') showDrawerTab('git')
-    else openSettings('Remote')
-  }
-  // Optimistic and machine-side: the dismissal writes through so it never
-  // resurfaces on another device, and a lost write costs one reappearance
-  // rather than a phantom quest.
-  const dismissQuest = (id: QuestId): void => {
-    const next = withQuestDismissed(questSignals.quests_dismissed, id)
-    setQuestSignals(current => ({ ...current, quests_dismissed: next }))
-    void api('PATCH', '/api/config', { quests_dismissed: next }).catch(() => {})
-  }
   // Optimistic and machine-side, exactly like the quest dismissal above. There is
   // deliberately no control to bring it back: it answers itself the moment a
   // credential exists, because the status block is derived rather than remembered.
@@ -846,7 +842,6 @@ export function App() {
   const [revealToken, setRevealToken] = useState(0)
   // Which MenuGroup is expanded in the app menu; null collapses every group.
   const [menuGroup,setMenuGroup]=useState<string|null>(null)
-  const [tutorialOpen,setTutorialOpen]=useState(()=>shouldStartTutorial())
   // The help surface. `null` is closed; `''` opens the index; a topic id opens that topic.
   // One piece of state rather than an open flag beside a selection, so "open help" and
   // "open help about the scan timeline" cannot disagree about whether it is up.
@@ -2043,8 +2038,7 @@ export function App() {
     setHarnessEnablement(config.harness_enabled as Record<string,boolean>|undefined)
     // First-run harness panel, gated daemon-side so a choice made on one device does
     // not reappear on another. False (or a daemon predating the flag) shows it once.
-    setHarnessSetupNeeded(config.harness_setup_complete===false)
-    setExperienceTierUnchosen(config.experience_tier==='')
+    setExperienceTier(String(config.experience_tier||''))
     // Density follows the tier, but only until the user chooses: a device with
     // no stored visibility set re-derives its default from the tier on every
     // config arrival (so applying a tier in Settings takes effect live), while
@@ -2120,10 +2114,16 @@ export function App() {
 
   const loadConfig = (includeTheme:boolean) =>
     api<AppConfig>('GET','/api/config')
-      .then(config=>applyConfig(config,includeTheme))
-      .catch(()=>{})
-      // Settled, not succeeded: an unreachable daemon must not suppress the tour forever.
-      .finally(()=>setFirstRunResolved(true))
+      .then(config=>{applyConfig(config,includeTheme);setFirstRunResolved(true);return true})
+      .catch(()=>false)
+
+  useEffect(()=>{
+    let stopped=false
+    let timer:ReturnType<typeof setTimeout>|undefined
+    const read=async()=>{if(!await loadConfig(true)&&!stopped)timer=setTimeout(()=>void read(),1500)}
+    void read()
+    return()=>{stopped=true;clearTimeout(timer)}
+  },[])
 
   const persistScratchpadEnabled=async(next:boolean):Promise<void>=>{
     try{
@@ -2174,7 +2174,6 @@ export function App() {
 
   useEffect(() => {
     void refresh()
-    void loadConfig(true)
     void loadProfiles()
     void loadVoiceStatus()
     void loadNotifications()
@@ -2527,6 +2526,8 @@ export function App() {
         // `/api/voice` was lost has no other way back, and the socket opening
         // is the app's own evidence that the daemon is answering again.
         void loadVoiceStatus()
+        void loadConfig(false)
+        window.dispatchEvent(new Event(ONBOARDING_CHANGED))
         if (hadCursor) {
           // Catch-up events are bounded and may omit state-independent audit hooks.
           // Refresh each global cache once instead of once per replayed event.
@@ -2641,6 +2642,7 @@ export function App() {
             setRedeploy(current => enterOutage(confirmRedeploy(current, Date.now())))
           }
           if (!isReplay && event.type === 'settings_changed') refreshSettings()
+          if (event.type === 'onboarding_changed') window.dispatchEvent(new Event(ONBOARDING_CHANGED))
           // Another device (or another tab) changed the ring; an open picker refetches.
           if (event.type === 'clipboard_changed') window.dispatchEvent(new CustomEvent(CLIPBOARD_CHANGED_EVENT))
           if (!isReplay && event.type === 'configuration_changed') {
@@ -4142,18 +4144,41 @@ export function App() {
   })
 
   // Which of the two first-run surfaces may be on screen. One decision, one owner.
-  const firstRun=firstRunSurface({tutorialArmed:tutorialOpen,configResolved:firstRunResolved,harnessSetupNeeded,settingsOpen})
-  const closeTutorial=()=>{
-    completeTutorial()
-    setTutorialOpen(false)
-  }
+  const setupOverlay=voiceSetupOpen||phoneSetupOpen||providerSetupOpen||desktopSetupOpen
+  useEffect(()=>{
+    if(!onboarding.state)return
+    const completed=[...new Set([...onboarding.state.completed,...(projects.length?['project']:[]),...(sessions.length?['session']:[])])]
+    if(completed.length!==onboarding.state.completed.length)void onboarding.save({completed}).catch(()=>{})
+  },[!!projects.length,!!sessions.length,onboarding.state?.revision])
+  const firstRun=setupOverlay?'none':firstRunSurface({
+    harnessSetupNeeded:onboarding.state?.status==='active',
+    tutorialArmed:onboarding.state?.tour_status==='active',
+    configResolved:firstRunResolved,settingsOpen,
+  })
+  const closeTutorial=()=>{void onboarding.save({tour_status:'deferred'}).catch(()=>{})}
+  const finishTutorial=()=>{void onboarding.save({tour_status:'complete'}).catch(()=>{})}
   const startTutorial=()=>{
-    // Help is where the tour is offered from, and the tour coaches over the live app
-    // rather than over a modal, so the modal has to go before the walk starts.
-    setHelpTopicOpen(null)
-    resetTutorial()
-    setTutorialOpen(true)
+    setHelpTopicOpen(null);setSettingsOpen(false)
+    void onboarding.save({tour_status:'active',tour_step:onboarding.state?.tour_status==='complete'?'welcome':onboarding.state?.tour_step||'welcome',status:onboarding.state?.status==='complete'?'complete':'deferred',hidden:false}).catch(()=>{})
   }
+  const setupAction=(id:string)=>{
+    if(id==='tour'){startTutorial();return}
+    if(id==='experience'){void onboarding.save({step:'experience',status:'active',hidden:false}).catch(()=>{});return}
+    if(id==='project'){openProjectsManager();return}
+    if(id==='session'){const button=document.querySelector<HTMLElement>('[data-tutorial="run"]');if(activeProject&&button)openRunMenu(activeProject,button);else openProjectsManager();return}
+    if(id==='phone')setPhoneSetupOpen(true)
+    if(id==='voice')setVoiceSetupOpen(true)
+    if(id==='desktop')setDesktopSetupOpen(true)
+    if(id==='provider')setProviderSetupOpen(true)
+    if(id==='worktrees'){if(activeProject)showDrawerTab('git');else openProjectsManager()}
+  }
+  useEffect(()=>{
+    const open=()=>setProviderSetupOpen(true)
+    const refreshed=()=>{void api<GrantsCatalogue>('GET','/api/grants').then(setGrantsCatalogue).catch(()=>{})}
+    window.addEventListener('mux:setup-provider',open)
+    window.addEventListener('mux:llm-provider-changed',refreshed)
+    return()=>{window.removeEventListener('mux:setup-provider',open);window.removeEventListener('mux:llm-provider-changed',refreshed)}
+  },[])
   /** Open help on one topic, or on the index with `''`. */
   const openHelp=(topic:string)=>{setMainMenuOpen(false);setPaletteOpen(false);setHelpTopicOpen(topic)}
   const navigateTutorial=(step:TutorialStepId)=>{
@@ -8055,7 +8080,7 @@ export function App() {
     {mobileProjection.tabs.length>0&&<OverflowRail className="stack-tabs mobile-unified-tabs" wrapperClassName="stack-tabs-rail" activeKey={mobileProjection.selected?.id} stripProps={{'data-tutorial':'tab-strip',role:'tablist','aria-label':'All Project tabs'}}>
       {mobileProjection.tabs.map(mobileTab)}
     </OverflowRail>}
-    <div class="stack-active mobile-unified-active">{mobileProjection.selected?renderPaneNode(mobileProjection.selected,'mobile',true):<div class="empty-stage"><div class="hero-terminal" aria-hidden="true">&gt;_</div><h1>Your Project workspace.</h1><p>Run a terminal, or open a note, a file, or a preview to begin. Files and notes live in the side panel.</p><QuestLog signals={questSignals} onAction={questAction} onDismiss={dismissQuest}/></div>}</div>
+    <div class="stack-active mobile-unified-active">{mobileProjection.selected?renderPaneNode(mobileProjection.selected,'mobile',true):<div class="empty-stage"><div class="hero-terminal" aria-hidden="true">&gt;_</div><h1>Your Project workspace.</h1><p>Run a terminal, or open a note, a file, or a preview to begin. Files and notes live in the side panel.</p></div>}</div>
   </section>
 
   // Where the keyboard cursor is, over the rows the filter left drawn in sidebar order.
@@ -8381,6 +8406,8 @@ export function App() {
             </section>})}
             </>}
         </div>
+        {onboarding.state&&<GettingStarted state={onboarding.state} save={onboarding.save} tier={experienceTier} completed={[...(projects.length?['project']:[]),...(sessions.length?['session']:[]),...(questSignals.tts_enabled||questSignals.stt_enabled?['voice']:[])]} onAction={setupAction}/>}
+        {onboarding.error&&<p class="setup-load-error" role="status">{onboarding.error}</p>}
         <div class="sidebar-status">
           {/* The one surface that carries the empty-state invitation. `firstRun` holds
               it back while the harness panel or the tour is on screen: the tour has an
@@ -8597,7 +8624,7 @@ export function App() {
         <div class="project-workspace unified-workspace">
           <div class="terminal-workspace">
             {mobileWorkspace?mobileUnifiedWorkspace:(activeLayout.root||focusedOutsideLayout) ? <div class="pane-tree">{renderPaneNode(zoomedId ? stackForView(activeLayout,zoomedId)||activeLayout.root! : focusedOutsideLayout&&activeId ? paneStack([terminalLeaf(activeId)],activeId) : activeLayout.root!)}</div> : <div class="pane-tree"><section data-tutorial="workspace-pane" class="pane-stack empty-workspace-pane">
-              <div class="stack-active empty-stage"><div class="hero-terminal" aria-hidden="true">&gt;_</div><h1>Your Project workspace.</h1><p>Run a terminal, or open a note, a file, or a preview to begin. Files and notes live in the side panel.</p><QuestLog signals={questSignals} onAction={questAction} onDismiss={dismissQuest}/></div>
+              <div class="stack-active empty-stage"><div class="hero-terminal" aria-hidden="true">&gt;_</div><h1>Your Project workspace.</h1><p>Run a terminal, or open a note, a file, or a preview to begin. Files and notes live in the side panel.</p></div>
             </section></div>}
           </div>
         </div>
@@ -9100,7 +9127,7 @@ export function App() {
             const deviates=projectCreate.automationOverrides[item.id]!==undefined
               &&projectCreate.automationOverrides[item.id]!==inheritedOn(item)
             return <label class="check" key={item.id}>
-              <input type="checkbox" checked={on} onChange={event=>setProjectCreate(value=>({
+              <input type="checkbox" checked={on} disabled={!!item.spends&&!grantsCatalogue?.llm.ready} onChange={event=>setProjectCreate(value=>({
                 ...value,
                 automationOverrides:setCreateAutomation(
                   value,projectCreateAutomationRows,item.id,event.currentTarget.checked),
@@ -9117,8 +9144,9 @@ export function App() {
             agents real authority, so each is a deliberate choice rather than part of
             the common name-folder-Enter path. Both apply through the same grant path
             as the free set, dependency closure and audit record included. */}
+        {grantsCatalogue&&!grantsCatalogue.llm.ready&&<button type="button" onClick={()=>setProviderSetupOpen(true)}>Set up model provider…</button>}
         <label class="check project-create-automations">
-          <input type="checkbox" checked={projectCreate.llm&&!startingSetBlocked('llm')} disabled={startingSetBlocked('llm')} onChange={event=>setProjectCreate(value=>({...value,llm:event.currentTarget.checked}))} />
+          <input type="checkbox" checked={projectCreate.llm&&!startingSetBlocked('llm')} disabled={startingSetBlocked('llm')||!grantsCatalogue?.llm.ready} onChange={event=>setProjectCreate(value=>({...value,llm:event.currentTarget.checked}))} />
           <span><strong>Turn on the model-backed automations</strong>
           {/* "re-titled", not "titles": naming a pane is the Session titler, an
               install-wide switch in the Automation workspace that runs whatever a
@@ -9126,7 +9154,7 @@ export function App() {
           <small>Scan timeline (armed for every new session), sessions re-titled when
           their scope changes, and model narration, plus the detectors they rank over.
           These call your configured model and can cost money; the budgets are
-          install-wide, in the Automation workspace.{grantsCatalogue&&!grantsCatalogue.llm.ready?' No verified model provider yet, so these stay inert until one is set up under Settings → Accounts.':''}{startingSetBlocked('llm')?' Part of this set is disabled install-wide in Automation → Policy.':''}</small></span>
+          install-wide, in the Automation workspace.{grantsCatalogue&&!grantsCatalogue.llm.ready?' Set up and verify a model provider before enabling these.':''}{startingSetBlocked('llm')?' Part of this set is disabled install-wide in Automation → Policy.':''}</small></span>
         </label>
         <label class="check project-create-automations">
           <input type="checkbox" checked={projectCreate.autonomy&&!startingSetBlocked('autonomy')} disabled={startingSetBlocked('autonomy')} onChange={event=>setProjectCreate(value=>({...value,autonomy:event.currentTarget.checked}))} />
@@ -9165,18 +9193,10 @@ export function App() {
         "exactly one of them, ever" is a property of the function rather than of two
         conditions that have to agree. The harness panel leads and the tour waits; the
         reasoning is on the function. */}
-    {firstRun === 'harness' && <HarnessSetup
-      tierNeeded={experienceTierUnchosen}
-      questSignals={questSignals}
-      onQuestAction={questAction}
-      onQuestDismiss={dismissQuest}
-      onDone={()=>{setHarnessSetupNeeded(false); void loadConfig(false); void refresh()}}
-      // Handing off to Settings → Agents is a choice to configure by hand, so the tour must
-      // not open on top of that. It is suppressed for this session only and NOT marked
-      // complete: declining the harness panel is not declining the tour, and silently
-      // consuming a first-run walk the user never saw is the more expensive mistake.
-      onConfigureMore={()=>{setHarnessSetupNeeded(false); setTutorialOpen(false); openSettings('Agents')}}
-    />}
+    {firstRun==='harness'&&onboarding.state&&<OnboardingFlow state={onboarding.state} save={onboarding.save} onBrowse={()=>openProjectsManager()} onTour={()=>{}} onLaunch={()=>setupAction('session')} onDone={()=>{void loadConfig(false);void refresh()}}/>}
+    {phoneSetupOpen&&<ConnectPhone onClose={()=>setPhoneSetupOpen(false)} onComplete={()=>{void onboarding.save({completed:[...new Set([...(onboarding.state?.completed||[]),'phone'])]}).then(()=>setPhoneSetupOpen(false)).catch(()=>{})}}/>}
+    {providerSetupOpen&&<SetupGuide title="MODELS" label="Model provider setup" busy={providerSetupBusy} onClose={()=>setProviderSetupOpen(false)}><ProviderSetup onBusy={setProviderSetupBusy} onReady={async()=>{await api('POST','/api/experience-tier',{tier:'automations'});await onboarding.save({completed:[...new Set([...(onboarding.state?.completed||[]),'provider'])]});setProviderSetupOpen(false);void loadConfig(false)}} onLater={async()=>{await api('POST','/api/experience-tier',{tier:'deterministic'});setProviderSetupOpen(false);void loadConfig(false)}}/></SetupGuide>}
+    {desktopSetupOpen&&<SetupGuide title="DESKTOP" label="Desktop setup" onClose={()=>setDesktopSetupOpen(false)}><DesktopSetup onContinue={async(done)=>{if(done)await onboarding.save({completed:[...new Set([...(onboarding.state?.completed||[]),'desktop'])]});setDesktopSetupOpen(false)}}/></SetupGuide>}
     {voiceSetupOpen && <VoiceSetup onClose={()=>setVoiceSetupOpen(false)}
     />}
 
@@ -9213,12 +9233,14 @@ export function App() {
 
     {notificationToast&&<button class="notification-toast" aria-live="assertive" onClick={()=>{setNotificationToast(null);openNotifications()}}><strong>{notificationToast.session_name||'daemon'}</strong><span>{notificationToast.type.replaceAll('_',' ')}</span><small>open notifications</small></button>}
 
-    {firstRun === 'tutorial' && <GuidedTutorial hasProject={projects.length>0} onNavigate={navigateTutorial} onExit={closeTutorial} onComplete={closeTutorial}/>}
+    {firstRun === 'tutorial' && <GuidedTutorial hasProject={projects.length>0} setupCompleted initialStep={onboarding.state?.tour_step as TutorialStepId} onStep={step=>{void onboarding.save({tour_step:step}).catch(()=>{})}} onNavigate={navigateTutorial} onExit={closeTutorial} onComplete={finishTutorial}/>}
 
     {helpTopicOpen !== null && <HelpModal
       initialTopic={helpTopicOpen || null}
       onClose={()=>setHelpTopicOpen(null)}
       onStartTutorial={startTutorial}
+      onShowGettingStarted={()=>{void onboarding.save({hidden:false}).then(()=>setHelpTopicOpen(null)).catch(()=>{})}}
+      onRestartSetup={()=>{void onboarding.save({action:'restart'}).then(()=>setHelpTopicOpen(null)).catch(()=>{})}}
       onOpenConfigurator={()=>{setHelpTopicOpen(null);void launchConfigurator()}}
       configurator={{enabled:configuratorLaunch.enabled,reason:configuratorLaunch.reason}}
     />}

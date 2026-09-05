@@ -776,8 +776,11 @@ Its rules, and what each one is defending:
   An axis the mode does not enforce stays editable and is labelled unenforced rather than disabled or cleared: it is a number the operator is keeping, not one that is unavailable, and discarding it would make trying the other unit a one-way door.
   Where the dollar axis is enforced against a provider that reports no cost, the control says the cap cannot bind there and names first-hit as the configuration that still bounds it - a warning drawn at the moment the choice is made rather than discovered later as spend that never approached a limit.
 - Harnesses is the per-harness section: an enable toggle, the detected executable path (read-only), the executable override, default arguments as a command line, and the width envelope where the harness declares it. It lists every registered harness including disabled ones (`allHarnessesIncludingDisabled`), because a section that hid a disabled harness could not re-enable it. The enable toggle is three-state: leaving a harness untouched follows detection, and a `follow detection` control clears an explicit choice. A disabled harness is only hidden from the launchers; it stays spawnable and its history stays searchable (`features/backends.md`). The tab also holds native-history reconcile: the startup toggle, a `Scan now` control with progress and cancel, and the browser's page size (`features/history.md`). That is history indexing rather than harness configuration, but the scan is scoped to exactly the enabled harnesses, so the two are read together or not at all.
-- The first-run harness panel appears once, gated daemon-side by `harness_setup_complete`, not device-local storage, so a choice made on one device does not reappear on another. It lists detected harnesses pre-ticked, offers a separate `scan history` choice, and a skip that writes only the completion flag. `Configure in Settings…` hands off to Settings → Harnesses rather than duplicating the per-harness editors.
-  It **leads** the first run and the guided tour waits behind it, never beside it; the ordering and its reasoning live under "Guided first-run tutorial" below.
+- First-run setup is a resumable machine-owned sequence covering experience, provider/models, harnesses/accounts, Projects, and desktop integration.
+  The UI tour follows setup and shares its progress across browser, desktop, and phone clients.
+  Getting started remains above Usage in the sidebar until hidden; Help restores it or restarts setup.
+  Tasks are never duplicated in the central empty workspace.
+  Canonical behavior and implementation pointers: `first-run.md`.
 - Git exposes the absolute `worktree_root` used by the Project Run launcher.
   An empty stored value resolves to `<data_dir>/worktrees`; the field displays that resolved default, and changing it does not move existing worktrees.
   The same Settings tab owns the machine-wide `Show swe-mux repository setup prompts` switch and a reset for recorded Project decisions.
@@ -1343,29 +1346,14 @@ The app-wide answer to "what is this", and the recovery path for the tour.
 
 ## Guided first-run tutorial
 
-- A versioned device-local completion marker opens the tutorial on the first browser/WebView
-  visit. Finish and **Exit tour** both suppress later automatic runs; Settings reset removes the
-  marker and starts immediately.
-- **The two first-run surfaces are drawn from one decision** (`firstRunSurface` in `tutorial.ts`),
-  so "exactly one of them, ever" is a property of a total function rather than of two conditions
-  that have to agree.
-  They used to be decided independently and both were live on a fresh install - the tour opens
-  synchronously from `localStorage`, the harness panel a config fetch later, and that panel's
-  backdrop stacks over the tour's blur - so the product's first frame was a dialog on a
-  doubly-dimmed app with an invisible tour card beneath it.
-  **The harness panel leads.** It decides what the launchers contain and the tour walks the user
-  into one of those launchers two steps in, so touring first shows a Run menu that is about to
-  change; it is also a bounded modal with three explicit exits, where a fourteen-step walk merely
-  gets interrupted.
-  The tour additionally waits for the first `/api/config` call to *settle* rather than to succeed,
-  because whether the panel is needed is a daemon fact that arrives after the first paint -
-  suppressing one fetch too late is exactly when the damage was done, and an unreachable daemon
-  must not suppress the tour forever.
-  The panel's `Configure in Settings…` suppresses the tour for that session **without** marking it
-  complete: declining the panel is not declining the tour, and silently consuming a first-run walk
-  the user never saw is the more expensive mistake.
+- Setup and tour progress are durable daemon state in `onboarding.json`.
+  Finishing a tour records completion; exiting defers it and preserves its current step.
+  Getting started resumes a deferred tour and replays a completed tour.
+- `firstRunSurface` arbitrates setup and tour rendering from that shared state.
+  Setup leads, and a tour waits for a successful config read.
+  Failed initial reads retry; opening a focused setup guide suppresses both surfaces.
 - The action-driven walkthrough covers the real Projects registry and creation form,
-  provider-native Claude/Codex login or current-login capture, Run menu, shell launch, pane/tab
+  optional provider account guidance on a standalone replay, Run menu, shell launch, pane/tab
   lifetime, second-tab creation, tab movement, pane-edge splitting, Project notes, menu browsers,
   and keyboard shortcuts. Replay with an existing Project opens it instead of forcing a duplicate.
 - The notes step is anchored on whichever **Notes** control the drawer currently shows: the

@@ -381,6 +381,8 @@ function scanTimelinePayload(sessionId: string): unknown {
   }
 }
 
+let demoOnboarding:Record<string,unknown>={version:1,revision:0,step:'complete',status:'complete',hidden:true,tour_status:'deferred',tour_step:'welcome',dismissed:[],completed:['project','session'],draft:{}}
+
 // -------------------------------------------------------------------- routes
 
 const ROUTES: Route[] = [
@@ -390,6 +392,11 @@ const ROUTES: Route[] = [
   { method: 'GET', pattern: /^\/api\/project-groups$/, handler: () => state.groups },
   { method: 'GET', pattern: /^\/api\/harnesses$/, handler: () => harnessPayload() },
   { method: 'GET', pattern: /^\/api\/config$/, handler: () => state.config },
+  { method: 'GET', pattern: /^\/api\/onboarding$/, handler: () => demoOnboarding },
+  { method: 'PATCH', pattern: /^\/api\/onboarding$/, handler: (_match,body) => {
+    demoOnboarding={...demoOnboarding,...(body as Record<string,unknown>),revision:Number(demoOnboarding.revision)+1}
+    return demoOnboarding
+  } },
   { method: 'GET', pattern: /^\/api\/voice$/, handler: () => voicePayload() },
   { method: 'GET', pattern: /^\/api\/profiles$/, handler: () => profilesPayload() },
   { method: 'GET', pattern: /^\/api\/notifications$/, handler: () => notificationsPayload() },

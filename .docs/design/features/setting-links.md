@@ -204,7 +204,7 @@ That is not a further rule but the first one applied honestly: a grant that clea
 | Run menu (no agent enabled) | `harness_enabled` | install | link (a set, not a switch) |
 | Claude width notice | `claude_max_columns` | install | link (a value, not a switch) |
 | Files tab header (`ignores`) | `project_ignore_patterns` | install | link (a header control, not a gate; a value, not a switch) |
-| Automation Project policy (model-backed row, provider unproven) | `llm_provider` | install | link (a value, not a switch) |
+| Automation Project policy (model-backed row, provider unproven) | `llm_provider` | install | guided setup and Settings link |
 | Any gate over a `needs_llm` switch | `llm_provider` | install | link, disclosed beside `spends` |
 
 ## First use
@@ -267,14 +267,12 @@ Three things address that without weakening the rule:
   approval chip states the restriction and grants only the install switch.
 - **Values rather than switches.** A gate can honestly offer "turn this on"; it cannot offer
   "pick a number". Budgets, model ids, and width caps stay links.
-- **The model provider.** Choosing OpenRouter or a custom endpoint, typing a base URL, a key,
-  and a model id, and then verifying it is a configuration pass, not one press - so a gate
-  over a model-backed switch *discloses* the unproven provider beside `spends` and links to
-  Settings → Accounts. Granting the automation anyway is correct: the opt-in is a real
-  permission and withholding it would mean the operator has to grant twice. What a gate must
-  not do is report success and leave a switch that reads on and does nothing, which is why
-  `GrantPlan.needs_llm` travels with `spends` and `POST /api/grants` returns the readiness
-  verdict alongside what it applied.
+- **The model provider.** Model-backed grants require a verified provider and approved model roles before activation.
+  The gate offers guided setup in place and keeps the Settings link as a secondary route.
+  Endpoint readiness and new-activation readiness are separate: a role change invalidates setup's proof without abruptly stopping already-running work.
+  `GET /api/automation/provider` reports both `llm` and `activation` verdicts; the grant catalog uses the activation verdict.
+  `POST /api/grants` refuses missing prerequisites before either scope is written.
+  After guided verification, open gates refresh immediately and become actionable.
 - **Change map `unsupported` / `no_project`.** Neither is a switch: one needs a daemon build
   carrying the code graph, the other needs the session's directory registered as a Project.
 - **Harness "launch clean" (`harness_instrument_enabled`).** A clean-launched session has no

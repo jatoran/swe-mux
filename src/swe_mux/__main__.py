@@ -36,6 +36,11 @@ def parser(prog: str | None = None) -> argparse.ArgumentParser:
     parser.add_argument("--host")
     parser.add_argument("--port", type=int)
     parser.add_argument("--config", type=Path)
+    parser.add_argument(
+        "--new-user-profile",
+        metavar="NAME",
+        help="use an isolated named setup-test profile and a separate local port",
+    )
     parser.add_argument("--dev", action="store_true")
     parser.add_argument(
         "--local-only",
@@ -98,6 +103,16 @@ def resolve_daemon_config(
     a command that first refuses over `invalid config:` would be useless in
     exactly the case it exists for.
     """
+    profile = getattr(args, "new_user_profile", None)
+    if profile is not None:
+        import re
+
+        if args.config or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", profile):
+            argument_parser.error(
+                "--new-user-profile takes 1-64 letters, digits, - or _ and cannot "
+                "be combined with --config"
+            )
+        args.config = Path.home() / ".mux-test-profiles" / profile / "config.toml"
     try:
         config = load_config(args.config)
     except (ValueError, TypeError) as exc:
@@ -116,6 +131,18 @@ def resolve_daemon_config(
         config.port = args.port
     if args.local_only:
         config.tailnet_enabled = False
+    if profile is not None:
+        import socket
+
+        config.tailnet_enabled = False
+        config.wsl_bridge_enabled = False
+        if not args.port:
+            with socket.socket() as probe:
+                probe.bind(("127.0.0.1", 0))
+                config.port = int(probe.getsockname()[1])
+        logging.getLogger(__name__).info(
+            "isolated onboarding profile selected", extra={"profile": profile, "port": config.port}
+        )
     return config
 
 
@@ -126,9 +153,7 @@ async def serve(
     relaunch_command: list[str] | None = None,
     browser: bool = False,
 ) -> None:
-    hosts = await listener_hosts(
-        config.host, config.tailnet_enabled, config.wsl_bridge_enabled
-    )
+    hosts = await listener_hosts(config.host, config.tailnet_enabled, config.wsl_bridge_enabled)
     if config.tailnet_enabled and len(hosts) == 1:
         logging.getLogger(__name__).warning(
             "Tailscale listener requested but no active Tailscale IPv4 address was "
@@ -165,8 +190,7 @@ async def serve(
                 # kill the whole daemon instead of degrading the way the
                 # no-address-detected path already does.
                 log.warning(
-                    "could not bind the secondary listener on %s:%s (%s); "
-                    "continuing on localhost",
+                    "could not bind the secondary listener on %s:%s (%s); continuing on localhost",
                     host,
                     config.port,
                     exc,
@@ -202,9 +226,7 @@ def _announce(config: Config, *, browser: bool) -> None:
     interactive = bool(stream is not None and getattr(stream, "isatty", lambda: False)())
     opened = (
         open_browser(url)
-        if should_open_browser(
-            requested=browser, stdout_isatty=interactive, environ=os.environ
-        )
+        if should_open_browser(requested=browser, stdout_isatty=interactive, environ=os.environ)
         else False
     )
     if interactive:

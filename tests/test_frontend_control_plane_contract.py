@@ -72,6 +72,7 @@ def test_cross_vendor_review_has_no_frontend_surface() -> None:
 
 def test_automation_settings_keep_key_write_only_and_show_privacy_boundary() -> None:
     settings = (ROOT / "Settings.tsx").read_text(encoding="utf-8")
+    settings += (ROOT / "ProviderSetup.tsx").read_text(encoding="utf-8")
     policy = (ROOT / "AutomationPolicyView.tsx").read_text(encoding="utf-8")
 
     assert 'type="password"' in settings

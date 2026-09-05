@@ -49,7 +49,7 @@ const settingsSources = [
   'AutomationMatrix.tsx',
   // The seven model settings live here now rather than beside the features they
   // configure, because switching endpoint changes all of them at once.
-  'ModelRoutingSummary.tsx',
+  'ModelRoutingSummary.tsx', 'ProviderSetup.tsx',
 ].map(source).join('\n')
 
 /**

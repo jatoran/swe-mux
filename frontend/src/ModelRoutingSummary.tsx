@@ -44,14 +44,15 @@ type Props = {
    */
   catalogKnown?: boolean
   onChange: (key: keyof ModelRoutingConfig, value: string) => void
+  roles?: 'primary'|'overrides'
 }
 
 export function ModelRoutingSummary(
-  { draft, catalog, override = null, catalogKnown = false, onChange }: Props,
+  { draft, catalog, override = null, catalogKnown = false, onChange, roles }: Props,
 ) {
   const byId = new Map(catalog.map(model => [model.id, model]))
   return <ul class="model-routing">
-    {MODEL_ROUTES.map(route => {
+    {MODEL_ROUTES.filter(route=>!roles||(roles==='overrides'?route.kind==='override':route.kind!=='override')).map(route => {
       const { model, inherited } = resolveRoute(route, draft, override)
       const entry = model ? byId.get(model) : undefined
       const price = entry ? modelMetaLabel(entry) : null
@@ -68,7 +69,7 @@ export function ModelRoutingSummary(
           <strong>{route.feature}</strong>
           <span class={`model-routing-kind model-routing-${route.kind}`}>{route.kind}</span>
         </div>
-        <ModelPicker
+        {!override&&<ModelPicker
           id={`${route.key}-picker`}
           value={draft[route.key] || ''}
           options={catalog}
@@ -77,7 +78,7 @@ export function ModelRoutingSummary(
             : 'Select exact model…'}
           required={route.kind === 'pinned'}
           onChange={value => onChange(route.key, value)}
-        />
+        />}
         <div class="model-routing-model">
           {model
             // The exact id, not a display label: this row answers "which model is

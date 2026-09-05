@@ -296,6 +296,10 @@ def startup_banner(url: str, *, windows: bool, opened_browser: bool) -> str:
     ]
     if windows:
         lines.append("  swe-mux              the same thing in a window, with a tray icon")
+        lines.append(
+            "  swemux install-shortcut --startup   add Start Menu, desktop and login shortcuts"
+        )
+    lines.append("  Setup opens in the UI. Resume it any time from Getting started or Help.")
     lines += [
         "  swemux doctor        read-only health report",
         "",

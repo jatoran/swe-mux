@@ -1021,6 +1021,15 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
         help="the digest the payload must match; required for a URL, optional for a path",
     )
 
+    setup = sub.add_parser(
+        "setup", parents=[common], help="resume setup, or review existing preferences"
+    )
+    setup.add_argument(
+        "--restart",
+        action="store_true",
+        help="offer retained settings and the backed-up fresh preferences flow",
+    )
+
     shortcut = sub.add_parser(
         "install-shortcut",
         parents=[common],
@@ -1467,6 +1476,13 @@ def dispatch(args: argparse.Namespace, base: str) -> tuple[Any, Any]:
         return start_command(args, base)
     if args.command == "install-shortcut":
         return install_shortcut_command(args)
+    if args.command == "setup":
+        state = request("GET", "/api/onboarding", base=base)
+        patch = {"revision": state["revision"], "hidden": False, "status": "active"}
+        if args.restart:
+            patch["action"] = "restart"
+        result = request("PATCH", "/api/onboarding", patch, base=base)
+        return result, lambda _: f"Setup is ready at {base}. Open the UI to continue."
     if args.command == "install-skill":
         return install_skill_command(args)
     if args.command == "resume":

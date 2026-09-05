@@ -3,6 +3,18 @@
 All JSON APIs are rooted at `/api`. PTY and event streams use `/pty/{session_id}` and
 `/events` WebSockets.
 
+## Onboarding
+
+- `GET /api/onboarding`: durable setup, tour, and task progress, shared by clients.
+- `PATCH /api/onboarding`: requires the current `revision`; accepts closed progress fields and optional `action: restart | reuse | fresh`.
+  A stale revision returns 409 with current state; invalid fields return 422.
+  Fresh preferences are backed up before reset and preserve Projects, history, credentials, and connection identity.
+- `GET /api/onboarding/projects?harnesses=claude,codex`: bounded native-history project candidates, without registration or transcript import.
+- `POST /api/onboarding/models/verify`: explicitly tests the configured structured-output and tool-call roles, executes no tool, and records a configuration-bound proof only after success.
+- `onboarding_changed`: broadcasts progress revision and action; clients refetch the canonical record.
+
+Design and invariants: `features/first-run.md`.
+
 ## Error shapes every route shares
 
 `error_middleware` translates the typed failures below before any handler-specific

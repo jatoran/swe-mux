@@ -115,7 +115,7 @@ export type LlmReadiness = {
   ready: boolean
   provider: string
   code: 'ready' | 'no_key' | 'no_endpoint' | 'no_model' | 'unverified' | 'endpoint_changed'
-    | 'unknown'
+    | 'unknown' | 'models_unverified'
   reason: string
   /**
    * Whether this endpoint reports what a completion cost. A local OpenAI-compatible

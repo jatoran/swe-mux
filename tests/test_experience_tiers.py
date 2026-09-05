@@ -69,7 +69,7 @@ def test_terminal_switches_off_everything_that_watches(tmp_path: Path) -> None:
     assert config.automation_enabled is False
 
 
-def test_automations_turns_on_exactly_the_two_masters(tmp_path: Path) -> None:
+def test_automations_sets_masters_and_inherited_project_defaults(tmp_path: Path) -> None:
     config = _fresh(tmp_path)
     update_config(config, tier_changes("automations"))
     assert config.automation_enabled is True
@@ -77,7 +77,15 @@ def test_automations_turns_on_exactly_the_two_masters(tmp_path: Path) -> None:
     # The model-backed observers are per-Project automations (schema 36), opted
     # in through the starting sets rather than switched here: a tier assigns
     # ordinary keys absolutely, and it must not erase the default template.
-    assert config.automation_project_defaults == {}
+    from swe_mux.automation_registry import (
+        LLM_PROJECT_AUTOMATIONS,
+        RECOMMENDED_PROJECT_AUTOMATIONS,
+        enabling_closure,
+    )
+
+    expected = enabling_closure((*RECOMMENDED_PROJECT_AUTOMATIONS, *LLM_PROJECT_AUTOMATIONS))
+    assert set(config.automation_project_defaults) == expected
+    assert all(config.automation_project_defaults.values())
     # Everything deterministic keeps its default; budgets are untouched.
     assert config.agent_messaging_enabled is True
     assert config.harness_instrument_enabled == {}
@@ -158,7 +166,7 @@ def test_the_overridable_set_is_exactly_the_tier_inventory_booleans() -> None:
 
 
 def test_nothing_outside_the_tier_module_gates_on_the_tier() -> None:
-    """"Tiers set defaults; they do not lock capability" - enforced, not
+    """ "Tiers set defaults; they do not lock capability" - enforced, not
     remembered: no backend module may read `experience_tier` to decide
     behaviour. Density defaults in the frontend are the one sanctioned reader
     class, and they choose presentation, not capability."""

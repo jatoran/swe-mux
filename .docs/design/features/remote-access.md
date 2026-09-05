@@ -88,12 +88,15 @@ listener, with optional Tailscale Serve for browser-recognized HTTPS.
   `swemux doctor --export` prints the same bundle from the CLI, and Settings → Remote copies it to
   the clipboard with a selectable textarea fallback for plain-HTTP tailnet clients where the
   Clipboard API is restricted.
-- A "Connect a phone" modal (reachable from Settings → Remote) renders a scannable QR of the
+- A "Connect a phone" guide (reachable from Getting started and Settings → Remote) renders a scannable QR of the
   connection URL alongside the hostname, the DNS checklist, and the live connection state. The URL
   is built from the `.ts.net` MagicDNS name, not the raw `100.x` IP: the HTTPS certificate is bound
   to the name, and it prefers the secure Serve address when one is up. The QR is a self-contained
   inline SVG (the `qrcode-generator` dependency), rendered on a white plate so it scans in either
   theme.
+  The guide offers connection refresh, private listener enablement, and the explicit HTTPS setup operation in place.
+  HTTPS authorization links remain visible when setup requires approval in Tailscale.
+  First-step completion requires the user to confirm that the workspace opened on the phone.
 - `GET /api/diagnostics/prerequisites` reports the presence of Git, Node, npm, uv, and Tailscale,
   each with what it backs and a next step, so a feature that needs an absent tool reads as
   unconfigured rather than broken. It is surfaced in Settings → Diagnostics.

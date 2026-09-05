@@ -928,9 +928,8 @@ class DesktopRuntime:
         # After the tray exists, so the app the dialog is talking about is
         # visibly running behind it, and on its own thread so a dialog left
         # unanswered costs nothing.
-        threading.Thread(
-            target=self.offer_shortcuts, name="swe-mux-first-run", daemon=True
-        ).start()
+        # Desktop integration is one resumable step in the shared onboarding UI.
+        # A separate native prompt would race the browser's setup sequence.
         try:
             webview.start(
                 None if healthy else self.load_when_healthy,

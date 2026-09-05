@@ -1,3 +1,5 @@
+import { ProviderConnectionFields, providerKeyOperation } from './ProviderSetup'
+import { ExperiencePreview } from './ExperiencePreview'
 import { Fragment } from 'preact'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { api, type ApiError } from './api'
@@ -629,6 +631,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
         : 'Applied.')
     } catch (cause) {
       setTierStatus(`Could not apply: ${cause instanceof Error ? cause.message : String(cause)}`)
+      if(['provider_required','models_required','model_verification_required'].includes(String((cause as {detail?:{code?:string}}).detail?.code)))window.dispatchEvent(new Event('mux:setup-provider'))
     }
   }
 
@@ -1600,7 +1603,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
     const label=target==='custom'?'Endpoint':'OpenRouter'
     setProviderMessage(operation==='clear'?'Clearing key…':operation==='set'?'Testing and storing key…':'Testing key…')
     try{
-      const result=await api<{ok?:boolean;status:ProviderStatus['secret']}>('POST','/api/automation/provider/key',{operation,provider:target,key:key||undefined,test:true})
+      const result=await providerKeyOperation(operation,target,key)
       // The whole payload is refetched rather than patched in: storing or clearing a key
       // drops the endpoint's verification (the key is part of its fingerprint), so the
       // verified badge and the readiness sentence both change with the key status and
@@ -1799,7 +1802,8 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <section data-setting="experience_tier"><h3>Experience tier</h3>
             <p>The first-run choice of how much swe-mux does: pure terminal (nothing watching), deterministic (transcripts, status, the fleet surface; model-free), or automations (adds the scan timeline and model-backed observers). A tier is a batch of defaults, never a lock - every switch it touches stays individually editable.</p>
             <label>Tier<Dropdown value={tierChoice} onChange={value=>setTierChoice(value as typeof tierChoice)} options={[...(draft.experience_tier===''?[{value:'',label:'Not chosen'}]:[]),{value:'terminal',label:'Pure terminal'},{value:'deterministic',label:'Deterministic'},{value:'automations',label:'Automations'}]}/></label>
-            <div class="settings-tutorial-reset"><div><p>Applying re-writes exactly the tier's own keys (instrumentation, MCP, fleet plumbing, automation masters), overwriting any hand edits to those keys; everything else is untouched.</p></div><button disabled={!tierChoice||tierChoice===draft.experience_tier} onClick={()=>void applyExperienceTier()}>Apply tier defaults</button></div>
+            {tierChoice&&<ExperiencePreview tier={tierChoice}/>}
+            <div class="settings-tutorial-reset"><div><p>Applying replaces the tier's instrumentation, fleet switches, and global automation defaults. Projects inherit these defaults unless they have an explicit choice. Other customized automation defaults are preserved.</p></div><button disabled={!tierChoice} onClick={()=>void applyExperienceTier()}>Apply tier defaults</button></div>
             {tierStatus&&<p class="profile-hint" role="status">{tierStatus}</p>}
           </section>
 
@@ -2209,25 +2213,11 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
               that no longer applies to find out why. */}
           <section><h3>Model provider</h3>
           <p>Choose OpenRouter or a self-hosted OpenAI-compatible <code>/chat/completions</code> endpoint. Speech recognition and synthesis remain local.</p>
-            <label for="llm-provider-select" data-setting="llm_provider">Provider<Dropdown id="llm-provider-select" value={draft.llm_provider} onChange={value=>change('llm_provider',value)} options={[
-              {value:'openrouter',label:'OpenRouter (hosted)'},
-              {value:'custom',label:'Custom OpenAI-compatible endpoint'},
-            ]}/><small>Every model-backed feature follows this: observers, scan timeline, spoken summaries, narration, titler, Project card, assistant.</small></label>
+            <ProviderConnectionFields draft={draft} onChange={(key,value)=>change(key,value)} apiKey={draft.llm_provider==='custom'?customKey:openRouterKey} onKeyChange={draft.llm_provider==='custom'?setCustomKey:setOpenRouterKey} configured={!!activeEndpoint?.secret.configured}/>
             <ProviderReadiness readiness={provider?.llm}/>
-            {/* The one bound on the transport rather than on a feature, and it applies
-                to whichever endpoint is selected - so it lives with the provider choice
-                rather than inside a section that disappears when you switch away. */}
-            <label data-setting="openrouter_request_timeout_seconds">Request timeout seconds<input type="number" min="1" max="120" step="1" value={draft.openrouter_request_timeout_seconds} onInput={event=>change('openrouter_request_timeout_seconds',Number(event.currentTarget.value))} /><small>How long any model-backed call waits, on either endpoint; raise it for a slow local server. <strong>Takes effect on the next daemon restart.</strong></small></label>
-            {draft.llm_provider==='custom'&&<Fragment>
-              <label data-setting="custom_llm_base_url">Base URL<input type="url" autocomplete="off" spellcheck={false} value={draft.custom_llm_base_url} placeholder="http://127.0.0.1:11434/v1" onInput={event=>change('custom_llm_base_url',event.currentTarget.value)} /><small>Everything up to but not including <code>/chat/completions</code> — e.g. Ollama's <code>http://127.0.0.1:11434/v1</code>.</small></label>
-              <label data-setting="custom_llm_model">Model<input type="text" autocomplete="off" spellcheck={false} value={draft.custom_llm_model} placeholder="qwen2.5-coder:7b" onInput={event=>change('custom_llm_model',event.currentTarget.value)} /><small>Used only when the endpoint publishes no catalog; every setting under <strong>Models</strong> then resolves to it. Leave blank when a catalog exists.</small></label>
-            <label data-setting="custom_llm_catalog_url">Model catalog URL<input type="text" autocomplete="off" spellcheck={false} value={draft.custom_llm_catalog_url} placeholder={`${draft.custom_llm_base_url||'http://host/v1'}/models`} onInput={event=>change('custom_llm_catalog_url',event.currentTarget.value)} /><small>Optional; blank uses <code>/models</code> beside the base URL. Accepts <code>{'{"data":[…]}'}</code>, <code>{'{"models":[…]}'}</code>, or a bare array; verify again after changing it.</small></label>
-              <label>API key<input type="password" autocomplete="off" value={customKey} placeholder={customProvider?.secret.configured?'write only · enter to replace':'often unnecessary for a local server'} onInput={event=>setCustomKey(event.currentTarget.value)} /><small>Optional for local servers. Stored in the platform credential store, never in config.</small></label>
-              <div class="theme-actions">
-                <button class="primary" disabled={!customKey} onClick={()=>void providerKeyAction('set','custom')}>Store key</button>
-                <button disabled={!customProvider?.secret.configured} onClick={()=>void providerKeyAction('clear','custom')}>Clear stored key</button>
-              </div>
-            </Fragment>}
+            <div class="theme-actions"><button disabled={!(draft.llm_provider==='custom'?customKey:openRouterKey)} onClick={()=>void providerKeyAction('test',draft.llm_provider==='custom'?'custom':'openrouter')}>Test entered key</button><button disabled={!(draft.llm_provider==='custom'?customKey:openRouterKey)} onClick={()=>void providerKeyAction('set',draft.llm_provider==='custom'?'custom':'openrouter')}>Test + set/replace key</button><button disabled={!activeEndpoint?.secret.configured} onClick={()=>void providerKeyAction('clear',draft.llm_provider==='custom'?'custom':'openrouter')}>Clear stored key</button></div>
+            <p aria-live="polite">{providerMessage||'The key is write-only and stored in the platform credential store.'}</p>
+            <label data-setting="openrouter_request_timeout_seconds">Request timeout seconds<input type="number" min="1" max="120" step="1" value={draft.openrouter_request_timeout_seconds} onInput={event=>change('openrouter_request_timeout_seconds',Number(event.currentTarget.value))}/><small>Takes effect on the next daemon restart.</small></label>
             {/* One button per configured provider rather than one for the active one: an
                 operator setting up a local endpoint wants to prove it before switching
                 everything over to it, and a verify that only worked on the live provider
@@ -2265,13 +2255,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
               it decides. Switching the dropdown above brings it straight back - the
               draft updates without a save - so nothing is unreachable, only hidden
               while it would be inert. */}
-          {draft.llm_provider==='openrouter'&&<section><h3>OpenRouter</h3>
-            <p><span class={`state-dot ${provider?.secret.configured?'idle':'running'}`}/> key::{provider?.secret.configured?'configured':'not configured'} · source::{provider?.secret.source||'none'} · endpoint::{provider?.origin||'fixed OpenRouter API'}</p>
-            <p class="profile-hint">One key unlocks every model-backed feature; without it they stay off rather than failing. Get a key at <a href="https://openrouter.ai/keys" target="_blank" rel="noreferrer">openrouter.ai/keys</a>.</p>
-            <label>API key<input type="password" autocomplete="off" value={openRouterKey} placeholder={provider?.secret.configured?'write only · enter to replace':'sk-or-…'} onInput={event=>setOpenRouterKey(event.currentTarget.value)} /></label>
-            <div class="theme-actions"><button disabled={!openRouterKey} onClick={()=>void providerKeyAction('test')}>Test entered key</button><button class="primary" disabled={!openRouterKey} onClick={()=>void providerKeyAction('set')}>Test + set/replace</button><button disabled={!provider?.secret.configured} onClick={()=>void providerKeyAction('clear')}>Clear stored key</button></div>
-            <p aria-live="polite">{providerMessage||'The key is write-only and never appears in config, exports, logs, or browser reads.'}</p>
-          </section>}
+          {draft.llm_provider==='openrouter'&&<p>Get an API key at <a href="https://openrouter.ai/keys" target="_blank" rel="noreferrer">OpenRouter</a>.</p>}
 
           <section><h3>Models</h3>
           <p>All model routes are edited here. Routed defaults are inherited; overrides may fall back; pinned models do not.</p>
