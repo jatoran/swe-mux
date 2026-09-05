@@ -15,6 +15,8 @@ The release procedure that maintains this file is [`RELEASING.md`](RELEASING.md)
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-09-05
+
 ### Added
 
 - **A canonical activity ledger, and the fleet's own telemetry feeding it.**
@@ -800,7 +802,8 @@ macOS is implemented and typechecked but has never been executed.
   resolved dependency closure that runs in the test suite, and a payload check over the built
   desktop bundle. No GPL or AGPL code ships; the two LGPL libraries ship as replaceable source.
 
-[Unreleased]: https://github.com/jatoran/swe-mux/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/jatoran/swe-mux/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/jatoran/swe-mux/releases/tag/v0.2.2
 [0.2.1]: https://github.com/jatoran/swe-mux/releases/tag/v0.2.1
 [0.2.0]: https://github.com/jatoran/swe-mux/releases/tag/v0.2.0
 [0.1.5]: https://github.com/jatoran/swe-mux/releases/tag/v0.1.5
