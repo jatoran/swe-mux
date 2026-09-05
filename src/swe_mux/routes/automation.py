@@ -589,6 +589,27 @@ async def _llm_readiness(request: web.Request) -> LlmReadiness:
     )
 
 
+async def _activation_readiness(request: web.Request) -> LlmReadiness:
+    """Prerequisites for a new model-backed opt-in, without stopping existing runs."""
+    from .. import model_setup
+
+    result = await _llm_readiness(request)
+    if not result.ready or result.code == "unknown":
+        return result
+    config: Config = request.app[keys.CONFIG]
+    endpoint = resolve_llm_endpoint(config, request.app.get(keys.LLM_CAPABILITIES))
+    secrets = request.app[keys.SECRET_STORE]
+    if model_setup.verified(config, endpoint, secrets.get(endpoint.secret_name)):
+        return result
+    return LlmReadiness(
+        False,
+        result.provider,
+        "models_unverified",
+        "Approve and test the selected model roles in guided model setup before enabling this.",
+        result.reports_cost,
+    )
+
+
 async def _provider_status(request: web.Request) -> dict[str, Any]:
     """Everything Settings → Accounts needs to describe the model provider.
 
@@ -641,6 +662,7 @@ async def _provider_status(request: web.Request) -> dict[str, Any]:
         "provider": active.provider,
         "providers": providers,
         "llm": (await _llm_readiness(request)).as_dict(),
+        "activation": (await _activation_readiness(request)).as_dict(),
     }
 
 

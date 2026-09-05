@@ -84,14 +84,11 @@ continues to own every terminal.
   sign-in, and ticking it on left two entries racing to launch one single-instance app.
   `startup_enabled` is now true if *either* is present and turning it off clears both;
   turning it on still writes the Run value, because that is the one this menu owns.
-- **The first successful start of a wheel install offers its own shortcuts** (`first_run.py`).
-  A wheel cannot create one and no hook runs after `pip`/`uv`, so `swemux install-shortcut` is a
-  command nobody knows to run; the first launch is the only moment the person is present and the
-  app has visibly worked. One modal yes/no, off the window thread, writing Start Menu +
-  run-at-login (never a desktop icon - that is a preference, and an unrequested one teaches
-  people to decline every future dialog). Asked once per install whichever way it is answered,
-  never for a frozen install (the installer did it), and never when a Start Menu entry already
-  exists whoever wrote it.
+- Desktop integration is a step in the shared resumable onboarding sequence (`first-run.md`).
+  It detects Start Menu and desktop shortcuts plus either startup registration mechanism, independently of install type.
+  The native shell does not launch a competing first-run shortcut prompt.
+  Start Menu is suggested for a wheel install; desktop and sign-in shortcuts are separate explicit choices.
+  The Windows installer creates Start Menu, defaults sign-in startup on, and leaves the desktop shortcut unchecked.
 - Tray Quit uses a native topmost Windows confirmation owned by the desktop supervisor, not the
   WebView. Confirmation therefore works identically while the window is visible, minimized, or
   hidden. Confirmed Quit reports the live terminal count, requests authenticated graceful

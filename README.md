@@ -47,13 +47,16 @@ swe-mux is on PyPI. The wheel is pure Python and carries the built frontend, so 
 ```
 # Recommended. Isolated environment, every command on your PATH globally.
 uv tool install swe-mux
+swe-mux  # Windows: open the desktop app and tray
 
 # The same isolated, on-PATH install, without uv.
 pipx install swe-mux
+swe-mux  # Windows: open the desktop app and tray
 ```
 
 On Windows that is everything: run `swe-mux` and you get the native window and a tray icon, with no console and nothing else to install.
-It offers to add itself to the Start Menu and to start with Windows the first time, so after that there is nothing to launch at all.
+The setup guide offers Start Menu, desktop, and sign-in shortcuts and detects those already configured.
+Setup, the UI tour, and optional first steps remain available in Getting started above Usage in the sidebar.
 
 Elsewhere - or if you would rather just use the browser - `swemux start` puts the daemon in the background and returns once it is serving <http://127.0.0.1:8765>; closing the terminal does not stop it, and `swemuxd --shutdown` does.
 `swemuxd` still runs it in the foreground when you want the log in front of you.
@@ -66,7 +69,11 @@ A **Windows installer** is published from v0.1.2 onward, alongside a portable ar
 It is **not code signed**, so SmartScreen warns on first run; the PyPI install avoids that prompt entirely.
 
 **No Python install of any kind creates a desktop shortcut.**
-Wheels have no post-install hook, so that is structural rather than an oversight: start swe-mux from a terminal, or run `swemux install-shortcut`.
+Wheels have no post-install hook, so `uv` prints its own installation summary.
+Launch `swe-mux` on Windows or `swemuxd` for the browser UI to begin setup.
+`swemux install-shortcut --startup` also creates Start Menu, desktop, and sign-in shortcuts directly.
+Use Help → Restart setup or `swemux setup --restart` to choose retained settings or backed-up fresh global preferences.
+For isolated first-use testing, `swemuxd --new-user-profile test-one` uses separate data and a separate local port.
 
 Running from a checkout, upgrades, PATH troubleshooting and uninstall: [`.docs/development/OPERATOR_LIFECYCLE.md`](.docs/development/OPERATOR_LIFECYCLE.md).
 

@@ -7,7 +7,7 @@ off until you ask - rather than inventing a mode system. Three tiers:
   hooks, no MCP registration, no shims, no fleet plumbing. A genuine product in
   its own right, not a reduced one.
 - **deterministic**: transcripts, status detection, managed harnesses, and the
-  agent fleet surface. Model-free throughout; this is the install default.
+  agent fleet surface. Model-free throughout; includes the recommended project-memory defaults.
 - **automations**: deterministic plus the model-backed layer's master switches
   (automation, the scan timeline, the attention observers), whose budgets and
   per-Project opt-ins still apply.
@@ -46,6 +46,12 @@ from __future__ import annotations
 
 from typing import Any
 
+from .automation_registry import (
+    DEDICATED_INSTALL_SWITCHES,
+    LLM_PROJECT_AUTOMATIONS,
+    RECOMMENDED_PROJECT_AUTOMATIONS,
+    enabling_closure,
+)
 from .harness import HARNESSES
 
 TIERS = ("terminal", "deterministic", "automations")
@@ -76,7 +82,12 @@ _DETERMINISTIC: dict[str, Any] = {
 }
 
 
-def tier_changes(tier: str) -> dict[str, Any]:
+def tier_changes(
+    tier: str,
+    *,
+    project_defaults: dict[str, bool] | None = None,
+    global_allow: dict[str, bool] | None = None,
+) -> dict[str, Any]:
     """The config assignment for ``tier``, including the tier stamp itself.
 
     The per-harness maps are written as explicit all-off entries for the
@@ -104,18 +115,33 @@ def tier_changes(tier: str) -> dict[str, Any]:
             land_queue_enabled=False,
         )
     elif tier == "automations":
-        # The two install masters. The model-backed observers (session titler,
-        # attention observers) are per-Project automations since schema 36 and
-        # are opted in through the "AI timeline" starting set at Project
-        # creation rather than switched install-wide here - a tier assigns
-        # ordinary keys absolutely, and writing the whole default template from
-        # it would erase every entry the operator (or the schema-36 migration)
-        # had put there.
+        # Masters open the model layer; the managed inherited defaults below
+        # opt Projects into its starting set without replacing unrelated entries.
         changes.update(
             automation_enabled=True,
             scan_timeline_enabled=True,
         )
     changes["experience_tier"] = tier
+    managed = enabling_closure((*RECOMMENDED_PROJECT_AUTOMATIONS, *LLM_PROJECT_AUTOMATIONS))
+    enabled = (
+        enabling_closure((*RECOMMENDED_PROJECT_AUTOMATIONS, *LLM_PROJECT_AUTOMATIONS))
+        if tier == "automations"
+        else enabling_closure(RECOMMENDED_PROJECT_AUTOMATIONS)
+        if tier == "deterministic"
+        else frozenset()
+    )
+    changes["automation_project_defaults"] = {
+        **(project_defaults or {}),
+        **{key: key in enabled for key in sorted(managed)},
+    }
+    changes["automation_global_allow"] = {
+        **(global_allow or {}),
+        **{
+            key: tier != "terminal"
+            for key in sorted(managed)
+            if key not in DEDICATED_INSTALL_SWITCHES
+        },
+    }
     return changes
 
 

@@ -23,6 +23,8 @@ type Props = {
   initialTopic?: string | null
   onClose: () => void
   onStartTutorial: () => void
+  onShowGettingStarted?: () => void
+  onRestartSetup?: () => void
   onOpenConfigurator: () => void
   /** Whether the configurator can start here, and why not when it cannot. */
   configurator: { enabled: boolean; reason?: string }
@@ -52,7 +54,7 @@ function TopicBody({ topic }: { topic: HelpTopic }) {
   </div>
 }
 
-export function HelpModal({ initialTopic, onClose, onStartTutorial, onOpenConfigurator, configurator }: Props) {
+export function HelpModal({ initialTopic, onClose, onStartTutorial, onShowGettingStarted, onRestartSetup, onOpenConfigurator, configurator }: Props) {
   const [selected, setSelected] = useState<string | null>(initialTopic && helpTopic(initialTopic) ? initialTopic : null)
   const [query, setQuery] = useState('')
   // Re-open on a different topic without unmounting: the command bus can ask for one while
@@ -86,6 +88,8 @@ export function HelpModal({ initialTopic, onClose, onStartTutorial, onOpenConfig
               something rather than explaining something, and it was previously reachable
               only from one section of one Settings tab. */}
           <button type="button" class="help-action primary" onClick={onStartTutorial}>Take the guided tour</button>
+          {onShowGettingStarted&&<button type="button" class="help-action" onClick={onShowGettingStarted}>Show Getting started again</button>}
+          {onRestartSetup&&<button type="button" class="help-action" onClick={onRestartSetup}>Restart setup / use existing settings</button>}
           <button
             type="button"
             class="help-action"

@@ -1,11 +1,13 @@
-import { useEffect, useState } from 'preact/hooks'
+import { useModalFocus } from './modalFocus'
+import { useEffect, useRef, useState } from 'preact/hooks'
 import { api } from './api'
 import { Dropdown } from './Dropdown.tsx'
 import { hostQuery } from './hostProfile.ts'
 import { ThemePicker } from './ThemePicker.tsx'
-import { QuestLog } from './QuestLog.tsx'
+import type { SetupDraft } from './onboarding'
+import { SetupAccounts } from './SetupAccounts'
+import { ExperiencePreview } from './ExperiencePreview'
 import { applyTheme, type CustomTheme, type ThemeName } from './theme'
-import { openQuests, type QuestId, type QuestSignals } from './questRegistry.ts'
 import {
   allHarnessesIncludingDisabled,
   installHarnessRegistry,
@@ -13,44 +15,7 @@ import {
   type HarnessRegistryPayload,
 } from './harnessRegistry'
 
-/**
- * First-run panel: the experience tier, then the harness list, then first steps.
- *
- * The tier step comes first because it frames everything after it, and it is
- * phrased as three genuine products rather than a good/reduced ladder - pure
- * terminal is the strongest claim swe-mux has against tools that re-render
- * agents into their own UI, and a reader who concludes it is "the one without
- * the good features" has been failed by the copy. A tier sets defaults through
- * `POST /api/experience-tier` and locks nothing; every switch it touches stays
- * individually editable in Settings.
- *
- * The tier page also carries the theme (previewed live, committed on Continue),
- * the keyboard preset, and a fold-out Customize section: an autonomy level and
- * the tier's own switches, both drawn from `GET /api/experience-tiers` rather
- * than restated here, because the key sets are daemon policy and a browser copy
- * is the one that drifts. Overrides ride the same `POST /api/experience-tier`
- * write, so tier + autonomy + deviations land atomically.
- *
- * The harness step runs detection, lists what it found with detected harnesses
- * pre-ticked, offers a separate "scan history" choice and an install-wide fleet
- * access choice, and a skip that writes nothing but the completion flag.
- *
- * The first-steps page is the quest log itself - the same component, the same
- * registry, the same machine-side dismissals the empty workspace stage draws -
- * so finishing setup hands off into the three guided setups without inventing a
- * second list. The completion flag is written when this page exits (or by any
- * skip), which is what keeps the modal on screen for it: `firstRunSurface`
- * arbitrates on `harness_setup_complete`, so writing the flag earlier would
- * unmount the panel out from under its own last page.
- *
- * First-run state is daemon-side (`harness_setup_complete`, `experience_tier`),
- * not device-local, because both are machine config: a choice made on the
- * desktop must not reappear on the phone.
- *
- * `onConfigureMore` hands off to Settings -> Agents for per-harness executable,
- * arguments, and width editing, so this panel assembles the enable/scan parts
- * rather than duplicating that surface.
- */
+/** Shared experience and harness pages. OnboardingFlow owns persistence and sequencing. */
 
 export type ExperienceTier = 'terminal' | 'deterministic' | 'automations'
 
@@ -58,23 +23,20 @@ export const EXPERIENCE_TIERS: { id: ExperienceTier; title: string; blurb: strin
   {
     id: 'terminal',
     title: 'Pure terminal',
-    blurb: 'Real terminals and nothing else. Agents run in genuine PTYs with no hooks, no '
-      + 'status detection, and no fleet plumbing - swe-mux never touches what runs inside. '
-      + 'The strongest choice when that guarantee is the point; everything else stays one '
-      + 'switch away, never removed.',
+    blurb: 'Agent and shell terminals without hooks, status tracking, or fleet tools. '
+      + 'Add individual features whenever you need them.',
   },
   {
     id: 'deterministic',
     title: 'Deterministic',
-    blurb: 'Terminals plus the model-free layer: transcripts, live status detection, managed '
-      + 'harnesses, and the agent fleet surface. Nothing here calls a model or spends money.',
+    blurb: 'Transcripts, live status, project memory, managed harnesses, and fleet tools. '
+      + 'These features use no model API.',
   },
   {
     id: 'automations',
     title: 'Automations',
-    blurb: 'Everything in Deterministic, plus the scan timeline and the model-backed '
-      + 'observers - the parts that spend tokens, under budgets you set and per-Project '
-      + 'switches you opt into.',
+    blurb: 'Everything in Deterministic, plus the scan timeline and model-backed observers. '
+      + 'Next, set up a provider, approve the models, and choose spending limits.',
   },
 ]
 
@@ -193,26 +155,18 @@ const OVERRIDE_COPY: Record<string, { label: string; hint: string }> = {
 
 const OVERRIDE_ORDER = Object.keys(OVERRIDE_COPY)
 
-export function HarnessSetup(
-  { tierNeeded, questSignals, onQuestAction, onQuestDismiss, onDone, onConfigureMore }:
-  {
-    tierNeeded: boolean
-    questSignals: QuestSignals
-    onQuestAction: (id: QuestId) => void
-    onQuestDismiss: (id: QuestId) => void
-    onDone: () => void
-    onConfigureMore: () => void
-  },
-) {
-  const [step, setStep] = useState<'tier' | 'harnesses' | 'first-steps'>(tierNeeded ? 'tier' : 'harnesses')
-  const [tier, setTier] = useState<ExperienceTier>('deterministic')
-  const [appliedTier, setAppliedTier] = useState<ExperienceTier | ''>('')
-  const [tierRestart, setTierRestart] = useState(false)
+export function HarnessSetup({page,workflow}:{
+  page:'experience'|'harnesses'
+  workflow:{draft:SetupDraft;onDraft:(draft:SetupDraft)=>Promise<void>;onTier:(draft:SetupDraft)=>Promise<void>;onHarnesses:(draft:SetupDraft)=>Promise<void>;onDefer:(draft:SetupDraft)=>Promise<void>}
+}) {
+  const step=page==='experience'?'tier':'harnesses'
+  const [tier, setTier] = useState<ExperienceTier>(workflow?.draft.tier||'deterministic')
+  const appliedTier=workflow.draft.tier||''
   // The keyboard preset, on the same page as the tier. Fetched rather than listed,
   // because the preset table is data on the daemon (`assets/keymaps/`) and a copy
   // here would be a second one to keep in step.
   const [presets, setPresets] = useState<KeymapPreset[]>([])
-  const [keymap, setKeymap] = useState(DEFAULT_KEYMAP_PRESET)
+  const [keymap, setKeymap] = useState(workflow?.draft.keymap||DEFAULT_KEYMAP_PRESET)
   // The theme, previewed live so the catalogue can be walked and seen. `initialTheme`
   // is what the daemon holds now, and is what a skip or an unchanged Continue leaves
   // applied; only a Continue with a different choice writes it.
@@ -225,13 +179,14 @@ export function HarnessSetup(
   // because a deviation is a statement about one tier's defaults.
   const [assignments, setAssignments] = useState<TierAssignments | null>(null)
   const [customizeOpen, setCustomizeOpen] = useState(false)
-  const [autonomy, setAutonomy] = useState<AutonomyLevel>('supervised')
-  const [overrides, setOverrides] = useState<Record<string, boolean>>({})
-  const [railDesktop, setRailDesktop] = useState(true)
-  const [railMobile, setRailMobile] = useState(true)
-  const [fleetAccess, setFleetAccess] = useState<FleetAccessChoice>('default')
+  const [autonomy, setAutonomy] = useState<AutonomyLevel>((workflow?.draft.autonomy as AutonomyLevel)||'supervised')
+  const [overrides, setOverrides] = useState<Record<string, boolean>>(workflow?.draft.overrides||{})
+  const [railDesktop, setRailDesktop] = useState(workflow?.draft.rail_desktop??true)
+  const [railMobile, setRailMobile] = useState(workflow?.draft.rail_mobile??true)
+  const [fleetAccess, setFleetAccess] = useState<FleetAccessChoice>((workflow?.draft.fleet_access as FleetAccessChoice)||'default')
+  const [defaultHarness,setDefaultHarness]=useState(workflow?.draft.default_harness||'')
   const [choices, setChoices] = useState<Record<string, boolean>>({})
-  const [scanHistory, setScanHistory] = useState(true)
+  const [scanHistory, setScanHistory] = useState(workflow?.draft.scan_history??true)
   const [ready, setReady] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -243,16 +198,17 @@ export function HarnessSetup(
       installHarnessRegistry(payload)
       const initial: Record<string, boolean> = {}
       for (const harness of payload.harnesses) initial[harness.name] = !!harness.installed
-      setChoices(initial)
+      setChoices(workflow?.draft.harnesses||initial)
+      if(!workflow?.draft.default_harness)setDefaultHarness(payload.harnesses.find(harness=>harness.installed)?.name||'')
       setReady(true)
-    }).catch(() => { if (live) setReady(true) })
+    }).catch(cause => { if (live) setError(`Harness detection failed: ${cause.message}. Close setup and resume to retry.`) })
     api<{ presets: KeymapPreset[] }>('GET', `/api/keybindings?${hostQuery()}`)
       .then(payload => { if (live) setPresets(payload.presets || []) })
       .catch(() => { /* the picker simply does not appear; the default preset stands */ })
     api<{ theme?: ThemeName; custom_theme?: CustomTheme }>('GET', '/api/config')
       .then(payload => {
         if (!live || !payload.theme) return
-        setTheme(payload.theme)
+        setTheme((workflow?.draft.theme as ThemeName)||payload.theme)
         setInitialTheme(payload.theme)
         setCustomTheme(payload.custom_theme)
       })
@@ -264,6 +220,12 @@ export function HarnessSetup(
   }, [])
 
   const detected = allHarnessesIncludingDisabled()
+  const draftSnapshot=():SetupDraft=>({tier,autonomy,overrides,theme,keymap,fleet_access:fleetAccess,harnesses:choices,default_harness:defaultHarness,scan_history:scanHistory,rail_desktop:railDesktop,rail_mobile:railMobile})
+  useEffect(()=>{
+    if(!workflow||!ready)return
+    const timer=setTimeout(()=>void workflow.onDraft(draftSnapshot()).catch(cause=>setError(cause.message)),400)
+    return()=>clearTimeout(timer)
+  },[ready,tier,autonomy,JSON.stringify(overrides),theme,keymap,fleetAccess,JSON.stringify(choices),defaultHarness,scanHistory,railDesktop,railMobile])
 
   const chooseTheme = (value: ThemeName) => {
     setTheme(value)
@@ -301,106 +263,32 @@ export function HarnessSetup(
   }
 
   const applyTier = async () => {
-    setBusy(true)
-    setError('')
-    try {
-      const body: Record<string, unknown> = { tier }
-      if (autonomy !== 'supervised') body.autonomy = autonomy
-      if (Object.keys(overrides).length) body.overrides = overrides
-      const applied = await api<{ restart_required: string[] }>(
-        'POST', '/api/experience-tier', body,
-      )
-      // After the tier, and only what differs from a fresh install: applying the
-      // default preset would rewrite `keybindings.json` for no change, an unchanged
-      // theme is already what the daemon holds, and a rail left on is the default.
-      if (keymap !== DEFAULT_KEYMAP_PRESET) {
-        await api('POST', `/api/keymap-preset?${hostQuery()}`, { preset: keymap })
-      }
-      const patch: Record<string, unknown> = {}
-      if (theme !== initialTheme) patch.theme = theme
-      if (!railDesktop) patch.rail_enabled_desktop = false
-      if (!railMobile) patch.rail_enabled_mobile = false
-      if (Object.keys(patch).length) await api('PATCH', '/api/config', patch)
-      setAppliedTier(tier)
-      setTierRestart(applied.restart_required.length > 0)
-      setStep('harnesses')
-      setBusy(false)
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause))
-      setBusy(false)
-    }
+    setBusy(true);setError('')
+    try{await workflow.onTier(draftSnapshot())}
+    catch(cause){setError((cause as Error).message);setBusy(false)}
   }
-
-  // Persist only choices that differ from detection, so the stored map stays the
-  // three-state minimum: an installed harness left ticked follows detection (no
-  // entry), only an override in either direction is written.
-  const explicitChoices = (): Record<string, boolean> => {
-    const explicit: Record<string, boolean> = {}
-    for (const harness of detected) {
-      const ticked = choices[harness.name] ?? false
-      if (ticked !== !!harness.installed) explicit[harness.name] = ticked
-    }
-    return explicit
-  }
-
-  /** Write the completion flag and leave. The final page, the quest actions, and
-   *  every skip route end here, so the flag is written exactly once per exit. */
-  const finish = async (after?: () => void) => {
-    setBusy(true)
-    setError('')
-    try {
-      await api('PATCH', '/api/config', { harness_setup_complete: true })
-      onDone()
-      after?.()
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause))
-      setBusy(false)
-    }
-  }
-
   const enable = async () => {
+    setBusy(true);setError('')
+    try{
+      const selected=detected.filter(harness=>choices[harness.name])
+      if(selected.length&&!selected.some(harness=>harness.name===defaultHarness))throw new Error('Choose an enabled default harness.')
+      await workflow.onHarnesses(draftSnapshot())
+    }catch(cause){setError((cause as Error).message);setBusy(false)}
+  }
+  const skip = async () => {
     setBusy(true)
-    setError('')
-    try {
-      const explicit = explicitChoices()
-      const body: Record<string, unknown> = { harness_enabled: explicit }
-      // The install-wide fleet-access choice, over every registered harness rather
-      // than only the enabled ones: enabling a harness later should find the choice
-      // already made, not a hole in the map.
-      if (appliedTier !== 'terminal') {
-        Object.assign(body, fleetAccessChanges(fleetAccess, detected.map(harness => harness.name)))
-      }
-      // The completion flag rides this PATCH only when the quest page is not going
-      // to show: `firstRunSurface` unmounts this panel the moment the flag lands,
-      // so the last page has to be the one that writes it.
-      const quests = openQuests(questSignals)
-      if (!quests.length) body.harness_setup_complete = true
-      await api('PATCH', '/api/config', body)
-      setHarnessEnablement(explicit)
-      if (scanHistory) await api('POST', '/api/history/scan').catch(() => {})
-      if (!quests.length) { onDone(); return }
-      setStep('first-steps')
-      setBusy(false)
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause))
-      setBusy(false)
-    }
+    try{applyTheme(initialTheme);await workflow.onDefer(draftSnapshot())}
+    catch(cause){setError((cause as Error).message);setBusy(false)}
   }
 
-  // Skip writes nothing but the completion flag: no `harness_enabled` entries (a
-  // harness installed later is still picked up by detection), and no tier - an
-  // unmade choice stays visible as unmade in Settings rather than being guessed.
-  // A previewed theme is handed back too: skipping is declining, not choosing.
-  const skip = async () => {
-    if (theme !== initialTheme) applyTheme(initialTheme)
-    await finish()
-  }
+  const dialog=useRef<HTMLElement>(null)
+  useModalFocus(dialog,()=>void skip(),!busy,'setup')
 
   const anyDetected = detected.some(harness => harness.installed)
 
   if (step === 'tier') {
     return <div class="harness-setup-backdrop" role="dialog" aria-modal="true" aria-label="Choose how much swe-mux does">
-      <section class="harness-setup">
+      <section ref={dialog} class="harness-setup">
         <header><strong>SET UP::EXPERIENCE</strong></header>
         <div class="harness-setup-body">
           <p>How much should swe-mux do? Each tier is a set of defaults, not a lock: everything a tier leaves off stays one switch away in Settings, and you can re-apply a different tier there any time.</p>
@@ -411,6 +299,7 @@ export function HarnessSetup(
             </span>
             <input type="radio" name="experience-tier" checked={tier === entry.id} onChange={() => chooseTier(entry.id)} />
           </label>)}
+          <ExperiencePreview tier={tier}/>
           {/* The Customize fold-out. Drawn only when the daemon served the assignments,
               because the switches are seeded from the chosen tier's own key set - a
               hand-written seed here would be the second copy of the policy. */}
@@ -483,49 +372,23 @@ export function HarnessSetup(
           {error && <p class="harness-setup-error" role="alert">{error}</p>}
         </div>
         <footer>
-          <button type="button" class="link" disabled={busy} onClick={() => { void skip(); onConfigureMore() }}>Configure in Settings…</button>
           <span class="harness-setup-spacer" />
-          <button type="button" disabled={busy} onClick={() => void skip()}>Skip setup</button>
+          <button type="button" disabled={busy} onClick={() => void skip()}>Continue later</button>
           <button type="button" class="primary" disabled={busy} onClick={() => void applyTier()}>Continue</button>
         </footer>
       </section>
     </div>
   }
 
-  if (step === 'first-steps') {
-    return <div class="harness-setup-backdrop" role="dialog" aria-modal="true" aria-label="First steps">
-      <section class="harness-setup">
-        <header><strong>SET UP::FIRST STEPS</strong></header>
-        <div class="harness-setup-body">
-          <p>Setup is done. Three optional guided setups are worth knowing about - they stay on your empty workspace until finished or dismissed, so there is nothing to remember.</p>
-          {/* The same component, registry, and machine-side dismissals as the empty
-              workspace stage: mirroring is done with components, never copies. An
-              action completes first-run and then opens its surface, because the
-              surface it opens must not be under this modal. */}
-          <QuestLog
-            signals={questSignals}
-            onAction={id => void finish(() => onQuestAction(id))}
-            onDismiss={onQuestDismiss}
-          />
-          {error && <p class="harness-setup-error" role="alert">{error}</p>}
-        </div>
-        <footer>
-          <span class="harness-setup-spacer" />
-          <button type="button" class="primary" disabled={busy} onClick={() => void finish()}>Open workspace</button>
-        </footer>
-      </section>
-    </div>
-  }
-
   return <div class="harness-setup-backdrop" role="dialog" aria-modal="true" aria-label="Set up agents">
-    <section class="harness-setup">
+    <section ref={dialog} class="harness-setup">
       <header><strong>SET UP::AGENTS</strong></header>
       <div class="harness-setup-body">
         <p>swe-mux found these agent CLIs on this machine. Enabled harnesses appear in the launchers; you can change any of this later under Settings → Agents.</p>
-        {tierRestart
+        {appliedTier==='terminal'
           ? <p class="harness-setup-note">Your pure-terminal choice is saved and applies fully at the next daemon reload (menu → Reload daemon; sessions survive). Until then, sessions launch with the standard instrumentation.</p>
           : <p class="harness-setup-note">When mux launches an enabled agent it adds two things per session: its lifecycle hooks (so status, history, and the prompt queue work) and a read-only mux MCP server (so the agent can see the fleet). Both are per-session and removed when the session ends. You can turn either off per harness under Settings → Agents ("launch clean" runs an agent unobserved).</p>}
-        <p class="harness-setup-note">Next, after this: create a Project for a folder, sign in to each agent CLI so its account and history appear (mux reads Claude and Codex auth, so the account switcher is empty until you run each CLI's login), then start a session. Set up a phone under Settings → Remote.</p>
+        <p class="harness-setup-note">Next, choose project folders from your session history or add a folder yourself. Your existing harness login can be saved here without signing in again.</p>
         {!ready&&<p class="harness-setup-loading">Detecting…</p>}
         {ready&&!detected.length&&<p>No harnesses are registered.</p>}
         {ready&&detected.map(harness=><label class="harness-setup-row check" key={harness.name}>
@@ -533,8 +396,12 @@ export function HarnessSetup(
             <strong>{harness.display_name}</strong>
             <small class={harness.installed?'harness-setup-found':'harness-setup-absent'}>{harness.installed?(harness.resolved_path?`Detected: ${harness.resolved_path}`:'Detected (data present)'):'Not detected'}</small>
           </span>
-          <input type="checkbox" checked={choices[harness.name]??false} onChange={e=>setChoices(current=>({...current,[harness.name]:e.currentTarget.checked}))} />
+          <input type="checkbox" checked={choices[harness.name]??false} onChange={e=>{const next={...choices,[harness.name]:e.currentTarget.checked};setChoices(next);if(!next[defaultHarness])setDefaultHarness(detected.find(item=>next[item.name])?.name||'')}} />
         </label>)}
+        {workflow&&ready&&<>
+          <label class="harness-setup-row"><span><strong>Default harness for Run</strong><small>You can choose a different harness for any session.</small></span><Dropdown ariaLabel="Default harness" value={defaultHarness} onChange={setDefaultHarness} options={detected.filter(harness=>choices[harness.name]).map(harness=>({value:harness.name,label:harness.display_name}))}/></label>
+          <SetupAccounts enabled={detected.filter(harness=>choices[harness.name]).map(harness=>harness.name)}/>
+        </>}
         {/* Install-wide rather than per-harness on purpose: the three per-harness
             checkboxes live in Settings → Agents, and first run wants the one question
             most people mean ("how do agents reach the fleet"), answered once. Hidden
@@ -556,9 +423,8 @@ export function HarnessSetup(
         {error&&<p class="harness-setup-error" role="alert">{error}</p>}
       </div>
       <footer>
-        <button type="button" class="link" disabled={busy} onClick={()=>{ void skip(); onConfigureMore() }}>Configure in Settings…</button>
         <span class="harness-setup-spacer" />
-        <button type="button" disabled={busy} onClick={()=>void skip()}>Skip</button>
+        <button type="button" disabled={busy} onClick={()=>void skip()}>Continue later</button>
         <button type="button" class="primary" disabled={busy||!ready} onClick={()=>void enable()}>Enable selected</button>
       </footer>
     </section>

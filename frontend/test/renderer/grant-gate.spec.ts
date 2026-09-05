@@ -82,3 +82,10 @@ test('a refused grant keeps the gate up and says why', async ({ page }) => {
   await expect(page.locator('.grant-gate-confirm')).toBeVisible()
   await expect(page.locator('#surface-live')).toHaveCount(0)
 })
+
+test('unapproved models keep a spending grant disabled and offer guided setup',async({page})=>{
+  await page.goto('/grant-gate-harness.html?no-models=1')
+  await expect(page.locator('.grant-gate-confirm')).toBeDisabled()
+  await expect(page.getByRole('button',{name:'Guided model setup'})).toBeVisible()
+  await expect(page.locator('.grant-gate')).toContainText('Approve the model roles first.')
+})

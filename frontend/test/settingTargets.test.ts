@@ -17,7 +17,7 @@ const ids = Object.keys(SETTING_TARGETS) as SettingTargetId[]
 // someone to a panel that scrolls nowhere and flashes nothing.
 test('every settings target names a control that exists in the panel it points at', () => {
   const settingsSources = [
-    source('Settings.tsx'),
+    source('Settings.tsx') + source('ProviderSetup.tsx'),
     source('SessionRowSettings.tsx'),
     source('SessionTopbarSettings.tsx'),
     source('NotificationPushSettings.tsx'),

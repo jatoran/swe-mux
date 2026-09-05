@@ -64,9 +64,11 @@ def _status(config: Config) -> dict[str, object]:
         path = folders.for_slot(slot) / SHORTCUT_FILENAME
         slots[slot] = {"path": str(path), "present": path.is_file()}
     missing = missing_shell_modules()
+    from ..desktop import _run_key_enabled
     return {
         "supported": True,
         "shortcuts": {"slots": slots},
+        "startup_enabled": _run_key_enabled(config) or slots["startup"]["present"],
         "shell": {
             "importable": not missing,
             "missing": list(missing),

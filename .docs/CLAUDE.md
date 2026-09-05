@@ -109,7 +109,7 @@
   `test_doctor_local.py::test_every_category_the_daemon_report_emits_is_covered_or_declared_unchecked`
   asserts only that a category comes back either way.
 - Changing the first-run sequence (the experience tier chooser, its key sets, the harness
-  panel, the quest log, or `firstRunSurface` arbitration): `design/features/first-run.md`,
+  panel, durable progress, the sidebar first steps, or `firstRunSurface` arbitration): `design/features/first-run.md`,
   `design/features/setting-links.md`, `design/interfaces.md`,
   `src/swe_mux/experience_tiers.py`.
   The rule the feature turns on: a tier sets defaults and never locks capability - no

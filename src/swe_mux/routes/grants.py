@@ -88,7 +88,7 @@ async def describe_grants(request: web.Request) -> web.Response:
             # So a gate can disclose "and this needs a model provider you have not
             # proven yet" before the press, from the same read that tells it what
             # it may grant at all.
-            "llm": (await automation._llm_readiness(request)).as_dict(),
+            "llm": (await automation._activation_readiness(request)).as_dict(),
         }
     )
 
@@ -178,6 +178,13 @@ async def apply_grants(request: web.Request) -> web.Response:
         )
     except GrantRefusal as refusal:
         return json_response({"error": refusal.message, "code": refusal.code}, 409)
+
+    if plan.needs_llm or any(
+        plan.install.get(name) for name in ("automation_enabled", "scan_timeline_enabled")
+    ):
+        readiness = await automation._activation_readiness(request)
+        if not readiness.ready:
+            return json_response({"error": readiness.reason, "code": "provider_required"}, 409)
 
     applied_automations = sorted(plan.automations)
     applied_values = sorted(plan.values)

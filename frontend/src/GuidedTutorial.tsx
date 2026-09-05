@@ -8,6 +8,9 @@ export type { TutorialStepId }
 
 type Props={
   hasProject:boolean
+  setupCompleted?:boolean
+  initialStep?:TutorialStepId
+  onStep?:(step:TutorialStepId)=>void
   onNavigate:(step:TutorialStepId)=>void
   onExit:()=>void
   onComplete:()=>void
@@ -42,10 +45,9 @@ const sameRect=(first:DOMRect|null,second:DOMRect|null)=>first===second||Boolean
   Math.abs(first.left-second.left)<.5&&Math.abs(first.top-second.top)<.5&&
   Math.abs(first.width-second.width)<.5&&Math.abs(first.height-second.height)<.5)
 
-export function GuidedTutorial({hasProject,onNavigate,onExit,onComplete}:Props){
+export function GuidedTutorial({hasProject,setupCompleted=false,initialStep,onStep,onNavigate,onExit,onComplete}:Props){
   const initialHasProject=useRef(hasProject).current
   const mobileAtStart=useRef(window.matchMedia('(max-width:760px)').matches).current
-  const [index,setIndex]=useState(0)
   const [dragging,setDragging]=useState(false)
   const [targetRect,setTargetRect]=useState<DOMRect|null>(null)
   const cardRef=useRef<HTMLElement>(null)
@@ -103,10 +105,11 @@ export function GuidedTutorial({hasProject,onNavigate,onExit,onComplete}:Props){
     // Ends by naming the surface that answers everything two minutes could not, rather
     // than only by naming the switch that replays these two minutes.
     {id:'ready',eyebrow:'TOUR COMPLETE',title:'You are ready to build.',body:<><p>Your Projects and layouts persist, and long-running sessions survive browser reloads or a hidden desktop window.</p><p><strong>Help</strong> - the last row of the menu, or “open help” in the command palette - explains every panel from the design document that defines it, and offers this walkthrough again. Settings → General has the same replay button.</p></>},
-  ],[dragging,initialHasProject,mobileAtStart])
+  ].filter(step=>!setupCompleted||step.id!=='accounts') as Step[],[dragging,initialHasProject,mobileAtStart,setupCompleted])
+  const [index,setIndex]=useState(()=>Math.max(0,steps.findIndex(item=>item.id===initialStep)))
   const step=steps[index]
 
-  useEffect(()=>{setDragging(false);onNavigate(step.id)},[step.id])
+  useEffect(()=>{setDragging(false);onNavigate(step.id);onStep?.(step.id)},[step.id])
 
   useEffect(()=>{
     const advance=()=>setIndex(value=>Math.min(steps.length-1,value+1))

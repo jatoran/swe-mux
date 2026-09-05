@@ -14,7 +14,7 @@ import {
   type GrantResult,
 } from './grants'
 import { fetchProjectAutomations, type ProjectAutomationState } from './projectAutomations'
-import { fetchLlmProvider, type LlmReadiness } from './llmProvider'
+import { fetchLlmProvider, LLM_PROVIDER_CHANGED, type LlmReadiness } from './llmProvider'
 
 /**
  * The one shape a surface takes when it cannot work until something is switched on.
@@ -104,10 +104,12 @@ export function GrantGate({
   useEffect(() => {
     if (!wantsModel) { setLlm(null); return }
     let stale = false
-    fetchLlmProvider()
-      .then(status => { if (!stale) setLlm(status.llm) })
+    const refresh=()=>void fetchLlmProvider()
+      .then(status => { if (!stale) setLlm(status.activation||status.llm) })
       .catch(() => { if (!stale) setLlm(null) })
-    return () => { stale = true }
+    refresh()
+    window.addEventListener(LLM_PROVIDER_CHANGED,refresh)
+    return () => { stale = true;window.removeEventListener(LLM_PROVIDER_CHANGED,refresh) }
   }, [wantsModel])
 
   const primary = ids[0]
@@ -163,11 +165,12 @@ export function GrantGate({
       <SettingLink variant="link" target="accounts.llmProvider">
         Choose or verify a model provider
       </SettingLink>
+      <button type="button" onClick={()=>window.dispatchEvent(new Event('mux:setup-provider'))}>Guided model setup</button>
     </p>}
     {extra}
     {error && <p class="grant-gate-error" role="alert">{error}</p>}
     <div class="grant-gate-actions">
-      <button type="button" class="grant-gate-confirm" disabled={busy || missingProject}
+      <button type="button" class="grant-gate-confirm" disabled={busy || missingProject || (wantsModel && !llm?.ready)}
         onClick={() => void grant()}>{busy ? 'Turning on…' : label}</button>
       {/* The owning overlay stays reachable. A gate answers this question; the overlay
           is where the whole picture lives and the only place it can be undone. */}

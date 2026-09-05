@@ -133,7 +133,7 @@ test('the policy matrix states the reason rather than paraphrasing it', () => {
 })
 
 test('the Accounts panel marks the controls the links reveal', () => {
-  const settings = source('Settings.tsx')
+  const settings = source('Settings.tsx') + source('ProviderSetup.tsx')
   for (const setting of ['llm_provider', 'custom_llm_base_url', 'custom_llm_model']) {
     assert.ok(settings.includes(`data-setting="${setting}"`),
       `Settings.tsx does not mark ${setting}`)
@@ -210,7 +210,7 @@ test('the panel holds no second control for a routed model', () => {
   // Two controls writing one config key is how a panel starts disagreeing with itself.
   // The feature tabs show these read-only and link back, so a `ModelPicker` bound to one
   // of these keys anywhere but the routing table is the regression this catches.
-  const settings = source('Settings.tsx')
+  const settings = source('Settings.tsx') + source('ProviderSetup.tsx')
   assert.ok(!settings.includes('ModelPicker'),
     'Settings.tsx must render model pickers only through the routing table')
   const table = source('ModelRoutingSummary.tsx')

@@ -186,6 +186,7 @@ async def get_experience_tiers(request: web.Request) -> web.Response:
     table restated in the browser is the second copy `POST /api/experience-tier`
     exists to avoid. Values only; nothing here writes.
     """
+    from ..automation_registry import REGISTRY, install_defaults
     from ..experience_tiers import (
         AUTONOMY_LEVELS,
         OVERRIDABLE_KEYS,
@@ -194,11 +195,26 @@ async def get_experience_tiers(request: web.Request) -> web.Response:
         tier_changes,
     )
 
+    config: Config = request.app[keys.CONFIG]
+    previous = install_defaults(config.automation_project_defaults)
+
     return json_response(
         {
             "tiers": {tier: tier_changes(tier) for tier in TIERS},
             "autonomy": {level: autonomy_changes(level) for level in AUTONOMY_LEVELS},
             "overridable": sorted(OVERRIDABLE_KEYS),
+            "project_defaults": {
+                tier: [
+                    {
+                        "id": name,
+                        "label": REGISTRY[name].label,
+                        "enabled": enabled,
+                        "previous": previous.get(name, False),
+                    }
+                    for name, enabled in tier_changes(tier)["automation_project_defaults"].items()
+                ]
+                for tier in TIERS
+            },
         }
     )
 
@@ -235,7 +251,11 @@ async def apply_experience_tier(request: web.Request) -> web.Response:
             {"error": "invalid configuration", "fields": {"tier": f"must be one of {TIERS}"}},
             422,
         )
-    changes = tier_changes(tier)
+    changes = tier_changes(
+        tier,
+        project_defaults=config.automation_project_defaults,
+        global_allow=config.automation_global_allow,
+    )
     autonomy = body.get("autonomy")
     if autonomy is not None:
         if autonomy not in AUTONOMY_LEVELS:
@@ -267,6 +287,50 @@ async def apply_experience_tier(request: web.Request) -> web.Response:
                 422,
             )
         changes.update(overrides)
+    if changes.get("automation_enabled") or changes.get("scan_timeline_enabled"):
+        readiness = await automation._llm_readiness(request)
+        if not readiness.ready or readiness.code == "unknown":
+            return json_response(
+                {
+                    "error": (
+                        "Set up and verify a model provider first, or continue with Deterministic."
+                    ),
+                    "code": "provider_required",
+                    "llm": readiness.as_dict(),
+                },
+                409,
+            )
+        from ..llm_endpoint import resolve_endpoint
+
+        endpoint = resolve_endpoint(config, request.app.get(keys.LLM_CAPABILITIES))
+        if not endpoint.model_override and (
+            not config.openrouter_cheap_model or not config.openrouter_standard_model
+        ):
+            return json_response(
+                {
+                    "error": (
+                        "Choose and approve the cheap and standard models before enabling "
+                        "Automations."
+                    ),
+                    "code": "models_required",
+                },
+                409,
+            )
+        from .. import model_setup
+
+        secrets = request.app.get(keys.SECRET_STORE)
+        if secrets is None or not model_setup.verified(
+            config, endpoint, secrets.get(endpoint.secret_name)
+        ):
+            return json_response(
+                {
+                    "error": (
+                        "Approve and test the selected model roles in guided model setup first."
+                    ),
+                    "code": "model_verification_required",
+                },
+                409,
+            )
     hot, restart = update_config(config, changes)
     apply_runtime_config(request.app, hot)
     log.info(
@@ -631,9 +695,7 @@ def _stage_keybindings(config: Config, preset: str, rules: list[Rule]) -> Path:
     """
     path = config.data_dir / "keybindings.json"
     temporary = path.with_suffix(".json.tmp")
-    temporary.write_text(
-        json.dumps(document_for(preset, rules), indent=2) + "\n", encoding="utf-8"
-    )
+    temporary.write_text(json.dumps(document_for(preset, rules), indent=2) + "\n", encoding="utf-8")
     return temporary
 
 

@@ -299,3 +299,10 @@ Also holds `PtyOutputFlow` credit accounting, terminal-input arbitration and its
 - `projects-and-worktrees.md` - `worktree_mutation.py`.
 - `processes-and-devices.md` - `preview_transport.py`.
 - `pty-and-sessions.md` - `session_media.py`.
+
+## `onboarding.py`
+
+Progress reads and revision-checked changes, backed-up preference reset, bounded native-history project discovery, and explicit model-role verification.
+Persistence belongs to `src/swe_mux/onboarding.py`; endpoint/model verification identity belongs to `src/swe_mux/model_setup.py`.
+The route uses ordinary config, credential, project, and model services and never starts a daemon or executes a model-produced tool call.
+Design: `../../../design/features/first-run.md`.

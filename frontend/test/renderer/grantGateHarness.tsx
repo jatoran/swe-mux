@@ -36,6 +36,10 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = String(input)
   const method = init?.method || 'GET'
   calls.push({ method, url, body: init?.body ? JSON.parse(String(init.body)) : undefined })
+  if(url==='/api/automation/provider'){
+    const ready=params.get('no-models')!=='1'
+    return new Response(JSON.stringify({llm:{ready,provider:'openrouter',code:ready?'ready':'models_unverified',reason:ready?'Ready':'Approve the model roles first.'}}),{status:200,headers:{'Content-Type':'application/json'}})
+  }
   if (url.includes('/automations')) {
     return new Response(JSON.stringify(AUTOMATION_STATE), { status: 200, headers: { 'Content-Type': 'application/json' } })
   }
