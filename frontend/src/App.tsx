@@ -120,10 +120,10 @@ import { RedeployChip } from './RedeployChip'
 import {
   abandonRequest, applyProbe, confirmRedeploy, enterOutage, holderWarning, IDLE_REDEPLOY,
   interruptionSummary, loadRedeploy, markResultPending, outcomeIsFresh, outcomeNotice,
-  REDEPLOY_POLL_MS, REDEPLOY_PROBE_TIMEOUT_MS, requestRedeploy, saveRedeploy, takeResultPending,
-  waitsOnDaemon,
-  type BundleHolder, type ProbeResult, type RedeployInterruptions, type RedeployState,
-  type RedeployStatus,
+  REDEPLOY_POLL_MS, REDEPLOY_PROBE_TIMEOUT_MS, requestRedeploy, saveRedeploy, sessionsNote,
+  takeResultPending, waitsOnDaemon,
+  type BundleHolder, type ProbeResult, type RedeployAnnouncement, type RedeployInterruptions,
+  type RedeployState, type RedeployStatus,
 } from './redeployProgress'
 import { currentInsertTarget, insertIntoFocusedSurface, noteTerminalFocus, subscribeInsertTarget } from './insertTarget'
 import type { InsertTarget } from './insertTarget'
@@ -2631,7 +2631,17 @@ export function App() {
           // redeploy's overlay off the event history. The live copy is what
           // matters, and the wait loop's own health probes are the authority on
           // when it ends regardless.
-          if (!isReplay && event.type === 'daemon_redeploy_started') enterRedeploy()
+          if (!isReplay && event.type === 'daemon_redeploy_started') {
+            // The in-app updater's swap is the same broadcast with two more
+            // fields: `kind` (so the chip says "installing update") and `mode`
+            // (so the outage overlay does not promise sessions the operator
+            // agreed to end). An older daemon sends neither, and that reads as
+            // the rebuild it always was.
+            enterRedeploy({
+              kind: typeof event.payload?.kind === 'string' ? event.payload.kind : undefined,
+              mode: typeof event.payload?.mode === 'string' ? event.payload.mode : undefined,
+            })
+          }
           if (!isReplay && event.type === 'daemon_redeploy_stopping') {
             // Sent by the daemon from its own shutdown handler, while it is still
             // alive: the one authoritative "the outage starts now". Health probes
@@ -5701,7 +5711,8 @@ export function App() {
   // Entering is idempotent so the local start, the daemon's broadcast, and the
   // boot-time sentinel can all call it without racing each other into a second
   // wait loop or resetting the elapsed clock mid-redeploy.
-  const enterRedeploy = () => setRedeploy(current => confirmRedeploy(current, Date.now()))
+  const enterRedeploy = (announced?: RedeployAnnouncement) =>
+    setRedeploy(current => confirmRedeploy(current, Date.now(), announced))
 
   const focusedDrawerStack=drawerStackForTab(drawerLayout,drawerTabId)
   const navigateDrawerTab=(offset:number)=>{
@@ -9078,7 +9089,7 @@ export function App() {
     {daemonReloading&&<div class="modal-layer daemon-reload-layer" role="alertdialog" aria-modal="true" aria-label="Daemon reloading"><div class="modal daemon-reload-modal"><h2>Reloading daemon…</h2><p>Live sessions are preserved by the PTY supervisor. This page reloads automatically once the daemon is back.</p></div></div>}
     {/* Only the daemon-down stage blocks. While the build runs the app is fully
         usable and the corner chip is the whole of the UI's report. */}
-    {redeployDown&&<div class="modal-layer daemon-reload-layer" role="alertdialog" aria-modal="true" aria-label="App restarting"><div class="modal daemon-reload-modal"><h2>Restarting the app…</h2><p>The rebuilt app is being swapped in and restarted around your live sessions, which are held by the PTY supervisor and are not affected. A cold start can take a few minutes; this page reloads by itself when it comes back.</p></div></div>}
+    {redeployDown&&<div class="modal-layer daemon-reload-layer" role="alertdialog" aria-modal="true" aria-label="App restarting"><div class="modal daemon-reload-modal"><h2>Restarting the app…</h2><p>{redeploy.kind==='update'?'The new release is being swapped in and restarted.':'The rebuilt app is being swapped in and restarted.'} {sessionsNote(redeploy.reap)} A cold start can take a few minutes; this page reloads by itself when it comes back.</p></div></div>}
     {redeployConfirmOpen&&<div class="modal-layer daemon-reload-layer" role="alertdialog" aria-modal="true" aria-label="Confirm redeploy" onClick={()=>setRedeployConfirmOpen(false)}><div class="modal daemon-reload-modal" onClick={event=>event.stopPropagation()}><h2>Rebuild + redeploy app?</h2><p>Rebuilds the frozen desktop app from source and restarts it around your live sessions. The build takes a few minutes and runs alongside the app you are using now, so you can keep working until it restarts. A failed build leaves the current app running.</p>{interruptionSummary(redeployInterruptions)&&<p class="redeploy-interrupts"><strong>{interruptionSummary(redeployInterruptions)}</strong><span>{redeployInterruptions?.note}</span></p>}{holderWarning(redeployHolders)&&<p class="redeploy-interrupts redeploy-blocked"><strong>{holderWarning(redeployHolders)}</strong><span>Stop those processes (or close the tab or session they belong to) first - the app bundle cannot be replaced while they hold it open.</span></p>}<div class="modal-actions"><button type="button" onClick={()=>setRedeployConfirmOpen(false)}>Cancel</button><button type="button" class="primary" onClick={()=>void startRedeploy()}>Rebuild + redeploy</button></div></div></div>}
 
     {/* The deep-linked entry is cleared with the overlay, not left behind: it is the

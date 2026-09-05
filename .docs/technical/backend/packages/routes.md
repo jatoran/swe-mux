@@ -52,11 +52,15 @@ The checkout resolution, the lock claim, and the detached spawn moved to `redepl
 ### `routes/update.py`
 
 `GET /api/update` (the last check's answer; reads state and never reaches the network), `POST /api/update/check` (behind the `update-check` gesture header and refused with `409 update_check_disabled` while the switch is off), and `POST /api/update/dismiss`.
-Plus `GET /api/update/install` (the attempt's phase; polled during a download, so it reads state only) and `POST /api/update/install`, which needs the `update-install` gesture header **and** a named version, so what installs is what the operator was shown.
-Every refusal that needs no network is answered as a `409` to that request rather than left for a poll to find.
+Plus `POST /api/update/plan`, behind its own `update-plan` gesture: the manifest and two small sidecars, answered as what installing would do (the mode, whether sessions end and how many the daemon counts live, the delta) before any download.
+Plus `GET /api/update/install` (the attempt's phase; polled during a download, so it reads state only).
+Plus `POST /api/update/install`, which needs the `update-install` gesture header **and** a named version, so what installs is what the operator was shown.
+That route also takes `accept_supervisor_update` as the operator's consent to end every session if the release cannot be installed any other way.
+Every refusal that needs no network is answered as a `409` to that request rather than left for a poll to find, and a refusal that consent would clear carries `consent: "supervisor_update"`.
+The three gesture words are deliberately different from each other.
 A runtime with no checker or installer published answers a quiet 200 rather than a 404, because every consumer is a passive banner.
 
-**Not:** the interval, the schema handling, or the comparison (`update_check.py`); the download, the hash check, the supervisor gate, or the handoff (`update_install.py`).
+**Not:** the interval, the schema handling, or the comparison (`update_check.py`); the download, the hash check, the supervisor gate, the applier, or the handoff (`update_install.py`).
 
 ### `routes/frontend.py`
 

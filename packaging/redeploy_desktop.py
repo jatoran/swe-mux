@@ -18,17 +18,19 @@ where a dead daemon means no way back in).
    it requires ``swemuxd --shutdown`` first, which reaps sessions).
    ``--from-archive`` replaces this step and nothing else: a downloaded release
    archive is verified and staged into the same staging tree, and every step
-   below runs identically. That is the whole of the frozen-app updater's use of
-   this script (`swe_mux/update_install.py`) — the download stands where the
-   PyInstaller build stands, and the guarantees on either side of it are the
-   ones already proven here. Staging an archive is a **delta** where the archive
-   carries the per-file manifest to support one (`swe_mux/bundle_stage.py`):
-   files already installed byte-for-byte are hard-linked rather than rewritten,
-   which is what keeps their antivirus scan verdict and most of the minutes an
-   update used to cost.
+   below runs identically. That is the developer-machine form of the frozen-app
+   updater's install; on an installed copy with no checkout the same steps run
+   from the frozen console client (`swemux update-apply`), and both are one
+   implementation in `swe_mux/bundle_apply.py`. Staging an archive is a
+   **delta** where the archive carries the per-file manifest to support one
+   (`swe_mux/bundle_stage.py`): files already installed byte-for-byte are
+   hard-linked rather than rewritten, which is what keeps their antivirus scan
+   verdict and most of the minutes an update used to cost.
 3. Stop — ask the desktop-managed daemon to shut down with detach intent
    (sessions stay up), then terminate remaining ``swe-mux.exe`` processes
-   (the WebView shell). ``swe-mux-supervisor.exe`` is never touched.
+   (the WebView shell). ``swe-mux-supervisor.exe`` is never touched - unless
+   ``--replace-supervisor`` was given, which stops with quit intent (every
+   session ends) and swaps the supervisor bundle the archive carried as well.
 4. Swap — the previous bundle moves to `dist/swe-mux.prev` (kept as the
    rollback artifact), the staged bundle moves into `dist/swe-mux`. Renames
    retry briefly while the just-stopped exe releases its locks.
@@ -61,14 +63,10 @@ looking entirely normal, so without it nobody learns their change never shipped.
 from __future__ import annotations
 
 import argparse
-import json
-import os
 import shutil
 import subprocess
 import sys
 import time
-import urllib.error
-import urllib.request
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -77,472 +75,57 @@ sys.path.insert(0, str(ROOT / "src"))
 
 import build_desktop  # noqa: E402 - sibling packaging module
 
-from swe_mux import bundle_swap  # noqa: E402
-from swe_mux.bundle_archive import (  # noqa: E402
-    ArchiveError,
-    file_digest,
-    read_archive_metadata,
+from swe_mux import bundle_apply  # noqa: E402
+from swe_mux.bundle_apply import (  # noqa: E402 - re-exported for the script's callers
+    APP_HEALTH_TIMEOUT_SECONDS,
+    MODE_REPLACE,
+    MODE_SWAP,
+    OUTCOME_BUILD_FAILED,
+    OUTCOME_FAILED,
+    OUTCOME_REFUSED,
+    OUTCOME_ROLLED_BACK,
+    OUTCOME_SUCCEEDED,
+    OUTCOME_SWAP_FAILED,
+    OUTCOME_UNHEALTHY,
+    Layout,
+    Outcome,
+    announce_start,
+    claim_lock,
+    live_lock_pid,
+    log,
 )
-from swe_mux.bundle_locks import (  # noqa: E402
-    REDEPLOY_LOCK_NAME,
-    bundle_lock_holders,
-    live_redeploy_lock_pid,
-    write_redeploy_lock,
-)
-from swe_mux.bundle_stage import stage_bundle  # noqa: E402
 from swe_mux.config import load_config  # noqa: E402
-from swe_mux.spawn_contract import scrub_claude_session_markers  # noqa: E402
-from swe_mux.subprocess_flags import popen_outside_job  # noqa: E402
-from swe_mux.supervisor import discovery_path  # noqa: E402
 
-APP_DIST = ROOT / "dist" / "swe-mux"
-APP_EXE = APP_DIST / "swe-mux.exe"
-APP_IMAGE_NAMES = {"swe-mux.exe"}
-ACTION_IMAGE_NAME = "swe-mux-action.exe"
-SUPERVISOR_IMAGE_NAME = "swe-mux-supervisor.exe"
-# `swe-mux.exe -m swe_mux.<module>` is a short-lived helper an agent session
-# spawned inside its OWN process tree -- hook_client is the one that matters, it
-# runs on every PreToolUse/PostToolUse. It shares the app's image name but is not
-# the shell or the daemon, and killing it reaches into a live session. A redeploy
-# once did exactly that (`taskkill /F /IM swe-mux.exe`, no filter) and took down
-# the only session that happened to be mid-tool-call. Helpers are therefore spared
-# by the ordinary stop and only swept if a lock actually blocks the swap.
-HELPER_MODULE_FLAG = "-m"
-HELPER_MODULE_PREFIX = "swe_mux."
-# Staged-build locations: the new bundle lands in .staging while the old app
-# keeps running; the previous bundle is retained for rollback.
-STAGING_ROOT = ROOT / "dist" / ".staging"
-STAGED_APP = STAGING_ROOT / "swe-mux"
-PREV_APP = ROOT / "dist" / "swe-mux.prev"
-FAILED_APP = ROOT / "dist" / "swe-mux.failed"
-# How long a directory rename retries while the just-stopped exe releases its
-# locks (the old WinError 5/32 straggler, now confined to a cheap rename).
-SWAP_RETRY_SECONDS = 20.0
-# First launch of a freshly written PyInstaller tree can spend several minutes
-# in Windows image scanning before the tray reaches daemon startup. Rolling back
-# while that process is still alive converts a slow-but-valid deploy into an
-# outage, so give cold starts a realistic budget and fail early only when the
-# launched shell actually exits.
-# 600 rather than 300: measured 2026-08-21, an already-scanned build took 225s
-# to "runtime ready" with 30 live sessions, so a fresh bundle paying its
-# first-launch scan on top of that legitimately exceeds 300s - the rollback
-# fired on a healthy-but-slow deploy. Overridable per run for slower fleets.
-APP_HEALTH_TIMEOUT_SECONDS = float(os.environ.get("MUX_REDEPLOY_HEALTH_TIMEOUT", "600"))
-# Outcomes recorded in `<data_dir>/redeploy-result.json`. The successor daemon
-# serves this so the reconnecting UI can say what actually happened: a rollback
-# used to be visible only as English in redeploy.log, which meant the app came
-# back as the OLD build and nothing said so.
-OUTCOME_SUCCEEDED = "succeeded"
-OUTCOME_ROLLED_BACK = "rolled_back"
-OUTCOME_BUILD_FAILED = "build_failed"
-OUTCOME_SWAP_FAILED = "swap_failed"
-OUTCOME_UNHEALTHY = "unhealthy"
-OUTCOME_REFUSED = "refused"
-OUTCOME_FAILED = "failed"
-
-
-def log(message: str) -> None:
-    print(f"[redeploy] {message}", flush=True)
-
-
-class Outcome:
-    """Records what a run did, for the UI that reconnects after the outage.
-
-    `record` is called at the terminal paths whose meaning the exit code cannot
-    carry (a rollback and a failed swap both exit 1, and "the app is back" means
-    something very different in each). It writes **at the moment of decision**,
-    not on the way out: the very next thing a rollback does is relaunch the old
-    app, and the browser starts asking for this file as soon as *a* daemon
-    answers, so a record written after that relaunch is one the reader can miss.
-
-    `finish` is the backstop for every other return. It writes a record derived
-    from the exit code when none was made, so a new early return can never leave
-    the previous run's result standing - a stale record would tell the UI that
-    *this* redeploy did whatever the last one did, which is worse than silence.
-    """
-
-    def __init__(self, config, started_at: float) -> None:  # noqa: ANN001 - Config
-        self._path = config.data_dir / "redeploy-result.json"
-        self._log_path = config.data_dir / "redeploy.log"
-        self._started_at = started_at
-        self._recorded = False
-
-    def record(self, kind: str, detail: str, *, code: int) -> None:
-        self._recorded = True
-        self._write(kind, detail, code)
-
-    def finish(self, code: int) -> int:
-        if not self._recorded:
-            if code == 0:
-                kind, detail = OUTCOME_SUCCEEDED, "The redeploy completed."
-            elif code == 2:
-                kind, detail = (
-                    OUTCOME_REFUSED,
-                    "The redeploy was refused before anything was changed.",
-                )
-            else:
-                kind, detail = OUTCOME_FAILED, "The redeploy failed. See redeploy.log."
-            self._write(kind, detail, code)
-        return code
-
-    def _write(self, kind: str, detail: str, code: int) -> None:
-        payload = {
-            "outcome": kind,
-            "detail": detail,
-            "exit_code": code,
-            "started_at": self._started_at,
-            "finished_at": time.time(),
-            "log_tail": self._tail(),
-        }
-        # Written whole via a temp file: the daemon that reads this is starting up
-        # concurrently, and a partially written file would parse as "no record".
-        temporary = self._path.with_suffix(".json.tmp")
-        try:
-            self._path.parent.mkdir(parents=True, exist_ok=True)
-            temporary.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-            os.replace(temporary, self._path)
-        except OSError as exc:
-            log(f"could not record the redeploy outcome: {exc}")
-
-    def _tail(self, lines: int = 12) -> list[str]:
-        """This run's log tail, or nothing.
-
-        Only the daemon endpoint redirects this script's output into
-        `redeploy.log`; a run launched from a terminal prints to its own stdout
-        and never touches that file. Reading it unconditionally therefore
-        stamped a *previous* redeploy's output into this run's result - observed
-        live: a record whose detail said 11 live sessions carried a tail ending
-        "live_sessions=2" from an unrelated earlier run. A log older than this
-        run is not this run's log, and no tail beats a wrong one.
-        """
-        try:
-            if self._log_path.stat().st_mtime < self._started_at:
-                return []
-            data = self._log_path.read_bytes()
-        except OSError:
-            return []
-        return data[-8192:].decode("utf-8", "replace").splitlines()[-lines:]
-
-
-def claim_lock(config, *, already_held: bool) -> bool:  # noqa: ANN001 - Config
-    """Claim `redeploy.lock` for this process. False means one is already live.
-
-    The daemon claims it before spawning this script (and passes --lock-held),
-    so this covers the terminal-launched case, which previously took no lock at
-    all: `GET /api/daemon/redeploy` reported nothing in flight, two concurrent
-    CLI redeploys could race the same staging tree and swap, and the UI had no
-    way to know it should stop trusting the daemon.
-
-    Never removed on exit. The lock names this process and every reader tests
-    whether that process is still *this redeploy*, so a crash releases it for
-    free and a half-deleted file can never make a live redeploy look finished.
-
-    "This redeploy" rather than "a pid that exists": a completed run's lock read
-    as live forever once Windows recycled its pid, and the refusal below exits 0,
-    so every redeploy for the next twenty hours was silently declined
-    (`bundle_locks.REDEPLOY_LOCK_NAME`).
-    """
-    if already_held:
-        return True
-    path = config.data_dir / REDEPLOY_LOCK_NAME
-    path.parent.mkdir(parents=True, exist_ok=True)
-    live = live_lock_pid(config)
-    if live is not None:
-        log(f"ABORT: a redeploy is already running (pid {live})")
-        return False
-    # A lock naming a dead pid is stale by definition; only O_EXCL can decide the
-    # race between two scripts that both just found it stale.
-    try:
-        path.unlink(missing_ok=True)
-    except OSError:
-        pass
-    try:
-        handle = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-    except FileExistsError:
-        log("ABORT: a redeploy is already starting")
-        return False
-    except OSError as exc:
-        log(f"WARNING: could not claim {path} ({exc}); continuing without single-flight")
-        return True
-    os.close(handle)
-    write_redeploy_lock(path, os.getpid())
-    return True
-
-
-def live_lock_pid(config) -> int | None:  # noqa: ANN001 - Config
-    """PID named by a live `redeploy.lock`, or None (missing/stale/ours-to-take).
-
-    One shared rule with the daemon's reader (`bundle_locks`), so the two cannot
-    disagree about whether a redeploy is in flight.
-    """
-    pid = live_redeploy_lock_pid(config.data_dir / REDEPLOY_LOCK_NAME)
-    return None if pid == os.getpid() else pid
-
-
-def announce_start(config) -> None:  # noqa: ANN001 - Config
-    """Ask the daemon to tell its clients a redeploy just began.
-
-    Best-effort by design: this only buys the UI a progress chip during the
-    build, so a daemon that is not up, not desktop-managed, or too old to know
-    the route costs nothing but the old behaviour.
-    """
-    request = urllib.request.Request(
-        f"{base_url(config)}/api/daemon/redeploy/announce",
-        data=b"{}",
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=5) as response:
-            if int(response.status) == 202:
-                log("announced the redeploy to connected clients")
-                return
-    except (OSError, urllib.error.URLError) as exc:
-        log(f"could not announce the redeploy to clients ({exc}); continuing")
-        return
-    log("daemon did not accept the redeploy announcement; continuing")
-
-
-def base_url(config) -> str:  # noqa: ANN001 - Config
-    return f"http://127.0.0.1:{config.port}"
-
-
-def health_payload(config, timeout: float = 1.5) -> dict | None:  # noqa: ANN001
-    """Whatever `/api/health` says, ready or not.
-
-    A daemon that is still building its runtime answers 503 with the phase it is
-    in, and `urlopen` raises `HTTPError` for that - which is itself a readable
-    response, so the body is parsed rather than discarded. Reading it is the
-    whole reason the health wait can report progress instead of silence.
-    """
-    try:
-        with urllib.request.urlopen(f"{base_url(config)}/api/health", timeout=timeout) as response:
-            payload = json.load(response)
-    except urllib.error.HTTPError as error:
-        try:
-            payload = json.load(error)
-        except (OSError, ValueError):
-            return None
-    except (OSError, ValueError, urllib.error.URLError):
-        return None
-    return payload if isinstance(payload, dict) else None
-
-
-def health(config, timeout: float = 1.5) -> dict | None:  # noqa: ANN001
-    """The health payload only once the daemon is fully ready.
-
-    Deliberately unchanged in meaning: every caller of this asks "is there a
-    usable daemon on this port", and a daemon part-way through its startup is
-    not one. `health_payload` is the wider read for callers that want the
-    in-progress answer too.
-    """
-    payload = health_payload(config, timeout)
-    return payload if payload is not None and payload.get("ok") else None
-
-
-def startup_progress(payload: dict | None) -> str:
-    """One line describing where a starting daemon has got to, or "".
-
-    Only ever descriptive. It quotes the phase the daemon named and the phases
-    it has already finished; nothing here estimates a remaining time, because
-    the phase durations vary by two orders of magnitude across fleets and a made
-    up percentage is acted on where an absent one is not.
-    """
-    if not payload or payload.get("status") != "starting":
-        return ""
-    phase = str(payload.get("phase") or "starting")
-    phase_seconds = float(payload.get("phase_seconds") or 0.0)
-    elapsed = float(payload.get("elapsed_seconds") or 0.0)
-    done = [str(item.get("name")) for item in (payload.get("phases") or []) if item.get("name")]
-    completed = f"; done: {', '.join(done)}" if done else ""
-    return (
-        f"starting - phase {phase} ({phase_seconds:.0f}s), "
-        f"{elapsed:.0f}s into startup{completed}"
-    )
-
-
-def supervisor_process(config):  # noqa: ANN001
-    """(pid, exe_path) of the live supervisor for this config, or None."""
-    import psutil
-
-    try:
-        info = json.loads(discovery_path(config.data_dir).read_text(encoding="utf-8"))
-        pid = int(info["pid"])
-    except (OSError, ValueError, KeyError):
-        return None
-    try:
-        process = psutil.Process(pid)
-        return pid, Path(process.exe())
-    except (psutil.NoSuchProcess, psutil.AccessDenied):
-        return None
-
-
-def request_detach_shutdown(config) -> bool:  # noqa: ANN001
-    token_path = config.data_dir / "desktop-control.token"
-    try:
-        token = token_path.read_text(encoding="ascii").strip()
-    except OSError:
-        return False
-    if not token:
-        return False
-    request = urllib.request.Request(
-        f"{base_url(config)}/api/desktop/shutdown",
-        data=json.dumps({"mode": "restart"}).encode("utf-8"),
-        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=5) as response:
-            return int(response.status) == 202
-    except (OSError, urllib.error.URLError):
-        return False
-
-
-def processes_by_image(names: set[str]) -> list[tuple[int, str]]:
-    import psutil
-
-    found: list[tuple[int, str]] = []
-    for process in psutil.process_iter(["pid", "name"]):
-        try:
-            name = (process.info["name"] or "").casefold()
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            continue
-        if name in {value.casefold() for value in names}:
-            found.append((int(process.info["pid"]), name))
-    return found
-
-
-def is_session_helper(process) -> bool:  # noqa: ANN001 - psutil.Process
-    """True for `swe-mux.exe -m swe_mux.<module>`, a helper inside a session tree."""
-    import psutil
-
-    try:
-        argv = [str(part) for part in process.cmdline()]
-    except (psutil.NoSuchProcess, psutil.AccessDenied, OSError):
-        # Unreadable argv cannot be proven safe to kill. Treating it as a helper
-        # only risks a lock straggler, which the swap escalation already handles;
-        # treating it as the shell risks killing a live session, which it does not.
-        return True
-    for flag, module in zip(argv, argv[1:], strict=False):
-        if flag == HELPER_MODULE_FLAG and module.startswith(HELPER_MODULE_PREFIX):
-            return True
-    return False
-
-
-def partition_app_processes() -> tuple[list[int], list[int]]:
-    """Split live `swe-mux.exe` processes into (shell/daemon, session helpers)."""
-    import psutil
-
-    shell: list[int] = []
-    helpers: list[int] = []
-    for pid, _ in processes_by_image(APP_IMAGE_NAMES):
-        try:
-            process = psutil.Process(pid)
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            continue
-        (helpers if is_session_helper(process) else shell).append(pid)
-    return shell, helpers
-
-
-def app_window_visible() -> bool:
-    """Whether a visible top-level window belongs to the desktop app."""
-
-    if sys.platform != "win32":
-        return False
-    shell_pids = set(partition_app_processes()[0])
-    if not shell_pids:
-        return False
-
-    import ctypes
-    from ctypes import wintypes
-
-    found = False
-    user32 = ctypes.windll.user32
-    enum_callback = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
-    user32.IsWindowVisible.argtypes = [wintypes.HWND]
-    user32.IsWindowVisible.restype = wintypes.BOOL
-    user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
-    user32.GetWindowThreadProcessId.restype = wintypes.DWORD
-    user32.EnumWindows.argtypes = [enum_callback, wintypes.LPARAM]
-    user32.EnumWindows.restype = wintypes.BOOL
-
-    @enum_callback
-    def inspect_window(handle, _parameter) -> bool:  # noqa: ANN001 - Win32 callback
-        nonlocal found
-        if not user32.IsWindowVisible(handle):
-            return True
-        process_id = wintypes.DWORD()
-        user32.GetWindowThreadProcessId(handle, ctypes.byref(process_id))
-        if process_id.value in shell_pids:
-            found = True
-            return False
-        return True
-
-    user32.EnumWindows(inspect_window, 0)
-    return found
-
-
-def resolve_relaunch_hidden(*, hidden: bool, restore_visibility: bool) -> bool:
-    """Choose launch presentation, probing only for UI-triggered redeploys."""
-
-    return hidden or (restore_visibility and not app_window_visible())
-
-
-def terminate_pids(pids: list[int], *, grace: float = 3.0) -> None:
-    """Terminate then kill specific pids, never a whole image name."""
-    import psutil
-
-    processes = []
-    for pid in pids:
-        try:
-            process = psutil.Process(pid)
-            process.terminate()
-            processes.append(process)
-        except (psutil.NoSuchProcess, psutil.AccessDenied, OSError):
-            continue
-    _, alive = psutil.wait_procs(processes, timeout=grace)
-    for process in alive:
-        try:
-            process.kill()
-        except (psutil.NoSuchProcess, psutil.AccessDenied, OSError):
-            continue
-    if alive:
-        psutil.wait_procs(alive, timeout=grace)
-
-
-def force_stop_app_images() -> None:
-    """Last-resort image-wide kill, used only when a lock blocks the swap.
-
-    This is the blunt instrument: it reaches every `swe-mux.exe`, including the
-    in-session helpers deliberately spared above. It runs only when the choice is
-    between that and a failed redeploy, and it says so.
-    """
-    _, helpers = partition_app_processes()
-    if helpers:
-        log(
-            f"escalating to an image-wide kill; {len(helpers)} in-session helper(s) "
-            "will be terminated too"
-        )
-    subprocess.run(["taskkill", "/F", "/IM", "swe-mux.exe"], capture_output=True, check=False)
-    time.sleep(1.0)
-
-
-def stop_app_processes(config) -> None:  # noqa: ANN001
-    if health(config) is not None:
-        log("asking the daemon to shut down with detach intent (sessions stay up)")
-        if request_detach_shutdown(config):
-            deadline = time.monotonic() + 15
-            while time.monotonic() < deadline and health(config, timeout=0.5) is not None:
-                time.sleep(0.25)
-        else:
-            log("daemon did not accept desktop shutdown (not desktop-managed?); continuing")
-    shell, helpers = partition_app_processes()
-    if helpers:
-        log(f"sparing {len(helpers)} in-session swe-mux helper(s) (hook clients)")
-    if shell:
-        log(f"terminating {len(shell)} swe-mux.exe process(es) (shell/daemon)")
-        terminate_pids(shell)
-        time.sleep(1.0)
+#: The checkout's own layout: `dist/` beside `packaging/`. The module constants
+#: are kept for the readers that grep them (`tests/test_bundle_contents.py`
+#: asserts the `--skip-cli` line below verbatim).
+LAYOUT = Layout.for_checkout(ROOT)
+APP_DIST = LAYOUT.app
+APP_EXE = LAYOUT.app_exe
+STAGING_ROOT = LAYOUT.staging_root
+STAGED_APP = LAYOUT.staged(bundle_apply.APP_BUNDLE)
+PREV_APP = LAYOUT.prev(bundle_apply.APP_BUNDLE)
+FAILED_APP = LAYOUT.failed(bundle_apply.APP_BUNDLE)
+
+__all__ = [
+    "APP_HEALTH_TIMEOUT_SECONDS",
+    "MODE_REPLACE",
+    "MODE_SWAP",
+    "OUTCOME_BUILD_FAILED",
+    "OUTCOME_FAILED",
+    "OUTCOME_REFUSED",
+    "OUTCOME_ROLLED_BACK",
+    "OUTCOME_SUCCEEDED",
+    "OUTCOME_SWAP_FAILED",
+    "OUTCOME_UNHEALTHY",
+    "Outcome",
+    "announce_start",
+    "claim_lock",
+    "live_lock_pid",
+    "log",
+    "main",
+    "parse_args",
+]
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -575,6 +158,14 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help=(
             "expected SHA-256 of --from-archive; verified again here so this script "
             "carries its own guarantee rather than inheriting its caller's"
+        ),
+    )
+    parser.add_argument(
+        "--replace-supervisor",
+        action="store_true",
+        help=(
+            "with --from-archive: stop with quit intent (EVERY live session ends) and "
+            "replace the PTY supervisor bundle the archive carries as well as the app"
         ),
     )
     parser.add_argument(
@@ -626,6 +217,23 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 def _run(args: argparse.Namespace, config, outcome: Outcome) -> int:  # noqa: ANN001 - Config
+    mode = MODE_REPLACE if args.replace_supervisor else MODE_SWAP
+    if args.from_archive is not None and not args.skip_build:
+        # The whole install, preflights included, is the shared implementation:
+        # the same code the frozen console client runs on a machine with no
+        # checkout, so the two cannot drift apart.
+        return bundle_apply.apply_archive(
+            config,
+            LAYOUT,
+            outcome,
+            archive=args.from_archive,
+            expected_sha256=args.archive_sha256,
+            mode=mode,
+            hidden=args.hidden,
+            restore_visibility=args.restore_visibility,
+            no_launch=args.no_launch,
+            force=args.force,
+        )
     # -- preflight ---------------------------------------------------------
     # Cheapest check first, and the only one that costs nothing: the build
     # environment must carry every distributed extra. `voice-local` is optional
@@ -634,11 +242,7 @@ def _run(args: argparse.Namespace, config, outcome: Outcome) -> int:  # noqa: AN
     # which silently collects nothing when the package is absent. Without this,
     # the failure surfaces minutes later inside `verify_bundle_licenses`, and a
     # redeploy started from the UI reports it only as a generic build failure.
-    # An archive install builds nothing, so the build environment's completeness
-    # is not its problem: the released bundle already satisfies the LGPL relink
-    # obligation this check exists to protect, and demanding a local build
-    # environment would refuse exactly the install that needs none.
-    if not args.skip_build and args.from_archive is None:
+    if not args.skip_build:
         missing = build_desktop.missing_extra_distributions()
         if missing:
             extras = " ".join(
@@ -659,42 +263,28 @@ def _run(args: argparse.Namespace, config, outcome: Outcome) -> int:  # noqa: AN
                 code=2,
             )
             return 2
-    supervisor = supervisor_process(config)
-    if supervisor is None:
-        message = (
-            "no PTY supervisor is running for this config; a redeploy will kill any "
-            "in-process sessions"
+    if bundle_apply.preflight_supervisor(config, LAYOUT, mode=mode, force=args.force):
+        return 2
+    if args.skip_build:
+        return bundle_apply.bounce(
+            config,
+            LAYOUT,
+            outcome,
+            hidden=args.hidden,
+            restore_visibility=args.restore_visibility,
+            no_launch=args.no_launch,
         )
-        if not args.force:
-            log(f"ABORT: {message}. Re-run with --force to proceed anyway.")
-            return 2
-        log(f"WARNING: {message} (continuing due to --force)")
-    else:
-        pid, exe = supervisor
-        log(f"supervisor pid {pid} running from {exe}")
-        try:
-            inside_app_dist = exe.resolve().is_relative_to(APP_DIST.resolve())
-        except OSError:
-            inside_app_dist = False
-        if inside_app_dist and not args.force:
-            log(
-                "ABORT: the supervisor is running from dist/swe-mux (the "
-                "--supervisor-child fallback), so rebuilding would kill it and every "
-                "session. Run `swemuxd --shutdown`, rebuild once (this creates the "
-                "dedicated swe-mux-supervisor bundle), and relaunch; future redeploys "
-                "will then preserve sessions."
-            )
-            return 2
+    supervisor = bundle_apply.supervisor_process(config)
     # Legacy only: task steps are spawned as ordinary shells and no longer run any
     # swe-mux binary, so nothing new can hold this lock. Terminals started by a
     # pre-removal bundle still can, until they are closed.
-    action_terminals = processes_by_image({ACTION_IMAGE_NAME})
+    action_terminals = bundle_apply.processes_by_image({bundle_apply.ACTION_IMAGE_NAME})
     if action_terminals and not args.force:
         log(
             f"ABORT: {len(action_terminals)} task terminal(s) predating the action-runner "
-            f"removal still run {ACTION_IMAGE_NAME} from dist/swe-mux and would lock the "
-            "swap. Close those sessions (relaunching them after this redeploy is enough), "
-            "or re-run with --force."
+            f"removal still run {bundle_apply.ACTION_IMAGE_NAME} from dist/swe-mux and would "
+            "lock the swap. Close those sessions (relaunching them after this redeploy is "
+            "enough), or re-run with --force."
         )
         return 2
     # Anything foreign anchoring dist/swe-mux (a dev server behind a Preview tab,
@@ -703,417 +293,58 @@ def _run(args: argparse.Namespace, config, outcome: Outcome) -> int:  # noqa: AN
     # the swap is doomed no matter what. Say who is holding it BEFORE spending
     # minutes on a build (measured live 2026-08-02: two redeploys built, stopped
     # the app, and then died at this exact rename).
-    if not args.skip_build and abort_if_bundle_held(args, when="the swap would fail"):
+    if bundle_apply.abort_if_bundle_held(LAYOUT, force=args.force, when="the swap would fail"):
         return 2
 
-    # -- stage (staged; the old app keeps running and serving) --------------
-    if not args.skip_build and args.from_archive is not None:
-        staged = stage_from_archive(args, outcome)
-        if staged:
-            return staged
-    elif not args.skip_build:
-        skip_supervisor = False
-        if not build_desktop.supervisor_bundle_current() and supervisor is not None:
-            log(
-                "WARNING: supervisor sources changed but a supervisor is running with "
-                "live sessions; keeping the OLD supervisor bundle. To refresh it: "
-                "`swemuxd --shutdown` (reaps sessions), then "
-                "`uv run python packaging/build_desktop.py --supervisor-only`."
-            )
-            skip_supervisor = True
-        built = "app bundle only" if args.skip_frontend else "frontend + app bundle"
-        log(f"rebuilding {built} into dist/.staging (old app stays up)")
-        shutil.rmtree(STAGING_ROOT, ignore_errors=True)
-        # `--skip-cli` unconditionally. `dist/swe-mux-cli` is an installer input,
-        # not part of the running app: the daemon never launches it, the swap
-        # never renames it, and nothing here would be stale without it. Building
-        # it would put a fresh write into `dist/` during the one operation whose
-        # whole design is to touch nothing there until the swap - and if a
-        # `swemux` from that bundle happened to be sitting in a terminal, the
-        # build would fail on a locked exe minutes in. Refresh it deliberately
-        # with `packaging/build_desktop.py --cli-only`.
-        build_arguments = ["--app-distpath", str(STAGING_ROOT), "--skip-cli"]
-        if skip_supervisor:
-            build_arguments.append("--skip-supervisor")
-        if args.skip_frontend:
-            build_arguments.append("--skip-frontend")
-        try:
-            build_desktop.main(build_arguments)
-        except (SystemExit, subprocess.CalledProcessError) as exc:
-            log(f"ABORT: build failed; the running app was never touched ({exc})")
-            outcome.record(
-                OUTCOME_BUILD_FAILED,
-                "The build failed. The current app is untouched.",
-                code=1,
-            )
-            return 1
+    # -- build (staged; the old app keeps running and serving) --------------
+    skip_supervisor = False
+    if not build_desktop.supervisor_bundle_current() and supervisor is not None:
+        log(
+            "WARNING: supervisor sources changed but a supervisor is running with "
+            "live sessions; keeping the OLD supervisor bundle. To refresh it: "
+            "`swemuxd --shutdown` (reaps sessions), then "
+            "`uv run python packaging/build_desktop.py --supervisor-only`."
+        )
+        skip_supervisor = True
+    built = "app bundle only" if args.skip_frontend else "frontend + app bundle"
+    log(f"rebuilding {built} into dist/.staging (old app stays up)")
+    shutil.rmtree(STAGING_ROOT, ignore_errors=True)
+    # `--skip-cli` unconditionally. `dist/swe-mux-cli` is an installer input,
+    # not part of the running app: the daemon never launches it, the swap
+    # never renames it, and nothing here would be stale without it. Building
+    # it would put a fresh write into `dist/` during the one operation whose
+    # whole design is to touch nothing there until the swap - and if a
+    # `swemux` from that bundle happened to be sitting in a terminal, the
+    # build would fail on a locked exe minutes in. Refresh it deliberately
+    # with `packaging/build_desktop.py --cli-only`.
+    build_arguments = ["--app-distpath", str(STAGING_ROOT), "--skip-cli"]
+    if skip_supervisor:
+        build_arguments.append("--skip-supervisor")
+    if args.skip_frontend:
+        build_arguments.append("--skip-frontend")
+    try:
+        build_desktop.main(build_arguments)
+    except (SystemExit, subprocess.CalledProcessError) as exc:
+        log(f"ABORT: build failed; the running app was never touched ({exc})")
+        outcome.record(
+            OUTCOME_BUILD_FAILED,
+            "The build failed. The current app is untouched.",
+            code=1,
+        )
+        return 1
     # Both staging paths answer to these, and the wording stays "staged" rather
     # than "built": an archive that extracted without an exe is exactly as unusable
     # as a build that produced none, and it must fail here, before anything stops.
-    if not args.skip_build:
-        if not (STAGED_APP / "swe-mux.exe").is_file():
-            log("ABORT: nothing staged a swe-mux.exe; the running app was never touched")
-            outcome.record(
-                OUTCOME_BUILD_FAILED,
-                "The staged bundle carries no executable. The current app is untouched.",
-                code=1,
-            )
-            return 1
-        # Free the rollback slot BEFORE the app is stopped. The swap renames
-        # dist/swe-mux onto it, and a Windows rename cannot land on an existing
-        # directory — so a `.prev` that a previous run only partially removed
-        # (an exe image still mapped at the time) would otherwise abort the
-        # swap after the daemon was already down.
-        if not clear_slot(PREV_APP):
-            log("ABORT: dist/swe-mux.prev is not removable; the running app was never touched")
-            return 1
-
-    # -- stop (only after a successful build) -------------------------------
-    # Re-checked here because the build takes minutes: a holder that appeared
-    # during it would still doom the swap, and aborting now leaves the running
-    # app completely untouched (the staged build is kept for the retry).
-    if not args.skip_build and abort_if_bundle_held(
-        args, when="the swap would fail; the running app was never touched"
-    ):
-        return 2
-    args.hidden = resolve_relaunch_hidden(
-        hidden=args.hidden, restore_visibility=args.restore_visibility
+    return bundle_apply.apply_staged(
+        config,
+        LAYOUT,
+        outcome,
+        mode=mode,
+        hidden=args.hidden,
+        restore_visibility=args.restore_visibility,
+        no_launch=args.no_launch,
+        force=args.force,
     )
-    if args.restore_visibility:
-        presentation = "hidden in the tray" if args.hidden else "with its window visible"
-        log(f"desktop presentation captured; relaunching {presentation}")
-    stop_app_processes(config)
-
-    # -- swap ---------------------------------------------------------------
-    # Held for the renames only. `dist/swe-mux` stops existing between them, and
-    # every gated shim in the data dir waits that out rather than launching a
-    # process whose `_MEIPASS` is about to name a directory called something else
-    # (`swe_mux.bundle_swap` has the failure it closes). The stopped shell and
-    # daemon are not what this protects: the hook clients of live sessions are,
-    # and those are deliberately spared by `stop_app_processes` above.
-    if not args.skip_build:
-        clear_slot(PREV_APP)
-        with bundle_swap.hold_bundle_swap(config.data_dir):
-            if APP_DIST.exists() and not replace_dir(APP_DIST, PREV_APP):
-                # A lock straggler outlived the targeted stop. Only now is the blunt
-                # image-wide kill worth its cost: the alternative is a redeploy that
-                # fails outright. Sparing helpers first means the common path never
-                # pays it, and this path retries the rename once afterwards.
-                force_stop_app_images()
-                if not replace_dir(APP_DIST, PREV_APP):
-                    log("ABORT: could not retire the old bundle; relaunching it unchanged")
-                    outcome.record(
-                        OUTCOME_SWAP_FAILED,
-                        "The old app bundle could not be retired, so the previous build was "
-                        "restarted unchanged. Your change did NOT ship.",
-                        code=1,
-                    )
-                    return relaunch_and_report(config, args, note="old build (swap failed)")
-            if not replace_dir(STAGED_APP, APP_DIST):
-                log("ABORT: could not move the staged bundle into dist; restoring the old app")
-                if PREV_APP.exists():
-                    replace_dir(PREV_APP, APP_DIST)
-                outcome.record(
-                    OUTCOME_SWAP_FAILED,
-                    "The new bundle could not be moved into place, so the previous build was "
-                    "restored. Your change did NOT ship.",
-                    code=1,
-                )
-                return relaunch_and_report(config, args, note="old build (swap failed)")
-        shutil.rmtree(STAGING_ROOT, ignore_errors=True)
-
-    # -- relaunch ------------------------------------------------------------
-    if args.no_launch:
-        log("done (relaunch skipped)")
-        return 0
-    if not APP_EXE.is_file():
-        log(f"ABORT: {APP_EXE} does not exist after build")
-        return 1
-    launched = launch_app(config, hidden=args.hidden)
-    payload = wait_healthy(config, process=launched)
-    if payload is not None:
-        log(
-            f"daemon healthy: supervisor={payload.get('supervisor')} "
-            f"live_sessions={payload.get('live_sessions')}"
-        )
-        outcome.record(
-            OUTCOME_SUCCEEDED,
-            f"The rebuilt app is running with {payload.get('live_sessions', 0)} live session(s).",
-            code=0,
-        )
-        return 0
-    # -- rollback: the new build launched but never became healthy ----------
-    if not args.skip_build and PREV_APP.is_dir():
-        log(
-            f"new app did not report healthy within {APP_HEALTH_TIMEOUT_SECONDS:.0f}s; "
-            "rolling back to the previous "
-            f"build (failed bundle kept at {FAILED_APP})"
-        )
-        stop_app_processes(config)
-        clear_slot(FAILED_APP)
-        with bundle_swap.hold_bundle_swap(config.data_dir):
-            rolled_back = replace_dir(APP_DIST, FAILED_APP) and replace_dir(PREV_APP, APP_DIST)
-        if not rolled_back:
-            log("ABORT: rollback swap failed; check dist/ by hand")
-            outcome.record(
-                OUTCOME_SWAP_FAILED,
-                "The new build was unhealthy and the rollback swap also failed. "
-                "dist/ needs checking by hand.",
-                code=1,
-            )
-            return 1
-        # Written before the relaunch below, not after: the browser asks for this
-        # file as soon as any daemon answers health, which that relaunch causes.
-        outcome.record(
-            OUTCOME_ROLLED_BACK,
-            "The new build never became healthy, so the previous app was restored. "
-            "Your change did NOT ship; the failed bundle is kept at dist/swe-mux.failed.",
-            code=1,
-        )
-        return relaunch_and_report(config, args, note="rolled-back previous build")
-    log(
-        f"daemon did not report healthy within {APP_HEALTH_TIMEOUT_SECONDS:.0f}s; "
-        "check <data_dir>/desktop-daemon.log"
-    )
-    outcome.record(
-        OUTCOME_UNHEALTHY,
-        "The app did not report healthy and there was no previous build to roll back to. "
-        "Check desktop-daemon.log in the data directory.",
-        code=1,
-    )
-    return 1
-
-
-def stage_from_archive(args, outcome: Outcome) -> int:  # noqa: ANN001 - argparse.Namespace
-    """Verify and extract a release archive into `dist/.staging`. 0 means staged.
-
-    Stands exactly where the PyInstaller build stands, and gives the same two
-    guarantees the build gives: it happens while the old app is still serving, and
-    a failure here has touched nothing. Everything after it - the stop, the swap,
-    the health wait, the rollback to `dist/swe-mux.prev` - is unchanged and
-    unaware that a download rather than a build produced the tree.
-
-    The hash is re-checked here even though the daemon's updater already verified
-    it. That is not distrust of the caller; it is that this script is separately
-    invocable with any path a person can type, and a guarantee that only holds
-    when you were called by the right process is not a guarantee. Passing no
-    `--archive-sha256` is allowed and says so out loud, because a maintainer
-    installing a locally-built archive has nothing to check against.
-
-    Since Phase 21 the extraction is a **delta** where the archive supports one:
-    `bundle_stage.stage_bundle` reads the archive's own `files.json`, hard-links
-    every file whose SHA-256 already matches what is installed in `dist/swe-mux`,
-    and writes only the rest. That is the same tree either way - each reused file
-    is proven byte-identical to the release before it is linked - but a linked
-    file keeps the antivirus verdict the machine already has for it, which is
-    where an update's minutes actually go. Measured over two real consecutive
-    builds of this project, 92.3% of the bundle's bytes and 2874 of its 2937
-    files are unchanged. Anything unexpected falls back to extracting the whole
-    archive and says so, because that is precisely the behaviour that shipped
-    before, and `--from-archive` may never turn a slow install into no install.
-    """
-    archive = Path(args.from_archive)
-    if not archive.is_file():
-        log(f"ABORT: {archive} does not exist; nothing was touched")
-        outcome.record(
-            OUTCOME_REFUSED,
-            f"The release archive {archive.name} was not found. Nothing was changed.",
-            code=2,
-        )
-        return 2
-    expected = str(args.archive_sha256 or "").strip().lower()
-    if expected:
-        actual = file_digest(archive)
-        if actual != expected:
-            log(f"ABORT: {archive.name} does not match the expected SHA-256; nothing was touched")
-            outcome.record(
-                OUTCOME_REFUSED,
-                f"{archive.name} does not match the SHA-256 it was supposed to have, "
-                "so it was not staged. Nothing was changed.",
-                code=2,
-            )
-            return 2
-        log(f"{archive.name} matches the expected SHA-256")
-    else:
-        log(f"WARNING: no --archive-sha256 given for {archive.name}; extracting unverified")
-    try:
-        metadata = read_archive_metadata(archive)
-        log(
-            f"staging swe-mux {metadata.version} ({metadata.platform}, supervisor "
-            f"protocol {metadata.supervisor_protocol}) from {archive.name}"
-        )
-        # The installed bundle is offered as the reuse source only when it is
-        # actually there. A first install, or a `dist/` somebody has cleared, is
-        # a full extraction rather than a failure.
-        current = APP_DIST if APP_DIST.is_dir() else None
-        result = stage_bundle(archive, STAGING_ROOT, current_root=current, say=log)
-        log(result.summary())
-    except ArchiveError as exc:
-        log(f"ABORT: {exc.message}; nothing was touched")
-        outcome.record(
-            OUTCOME_REFUSED,
-            f"{exc.message} Nothing was changed.",
-            code=2,
-        )
-        return 2
-    except OSError as exc:
-        log(f"ABORT: could not extract {archive.name} ({exc}); nothing was touched")
-        outcome.record(
-            OUTCOME_BUILD_FAILED,
-            f"The release archive could not be extracted ({exc}). The current app is "
-            "untouched.",
-            code=1,
-        )
-        return 1
-    return 0
-
-
-def abort_if_bundle_held(args, *, when: str) -> bool:  # noqa: ANN001 - argparse.Namespace
-    """Report foreign processes anchoring dist/swe-mux. True means abort.
-
-    Only processes the stop machinery cannot release count (the app's own
-    image and its descendants are excluded by the scan), so a report here is a
-    swap that WILL fail. ``--force`` downgrades it to a warning for the case
-    where the holder is expected to exit during the build.
-    """
-    holders = bundle_lock_holders(APP_DIST)
-    if not holders:
-        return False
-    verdict = "WARNING" if args.force else "ABORT"
-    log(f"{verdict}: dist/swe-mux is held open by processes a redeploy cannot stop ({when}):")
-    for holder in holders:
-        log(f"  pid {holder['pid']} {holder['name']} ({holder['via']}: {holder['path']})")
-    if args.force:
-        log("continuing due to --force; the swap may still fail on these locks")
-        return False
-    log(
-        "These are usually a dev server/preview process or a terminal whose working "
-        "directory is inside dist/swe-mux. Stop those processes (or close their "
-        "tabs/sessions) and re-run, or re-run with --force to attempt anyway."
-    )
-    return True
-
-
-def clear_slot(path: Path, *, retry_seconds: float = SWAP_RETRY_SECONDS) -> bool:
-    """Free `path` so a later rename can land on it. False if it survives.
-
-    `shutil.rmtree(..., ignore_errors=True)` can leave a *partially* deleted
-    tree behind: Windows refuses to unlink an exe/DLL whose image is still
-    mapped by a process killed moments earlier, and the errors are swallowed.
-    The surviving directory then blocks every future rename onto it (WinError
-    183), which is how a stale `dist/swe-mux.prev` aborts a redeploy long after
-    the run that created it. So retry the removal, and if it still will not go,
-    move it aside under a unique name instead of leaving the slot poisoned.
-    Stale leftovers are swept opportunistically once their locks are gone.
-    """
-    for stale in path.parent.glob(f"{path.name}.stale-*"):
-        shutil.rmtree(stale, ignore_errors=True)
-    if not path.exists():
-        return True
-    deadline = time.monotonic() + retry_seconds
-    while True:
-        shutil.rmtree(path, ignore_errors=True)
-        if not path.exists():
-            return True
-        if time.monotonic() >= deadline:
-            break
-        time.sleep(0.5)
-    aside = path.with_name(f"{path.name}.stale-{int(time.time())}")
-    try:
-        path.rename(aside)
-    except OSError as exc:
-        log(f"could not clear {path}: {exc}")
-        return False
-    log(f"{path} had undeletable leftovers (locked images); moved aside to {aside}")
-    return True
-
-
-def replace_dir(source: Path, target: Path, *, retry_seconds: float = SWAP_RETRY_SECONDS) -> bool:
-    """Rename source → target, retrying while a just-stopped exe releases locks."""
-    deadline = time.monotonic() + retry_seconds
-    while True:
-        try:
-            source.rename(target)
-            return True
-        except OSError as exc:
-            if time.monotonic() >= deadline:
-                log(f"could not move {source} -> {target}: {exc}")
-                return False
-            time.sleep(0.5)
-
-
-def launch_app(config, *, hidden: bool) -> subprocess.Popen[bytes]:  # noqa: ANN001 - Config
-    log(f"launching {APP_EXE}")
-    command = [str(APP_EXE)] + (["--hidden"] if hidden else [])
-    # cwd must stay OUT of dist/: the shell's cwd is inherited down the spawn
-    # chain, and any process anchored inside dist/ locks it against the next
-    # rebuild (Windows directory locking via process cwd). Likewise the env is
-    # scrubbed of parent-Claude session markers: this script is designed to run
-    # from an agent session, and leaked markers would make every `claude`
-    # inside swe-mux think it is a nested child session (transcripts off).
-    # Breakaway spawn for the same reason: run from inside a session, this
-    # script sits in that session's kill-on-close Job, and a relaunched app
-    # that inherits it is silently terminated when the session is removed.
-    return popen_outside_job(
-        command,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        cwd=str(config.data_dir),
-        env=scrub_claude_session_markers(os.environ),
-        creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
-    )
-
-
-def wait_healthy(
-    config,
-    seconds: float = APP_HEALTH_TIMEOUT_SECONDS,
-    *,
-    process: subprocess.Popen[bytes] | None = None,
-):  # noqa: ANN001 - Config
-    deadline = time.monotonic() + seconds
-    reported_phase: object = None
-    progress = ""
-    while time.monotonic() < deadline:
-        payload = health_payload(config, timeout=1.0)
-        if payload is not None and payload.get("ok"):
-            return payload
-        # The daemon binds its listeners before it builds its runtime, so this
-        # wait is no longer blind. Logged on each phase *change* rather than each
-        # poll - the elapsed seconds in the line move every time, so comparing
-        # rendered text would put a line in the log twice a second. This is what
-        # turns a 5-15 minute wait from an indistinguishable-from-hung silence
-        # into a record of progress, which is the ambiguity that once made a
-        # 300s ceiling roll back a perfectly good bundle.
-        if payload is not None and payload.get("status") == "starting":
-            progress = startup_progress(payload)
-            if payload.get("phase") != reported_phase:
-                reported_phase = payload.get("phase")
-                log(f"daemon {progress}")
-        if process is not None and process.poll() is not None:
-            log(f"launched app process exited with code {process.returncode} before health")
-            return None
-        time.sleep(0.5)
-    if progress:
-        log(f"health budget expired while the daemon was {progress}")
-    return None
-
-
-def relaunch_and_report(config, args, *, note: str) -> int:  # noqa: ANN001
-    """Bring an app back after a failed swap/health check; always exits nonzero."""
-    if args.no_launch or not APP_EXE.is_file():
-        log(f"{note}: not relaunched (missing exe or --no-launch); check dist/ by hand")
-        return 1
-    launched = launch_app(config, hidden=args.hidden)
-    payload = wait_healthy(config, process=launched)
-    if payload is not None:
-        log(
-            f"{note} healthy again: supervisor={payload.get('supervisor')} "
-            f"live_sessions={payload.get('live_sessions')}; the redeploy itself FAILED"
-        )
-    else:
-        log(f"{note} did not report healthy; check <data_dir>/desktop-daemon.log")
-    return 1
 
 
 if __name__ == "__main__":

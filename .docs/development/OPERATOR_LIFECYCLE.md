@@ -234,19 +234,23 @@ A worktree is a different case and deliberately syncs less: `.worktree-setup` ru
 | `uv tool` | `uv tool upgrade swe-mux` |
 | `pipx` | `pipx upgrade swe-mux` |
 | Source checkout | `git pull`, then the sync command for that checkout, then `npm --prefix frontend ci && npm --prefix frontend run build` if frontend dependencies or sources changed |
-| Installer (`-setup.exe`) | Download the new release's installer and run it. It upgrades in place. |
-| Frozen desktop app in a checkout | `uv run python packaging/redeploy_desktop.py`, or the UI menu's "Rebuild + redeploy app (keep sessions)" (`POST /api/daemon/redeploy`) |
+| Installer (`-setup.exe`) or portable archive | Press **Update** on the banner (or Settings → Diagnostics → Software updates → Install). The dialog says what the update does before you confirm; the app is replaced in place and your sessions survive. Running the new release's installer over the top still works and is the path for a copy older than 0.2.4. |
+| Frozen desktop app in a checkout | The same in-app update; or `uv run python packaging/redeploy_desktop.py` / the UI menu's "Rebuild + redeploy app (keep sessions)" (`POST /api/daemon/redeploy`) to rebuild from source |
 
 Four upgrade properties are worth knowing before you rely on them.
 
-**An installer-managed install upgrades by running the installer, and cannot use the in-app updater.**
-The in-app updater (`POST /api/update/install`, `swemux update --install`) hands its verified archive to `packaging/redeploy_desktop.py`, which is not carried in the bundle - it lives in a source checkout.
-`redeploy_launch.redeploy_source_root()` looks for that script and a `pyproject.toml` beside the app, an installed copy has neither, and the preflight therefore refuses with `no_swap_tool` **before anything is downloaded**, naming the release page instead.
-That is the honest answer rather than a bug: the installer is the upgrade path for an installer install, and the same `AppId` makes running the new one an in-place replacement rather than a second entry in Add/Remove Programs.
+**A frozen install updates itself in place, from any shape, and the first hop is the installer.**
+The in-app updater (`POST /api/update/install`, `swemux update --install`) downloads the release archive, verifies its SHA-256 against the published manifest, and hands it to the staged swap in `swe_mux/bundle_apply.py` - run by `swemux update-apply` from a copy of the console client the archive carries, unpacked under the data directory so it sits outside every bundle it renames.
+No source checkout and no `uv` are needed, which is what makes an installer install and a portable unpack update exactly as a checkout's `dist/` does.
+The exception is a copy whose bundled backend predates the applier (every release up to 0.2.3): it has no `update-apply` to run, so the first upgrade from it is the installer (or a fresh portable unpack), and every upgrade after that is a press.
+After a healthy swap of an installer install the applier writes the new version into the Add/Remove Programs entry, so it and the installer's own "upgrading from" page keep saying the truth.
+`swemux update --plan <version>` prints what a press would do without downloading anything.
 
-An installer upgrade also **deletes the previous bundles before writing the new ones**, which is why it is not simply a copy over the top: a PyInstaller `onedir` tree is not additive, and a dependency dropped between releases would leave an importable stale `.pyd` behind.
-It closes the running app and the PTY supervisor to do that, so **an installer upgrade ends every live terminal session**.
+**An installer upgrade still works and still ends every session.**
+Running the new `-setup.exe` over an existing install **deletes the previous bundles before writing the new ones**, which is why it is not simply a copy over the top: a PyInstaller `onedir` tree is not additive, and a dependency dropped between releases would leave an importable stale `.pyd` behind.
+It closes the running app and the PTY supervisor to do that, so **an installer upgrade ends every live terminal session**; the in-app update does not, which is why it is the default path.
 The Ready page says so when it detects a previous version; finish or detach running agents first.
+It also clears the in-app updater's rollback and staging slots (`swe-mux.prev`, `.staging`, and their siblings) so a fresh install never rolls back into an older release.
 
 **A daemon restart preserves sessions only when the PTY supervisor owns them.**
 `pty_supervisor_enabled` ships `True` as of 2026-08-28; it shipped `False` before that, so an install carried forward from an older config file may still have it off.
@@ -260,10 +264,11 @@ The tray omits its "Restart daemon (keep sessions)" item entirely when the *sett
 `POST /api/daemon/restart` and a plain `npm run build` both reach a daemon that runs from source and neither reaches the frozen bundle, which serves its own copy at `dist/swe-mux/_internal/swe_mux/static` and respawns its own bundled backend.
 Confirm which build is being served before assuming a change is live: compare the hashed asset the live daemon returns against the one you just built.
 
-**The PTY supervisor is updated separately and reaps every session.**
-`packaging/redeploy_desktop.py` cannot ship a supervisor change and says nothing when it does not.
-Updating it is `uv run swemuxd --shutdown`, then `uv run python packaging/build_desktop.py --supervisor-only`, then relaunch, all from outside swe-mux.
-A release that requires it says so in its release notes rather than leaving the updater to surprise the operator.
+**The PTY supervisor is replaced only with your consent, and replacing it reaps every session.**
+A release whose daemon speaks a different supervisor protocol cannot be installed around your sessions.
+The in-app updater refuses it (`supervisor_update_required`, and the dialog says so before the download when the release publishes its metadata sidecar) until you press the button labelled with the consequence - "End every session and install", or `swemux update --install <version> --accept-supervisor-update` - and then installs it in replace mode: the daemon stops with quit intent, every session ends, and the supervisor bundle the archive carries is swapped alongside the app.
+A release that needs this says so in its release notes as well, rather than leaving the updater to surprise you.
+In a checkout, `packaging/redeploy_desktop.py` cannot ship a supervisor change from a *rebuild* and says nothing when it does not; the manual flow there is `uv run swemuxd --shutdown`, then `uv run python packaging/build_desktop.py --supervisor-only`, then relaunch, all from outside swe-mux (`redeploy_desktop.py --from-archive <zip> --replace-supervisor` is the archive form).
 
 **A schema migration keeps a copy of what it replaced.**
 `load_config` rewrites `config.toml` when it migrates, and takes `config.toml.bak` first.

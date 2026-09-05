@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'preact/hooks'
+import { UpdateDialog } from './UpdateDialog'
 import {
   dismissUpdate, fetchUpdateStatus, shouldShowUpdateBanner, updateBannerText,
   type UpdateStatus,
@@ -9,14 +10,16 @@ import {
  *
  * It sits in the shell's banner row beside `ContinuityBanner` and the UI-build
  * strip, which is what makes it non-blocking by construction: it takes a row of
- * chrome and never covers a terminal, never opens a dialog, and never takes
- * focus. `role="status"` with `aria-live="polite"` is the accessible form of the
- * same promise - a screen reader announces it at the next pause rather than
- * interrupting, so it cannot arrive on top of a turn in progress.
+ * chrome and never covers a terminal, never opens a dialog by itself, and never
+ * takes focus. `role="status"` with `aria-live="polite"` is the accessible form
+ * of the same promise - a screen reader announces it at the next pause rather
+ * than interrupting, so it cannot arrive on top of a turn in progress.
  *
- * Nothing here downloads or installs anything. The link goes to the release
- * notes and the operator decides; declining is per version and is recorded by
- * the daemon, so it holds across a reload, a restart, and the phone.
+ * Nothing here downloads or installs anything. The **Update** button opens
+ * `UpdateDialog`, which asks the daemon what installing would do and shows that
+ * before the press that does it; the link goes to the release notes; declining
+ * is per version and is recorded by the daemon, so it holds across a reload, a
+ * restart, and the phone.
  *
  * The poll is deliberately slack. The daemon checks once a day and this only
  * reads the answer it already has, so a slow cadence costs nothing and a fast
@@ -28,6 +31,7 @@ export const POLL_INTERVAL_MS = 60 * 60 * 1000
 
 export function UpdateBanner() {
   const [status, setStatus] = useState<UpdateStatus | null>(null)
+  const [installing, setInstalling] = useState(false)
   const load = useCallback(() => {
     // A failed read leaves the previous answer in place rather than clearing it:
     // one lost poll during a daemon restart must not blink the banner away and
@@ -57,9 +61,19 @@ export function UpdateBanner() {
       {latest?.changelog
         ? <a href={latest.changelog} target="_blank" rel="noreferrer">Release notes</a>
         : null}
+      <button class="primary" onClick={() => setInstalling(true)} aria-label={`Install swe-mux ${latest?.version}`}>
+        Update
+      </button>
       <button onClick={decline} aria-label={`Dismiss the ${latest?.version} update notice`}>
         Dismiss
       </button>
+      {installing && latest?.version && (
+        <UpdateDialog
+          version={latest.version}
+          changelog={latest.changelog}
+          onClose={() => setInstalling(false)}
+        />
+      )}
     </div>
   )
 }

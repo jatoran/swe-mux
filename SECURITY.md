@@ -79,6 +79,8 @@ That check is a security boundary rather than an integrity nicety - an unverifie
 that reached the staged swap would replace the application - so a way to make an artifact be
 staged without matching the published hash, or to make an install start without the explicit
 action, is in scope below.
+So is a way to make an update replace the PTY supervisor - which ends every live terminal
+session - without the request carrying the operator's explicit consent to that.
 
 Two consequences define scope.
 **Exposing the daemon to an untrusted network is outside the supported configuration**, so a
@@ -115,6 +117,8 @@ A vulnerability is something that breaks the boundary above **as designed**:
 - Making the release update check identify the install - a query string, a header, a cookie,
   or any per-machine value on the request - or making it fire while `update_check_enabled`
   is off. The no-telemetry property is a design commitment, not a side effect.
+- Making the updater replace the PTY supervisor, or otherwise end live sessions, on a
+  request that did not carry `accept_supervisor_update`.
 - Getting an artifact staged by the updater without matching the SHA-256 the manifest
   publishes, or getting an install to start without the explicit action that authorizes one.
   The verification is what stands between a network position and replacing the application.

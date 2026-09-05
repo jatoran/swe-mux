@@ -272,17 +272,24 @@ It parses the manifest's `artifacts` for that module but neither persists nor se
 
 ### `update_install.py`
 
-The frozen-app updater, in five steps.
-Install-kind detection (`sys.frozen` plus the executable's own directory, never the presence of a `dist/` beside a checkout) and the release-artifact naming contract (`release_archive_name`, `release_platform_tag`).
-Then the streaming bounded download hashed as it arrives, the promotion of a `.part` file only on a matching digest, the supervisor-protocol gate, and the handoff to `packaging/redeploy_desktop.py --from-archive`.
+The in-app updater, in seven steps.
+Install-kind detection: `sys.frozen` plus the executable's own directory, never the presence of a `dist/` beside a checkout.
+A frozen install is further `checkout`, `installer` (read from the Windows installer's uninstall key), or `portable`.
+The release-artifact naming contract lives here too (`release_archive_name`, `release_file_manifest_name`, `release_bundle_metadata_name`, `release_installer_name`, `release_platform_tag`).
+Then the plan (`plan`): the manifest and the two small hashed sidecars, answered before any download as the mode the release needs, whether that ends sessions, and the delta.
+Then the streaming bounded download hashed as it arrives, and the promotion of a `.part` file only on a matching digest.
+Then the supervisor gate (`_supervisor_verdict`), which answers `swap` or `replace` and the consent refusal that stands until `accept_supervisor_update`.
+Then the applier's extraction from the archive's own `swe-mux-cli/` (`prepare_applier`, falling back to the installed client).
+Then the handoff to `swemux update-apply` through `redeploy_launch.spawn_applier`, announced to every client as `daemon_redeploy_started` with `kind: "update"` and the mode.
 Its refusal vocabulary is closed and durable in `<data_dir>/update-install.json`, because the daemon does not survive the swap it starts.
 Every phase transition is logged with the attempt's `install_id` and persisted at the moment of decision.
 
 It also previews the delta: it fetches the release's sidecar `files.json`, verifies it against `version.json` like any other artifact, and records how many files and bytes of the incoming bundle this machine already has.
 That preview is advisory and nothing branches on it - the swap recomputes the identical plan from the copy inside the archive - and every way it can fail leaves the install proceeding exactly as it did before it existed.
 
-**Not:** the swap (`packaging/redeploy_desktop.py`, unchanged except for the flag), the archive's shape rules or extraction (`bundle_archive.py`), what a bundle claims about itself (`bundle_metadata.py`), which files a delta writes (`bundle_manifest.py` / `bundle_stage.py`), or the decision that an update exists at all (`update_check.py`).
-It never updates `dist/swe-mux-supervisor/`: that reaps every live session, so a release needing it is refused with the manual flow named.
+**Not:** the swap (`bundle_apply.py`), the archive's shape rules or extraction (`bundle_archive.py`), what a bundle claims about itself (`bundle_metadata.py`), or which files a delta writes (`bundle_manifest.py` / `bundle_stage.py`).
+Nor the Add/Remove Programs write after a healthy swap (`install_location.record_installed_version`, called by the applier), or the decision that an update exists at all (`update_check.py`).
+It never replaces the PTY supervisor without consent: that reaps every live session, so a release needing it is refused with `consent: "supervisor_update"` and installed in replace mode only when the request says that was understood.
 
 ### `frontend_overlay.py`
 
@@ -311,7 +318,10 @@ Nor minting a compatibility pin for a payload that arrived without a manifest, a
 
 What a built bundle says about itself (`bundle.json`: schema, version, `supervisor_protocol`, platform, build stamp) and the rules for reading a release archive.
 Split from the updater because two processes need them - the daemon interrogates the archive before deciding anything, and the redeploy script re-validates and extracts it minutes later in its own process, so a rule enforced in only one of them is a rule the other does not have.
-An archive is exactly one top-level `swe-mux/` directory; an absolute path, a drive letter, a `..` segment, or a second root is refused rather than normalized, because a hash proves which file arrived and nothing about what extracting it would write.
+An archive is a top-level `swe-mux/` directory, optionally beside `swe-mux-supervisor/` and `swe-mux-cli/` (`ARCHIVE_ROOTS`, the same three the installed layout holds).
+The client is the process the swap runs from, and the supervisor is moved only in replace mode.
+An absolute path, a drive letter, a `..` segment, a root that is none of those three, or an archive with no `swe-mux/` at all is refused rather than normalized, because a hash proves which file arrived and nothing about what extracting it would write.
+`extract_roots` extracts a named subset of those bundles, which is how the applier is unpacked without the rest.
 `read_archive_file_manifest` reads the second document an archive carries and is deliberately the *only* reader here that answers `(None, reason)` for everything short of an unreadable archive: missing supervisor metadata risks the operator's fleet and is a refusal, while a missing file manifest costs only the delta.
 
 **Not:** deciding what to do about a mismatch (that is the updater's refusal, with the message an operator can act on).
@@ -348,10 +358,22 @@ A wedged hold is bounded twice: the shims give up after `WAIT_SECONDS`, and `cle
 It carries only `agent-turn-complete`, and every durable sibling travels the Codex lifecycle hooks, which are gated.
 **Not** a fix that can live inside the bundle: by the time any of our code runs, including a PyInstaller runtime hook, the process is already committed to the `_MEIPASS` the rename is about to invalidate, so the decision has to be made before the executable is launched at all.
 
+### `bundle_apply.py`
+
+The staged swap, lifted out of `packaging/redeploy_desktop.py` so a process with no checkout and no `uv` can run it: the frozen console client's `swemux update-apply`, running from a copy under the data directory that sits outside every tree it renames.
+`Layout` derives every path - the three bundles, `.staging`, the `.prev` and `.failed` slots - from one install root, because the same swap now runs against a checkout's `dist/`, the installer's `{app}`, and wherever a portable archive was unpacked.
+`apply_archive` verifies and stages (`stage_from_archive`, a delta where the archive supports one) and then `apply_staged` does what the script always did: re-check the bundle holders, stop, rename each bundle to its slot under the bundle-swap hold, relaunch, wait for health, and roll every swapped bundle back if the new app never turns healthy.
+`MODE_SWAP` stops with detach intent and never touches the supervisor bundle; `MODE_REPLACE` stops with quit intent (every session ends, then `stop_supervisor` waits the supervisor out and terminates a straggler by its discovery pid) and swaps the supervisor bundle too.
+The console client is best effort in both modes - a `swemux` in a terminal holds it open, and the old one keeps working - while the app and, in replace mode, the supervisor are required and roll the run back on failure.
+`Outcome` records the mode, version, and swapped bundles in `redeploy-result.json` at the moment of decision; `bounce` is the script's `--skip-build`.
+The script keeps argument parsing, the build-environment preflight, and the PyInstaller build, and calls in here for everything after the staging tree exists.
+
+**Not:** the download, the hash against the manifest, or the consent gate (`update_install.py`); whether an install *may* run at all (each caller's own preflight); or the registry write after a healthy installer install (`install_location.record_installed_version`, which the CLI command passes as `on_success`).
+
 ### `redeploy_launch.py`
 
-How `packaging/redeploy_desktop.py` gets started, shared by `POST /api/daemon/redeploy` and the updater's handoff.
-Three things: the source-checkout resolution (`redeploy_source_root`, with `PACKAGE_DIR` anchored on the package rather than counted from a file), the atomically claimed `redeploy.lock` naming the script process, and the detached breakaway spawn with the parent-Claude markers scrubbed and the cwd kept out of `dist/`.
+How the swap's process gets started, shared by `POST /api/daemon/redeploy` (`spawn_redeploy`: the checkout's script under `uv`) and the updater's handoff (`spawn_applier`: the unpacked console client's `update-apply`, with the data directory as its cwd).
+Three things: the source-checkout resolution (`redeploy_source_root`, with `PACKAGE_DIR` anchored on the package rather than counted from a file), the atomically claimed `redeploy.lock` naming the spawned process, and the detached breakaway spawn with the parent-Claude markers scrubbed and the cwd kept out of the install root.
 
 **Not:** whether a redeploy may run - the preconditions differ between the two callers (a bundle-holder scan for one, a supervisor-protocol gate for the other), so each owns its own refusals.
 

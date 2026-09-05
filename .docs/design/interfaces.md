@@ -247,34 +247,58 @@ The `startup` slot became writable in the same change - this surface always repo
 remove it, while the only way to turn it *on* was the tray menu (unreachable from a phone) or a
 CLI flag.
 
-## Release install (the frozen-app updater)
+## Release install (the in-app updater)
 
 ```text
+POST /api/update/plan      {version: str}   (X-Mux-User-Gesture: update-plan)
 GET  /api/update/install
-POST /api/update/install   {version: str}   (X-Mux-User-Gesture: update-install)
+POST /api/update/install   {version: str, accept_supervisor_update?: bool}
+                                            (X-Mux-User-Gesture: update-install)
 ```
 
 Downloads a named release, verifies its SHA-256 against the published manifest,
-and hands the archive to the redeploy machinery's staged swap
-(`packaging/redeploy_desktop.py --from-archive`, `design/features/desktop-shell.md`).
-The swap itself is unchanged: sessions survive because the PTY supervisor owns
-them, a failure leaves the running app untouched, and a bundle that never turns
-healthy is rolled back to `dist/swe-mux.prev`.
+and hands the archive to the staged swap (`bundle_apply.py`,
+`design/features/desktop-shell.md`), run by a copy of the console client the
+archive itself carries (`swemux update-apply`) - so an installed copy needs no
+source checkout and no `uv`.
+The swap is the one a local redeploy performs: sessions survive because the PTY
+supervisor owns them, a failure leaves the running app untouched, and a bundle
+that never turns healthy is rolled back to `<name>.prev`.
 
-`GET` reads state and nothing else - it is polled while a download runs, so it
-makes no request, touches no archive, and inspects no bundle. It returns
-`{install_kind, swappable, bundle_root, upgrade_command, platform, artifact_name,
-current_version, running, phase, reason, message, version, artifact, archive,
-bytes_downloaded, bytes_total, started_at, finished_at, install_id, events[]}`.
-`phase` is `idle | downloading | verifying | inspecting | handed_off | refused |
-failed`, and the state is durable in `<data_dir>/update-install.json` because
-**the daemon does not survive its own swap** - a record that lived only in memory
-would be gone exactly when someone wanted to know what happened.
+`POST /api/update/plan` is the confirm dialog's content, answered **before any
+download**: it fetches the manifest and the release's two small hashed sidecars
+(`.files.json`, `.bundle.json`) and returns `{version, current_version,
+changelog, published, install_kind, managed, install_root, artifact, installer,
+supervisor, mode, reaps_sessions, consent, consent_reason, delta,
+archive_cached, live_sessions}`.
+`mode` is `swap` (the app is replaced around live sessions) or `replace` (every
+session ends and the PTY supervisor bundle is replaced too); `supervisor` carries
+the running and incoming protocol numbers, `known` (false when the release
+published no metadata sidecar, in which case the install decides after the
+download and stops to ask), and the sentence the dialog shows.
+`managed` is `checkout`, `installer`, or `portable` for a frozen install, and
+decides only what happens *after* a successful swap: an installer install gets
+its Add/Remove Programs entry brought up to the new version.
+The refusals that need no archive - a source install, a manifest that moved, no
+artifact for this platform - are answered as `409` with the same words the
+install would use.
+
+`GET /api/update/install` reads state and nothing else - it is polled while a
+download runs, so it makes no request, touches no archive, and inspects no
+bundle. It returns `{install_kind, managed, swappable, bundle_root,
+install_root, upgrade_command, platform, artifact_name, current_version, running,
+phase, reason, message, version, artifact, archive, bytes_downloaded,
+bytes_total, started_at, finished_at, install_id, events[], delta, mode,
+accepted_supervisor_update, consent, applier}`.
+`phase` is `idle | downloading | verifying | inspecting | preparing | handed_off
+| refused | failed`, and the state is durable in `<data_dir>/update-install.json`
+because **the daemon does not survive its own swap** - a record that lived only
+in memory would be gone exactly when someone wanted to know what happened.
 A phase left mid-flight by a restart reads back as `failed`, never as still
 running: nothing is transferring, because the process that was is gone.
 
-`POST` needs two things, and they answer different questions. The
-**gesture header** is the same promise the manual check makes - nothing a
+`POST /api/update/install` needs two things, and they answer different questions.
+The **gesture header** is the same promise the manual check makes - nothing a
 background poll or a stray reload can trigger reaches the network on the daemon's
 behalf, and this one also replaces the application. The **named version** is
 consent about a specific release: the manifest moves, and "install whatever is
@@ -283,41 +307,61 @@ agreed to, so a manifest that has moved on is `409 version_mismatch`.
 It returns `202` with the snapshot once the attempt starts, and every refusal
 that needs no network is answered as `409` to *this* request rather than left for
 a poll to discover.
+The moment the applier is spawned the daemon broadcasts `daemon_redeploy_started`
+with `kind: "update"` and `mode`, exactly as `POST /api/daemon/redeploy` does for
+a rebuild, so every client shows the same progress chip.
 
-`reason` is a closed set, and each word is a different thing an operator can do:
-`source_install` (a `uv tool install`/wheel has no bundle to swap; the reply
-carries the `uv tool upgrade swe-mux` to run instead), `update_check_disabled`,
-`in_progress`, `no_swap_tool`, `unreachable`, `malformed`, `unsupported_schema`,
-`no_artifact` (this release publishes no bundle named for this platform - also
-the answer when the GitHub fallback found the release, since it carries no
-hashes), `version_mismatch`, `not_newer`, `truncated` (the server declared more
-bytes than it sent - a network event worth retrying), `hash_mismatch` (a complete
-body that is not the released file - never retried into success), `oversized`,
-`download_failed`, `archive_invalid` (an absolute path, a `..` segment, or a
-root other than `swe-mux/`), `bundle_metadata_missing`, `no_supervisor`,
-`supervisor_unknown`, and `supervisor_update_required`.
-
-The last one is the point of the feature rather than an edge case: updating the
-PTY supervisor reaps every live session, so a release whose daemon speaks a
-different supervisor protocol is **refused with the manual flow named** instead of
-being installed behind the operator's back. The comparison is `!=` rather than
-`>` (the supervisor's `hello` refuses any mismatch, so a downgrade strands the
-fleet exactly as a bump does) and it is the protocol rather than a source hash
+A third field, `accept_supervisor_update`, is consent about **cost**. Updating
+the PTY supervisor reaps every live session, so a release whose daemon speaks a
+different supervisor protocol - or an install whose supervisor is running from
+inside the app bundle, or has none - cannot be installed around the sessions.
+Such a release is refused with `consent: "supervisor_update"` on the answer, and
+the same request carrying `accept_supervisor_update: true` proceeds in
+**replace** mode: quit intent (every session ends), then the app *and* the
+supervisor bundle the archive carries are swapped. The flag is permission rather
+than instruction: a release that can be installed around the sessions is,
+whatever the flag says. The comparison is `!=` rather than `>` (the supervisor's
+`hello` refuses any mismatch, so a downgrade strands the fleet exactly as a bump
+does) and it is the protocol rather than a source hash
 (`build_desktop.supervisor_source_hash()` mixes in the build machine's own
 package versions, so hashes never match across a release). An archive whose
 `bundle.json` is missing or unreadable is refused too: "cannot tell whether this
 reaps your sessions" is not a case to guess at.
 
+`reason` is a closed set, and each word is a different thing an operator can do:
+`source_install` (a `uv tool install`/wheel has no bundle to swap; the reply
+carries the exact upgrade command for how this copy was installed),
+`update_check_disabled`, `in_progress`, `no_applier` (neither the release nor
+the install carries the console client that performs the swap - a portable
+archive unpacked without its siblings, installing a pre-2026-09-05 release),
+`unreachable`, `malformed`, `unsupported_schema`, `no_artifact` (this release
+publishes no bundle named for this platform - also the answer when the GitHub
+fallback found the release, since it carries no hashes), `version_mismatch`,
+`not_newer`, `truncated` (the server declared more bytes than it sent - a
+network event worth retrying), `hash_mismatch` (a complete body that is not the
+released file - never retried into success), `oversized`, `download_failed`,
+`archive_invalid` (an absolute path, a `..` segment, or a top-level entry that
+is none of `swe-mux/`, `swe-mux-supervisor/`, `swe-mux-cli/`),
+`bundle_metadata_missing`, and the three consent refusals `no_supervisor`,
+`supervisor_unknown`, `supervisor_in_bundle`, and `supervisor_update_required`.
+
 Nothing is staged before the digest matches. The download streams to a `.part`
 file while it is hashed, and only a matching digest promotes it to a name the
 swap can see, so a partial or substituted download is not a file the swap can
 find. A verified archive is kept (two at a time, under `<data_dir>/updates/`) and
-reused rather than re-fetched, which is the only resume worth having; a file under
+reused rather than re-fetched, which is the only resume worth having - and the
+reason a refusal for want of consent costs nothing to retry with it; a file under
 an artifact's name whose digest is wrong is deleted rather than trusted.
+The applier is unpacked beside the archives (`<data_dir>/updates/applier-<id>/`)
+from the archive's own `swe-mux-cli/`, falling back to the installed client for
+an archive that predates it, so the process performing the swap never sits
+inside a tree the swap renames.
 
-`swemux update` reports both halves from the CLI, and `mux update --install
-<version>` performs one - it sends the same gesture header, because typing the
-command is exactly the deliberate act that header stands for.
+`swemux update` reports both halves from the CLI, `swemux update --plan
+<version>` prints the plan, and `swemux update --install <version>
+[--accept-supervisor-update]` performs one - it sends the same gesture header,
+because typing the command is exactly the deliberate act that header stands for.
+`swemux update-apply` is the applier itself and talks to no daemon.
 
 ## Frontend overlay
 

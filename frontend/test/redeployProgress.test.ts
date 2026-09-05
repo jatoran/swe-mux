@@ -5,8 +5,8 @@ import {
   holderWarning, IDLE_REDEPLOY, loadRedeploy,
   markResultPending, outcomeIsFresh, outcomeNotice, phaseDetail, phaseLabel,
   REDEPLOY_DOWN_PROBES, REDEPLOY_MAX_MS,
-  REDEPLOY_RESULT_KEY, REDEPLOY_STORAGE_KEY, requestRedeploy, saveRedeploy, takeResultPending,
-  interruptionSummary, waitsOnDaemon,
+  REDEPLOY_RESULT_KEY, REDEPLOY_STORAGE_KEY, requestRedeploy, saveRedeploy, sessionsNote,
+  takeResultPending, interruptionSummary, waitsOnDaemon,
   type ProbeVerdict,
 } from '../src/redeployProgress.ts'
 
@@ -186,6 +186,42 @@ test('restored state never blocks and never claims to have seen an outage', () =
   assert.equal(restored.downProbes, 0)
   assert.deepEqual(restored.logTail, [])
   assert.equal(restored.startedAt, now)
+})
+
+test('an update announces itself as one, and a consented reap stops the reassurance', () => {
+  // The in-app updater's swap is the rebuild's broadcast plus `kind` and `mode`.
+  // Both are folded into the state the chip draws from, so a phone that heard
+  // only the broadcast says "installing update" and, for a replace-mode swap,
+  // does not promise sessions the operator agreed to end.
+  const start = 1_000_000
+  const update = beginRedeploy(start, { kind: 'update', mode: 'replace' })
+  assert.equal(update.kind, 'update')
+  assert.equal(update.reap, true)
+  assert.equal(phaseLabel('building', 'update'), 'Installing update')
+  assert.match(phaseDetail('down', 'update', true), /Every terminal session ended/)
+  assert.match(sessionsNote(true), /sessions ended/)
+  assert.match(sessionsNote(false), /not affected/)
+  // A broadcast that names the mode is believed even for a swap already being
+  // tracked: the press that raised the chip may not have known.
+  const pressed = requestRedeploy(start)
+  const confirmed = confirmRedeploy(pressed, start + 2_000, { kind: 'update', mode: 'swap' })
+  assert.equal(confirmed.phase, 'building')
+  assert.equal(confirmed.kind, 'update')
+  assert.equal(confirmed.reap, false)
+  const later = confirmRedeploy(confirmed, start + 3_000, { mode: 'replace' })
+  assert.equal(later.reap, true)
+  // An older daemon that sends neither field is the rebuild it always was.
+  const plain = beginRedeploy(start, {})
+  assert.equal(plain.kind, 'redeploy')
+  assert.equal(plain.reap, false)
+  assert.equal(phaseLabel('building'), 'Rebuilding app')
+  assert.match(phaseDetail('down'), /around your live sessions/)
+  // And the two survive a reload through the sentinel.
+  const store = fakeStore()
+  saveRedeploy(store, update)
+  const restored = loadRedeploy(store, start + 1_000)
+  assert.equal(restored.kind, 'update')
+  assert.equal(restored.reap, true)
 })
 
 test('an expired or absent sentinel restores nothing', () => {

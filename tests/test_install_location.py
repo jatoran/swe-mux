@@ -39,6 +39,7 @@ The two facts under test that a fresh install turns on:
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 from pathlib import Path
 
 from swe_mux import install_location
@@ -687,3 +688,88 @@ def test_every_declared_command_is_one_pyproject_actually_ships() -> None:
     gui = set(manifest["project"]["gui-scripts"])
     declared = {name: launcher for name, launcher in install_location.SHIPPED_COMMANDS}
     assert declared == {**dict.fromkeys(console, "console"), **dict.fromkeys(gui, "gui")}
+
+
+# --------------------------------------------------------------------------- #
+# The Windows installer's registration
+# --------------------------------------------------------------------------- #
+
+
+def _registry(values: dict[str, str]) -> Callable[[str, str], str | None]:
+    """A reader over one key's values; the key is the only one this module reads."""
+
+    def read(key: str, name: str) -> str | None:
+        assert key == install_location.INSTALLER_UNINSTALL_KEY
+        return values.get(name)
+
+    return read
+
+
+def test_the_installers_registration_is_read_from_its_uninstall_entry() -> None:
+    reader = _registry(
+        {
+            "InstallLocation": "C:\\Users\\me\\AppData\\Local\\Programs\\swe-mux\\",
+            "DisplayVersion": "0.2.2",
+            "UninstallString": '"C:\\Users\\me\\AppData\\Local\\Programs\\swe-mux\\unins000.exe"',
+        }
+    )
+    registration = install_location.installer_registration(windows=True, read=reader)
+    assert registration is not None
+    assert registration.display_version == "0.2.2"
+    assert registration.install_location == Path("C:\\Users\\me\\AppData\\Local\\Programs\\swe-mux")
+    if IS_WINDOWS:
+        # The install root is matched as a path, case-insensitively on Windows.
+        # (Only asserted there: `Path` on POSIX keeps backslashes as characters
+        # and `normpath` would not collapse them, which is the detector's own
+        # documented limit rather than this function's.)
+        assert registration.manages(Path("c:\\users\\ME\\appdata\\local\\programs\\swe-mux"))
+        assert not registration.manages(Path("C:\\Users\\me\\AppData\\Local\\Programs\\swe-mux-2"))
+
+
+def test_an_entry_without_an_install_location_is_no_registration() -> None:
+    assert install_location.installer_registration(windows=True, read=_registry({})) is None
+    assert (
+        install_location.installer_registration(
+            windows=True, read=_registry({"InstallLocation": "  "})
+        )
+        is None
+    )
+
+    # Off Windows the registry does not exist and the reader is never consulted.
+    def never(_key: str, _name: str) -> str | None:
+        raise AssertionError("no registry off Windows")
+
+    assert install_location.installer_registration(windows=False, read=never) is None
+
+
+def test_the_add_remove_programs_entry_is_written_only_for_the_install_it_names() -> None:
+    root = Path("C:\\Users\\me\\AppData\\Local\\Programs\\swe-mux")
+    reader = _registry({"InstallLocation": str(root), "DisplayVersion": "0.2.2"})
+    written: list[tuple[str, str, str]] = []
+
+    def write(key: str, name: str, value: str) -> None:
+        written.append((key, name, value))
+
+    assert install_location.record_installed_version(
+        "0.2.4", root, windows=True, read=reader, write=write
+    )
+    assert written == [
+        (install_location.INSTALLER_UNINSTALL_KEY, "DisplayVersion", "0.2.4"),
+        (install_location.INSTALLER_UNINSTALL_KEY, "DisplayName", "swe-mux 0.2.4"),
+    ]
+    # A different install root - a second copy, a portable unpack - is not this
+    # entry's to describe.
+    written.clear()
+    assert not install_location.record_installed_version(
+        "0.2.4", root.parent / "elsewhere", windows=True, read=reader, write=write
+    )
+    assert written == []
+
+    # A registry that refuses the write is a False, never a raise: the update
+    # shipped and a stale line is not a reason to say it did not.
+    def refuse(_key: str, _name: str, _value: str) -> None:
+        raise OSError("access denied")
+
+    assert not install_location.record_installed_version(
+        "0.2.4", root, windows=True, read=reader, write=refuse
+    )

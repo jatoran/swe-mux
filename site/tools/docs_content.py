@@ -2303,8 +2303,12 @@ CLI = Page(
                     [
                         "swemux update",
                         "Report the release check and this install's update path. "
-                        "<code>--install VERSION</code> downloads that release and verifies its "
-                        "hash against the published manifest before anything is staged.",
+                        "<code>--plan VERSION</code> says what installing that release would do "
+                        "without downloading it; <code>--install VERSION</code> downloads it, "
+                        "verifies its hash against the published manifest, and replaces the app "
+                        "around your sessions. A release that replaces the PTY supervisor is "
+                        "refused until <code>--accept-supervisor-update</code> is given, because "
+                        "that <b>ends every session</b>.",
                     ],
                     [
                         "swemux reload-daemon",
@@ -2653,10 +2657,12 @@ DATA = Page(
         ),
         (
             "p",
-            "Installing an update is a separate act you take: <code>mux update --install "
-            "&lt;version&gt;</code> downloads that release, checks its SHA-256 against the "
-            "published manifest before anything is staged, and refuses rather than installs if the "
-            "release would need a new terminal supervisor - which would end your live sessions.",
+            "Installing an update is a separate act you take: the Update button (or "
+            "<code>swemux update --install &lt;version&gt;</code>) downloads that release, checks "
+            "its SHA-256 against the published manifest before anything is staged, and replaces "
+            "the app in place around your live sessions. A release that would need a new "
+            "terminal supervisor - which ends every live session - is refused until you say so "
+            "explicitly, and the dialog says so before anything is downloaded.",
         ),
         ("h2", "Everything else that can reach the network"),
         (

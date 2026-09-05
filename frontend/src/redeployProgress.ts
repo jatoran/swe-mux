@@ -138,6 +138,18 @@ export const REDEPLOY_POLL_MS = 2000
  *  concluding the daemon is away. */
 export const REDEPLOY_PROBE_TIMEOUT_MS = 5000
 
+/** What is being swapped: a rebuild from source, or a downloaded release. The
+ *  two run the identical swap and differ only in what the chip should call it. */
+export type RedeployKind = 'redeploy' | 'update'
+
+/** What the daemon's `daemon_redeploy_started` broadcast said about the swap,
+ *  when it said anything: an older daemon sends neither field. */
+export type RedeployAnnouncement = {
+  kind?: RedeployKind | string
+  /** `swap` preserves sessions; `replace` ends every one (a consented supervisor update). */
+  mode?: 'swap' | 'replace' | string
+}
+
 export type RedeployState = {
   phase: RedeployPhase
   /** When this client first learned about the redeploy (ms epoch). Drives the
@@ -154,28 +166,51 @@ export type RedeployState = {
   downProbes: number
   /** Most recent build-log lines, shown when the chip is expanded. */
   logTail: string[]
+  /** A rebuild from source, or a release being installed. Decides the headline. */
+  kind: RedeployKind
+  /** True when this swap ends every live session (a consented supervisor update),
+   *  so the chip must not promise the sessions are held. */
+  reap: boolean
 }
 
 export const IDLE_REDEPLOY: RedeployState = {
   phase: 'idle', startedAt: 0, expiresAt: 0, sawDown: false, downProbes: 0, logTail: [],
+  kind: 'redeploy', reap: false,
 }
 
-export function beginRedeploy(now: number): RedeployState {
-  return { ...IDLE_REDEPLOY, phase: 'building', startedAt: now, expiresAt: now + REDEPLOY_MAX_MS }
+/** Fold a broadcast's fields into state. Unknown values keep the defaults: an
+ *  older daemon that says nothing is a rebuild that preserves sessions, which is
+ *  the only thing it could have been. */
+function describe(state: RedeployState, announced?: RedeployAnnouncement): RedeployState {
+  if (!announced) return state
+  const kind: RedeployKind = announced.kind === 'update' ? 'update' : state.kind
+  const reap = announced.mode === 'replace' ? true : announced.mode === 'swap' ? false : state.reap
+  return kind === state.kind && reap === state.reap ? state : { ...state, kind, reap }
+}
+
+export function beginRedeploy(now: number, announced?: RedeployAnnouncement): RedeployState {
+  return describe(
+    { ...IDLE_REDEPLOY, phase: 'building', startedAt: now, expiresAt: now + REDEPLOY_MAX_MS },
+    announced,
+  )
 }
 
 /** The press itself, before the daemon has accepted anything. */
-export function requestRedeploy(now: number): RedeployState {
-  return { ...beginRedeploy(now), phase: 'requested' }
+export function requestRedeploy(now: number, announced?: RedeployAnnouncement): RedeployState {
+  return { ...beginRedeploy(now, announced), phase: 'requested' }
 }
 
 /** The daemon accepted (or a broadcast said one is running): start believing in
  *  it. Keeps the clock the press started, so the elapsed timer never jumps back
- *  to zero when the 202 lands several seconds later. */
-export function confirmRedeploy(state: RedeployState, now: number): RedeployState {
-  if (state.phase === 'idle') return beginRedeploy(now)
-  if (state.phase !== 'requested') return state
-  return { ...state, phase: 'building' }
+ *  to zero when the 202 lands several seconds later. A broadcast that names the
+ *  kind or the mode is believed even for a swap already being tracked, because
+ *  the press that raised the chip may not have known either. */
+export function confirmRedeploy(
+  state: RedeployState, now: number, announced?: RedeployAnnouncement,
+): RedeployState {
+  if (state.phase === 'idle') return beginRedeploy(now, announced)
+  if (state.phase !== 'requested') return describe(state, announced)
+  return describe({ ...state, phase: 'building' }, announced)
 }
 
 /** Undo a press the daemon refused - and only that press.
@@ -261,30 +296,47 @@ export function elapsedLabel(startedAt: number, now: number): string {
  *  report during the outage - the only process that knows is the one that took
  *  the daemon away - so this says what stage it is in and lets the elapsed timer
  *  carry the rest, rather than inventing a percentage. */
-export function phaseLabel(phase: RedeployPhase): string {
+export function phaseLabel(phase: RedeployPhase, kind: RedeployKind = 'redeploy'): string {
   // `requested` deliberately says the same thing as `building`. The two are
   // seconds apart and the operator asked for one thing, so a headline that
   // changed in between would read as churn rather than as progress; what
   // differs between them is in `phaseDetail`.
-  if (phase === 'requested' || phase === 'building') return 'Rebuilding app'
+  if (phase === 'requested' || phase === 'building') {
+    return kind === 'update' ? 'Installing update' : 'Rebuilding app'
+  }
   if (phase === 'down') return 'Restarting app'
   return ''
 }
 
-export function phaseDetail(phase: RedeployPhase): string {
+export function phaseDetail(
+  phase: RedeployPhase, kind: RedeployKind = 'redeploy', reap = false,
+): string {
   if (phase === 'requested') {
     return 'Checking that nothing is holding the app bundle open, then the build starts. '
       + 'It runs alongside the app you are using now.'
   }
   if (phase === 'building') {
-    return 'The new build runs alongside the current app, so you can keep working. '
-      + 'The app restarts when it finishes.'
+    return kind === 'update'
+      ? 'The release is being staged beside the current app, so you can keep working. '
+        + 'The app restarts when it is ready.'
+      : 'The new build runs alongside the current app, so you can keep working. '
+        + 'The app restarts when it finishes.'
   }
   if (phase === 'down') {
-    return 'The app is being swapped and restarted around your live sessions. '
-      + 'This page reloads by itself when it comes back.'
+    return reap
+      ? 'The app and its PTY supervisor are being replaced. Every terminal session ended, '
+        + 'as agreed; this page reloads by itself when the app is back.'
+      : 'The app is being swapped and restarted around your live sessions. '
+        + 'This page reloads by itself when it comes back.'
   }
   return ''
+}
+
+/** The reassurance under the outage overlay, or the plain truth when there is none. */
+export function sessionsNote(reap: boolean): string {
+  return reap
+    ? 'This update replaced the PTY supervisor, so your sessions ended when it stopped.'
+    : 'Your sessions are held by the PTY supervisor and are not affected.'
 }
 
 /** A user-facing sentence for a finished redeploy, or '' when it plainly worked.
@@ -338,10 +390,10 @@ export function loadRedeploy(store: Storage | null, now: number): RedeployState 
     // whether the redeploy itself still is. Restoring 'down' verbatim would
     // instead flash a full-screen overlay over a working app, and restoring
     // `sawDown` would make that first healthy probe reload the page for nothing.
-    return {
+    return describe({
       phase: 'building', startedAt: startedAt || now, expiresAt,
-      sawDown: false, downProbes: 0, logTail: [],
-    }
+      sawDown: false, downProbes: 0, logTail: [], kind: 'redeploy', reap: false,
+    }, { kind: parsed.kind, mode: parsed.reap === true ? 'replace' : 'swap' })
   } catch { return IDLE_REDEPLOY }
 }
 

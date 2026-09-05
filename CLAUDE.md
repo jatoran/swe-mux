@@ -64,6 +64,15 @@ daemon restarts and app rebuilds. Use these flows instead of killing swe-mux:
   retries exhaust on a `WinError 5/32` lock straggler, the script relaunches the old bundle
   itself; do NOT reach for `taskkill`/`swemuxd --shutdown` (that reaps sessions). Endpoint log:
   `<data_dir>/redeploy.log`.
+- **In-app update of an installed copy** (the thing a user does; `.docs/design/features/desktop-shell.md`):
+  the banner's Update button, `swemux update --install <version>`, or `POST /api/update/install`.
+  Since 2026-09-05 it needs no checkout and no `uv`: the release archive carries the console
+  client, the daemon unpacks it under the data dir, and `swemux update-apply` runs the same
+  staged swap `redeploy_desktop.py` runs (`src/swe_mux/bundle_apply.py` - one implementation,
+  do not grow a second). A release that changes the supervisor protocol is refused until the
+  request carries `accept_supervisor_update`, because that ends every session. On this
+  machine the redeploy above is still how a *source change* ships; the updater is how a
+  *release* does.
 - **Supervisor change** (`supervisor.py`, `pty_host.py`, `scrollback.py`, `win_jobobj.py`,
   `subprocess_flags.py`, the supervisor spec/entry): **the redeploy above cannot ship this,
   and says nothing when it doesn't.** The redeploy's preflight *requires* a live supervisor,

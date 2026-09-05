@@ -15,6 +15,27 @@ The release procedure that maintains this file is [`RELEASING.md`](RELEASING.md)
 
 ## [Unreleased]
 
+### Added
+
+- **One-press updates for the desktop app, on any install.**
+  The update banner and Settings → Diagnostics → Software updates now carry an Install button.
+  It opens a dialog that says what the update will do before you confirm - how this copy is installed, how much of the app is rewritten, and whether your live sessions survive - and then downloads the release, verifies its hash against the published manifest, and replaces the app in place around your sessions.
+  This works for a copy installed with the Windows installer and for a portable unpack, not only for a source checkout: the swap now ships inside the release (`swemux update-apply`), so no checkout and no `uv` are needed.
+  A copy installed with the installer has its Add/Remove Programs entry brought up to the new version afterwards.
+  The first upgrade from 0.2.3 or earlier is still the installer, because those releases do not carry the updater; every upgrade after it is a press.
+- **A release that replaces the PTY supervisor asks first, and says what it costs.**
+  Replacing the supervisor ends every live terminal session, so such a release is never installed behind your back: the dialog says so before anything is downloaded (naming how many sessions are running), the install is refused until you press "End every session and install", and the CLI needs `--accept-supervisor-update`.
+  Declining keeps everything running until you choose a quieter moment; the downloaded release is kept, so accepting later costs no second download.
+- `swemux update --plan <version>` prints what installing that version would do without downloading it.
+
+### Changed
+
+- The release archive now carries the PTY supervisor and console client bundles beside the app bundle, so an in-app update refreshes the console client too and can replace the supervisor when you consent to it.
+  Older archives still install.
+- A release also publishes its `bundle.json` beside the archive, which is what lets the dialog answer the supervisor question before the download.
+- The installer clears the in-app updater's rollback and staging directories when it upgrades or uninstalls, so a fresh install never rolls back into an older release.
+- The progress chip during an update says "Installing update" rather than "Rebuilding app", and after a consented supervisor replacement the restart overlay says the sessions ended rather than that they are held.
+
 ## [0.2.3] - 2026-09-05
 
 ### Added

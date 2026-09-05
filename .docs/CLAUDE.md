@@ -253,6 +253,24 @@
 - Changing Windows desktop packaging, WebView, tray, login startup, or daemon shutdown:
   `design/features/desktop-shell.md`, `design/architecture.md`, `design/interfaces.md`,
   `design/features/remote-access.md`, `technical/backend/packages.md`
+- Changing the in-app updater - the plan, the consent gate, the applier, the staged swap
+  (`bundle_apply.py`), the release archive's shape, or the install dialog:
+  `design/features/desktop-shell.md`, `design/interfaces.md`,
+  `technical/backend/packages/daemon-runtime.md`, `technical/backend/packages/routes.md`,
+  `technical/frontend/packages/composition.md`, `development/OPERATOR_LIFECYCLE.md`,
+  `RELEASING.md`, `SECURITY.md`, `site/tools/docs_content.py` (then rebuild `site/`).
+  Three rules the design turns on. **The swap has one implementation** (`bundle_apply.py`)
+  and two processes that run it - the checkout's `packaging/redeploy_desktop.py` after a
+  build, and the frozen console client's `swemux update-apply` from a copy under the data
+  directory, which is the only process that sits outside every tree the swap renames. A
+  second copy of the stop-swap-relaunch-rollback sequence is the bug to refuse. **The
+  supervisor is never replaced without consent**, because replacing it reaps every session:
+  the plan says which mode a release needs before the download (the `.bundle.json` sidecar),
+  the install refuses with `consent: "supervisor_update"`, and only a request carrying
+  `accept_supervisor_update` proceeds - in replace mode, from a button labelled with the
+  consequence. And **the release archive carries the three sibling bundles** so the applier
+  is always the release being installed; every reader treats the siblings as optional so an
+  older archive still installs.
 - Changing how swe-mux is *started* without a terminal - the first-run shortcut offer
   (`first_run.py`), the detached `swemux start` (`daemon_start.py`), the shortcut slots
   (`shortcuts.py`, `routes/desktop_integration.py`), or which of the two run-at-login

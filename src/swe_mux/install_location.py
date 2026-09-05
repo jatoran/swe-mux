@@ -450,11 +450,7 @@ def detect_install_location(
         scripts = scripts_dir if scripts_dir is not None else root
     else:
         root = Path(prefix if prefix is not None else sys.prefix)
-        scripts = (
-            scripts_dir
-            if scripts_dir is not None
-            else Path(sysconfig.get_path("scripts"))
-        )
+        scripts = scripts_dir if scripts_dir is not None else Path(sysconfig.get_path("scripts"))
     kind = _detect_kind(
         frozen=is_frozen,
         environment_root=root,
@@ -663,10 +659,141 @@ def render_where(location: InstallLocation, *, version: str | None) -> str:
     return "\n".join(lines)
 
 
+# --- the Windows installer's registration ---------------------------------------
+#
+# A frozen install comes in three shapes that look identical from inside the
+# bundle - `dist/` in a source checkout, the Windows installer's `{app}`, and a
+# portable archive unpacked anywhere - and the in-app updater treats them
+# differently in exactly one place: after replacing an installer-managed copy it
+# brings the Add/Remove Programs entry up to the version now running, so the
+# entry and the installer's own "upgrading from" page stop describing a version
+# that is no longer there. Telling the shapes apart is a question about the
+# registry, and it is answered here beside the rest of "which install is this".
+
+#: The installer's product identity (`packaging/installer/swe-mux.iss`,
+#: `#define AppGuid`). It never changes - Add/Remove Programs and every in-place
+#: upgrade key off it - and `tests/test_windows_installer.py` asserts the two
+#: copies agree, because a drift here would make every installer install read
+#: as portable and its registry entry go stale on the first in-app update.
+INSTALLER_APP_ID = "{7C4E1A64-2B5F-4E0B-9E2D-6E5B0D4A11C3}"
+#: Where a `PrivilegesRequired=lowest` install registers, under HKCU. Inno
+#: appends `_is1` to the AppId for the uninstall key, which is the one thing
+#: about this path that is Inno's convention rather than Windows'.
+INSTALLER_UNINSTALL_KEY = (
+    f"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{INSTALLER_APP_ID}_is1"
+)
+#: The values read and written there. `DisplayVersion` is what Add/Remove
+#: Programs shows and what the installer's Ready page reads as the previous
+#: version; `DisplayName` carries the version too (`UninstallDisplayName`).
+INSTALLER_VALUE_LOCATION = "InstallLocation"
+INSTALLER_VALUE_VERSION = "DisplayVersion"
+INSTALLER_VALUE_NAME = "DisplayName"
+INSTALLER_VALUE_UNINSTALL = "UninstallString"
+
+
+@dataclass(frozen=True, slots=True)
+class InstallerRegistration:
+    """What the installer left in the registry about the copy it installed."""
+
+    install_location: Path
+    display_version: str
+    uninstall_string: str
+
+    def manages(self, install_root: Path, *, windows: bool = True) -> bool:
+        """Whether the registered install is the one rooted at `install_root`.
+
+        Path text compared normalized rather than `samefile`, for the reason
+        `_same_path` gives: this must answer for a directory that may be
+        mid-rename, and for an injected layout in a test.
+        """
+        return _same_path(self.install_location, install_root, windows=windows)
+
+
+def _read_registry_value(key: str, name: str) -> str | None:
+    """One HKCU string value, or None when the key or the value is absent."""
+    import winreg
+
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key) as handle:
+            value, kind = winreg.QueryValueEx(handle, name)
+    except OSError:
+        return None
+    if kind not in (winreg.REG_SZ, winreg.REG_EXPAND_SZ) or not isinstance(value, str):
+        return None
+    return value
+
+
+def _write_registry_value(key: str, name: str, value: str) -> None:
+    """Set one HKCU REG_SZ value on an existing key. Raises `OSError` if absent."""
+    import winreg
+
+    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key, 0, winreg.KEY_SET_VALUE) as handle:
+        winreg.SetValueEx(handle, name, 0, winreg.REG_SZ, value)
+
+
+def installer_registration(
+    *,
+    windows: bool | None = None,
+    read: Callable[[str, str], str | None] | None = None,
+) -> InstallerRegistration | None:
+    """The installer's registration for this user, or None off Windows or unregistered.
+
+    `read` is injectable so the three shapes can be asserted from any host; the
+    live default reads HKCU. An entry with no `InstallLocation` is treated as
+    absent, because a registration that cannot say where it installed cannot be
+    matched to the copy asking.
+    """
+    is_windows = IS_WINDOWS if windows is None else windows
+    if not is_windows:
+        return None
+    reader = read if read is not None else _read_registry_value
+    location = reader(INSTALLER_UNINSTALL_KEY, INSTALLER_VALUE_LOCATION)
+    if not location or not location.strip():
+        return None
+    return InstallerRegistration(
+        install_location=Path(location.strip().rstrip("\\/")),
+        display_version=(reader(INSTALLER_UNINSTALL_KEY, INSTALLER_VALUE_VERSION) or "").strip(),
+        uninstall_string=(reader(INSTALLER_UNINSTALL_KEY, INSTALLER_VALUE_UNINSTALL) or "").strip(),
+    )
+
+
+def record_installed_version(
+    version: str,
+    install_root: Path,
+    *,
+    windows: bool | None = None,
+    read: Callable[[str, str], str | None] | None = None,
+    write: Callable[[str, str, str], None] | None = None,
+) -> bool:
+    """Bring the installer's Add/Remove Programs entry up to `version`.
+
+    Called by the applier after an in-place update of an installer-managed copy
+    has reported healthy, and only then - the registry describes what is
+    installed, so it is written after the fact it describes. Writes nothing
+    when the registration is absent or names a different install root: a second
+    swe-mux install's entry is not this one's to edit. Returns whether the entry
+    was written, and never raises past a logged `OSError` - a stale registry
+    line is not a reason to report that a shipped update did not ship.
+    """
+    registration = installer_registration(windows=windows, read=read)
+    is_windows = IS_WINDOWS if windows is None else windows
+    if registration is None or not registration.manages(install_root, windows=is_windows):
+        return False
+    writer = write if write is not None else _write_registry_value
+    try:
+        writer(INSTALLER_UNINSTALL_KEY, INSTALLER_VALUE_VERSION, version)
+        writer(INSTALLER_UNINSTALL_KEY, INSTALLER_VALUE_NAME, f"swe-mux {version}")
+    except OSError:
+        return False
+    return True
+
+
 __all__ = [
     "CLIENT_COMMANDS",
     "DAEMON_COMMANDS",
     "FROZEN_SIBLING_BUNDLES",
+    "INSTALLER_APP_ID",
+    "INSTALLER_UNINSTALL_KEY",
     "INSTALL_FROZEN",
     "INSTALL_PIPX",
     "INSTALL_SYSTEM",
@@ -675,9 +802,12 @@ __all__ = [
     "SHIPPED_COMMANDS",
     "CommandLocation",
     "InstallLocation",
+    "InstallerRegistration",
     "detect_install_location",
     "extra_install_command",
     "installed_version",
+    "installer_registration",
     "path_hint_lines",
+    "record_installed_version",
     "render_where",
 ]

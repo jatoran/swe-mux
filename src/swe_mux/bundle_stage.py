@@ -68,10 +68,13 @@ from pathlib import Path
 
 from .bundle_archive import (
     ARCHIVE_ROOT,
+    ARCHIVE_ROOTS,
     CHUNK_BYTES,
     ArchiveError,
     ArchiveReader,
+    archive_bundles,
     extract_bundle,
+    extract_roots,
     open_archive,
     read_archive_file_manifest,
     validate_members,
@@ -116,18 +119,25 @@ class StageResult:
     copied: int = 0
     links_created: int = 0
     observations: list[str] = field(default_factory=list)
+    #: Every top-level bundle now under the staging root, app bundle first. The
+    #: siblings (`swe-mux-supervisor`, `swe-mux-cli`) are extracted whole - they
+    #: are small, and only the app bundle publishes a per-file manifest - and an
+    #: archive from before they were carried lists the app bundle alone.
+    bundles: tuple[str, ...] = (ARCHIVE_ROOT,)
 
     def summary(self) -> str:
+        siblings = [name for name in self.bundles if name != ARCHIVE_ROOT]
+        beside = f"; plus {', '.join(siblings)}" if siblings else ""
         if self.mode == MODE_FULL:
             return (
                 f"extracted the whole bundle ({self.written_files} files, "
-                f"{self.written_bytes / 1e6:.1f} MB): {self.reason}"
+                f"{self.written_bytes / 1e6:.1f} MB): {self.reason}{beside}"
             )
         return (
             f"staged a delta: wrote {self.written_files} file(s) / "
             f"{self.written_bytes / 1e6:.1f} MB, reused {self.reused_files} file(s) / "
             f"{self.reused_bytes / 1e6:.1f} MB ({self.linked} linked, {self.copied} "
-            f"copied), recreated {self.links_created} symlink(s)"
+            f"copied), recreated {self.links_created} symlink(s){beside}"
         )
 
     def as_dict(self) -> dict[str, object]:
@@ -142,6 +152,7 @@ class StageResult:
             "copied": self.copied,
             "links_created": self.links_created,
             "observations": list(self.observations),
+            "bundles": list(self.bundles),
         }
 
 
@@ -189,9 +200,7 @@ def stage_bundle(
         # what went wrong; flattening every failure to `staging_failed` would
         # throw away the one thing the log is read for. Only a failure with no
         # word of its own - a disk error, a decoder giving up - takes the generic.
-        plan.reason = (
-            exc.reason if isinstance(exc, ArchiveError) else DELTA_STAGING_FAILED
-        )
+        plan.reason = exc.reason if isinstance(exc, ArchiveError) else DELTA_STAGING_FAILED
         return _stage_full(archive, staging_root, plan)
 
 
@@ -216,7 +225,23 @@ def _stage_full(archive: Path, staging_root: Path, plan: DeltaPlan) -> StageResu
         written_files=len(files),
         written_bytes=sum(path.stat().st_size for path in files),
         observations=list(plan.observations),
+        bundles=tuple(name for name in ARCHIVE_ROOTS if (staging_root / name).is_dir()),
     )
+
+
+def _stage_siblings(archive: Path, staging_root: Path, names: list[str]) -> tuple[str, ...]:
+    """Extract the sibling bundles whole, beside a delta-staged app bundle.
+
+    Whole rather than as a delta, because only the app bundle publishes a
+    per-file manifest and the siblings together are under a tenth of its size:
+    the supervisor bundle is a handful of megabytes and the console client is
+    28 MiB. Extracted after the app bundle so a failure here still leaves the
+    app tree self-describing for the fallback's `rmtree`.
+    """
+    wanted = tuple(name for name in archive_bundles(names) if name != ARCHIVE_ROOT)
+    if not wanted:
+        return ()
+    return extract_roots(archive, staging_root, wanted)
 
 
 def _stage_delta(
@@ -276,6 +301,7 @@ def _stage_delta(
         result.links_created += 1
 
     _verify_complete(target, manifest)
+    result.bundles = (ARCHIVE_ROOT, *_stage_siblings(archive, staging_root, names))
     return result
 
 

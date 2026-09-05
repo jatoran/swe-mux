@@ -927,6 +927,21 @@ body {
 }
 .daemon-reload-modal .modal-actions button:hover { border-color:var(--muted) }
 @media(pointer:coarse) { .daemon-reload-modal .modal-actions button { min-height:44px;padding:0 16px } }
+/* The update dialog reuses the redeploy dialog's frame and adds three things: a
+   progress line while the download runs, the copyable command a source install
+   is given instead of a button, and an affirmative button drawn as the refusal
+   it overrides when the press ends every session. The red is the same red the
+   bundle-holder warning uses, because it is the same kind of fact. */
+.update-dialog p + p { margin-top:10px }
+.update-dialog .redeploy-interrupts span { display:block }
+.update-dialog-progress { display:flex;align-items:center;gap:8px;margin-top:12px!important;color:var(--text)!important }
+.update-dialog-command { display:flex;align-items:center;gap:8px;margin-top:10px!important }
+.update-dialog-command code { flex:1;min-width:0;padding:6px 8px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:11px 'Cascadia Mono',Consolas,monospace;overflow-wrap:anywhere }
+.update-dialog-command button { min-height:28px;padding:0 10px;border:1px solid var(--line);border-radius:6px;background:var(--panel2);color:var(--text);font-size:11px;cursor:pointer }
+.daemon-reload-modal .modal-actions button.update-dialog-reap { border-color:var(--red);background:color-mix(in srgb,var(--panel) 80%,var(--red)) }
+.daemon-reload-modal .modal-actions button.update-dialog-reap:hover { border-color:var(--red);background:color-mix(in srgb,var(--panel) 65%,var(--red)) }
+.redeploy-chip-body .redeploy-chip-note.redeploy-chip-reap { color:var(--amber) }
+.settings-update-actions { display:flex;flex-direction:column;gap:6px;align-items:stretch }
 
 /* The redeploy chip: a floating, persistent, expandable progress indicator that
    every client shows for the whole redeploy, not just the tab that started it.
@@ -1853,6 +1868,7 @@ body {
 .release-update-banner strong{color:#d7ecc9}.release-update-banner span{color:#8ba57c}
 .release-update-banner a{color:#a9d18f;text-decoration:underline}
 .release-update-banner button{min-height:26px;padding:0 9px;border:1px solid #4c6a3d;border-radius:5px;background:#1b2616;color:#cfe4c1;cursor:pointer}.release-update-banner button:hover{background:#223019}
+.release-update-banner button.primary{border-color:#7fa866;background:#2b4021;color:#e4f3d8;font-weight:600}.release-update-banner button.primary:hover{background:#365228}
 @media(max-width:760px){.release-update-banner{justify-content:space-between;gap:8px;padding:6px 8px}.release-update-banner span{display:none}.release-update-banner a,.release-update-banner button{min-height:36px;display:flex;align-items:center}}
 /* The daemon has stopped answering (DaemonStallBanner.tsx). Amber, because it is
    a condition and not a request: nothing here is for the operator to do, and a

@@ -132,3 +132,217 @@ export async function requestUpdateCheck(): Promise<UpdateStatus> {
 
 export const dismissUpdate = (version: string): Promise<UpdateStatus> =>
   api<UpdateStatus>('POST', '/api/update/dismiss', { version }, { timeoutMs: 10_000 })
+
+// ----------------------------------------------------------------------------
+// Installing. The daemon owns every decision here too - which mode a release
+// needs, whether that needs consent, what the delta costs - and the browser's
+// job is to render the answer and to send the operator's press back with the
+// same words the daemon used. Nothing below re-derives a verdict.
+// ----------------------------------------------------------------------------
+
+/** The gesture headers `POST /api/update/plan` and `POST /api/update/install` require. */
+export const UPDATE_PLAN_GESTURE = 'update-plan'
+export const UPDATE_INSTALL_GESTURE = 'update-install'
+
+/** The one consent the install can ask for, as the daemon names it. */
+export const CONSENT_SUPERVISOR_UPDATE = 'supervisor_update'
+
+/** `swap` preserves sessions; `replace` ends every one and swaps the supervisor. */
+export type UpdateMode = 'swap' | 'replace' | string
+
+export type UpdateSupervisorVerdict = {
+  mode: UpdateMode
+  /** The refusal that stands until consent is given, or ''. */
+  reason: string
+  message: string
+  running_protocol: number | null
+  incoming_protocol: number | null
+  /** False when the release published no metadata sidecar: decided after download. */
+  known: boolean
+  reaps_sessions: boolean
+  consent: string
+}
+
+export type UpdateDelta = {
+  eligible?: boolean
+  reason?: string
+  reuse_files?: number
+  reuse_bytes?: number
+  fetch_files?: number
+  fetch_bytes?: number
+  write_files?: number
+  write_bytes?: number
+  total_files?: number
+  total_bytes?: number
+}
+
+/** `POST /api/update/plan`: what installing a version would do, before any download. */
+export type UpdatePlan = {
+  version: string
+  current_version: string
+  changelog: string
+  published: string
+  install_kind: string
+  /** `checkout`, `installer`, or `portable` for a frozen install. */
+  managed: string
+  install_root: string
+  artifact: { name: string; url: string; sha256: string }
+  installer: { name: string; url: string; sha256: string } | null
+  supervisor: UpdateSupervisorVerdict
+  mode: UpdateMode
+  reaps_sessions: boolean
+  consent: string
+  consent_reason: string
+  delta: UpdateDelta
+  archive_cached: boolean
+  live_sessions?: number
+}
+
+/** `GET /api/update/install`: the attempt in flight, or the last one. */
+export type UpdateInstallStatus = {
+  install_kind: string
+  managed?: string
+  swappable: boolean
+  upgrade_command?: string
+  current_version?: string
+  running?: boolean
+  phase: 'idle' | 'downloading' | 'verifying' | 'inspecting' | 'preparing' | 'handed_off'
+    | 'refused' | 'failed' | string
+  reason?: string
+  message?: string
+  version?: string
+  bytes_downloaded?: number
+  bytes_total?: number
+  mode?: UpdateMode
+  consent?: string
+  delta?: UpdateDelta
+}
+
+/** A `409` from plan or install: the daemon's word, its sentence, and what would proceed. */
+export type UpdateRefusal = UpdateInstallStatus & { error: string; message: string; consent?: string }
+
+export class UpdateRefusedError extends Error {
+  // A declared field rather than a constructor parameter property: the unit
+  // suite runs under `node --experimental-strip-types`, which strips annotations
+  // and refuses syntax that needs a transform, and `public readonly x` is one.
+  readonly refusal: UpdateRefusal
+
+  constructor(refusal: UpdateRefusal) {
+    super(refusal.message || refusal.error)
+    this.refusal = refusal
+  }
+}
+
+async function post<T>(path: string, gesture: string, body: unknown): Promise<T> {
+  // Direct fetch rather than `api()`: a 409 body is the answer here, not an error
+  // to flatten - it carries the reason, the sentence, and the consent word.
+  const response = await fetch(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Mux-User-Gesture': gesture },
+    body: JSON.stringify(body),
+  })
+  const payload = await response.json().catch(() => ({})) as T & { error?: string; message?: string }
+  if (response.status === 409 && payload.error) throw new UpdateRefusedError(payload as unknown as UpdateRefusal)
+  if (!response.ok) throw new Error(payload.message || payload.error || `HTTP ${response.status}`)
+  return payload
+}
+
+/** The confirm dialog's content. Reaches the network for the manifest and two small sidecars. */
+export const requestUpdatePlan = (version: string): Promise<UpdatePlan> =>
+  post<UpdatePlan>('/api/update/plan', UPDATE_PLAN_GESTURE, { version })
+
+/** The press. `acceptSupervisorUpdate` is consent to end every session *if needed*. */
+export const requestUpdateInstall = (
+  version: string, acceptSupervisorUpdate: boolean,
+): Promise<UpdateInstallStatus> =>
+  post<UpdateInstallStatus>('/api/update/install', UPDATE_INSTALL_GESTURE, {
+    version, accept_supervisor_update: acceptSupervisorUpdate,
+  })
+
+/** The passive read, polled while a download runs. Never reaches the network past the daemon. */
+export const fetchUpdateInstall = (): Promise<UpdateInstallStatus> =>
+  api<UpdateInstallStatus>('GET', '/api/update/install', undefined, { timeoutMs: 10_000 })
+
+/** Whether a refusal is one the same request with consent would get past. */
+export function refusalNeedsConsent(refusal: UpdateRefusal | UpdateInstallStatus | null): boolean {
+  return !!refusal && refusal.consent === CONSENT_SUPERVISOR_UPDATE
+}
+
+/** Terminal phases: the attempt is over, one way or another. */
+export function installFinished(phase: string): boolean {
+  return phase === 'handed_off' || phase === 'refused' || phase === 'failed'
+}
+
+export function bytesLabel(bytes: number | undefined): string {
+  if (typeof bytes !== 'number' || !Number.isFinite(bytes) || bytes < 0) return ''
+  if (bytes >= 1e9) return `${(bytes / 1e9).toFixed(2)} GB`
+  if (bytes >= 1e6) return `${(bytes / 1e6).toFixed(1)} MB`
+  if (bytes >= 1e3) return `${(bytes / 1e3).toFixed(0)} KB`
+  return `${bytes} B`
+}
+
+/** What the progress line says for an attempt in flight. */
+export function installPhaseLabel(status: UpdateInstallStatus | null): string {
+  if (!status) return ''
+  switch (status.phase) {
+    case 'downloading': {
+      const done = bytesLabel(status.bytes_downloaded)
+      const total = bytesLabel(status.bytes_total)
+      if (done && total && (status.bytes_total ?? 0) > 0) return `Downloading ${done} of ${total}`
+      return done ? `Downloading ${done}` : 'Downloading'
+    }
+    case 'verifying': return 'Verifying the download'
+    case 'inspecting': return 'Reading the release'
+    case 'preparing': return 'Unpacking the updater'
+    case 'handed_off': return 'Installing'
+    case 'refused': return 'Not installed'
+    case 'failed': return 'Failed'
+    default: return ''
+  }
+}
+
+/** The one sentence about the operator's sessions, from the daemon's verdict. */
+export function planSessionsLine(plan: UpdatePlan): string {
+  const count = plan.live_sessions ?? 0
+  const sessions = count === 1 ? '1 live session' : `${count} live sessions`
+  if (plan.reaps_sessions) {
+    return count > 0
+      ? `This release replaces the PTY supervisor, which ends every live terminal session - ${sessions} right now.`
+      : 'This release replaces the PTY supervisor, which ends every live terminal session. None are running right now.'
+  }
+  if (!plan.supervisor.known) {
+    return 'Whether your sessions survive is decided after the download: this release published no '
+      + 'metadata sidecar. If it would replace the PTY supervisor, the install stops and asks first.'
+  }
+  return count > 0
+    ? `Your ${sessions} keep running: the PTY supervisor holds them while the app restarts around them.`
+    : 'Live sessions keep running: the PTY supervisor holds them while the app restarts around them.'
+}
+
+/** How much of the bundle the install writes, or '' when the plan could not say. */
+export function planCostLine(plan: UpdatePlan): string {
+  const delta = plan.delta
+  if (delta.eligible) {
+    const fetched = bytesLabel(delta.fetch_bytes)
+    const files = delta.fetch_files ?? 0
+    const reused = delta.reuse_files ?? 0
+    return `Downloads the release and rewrites ${files} file${files === 1 ? '' : 's'}`
+      + `${fetched ? ` (${fetched})` : ''}; ${reused} already on this machine are reused.`
+  }
+  if (plan.archive_cached) return 'The release is already downloaded and verified.'
+  return ''
+}
+
+/** What the install kind means for the operator, in one line. */
+export function planInstallLine(plan: UpdatePlan): string {
+  switch (plan.managed) {
+    case 'installer':
+      return 'Installed with the Windows installer. The app is replaced in place and Add/Remove Programs is updated.'
+    case 'checkout':
+      return 'Running from a source checkout’s dist/. The built app is replaced in place.'
+    case 'portable':
+      return 'A portable install. The app is replaced in place.'
+    default:
+      return ''
+  }
+}

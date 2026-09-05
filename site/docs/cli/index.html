@@ -1162,7 +1162,7 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
             <tr><td>swemux history-duplicates</td><td>Report, or with <code>repair</code> merge, history entries that share one conversation.</td></tr>
             <tr><td>swemux accounts</td><td><code>list</code>, <code>verify</code>, or <code>audit</code> saved provider accounts.</td></tr>
             <tr><td>swemux doctor</td><td>The consolidated read-only diagnostics report. <code>--export</code> prints the full bundle as JSON.</td></tr>
-            <tr><td>swemux update</td><td>Report the release check and this install's update path. <code>--install VERSION</code> downloads that release and verifies its hash against the published manifest before anything is staged.</td></tr>
+            <tr><td>swemux update</td><td>Report the release check and this install's update path. <code>--plan VERSION</code> says what installing that release would do without downloading it; <code>--install VERSION</code> downloads it, verifies its hash against the published manifest, and replaces the app around your sessions. A release that replaces the PTY supervisor is refused until <code>--accept-supervisor-update</code> is given, because that <b>ends every session</b>.</td></tr>
             <tr><td>swemux reload-daemon</td><td>Restart the daemon in place. Sessions survive when the PTY supervisor is on; <code>--force</code> restarts without it and <b>kills every session</b>.</td></tr>
             <tr><td>swemux install-shortcut</td><td>Create the Start Menu and Desktop shortcuts a wheel install structurally cannot (Windows). <code>--startup</code> adds a run-at-login entry, <code>--remove</code> takes them all away. Idempotent.</td></tr>
           </tbody>

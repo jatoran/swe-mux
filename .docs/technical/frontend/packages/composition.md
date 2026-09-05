@@ -19,22 +19,27 @@ Index: `../packages.md`.
 - `sessionFocusHistory.ts` owns the bounded per-Project most-recently-focused stack that session choice consults.
   It is fed from the settled active session rather than from `setActiveId`'s many call sites, and is held in memory because it answers "where was I just now" (`../workspace-state.md`).
 
-## Release update banner
+## Release update banner and install dialog
 
-`UpdateBanner.tsx`, `updateCheck.ts`
+`UpdateBanner.tsx`, `UpdateDialog.tsx`, `updateCheck.ts`
 
-- A dismissible strip in the shell's banner row saying a newer swe-mux release exists, with the version and a link to the release notes.
+- A dismissible strip in the shell's banner row saying a newer swe-mux release exists, with the version, a link to the release notes, and an **Update** button.
   It is a row of chrome rather than an overlay, so it cannot cover a terminal or arrive on top of a turn; `role="status"` with `aria-live="polite"` is the same promise for a screen reader.
-  Nothing here downloads or installs.
-- **Not the same thing as the UI-build banner above it.** That one says this tab is behind the daemon it is already talking to and reloads itself; this one says the installed swe-mux is behind the published release and never installs anything.
-- `updateCheck.ts` deliberately does **not** re-derive whether an update exists.
-  `banner` in the payload is the daemon's verdict, and a second version comparison in the browser would eventually make the desktop and the phone disagree about it.
-  What the browser owns is the narrow guard: a payload that failed to arrive, one from an older daemon with no such endpoint, and a verdict with no version to name all render nothing.
+  The strip itself downloads and installs nothing; the button opens the dialog.
+- **Not the same thing as the UI-build banner above it.** That one says this tab is behind the daemon it is already talking to and reloads itself; this one says the installed swe-mux is behind the published release.
+- `updateCheck.ts` deliberately does **not** re-derive whether an update exists, nor whether installing it ends the operator's sessions.
+  `banner` in the payload is the daemon's verdict, and `POST /api/update/plan` is the daemon's verdict on the install; a second comparison in the browser would eventually make the desktop and the phone disagree.
+  What the browser owns is the narrow guard (a payload that failed to arrive, one from an older daemon with no such endpoint, and a verdict with no version to name all render nothing) and the rendering of the plan's facts into sentences (`planSessionsLine`, `planCostLine`, `planInstallLine`, `installPhaseLabel`), which are pure and tested.
+- `UpdateDialog.tsx` asks for the plan as it opens and shows, before the press: how this copy is managed, how much of the bundle is rewritten, and - drawn as the refusal it is when so - whether every live session ends and how many there are.
+  A release that replaces the PTY supervisor is refused by the daemon until the request carries `accept_supervisor_update`, and the dialog sends that only from the button labelled "End every session and install".
+  When the plan could not know (no metadata sidecar), the same consent is offered when the install stops after the download.
+  A source install gets the exact upgrade command with a copy control instead of a button.
+  While the download runs the dialog polls `GET /api/update/install` once a second; the daemon's `daemon_redeploy_started` broadcast (with `kind: "update"` and the mode) closes it and the app-wide redeploy chip and outage overlay take over, saying "Installing update" and, for a consented reap, that the sessions ended rather than that they are held.
 - The poll is an hour and only re-reads an answer the daemon already holds (it checks once a day).
   A failed poll leaves the previous answer in place rather than blinking the banner away and back through a daemon restart.
 - Dismissal hides the strip immediately and persists in the background: the press is the decision, and it is recorded per version by the daemon, so it holds across a reload, a restart, and the phone.
-- The switch, the last-check status, and a "Check now" button are in Settings → Diagnostics → **Software updates** (`update_check_enabled`).
-  Endpoint and reasoning: `../../design/interfaces.md`, `../../design/features/remote-access.md`.
+- The switch, the last-check status, a "Check now" button, and an "Install <version>" button opening the same dialog are in Settings → Diagnostics → **Software updates** (`update_check_enabled`).
+  Endpoint and reasoning: `../../design/interfaces.md`, `../../design/features/desktop-shell.md`, `../../design/features/remote-access.md`.
 
 ## Frontend overlay
 

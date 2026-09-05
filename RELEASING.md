@@ -189,23 +189,26 @@ Its contract:
   archive and its per-file hash manifest, the Windows installer, and `version.json`.
   **The bundle's filename is a contract, not a convenience**: the
   in-app updater recognizes its own platform's artifact by name alone, so it must be built by
-  `packaging/package_desktop_release.py` (`swe-mux-<version>-<platform>-<arch>.zip`, one
-  top-level `swe-mux/` directory carrying the `bundle.json` the updater reads). An artifact
-  named anything else is invisible to every installed copy, which reports "no desktop bundle
-  for this platform" rather than installing the wrong thing.
+  `packaging/package_desktop_release.py` (`swe-mux-<version>-<platform>-<arch>.zip`: a
+  top-level `swe-mux/` directory carrying the `bundle.json` the updater reads, beside
+  `swe-mux-supervisor/` and `swe-mux-cli/` since 0.2.4). An artifact named anything else is
+  invisible to every installed copy, which reports "no desktop bundle for this platform"
+  rather than installing the wrong thing.
   `release.yml`'s `build-desktop` job produces it, alongside the per-file hash manifest the
-  updater plans a delta against and the Windows installer
+  updater plans a delta against, the bundle-metadata sidecar (`.bundle.json`) the update
+  dialog reads before a download, and the Windows installer
   (`update_install.release_installer_name`). It builds **three** bundles for that: the app,
   the PTY supervisor, and - since 0.1.4 - `dist/swe-mux-cli`, the console client the installer
-  puts on `PATH`. Only the archive and the installer are published; the client bundle ships
-  inside the installer and is not a release artifact of its own, so nothing new has to be
-  looked up by name (`.docs/design/features/desktop-shell.md`).
+  puts on `PATH` and, since 0.2.4, the process that performs an in-app update's swap
+  (`swemux update-apply`). The archive carries all three so the applier is always the release
+  being installed (`.docs/design/features/desktop-shell.md`).
 - **A release that changes `supervisor.PROTOCOL_VERSION` must say so in its release notes**,
-  because the updater refuses to install it: swapping the app bundle alone would leave a
-  daemon that cannot talk to the running supervisor, and refreshing the supervisor reaps
-  every live session. Such a release is a deliberate, announced, sessions-lost upgrade. The
-  updater reads the incoming bundle's declared protocol out of the archive and stops before
-  anything is staged; it never decides this quietly.
+  because installing it ends every live session: swapping the app bundle alone would leave a
+  daemon that cannot talk to the running supervisor, so the updater installs such a release
+  only in replace mode - refused until the request carries `accept_supervisor_update`, from a
+  dialog button or CLI flag labelled with the consequence. The plan answers from the
+  `.bundle.json` sidecar before the download and the install re-reads the archive's own copy;
+  it never decides this quietly, and the release notes are where the operator reads why.
 - Write `version.json` into the static site (latest version, artifact URLs and hashes, and a
   changelog pointer). That file is the in-app update-check endpoint; the site workflow deploys
   `site/` to Cloudflare Workers from the same repository.

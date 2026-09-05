@@ -139,8 +139,10 @@ It is a real surface - anything that can reach the port can drive the page - so 
   is the deliberate half and is a separate act in every sense: it runs only on an explicit
   press carrying `X-Mux-User-Gesture: update-install`, and only when that press *names the
   version it means*, so a manifest that moved between the banner and the button is refused
-  rather than silently installed. Nothing about the passive check changed; a banner still
-  starts nothing.
+  rather than silently installed. Nothing about the passive check changed; the banner's
+  **Update** button opens a dialog that asks `POST /api/update/plan` what the press would do
+  - which mode, whether the operator's sessions survive and how many there are, how much of
+  the bundle is rewritten - and only the press inside that dialog starts anything.
   **What the updater downloads is verified before it is staged, and the check is the point
   of the manifest's hashes.** The artifact's SHA-256 is computed over the bytes as they
   arrive, the file is written under a `.part` name, and only a matching digest promotes it
@@ -148,13 +150,23 @@ It is a real surface - anything that can reach the port can drive the page - so 
   file the staged swap can find. A hash comes from the *manifest* only: the GitHub
   Releases fallback publishes none, so a release discovered that way can be announced and
   can never be installed.
-- **The updater refuses a release that would need a new PTY supervisor, and that refusal is
-  the feature.** The swap preserves sessions only because the supervisor outlives it, and
-  refreshing `dist/swe-mux-supervisor/` reaps every live session (see the supervisor rules
-  in the root `CLAUDE.md`). So each bundle declares the supervisor protocol its daemon
-  speaks in `bundle.json` (`bundle_metadata.py`, written by `build_desktop.describe_bundle`),
-  the running supervisor declares its own in `<data_dir>/supervisor.json`, and a difference
-  stops the install with the manual flow named in the message.
+- **The updater never replaces the PTY supervisor behind the operator's back, and the ask
+  is explicit.** The swap preserves sessions only because the supervisor outlives it, and
+  refreshing `swe-mux-supervisor/` reaps every live session (see the supervisor rules in
+  the root `CLAUDE.md`). So each bundle declares the supervisor protocol its daemon speaks
+  in `bundle.json` (`bundle_metadata.py`, written by `build_desktop.describe_bundle`), the
+  running supervisor declares its own in `<data_dir>/supervisor.json`, and a difference
+  means the release needs **replace mode**: the install is refused with
+  `supervisor_update_required` and `consent: "supervisor_update"`, the plan says so before
+  a byte is downloaded (the release's `.bundle.json` sidecar is what makes that possible),
+  and only a request carrying `accept_supervisor_update: true` proceeds - stopping with quit
+  intent, so every session ends, and swapping the supervisor bundle the archive carries as
+  well as the app. The dialog's affirmative button is labelled with that consequence and
+  names the live session count; the CLI flag is `--accept-supervisor-update`. Consent is
+  permission rather than instruction: a release that can be installed around the sessions
+  is, whatever the flag says. The same gate covers a supervisor running from inside the app
+  bundle (`supervisor_in_bundle`, the `--supervisor-child` fallback the rename would kill)
+  and an install with no supervisor at all.
   Three details are load-bearing. It compares the **protocol**, not a source hash:
   `build_desktop.supervisor_source_hash()` mixes in the *build machine's* pywinpty/psutil/
   PyInstaller versions, so hashes never match across a release and comparing them would
@@ -485,19 +497,43 @@ It is a real surface - anything that can reach the port can drive the page - so 
   The successor serves it as `last_result`, which is what lets the reconnecting UI say that a
   rollback happened: the app comes back looking entirely normal, so otherwise nothing would tell
   the operator their change never shipped.
-- **The updater is that same script with a download where the build was**, and nothing
-  else. `packaging/redeploy_desktop.py --from-archive <zip> [--archive-sha256 <hex>]`
-  verifies and extracts a release archive into `dist/.staging` instead of running
-  PyInstaller; every step after it - the bundle-holder gate, the detach-stop, the swap, the
-  health wait, the rollback to `dist/swe-mux.prev`, the `redeploy-result.json` record - is
-  the same code and carries the same guarantees. Two things follow from the reuse being
-  real rather than described: a failed download or a rejected archive leaves the running app
-  completely untouched, because the refusal happens before anything stops; and the script
-  re-checks the SHA-256 itself, because it is separately invocable with any path a person
-  can type and a guarantee that only holds when the right caller invoked you is not one.
-  The build-extras preflight is skipped for an archive install: the released bundle already
-  satisfies the LGPL relink obligation that check protects, and requiring a local build
-  environment would refuse exactly the install that needs none.
+- **The updater is that same swap with a download where the build was**, and the swap has
+  exactly one implementation: `src/swe_mux/bundle_apply.py`, which
+  `packaging/redeploy_desktop.py` calls after its PyInstaller build and which the frozen
+  console client runs as `swemux update-apply` after the daemon's download. Every step -
+  the bundle-holder gate, the stop, the renames under the bundle-swap hold, the health wait,
+  the rollback to `<name>.prev`, the `redeploy-result.json` record - is the same code and
+  carries the same guarantees whichever process runs it. Two things follow from the reuse
+  being real rather than described: a failed download or a rejected archive leaves the
+  running app completely untouched, because the refusal happens before anything stops; and
+  the applier re-checks the SHA-256 itself, because it is separately invocable with any path
+  a person can type (`redeploy_desktop.py --from-archive <zip> [--archive-sha256 <hex>]
+  [--replace-supervisor]`) and a guarantee that only holds when the right caller invoked
+  you is not one. The build-extras preflight is skipped for an archive install: the
+  released bundle already satisfies the LGPL relink obligation that check protects, and
+  requiring a local build environment would refuse exactly the install that needs none.
+- **The applier runs from a copy of the console client under the data directory, and the
+  copy comes out of the archive.** The app bundle cannot rename the directory it is running
+  from, and the supervisor is deliberately never touched, so the swap has to run from a
+  process outside every tree it renames. The release archive carries `swe-mux-cli/`
+  (below); `UpdateInstaller._prepare_applier` extracts it into
+  `<data_dir>/updates/applier-<id>/` and `redeploy_launch.spawn_applier` starts
+  `swemux update-apply` from there with the data directory as its cwd. The applier is
+  therefore always the release being installed and never a stale copy; an archive from
+  before the client was carried falls back to the client installed beside the app; and only
+  when neither exists is the install refused (`no_applier`). This is what replaced the
+  checkout-and-`uv` requirement: since 2026-09-05 an installer or portable install updates
+  itself with one press, and the checkout is what a *rebuild* needs, not an update.
+- **The three frozen shapes swap identically, and only the aftermath differs.**
+  `update_install.detect_install_kind` reports `managed` as `checkout` (the bundle sits in
+  a source checkout's `dist/`), `installer` (the Windows installer registered this install
+  root - read from its `AppId` uninstall key, `install_location.installer_registration`),
+  or `portable`. After an installer install's swap reports healthy, the applier writes the
+  new `DisplayVersion` and `DisplayName` into that entry
+  (`install_location.record_installed_version`), so Add/Remove Programs and the
+  installer's own "upgrading from" page keep saying the truth; the `.iss` clears the
+  updater's `.prev`/`.failed`/`.staging` slots on its own upgrade and uninstall for the
+  same reason. Nothing else branches on the shape.
 - **Installing a release writes the files that changed and hard-links the rest**, which is
   where an update's minutes went. The cost was never the download or the compilation; it was
   Windows image-scanning a tree of files the machine had never seen, and it is the measured
@@ -535,12 +571,24 @@ It is a real surface - anything that can reach the port can drive the page - so 
 - **The release artifact's *name* is a contract**, because the manifest says only what an
   artifact is called, where it is, and what it hashes to - the updater has to recognize its
   own platform's bundle by name alone. `swe-mux-<version>-<platform>-<arch>.zip` on Windows
-  (`.tar.gz` elsewhere), containing exactly one top-level `swe-mux/` directory.
-  `packaging/package_desktop_release.py` is its only writer and derives the name from
-  `update_install.release_archive_name`, so the two halves cannot drift into a release no
-  installed copy can find; it prints the SHA-256 the manifest step needs. A release that
-  publishes nothing matching the name is reported as "no desktop bundle for this platform"
-  rather than guessed at.
+  (`.tar.gz` elsewhere), containing a top-level `swe-mux/` directory and, since 2026-09-05,
+  its two siblings `swe-mux-supervisor/` and `swe-mux-cli/` - the same three directories
+  `dist/` and the installer's `{app}` hold. The siblings are optional to every reader
+  (`bundle_archive.ARCHIVE_ROOTS`), so an older archive installs as it always did; the
+  client is what the updater runs the swap from, and the supervisor is installed only in
+  replace mode, with consent. `packaging/package_desktop_release.py` is its only writer and
+  derives the name from `update_install.release_archive_name`, so the two halves cannot
+  drift into a release no installed copy can find; it prints the SHA-256 the manifest step
+  needs. A release that publishes nothing matching the name is reported as "no desktop
+  bundle for this platform" rather than guessed at.
+- **The bundle's own `bundle.json` is published beside the archive too**, as
+  `swe-mux-<version>-<platform>-<arch>.bundle.json` (`release_bundle_metadata_name`),
+  hashed into `version.json` like every other artifact by the same directory enumeration.
+  A few hundred bytes, read by `POST /api/update/plan` so the confirm dialog can say
+  *before* a several-hundred-megabyte download whether this release replaces the PTY
+  supervisor. The copy inside the archive stays authoritative: the install re-reads it out
+  of the verified download and refuses on the same terms. A release without the sidecar
+  plans as "decided after download".
 - **A release carries two desktop artifacts, and they answer different questions.** The
   portable archive above is what the *in-app updater* downloads and hands to the staged
   swap; `swe-mux-<version>-<platform>-<arch>-setup.exe` is the Windows installer, and it is
@@ -734,21 +782,25 @@ person with no shortcut, no tray, and no idea where anything went.
   and no file change. The *payload* executables are a separate question and belong to
   `build_desktop.py`; an installer signed around unsigned binaries still raises SmartScreen
   on first launch.
-- **An installer-managed install cannot use the in-app updater, and says so rather than
-  failing oddly.** `redeploy_launch.redeploy_source_root()` requires
-  `packaging/redeploy_desktop.py` and `pyproject.toml` beside the bundle, which an installed
-  copy has neither of, so `UpdateInstaller._preflight` refuses with `no_swap_tool` before
-  anything is downloaded. Upgrading such an install means running the new installer, which is
-  what the Add/Remove Programs entry and the same-`AppId` in-place upgrade are for.
-- **The portable archive carries the app bundle only, so a source-mode in-app update leaves
-  the client behind** - exactly as it already leaves `dist/swe-mux-supervisor` behind, and for
-  the same reason: `ARCHIVE_ROOT` is one `swe-mux/` directory and the staged swap replaces one
-  directory. Staleness is fatal for the supervisor (a protocol mismatch) and is gated for it;
-  for the client it is not, because the client is an HTTP client against the daemon's own
-  routes. It is refreshed the way it is installed: by running the newer installer, or with
-  `packaging/build_desktop.py --cli-only` in a checkout. A staged redeploy passes `--skip-cli`
-  deliberately - `dist/swe-mux-cli` has no staging path, so building it would write into
-  `dist/` during the one operation whose design is to touch nothing there until the swap.
+- **An installer-managed install uses the in-app updater like any other frozen install**,
+  since 2026-09-05. It used to be refused (`no_swap_tool`) because the swap lived in
+  `packaging/redeploy_desktop.py`, which an installed copy does not carry; the swap now
+  lives in the package (`bundle_apply.py`) and runs from the console client the archive
+  carries, so the installer is the *first* install and the manual fallback rather than the
+  only upgrade path. Running the new installer over the top still works and is still the
+  way to upgrade a copy whose bundled backend predates the applier - which is every install
+  of 0.2.3 and earlier, so the first hop is the installer and every hop after it is a press.
+  The uninstaller is unaffected: it removes the bundle directories by name, and an in-app
+  update replaces those directories under the same names.
+- **An in-app update refreshes the console client too, best effort.** The archive carries
+  `swe-mux-cli/`, so the swap moves it into place beside the app; a `swemux` sitting in a
+  terminal holds the old one open, and then the old client stays (it is an HTTP client
+  against the daemon's own routes, so staleness is not fatal) and the next update tries
+  again. The supervisor bundle is moved only in replace mode, because moving it is the reap.
+  A staged *redeploy* still passes `--skip-cli` deliberately - `dist/swe-mux-cli` has no
+  staging path in the build, so building it would write into `dist/` during the one
+  operation whose design is to touch nothing there until the swap; refresh it in a checkout
+  with `packaging/build_desktop.py --cli-only`.
 - `release.yml`'s `build-desktop` job builds all three bundles on `windows-latest` and uploads
   the portable archive and the installer as the `desktop` artifact; `github-release` and
   `update-manifest` download it into the
@@ -832,7 +884,13 @@ person with no shortcut, no tray, and no idea where anything went.
   `packaging/installer/verify_path_cycle.ps1`, `.github/workflows/ci.yml`
 - Installer tests: `tests/test_windows_installer.py`
 - Client bundle tests: `tests/test_bundle_contents.py`
-- Frozen-app updater: `src/swe_mux/update_install.py`, `src/swe_mux/routes/update.py`
+- In-app updater: `src/swe_mux/update_install.py`, `src/swe_mux/routes/update.py`,
+  `frontend/src/UpdateDialog.tsx`, `frontend/src/UpdateBanner.tsx`, `frontend/src/updateCheck.ts`
+- The staged swap, shared by the redeploy script and the frozen applier:
+  `src/swe_mux/bundle_apply.py` (`swemux update-apply` in `src/swe_mux/cli.py`)
+- Installer registration (which frozen shape this is, the Add/Remove Programs version):
+  `src/swe_mux/install_location.py`
+- Swap tests: `tests/test_bundle_apply.py`
 - Frontend overlay: `src/swe_mux/frontend_overlay.py`, `src/swe_mux/routes/frontend.py`,
   `packaging/build_frontend_overlay.py`, `frontend/src/frontendOverlay.ts`
 - Frontend-overlay tests: `tests/test_frontend_overlay.py`,

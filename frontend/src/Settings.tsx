@@ -37,6 +37,7 @@ import { TailscaleConnection, PhoneDnsChecklist, FirewallPanel, type RemoteStatu
 import { WslBridgePanel } from './WslBridgePanel'
 import { type WslBridgeStatus } from './wslBridge'
 import { ConnectPhone } from './ConnectPhone'
+import { UpdateDialog } from './UpdateDialog'
 import { VoiceLatencyReport } from './VoiceLatencyReport'
 import { WakeWordTester } from './WakeWordTester'
 import {
@@ -444,6 +445,10 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   const [updateStatus,setUpdateStatus]=useState<UpdateStatus|null>(null)
   const [updateBusy,setUpdateBusy]=useState(false)
   const [updateError,setUpdateError]=useState('')
+  // The same dialog the banner opens: it asks the daemon what installing would
+  // do and shows that before the press. Settings is where someone who dismissed
+  // the banner comes back to it.
+  const [updateInstallOpen,setUpdateInstallOpen]=useState(false)
   useEffect(()=>{void fetchUpdateStatus().then(setUpdateStatus).catch(()=>{})},[])
   const updateSummary=updateStatusSummary(updateStatus)
   const updateChecked=lastCheckedLabel(updateStatus)
@@ -2683,8 +2688,8 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
               one place in the app that has to be honest about an outbound request,
               which is why the switch is here in full rather than as a link. */}
           <section><h3>Software updates</h3>
-          <p>Once a day the daemon asks <code>{updateStatus?.manifest_url||'https://swemux.dev/version.json'}</code> whether a newer release exists, and shows a dismissible banner if one does. <strong>Nothing downloads and nothing installs.</strong></p>
-          <p class="profile-hint">This is the only request swe-mux makes on its own behalf. It is a plain fetch of one file that is identical for every install: no query string, no custom header, no cookie, and no identifier of this machine. Turning it off means no request is made at all.</p>
+          <p>Once a day the daemon asks <code>{updateStatus?.manifest_url||'https://swemux.dev/version.json'}</code> whether a newer release exists, and shows a dismissible banner if one does. <strong>Nothing downloads and nothing installs until you press Install</strong>, which first shows what the update would do - and whether your live sessions survive it - and then replaces the app in place.</p>
+          <p class="profile-hint">The check is the only request swe-mux makes on its own behalf. It is a plain fetch of one file that is identical for every install: no query string, no custom header, no cookie, and no identifier of this machine. Turning it off means no request is made at all.</p>
           <label class="check" data-setting="update_check_enabled"><span>Check for new releases</span><input type="checkbox" checked={draft.update_check_enabled} onChange={e=>change('update_check_enabled',e.currentTarget.checked)}/><small>At most one check a day, remembered across restarts.</small></label>
           <div class="settings-config-actions"><div>
             <p>{updateSummary||' '}</p>
@@ -2693,9 +2698,13 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
               ?<p><a href={updateStatus.latest.changelog} target="_blank" rel="noreferrer">Release notes for {updateStatus.latest.version}</a></p>
               :null}
           </div>
-            <div><button disabled={updateBusy||!draft.update_check_enabled} onClick={()=>void checkForUpdates()}>{updateBusy?'Checking…':'Check now'}</button></div>
+            <div class="settings-update-actions">
+              <button disabled={updateBusy||!draft.update_check_enabled} onClick={()=>void checkForUpdates()}>{updateBusy?'Checking…':'Check now'}</button>
+              {updateStatus?.update_available&&updateStatus.latest?.version&&<button class="primary" onClick={()=>setUpdateInstallOpen(true)}>Install {updateStatus.latest.version}</button>}
+            </div>
           </div>
           {updateError&&<p aria-live="polite">{updateError}</p>}
+          {updateInstallOpen&&updateStatus?.latest?.version&&<UpdateDialog version={updateStatus.latest.version} changelog={updateStatus.latest.changelog} onClose={()=>setUpdateInstallOpen(false)}/>}
           </section>
 
           {/* Between "is there anything new" and "put a whole new app on this

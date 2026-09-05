@@ -1166,6 +1166,29 @@ def _precompress_frontend(frontend_dir: Path) -> None:
         )
 
 
+def _update_swap_announcer(events: EventBus) -> Callable[[int, str], Awaitable[None]]:
+    """The broadcast the in-app updater makes the moment its applier is spawned.
+
+    The same `daemon_redeploy_started` that `POST /api/daemon/redeploy` emits for
+    a rebuild, so every client shows the same progress chip: they learn about
+    the swap while this daemon still has sockets to tell them on. `mode` is what
+    lets the chip say whether their sessions are coming back, and `kind` is what
+    lets it say "installing an update" rather than "rebuilding".
+    """
+
+    async def announce(pid: int, mode: str) -> None:
+        await events.emit(
+            "daemon_redeploy_started",
+            source="daemon",
+            pid=pid,
+            phase="building",
+            mode=mode,
+            kind="update",
+        )
+
+    return announce
+
+
 async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase by phase
     app: web.Application, timeline: StartupTimeline, predecessor_died_uncleanly: bool = False
 ) -> None:
@@ -1440,8 +1463,7 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
         # Stamped into agent panes as MUX_SURFACES; restart-scoped like the
         # per-harness toggles it is computed from (`agent_surfaces.py`).
         agent_surfaces={
-            name: agent_surfaces.surfaces_env_value(config, name)
-            for name in HARNESSES
+            name: agent_surfaces.surfaces_env_value(config, name) for name in HARNESSES
         },
         native_otel_enabled=config.canonical_telemetry_native_otel_enabled,
     )
@@ -2491,9 +2513,7 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
     stall_watchdog = StallWatchdog(config.data_dir / STALL_TRACE_FILENAME)
     stall_watchdog.start()
     publish(app, {keys.LOOP_LAG: loop_lag, keys.STALL_WATCHDOG: stall_watchdog})
-    background.start(
-        LOOP_LAG_LOOP, lambda: _loop_lag_loop(loop_lag, stall_watchdog, telemetry)
-    )
+    background.start(LOOP_LAG_LOOP, lambda: _loop_lag_loop(loop_lag, stall_watchdog, telemetry))
     background.start(CONFIG_WATCH_LOOP, lambda: watch_config(app))
     background.start(MEDIA_CLEANUP_LOOP, lambda: _media_cleanup_loop(config.data_dir, projects))
     background.start(
@@ -2528,6 +2548,7 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
     # download abandoned by a restart is reported as abandoned - by the first
     # read rather than by the first install.
     update_installer = UpdateInstaller(config)
+    update_installer.announce = _update_swap_announcer(events)
     history_search_maintenance_task = asyncio.create_task(
         history.maintain_message_search_indexes(), name="history-message-search-maintenance"
     )

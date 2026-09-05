@@ -1067,7 +1067,26 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
         <h2><a href="https://github.com/jatoran/swe-mux/compare/v0.2.3...HEAD">Unreleased</a></h2>
         <span class="fill"></span>
       </div>
-      <p class="prose">Nothing yet.</p>
+      <div class="relgroups">
+        <div><span class="k">Added</span> <span class="sep">3 entries</span></div>
+        <div><span class="k">Changed</span> <span class="sep">4 entries</span></div>
+      </div>
+      <details class="relmore">
+        <summary>all 7 entries</summary>
+        <div class="changetype">Added</div>
+        <ul class="bullets">
+          <li><span><b>One-press updates for the desktop app, on any install.</b> The update banner and Settings → Diagnostics → Software updates now carry an Install button. It opens a dialog that says what the update will do before you confirm - how this copy is installed, how much of the app is rewritten, and whether your live sessions survive - and then downloads the release, verifies its hash against the published manifest, and replaces the app in place around your sessions. This works for a copy installed with the Windows installer and for a portable unpack, not only for a source checkout: the swap now ships inside the release (<code>swemux update-apply</code>), so no checkout and no <code>uv</code> are needed. A copy installed with the installer has its Add/Remove Programs entry brought up to the new version afterwards. The first upgrade from 0.2.3 or earlier is still the installer, because those releases do not carry the updater; every upgrade after it is a press.</span></li>
+          <li><span><b>A release that replaces the PTY supervisor asks first, and says what it costs.</b> Replacing the supervisor ends every live terminal session, so such a release is never installed behind your back: the dialog says so before anything is downloaded (naming how many sessions are running), the install is refused until you press "End every session and install", and the CLI needs <code>--accept-supervisor-update</code>. Declining keeps everything running until you choose a quieter moment; the downloaded release is kept, so accepting later costs no second download.</span></li>
+          <li><span><code>swemux update --plan &lt;version&gt;</code> prints what installing that version would do without downloading it.</span></li>
+        </ul>
+        <div class="changetype">Changed</div>
+        <ul class="bullets">
+          <li><span>The release archive now carries the PTY supervisor and console client bundles beside the app bundle, so an in-app update refreshes the console client too and can replace the supervisor when you consent to it. Older archives still install.</span></li>
+          <li><span>A release also publishes its <code>bundle.json</code> beside the archive, which is what lets the dialog answer the supervisor question before the download.</span></li>
+          <li><span>The installer clears the in-app updater's rollback and staging directories when it upgrades or uninstalls, so a fresh install never rolls back into an older release.</span></li>
+          <li><span>The progress chip during an update says "Installing update" rather than "Rebuilding app", and after a consented supervisor replacement the restart overlay says the sessions ended rather than that they are held.</span></li>
+        </ul>
+      </details>
     </div>
     <div class="rel">
       <div class="relhead">

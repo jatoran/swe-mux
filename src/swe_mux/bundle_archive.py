@@ -13,11 +13,24 @@ person can type, and it does not inherit the daemon's checks by being downstream
 of them. Both call `validate_members`.
 
 The rules are deliberately narrow rather than clever. A swe-mux desktop archive
-is exactly one top-level directory named `swe-mux`, containing the PyInstaller
-onedir tree and the `bundle.json` that describes it. Anything else - an absolute
-path, a drive letter, a `..` segment, a second top-level entry - is not that, and
-is refused rather than normalized. A hash proves an archive is the file the
-manifest named; it proves nothing about what extracting it would write.
+is a top-level directory named `swe-mux`, containing the PyInstaller onedir tree
+and the `bundle.json` that describes it, optionally beside its two sibling
+bundles under their own top-level names (`swe-mux-supervisor`, `swe-mux-cli`) -
+exactly the three directories `dist/` and the Windows installer's `{app}` lay
+out. Anything else - an absolute path, a drive letter, a `..` segment, a
+top-level entry that is none of those three, an archive with no `swe-mux/` at
+all - is not that, and is refused rather than normalized. A hash proves an
+archive is the file the manifest named; it proves nothing about what extracting
+it would write.
+
+The siblings joined the archive on 2026-09-05, and the reason is the applier
+rather than completeness. An installed copy without a source checkout has no
+process that can perform the swap from outside the tree being swapped - the app
+bundle is the tree, and the supervisor is deliberately never touched - so the
+console client (`swe-mux-cli/swemux.exe update-apply`) is that process, and the
+archive carries it so the applier is always the release being installed and
+never a stale copy. An archive from before that date carries only `swe-mux/` and
+is read exactly as it always was; every reader treats the siblings as optional.
 
 **Two container formats, because `update_install._ARCHIVE_SUFFIX` names two.**
 Windows gets `.zip` (Explorer and `Expand-Archive` open one with nothing
@@ -64,10 +77,20 @@ from .bundle_manifest import (
 )
 from .bundle_metadata import BUNDLE_METADATA_NAME, BundleMetadata, parse_bundle_metadata
 
-#: The archive's single top-level directory. Named rather than inferred from the
-#: first entry, so a malformed archive is rejected instead of extracted into
+#: The archive's app-bundle directory, which every release archive carries and
+#: which holds `bundle.json` and `files.json`. Named rather than inferred from
+#: the first entry, so a malformed archive is rejected instead of extracted into
 #: whatever shape it happens to have.
 ARCHIVE_ROOT = "swe-mux"
+#: The two sibling bundles a release archive may also carry, under the names the
+#: installed layout uses for them (`install_location.FROZEN_SIBLING_BUNDLES` and
+#: `supervisor_client.SUPERVISOR_BUNDLE_DIR` read the same names from the other
+#: end). Optional in every reader: an archive from before they were added has
+#: neither and installs as it always did.
+SUPERVISOR_ROOT = "swe-mux-supervisor"
+CLI_ROOT = "swe-mux-cli"
+#: Every top-level directory an archive may contain, app bundle first.
+ARCHIVE_ROOTS = (ARCHIVE_ROOT, SUPERVISOR_ROOT, CLI_ROOT)
 
 #: Read granularity for hashing. Large enough that hashing is not syscall-bound.
 CHUNK_BYTES = 1024 * 1024
@@ -111,9 +134,15 @@ def file_digest(path: Path) -> str:
 
 
 def validate_members(names: list[str]) -> None:
-    """Refuse an archive that would write anywhere but its own `swe-mux/` tree."""
+    """Refuse an archive that would write anywhere but its own bundle trees.
+
+    Every member sits under one of `ARCHIVE_ROOTS`, and `swe-mux/` is present:
+    an archive carrying only a console client is not a release of the app, and
+    accepting it would stage a tree with no executable to launch.
+    """
     if not names:
         raise ArchiveError(ARCHIVE_INVALID, "The archive is empty, so it is not a bundle.")
+    heads: set[str] = set()
     for name in names:
         pure = name.replace("\\", "/")
         head = pure.split("/")[0]
@@ -129,12 +158,25 @@ def validate_members(names: list[str]) -> None:
                 f"The archive contains a parent-directory path ({name!r}), which a "
                 "release bundle never does.",
             )
-        if head != ARCHIVE_ROOT:
+        if head not in ARCHIVE_ROOTS:
             raise ArchiveError(
                 ARCHIVE_INVALID,
-                f"The archive's entries are not all under {ARCHIVE_ROOT}/ ({name!r}), "
-                "so it is not a swe-mux desktop bundle.",
+                f"The archive's entries are not all under {ARCHIVE_ROOT}/ or its sibling "
+                f"bundles ({name!r}), so it is not a swe-mux desktop bundle.",
             )
+        heads.add(head)
+    if ARCHIVE_ROOT not in heads:
+        raise ArchiveError(
+            ARCHIVE_INVALID,
+            f"The archive carries no {ARCHIVE_ROOT}/ directory, so it is not a swe-mux "
+            "desktop bundle.",
+        )
+
+
+def archive_bundles(names: list[str]) -> tuple[str, ...]:
+    """Which of `ARCHIVE_ROOTS` the (already validated) member list carries."""
+    heads = {name.replace("\\", "/").split("/")[0] for name in names}
+    return tuple(root for root in ARCHIVE_ROOTS if root in heads)
 
 
 def archive_suffix(archive: Path) -> str:
@@ -278,8 +320,7 @@ def read_archive_metadata(archive: Path) -> BundleMetadata:
     if metadata is None:
         raise ArchiveError(
             BUNDLE_METADATA_MISSING,
-            f"The archive describes itself in a way this build does not understand "
-            f"({reason}).",
+            f"The archive describes itself in a way this build does not understand ({reason}).",
         )
     return metadata
 
@@ -327,42 +368,26 @@ def read_archive_file_manifest(archive: Path) -> tuple[FileManifest | None, str]
 
 
 def extract_bundle(archive: Path, staging_root: Path) -> Path:
-    """Extract a validated archive under `staging_root`, returning the bundle root.
+    """Extract a validated archive under `staging_root`, returning the app bundle root.
 
     The destination is emptied first. A staging tree left by a previous run is
     not a starting point: merging a new bundle over an old one produces a tree
     that is neither, and the failure would only appear at runtime.
 
-    A tarball is extracted under `filter="data"`, which is the interpreter's own
-    refusal of absolute paths, `..` escapes, links leaving the tree, and special
-    files. `validate_members` has already run; the filter is the second half that
-    covers what a name alone cannot say, and it is deliberately not disabled to
-    preserve some member a bundle has never needed.
+    Every bundle the archive carries is extracted, each under its own top-level
+    name, so the staging tree has the shape of the install root it is about to
+    be renamed into. A tarball is extracted under `filter="data"`, which is the
+    interpreter's own refusal of absolute paths, `..` escapes, links leaving the
+    tree, and special files. `validate_members` has already run; the filter is
+    the second half that covers what a name alone cannot say, and it is
+    deliberately not disabled to preserve some member a bundle has never needed.
     """
     import shutil
 
     staging_root = Path(staging_root)
     shutil.rmtree(staging_root, ignore_errors=True)
     staging_root.mkdir(parents=True, exist_ok=True)
-    try:
-        if archive_suffix(archive) == TAR_GZ_SUFFIX:
-            with tarfile.open(archive, "r:gz") as tar:
-                members = tar.getmembers()
-                _check_total_size([member.size for member in members])
-                validate_members([member.name for member in members])
-                tar.extractall(staging_root, filter="data")
-        else:
-            with zipfile.ZipFile(archive) as bundle:
-                _check_total_size([info.file_size for info in bundle.infolist()])
-                validate_members(bundle.namelist())
-                bundle.extractall(staging_root)
-    except ArchiveError:
-        raise
-    except _UNREADABLE as exc:
-        raise ArchiveError(
-            ARCHIVE_INVALID,
-            f"The archive could not be extracted ({type(exc).__name__}).",
-        ) from exc
+    extract_roots(archive, staging_root, ARCHIVE_ROOTS)
     root = staging_root / ARCHIVE_ROOT
     if not root.is_dir():
         raise ArchiveError(
@@ -370,3 +395,63 @@ def extract_bundle(archive: Path, staging_root: Path) -> Path:
             f"The archive produced no {ARCHIVE_ROOT}/ directory when extracted.",
         )
     return root
+
+
+def extract_roots(archive: Path, destination: Path, roots: tuple[str, ...]) -> tuple[str, ...]:
+    """Extract only the top-level bundles named in `roots`, returning those found.
+
+    The destination is *not* emptied: this is the member-level primitive
+    `extract_bundle` and the delta stager both build on, and the delta stager
+    has already written the app bundle beside where a sibling lands. The whole
+    archive is still validated first - a partial extraction is no reason to
+    trust a member list less.
+    """
+    destination = Path(destination)
+    destination.mkdir(parents=True, exist_ok=True)
+    wanted = set(roots)
+    try:
+        if archive_suffix(archive) == TAR_GZ_SUFFIX:
+            with tarfile.open(archive, "r:gz") as tar:
+                members = tar.getmembers()
+                _check_total_size([member.size for member in members])
+                names = [member.name for member in members]
+                validate_members(names)
+                chosen = [
+                    member
+                    for member in members
+                    if member.name.replace("\\", "/").split("/")[0] in wanted
+                ]
+                tar.extractall(destination, members=chosen, filter="data")
+        else:
+            with zipfile.ZipFile(archive) as bundle:
+                _check_total_size([info.file_size for info in bundle.infolist()])
+                names = bundle.namelist()
+                validate_members(names)
+                chosen_names = [
+                    name for name in names if name.replace("\\", "/").split("/")[0] in wanted
+                ]
+                bundle.extractall(destination, members=chosen_names)
+    except ArchiveError:
+        raise
+    except _UNREADABLE as exc:
+        raise ArchiveError(
+            ARCHIVE_INVALID,
+            f"The archive could not be extracted ({type(exc).__name__}).",
+        ) from exc
+    return tuple(root for root in archive_bundles(names) if root in wanted)
+
+
+def archive_bundle_names(archive: Path) -> tuple[str, ...]:
+    """Which bundles `archive` carries, read from its member list alone."""
+    try:
+        with open_archive(archive) as bundle:
+            names = bundle.names()
+            validate_members(names)
+    except ArchiveError:
+        raise
+    except _UNREADABLE as exc:
+        raise ArchiveError(
+            ARCHIVE_INVALID,
+            f"The archive could not be read ({type(exc).__name__}).",
+        ) from exc
+    return archive_bundles(names)

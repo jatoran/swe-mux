@@ -119,6 +119,10 @@
 ; this one with its own uninstall entry, which is precisely the orphaning an
 ; in-place upgrade has to avoid. Defined once and used twice - in [Setup] and in
 ; the uninstall-key lookup below - so the two can never name different products.
+; The in-app updater reads the same key (`install_location.INSTALLER_APP_ID`,
+; asserted equal by `tests/test_windows_installer.py`) to tell an installer
+; install from a portable one, and writes `DisplayVersion` there after an
+; in-place update so this entry and the Ready page below keep saying the truth.
 #define AppGuid "{7C4E1A64-2B5F-4E0B-9E2D-6E5B0D4A11C3}"
 
 [Setup]
@@ -225,6 +229,18 @@ Source: "{#IconFile}"; DestDir: "{app}"; DestName: "swe-mux.ico"; Flags: ignorev
 Type: filesandordirs; Name: "{app}\swe-mux"
 Type: filesandordirs; Name: "{app}\swe-mux-supervisor"
 Type: filesandordirs; Name: "{app}\swe-mux-cli"
+; The in-app updater's slots (`swe_mux/bundle_apply.py`): a retired bundle kept
+; for rollback, a bundle that never turned healthy, and a staging tree. None of
+; them is the version this installer is about to write, and a rollback slot
+; holding an older release beside a freshly installed one is a trap for the
+; next in-app update's "previous build".
+Type: filesandordirs; Name: "{app}\swe-mux.prev"
+Type: filesandordirs; Name: "{app}\swe-mux-supervisor.prev"
+Type: filesandordirs; Name: "{app}\swe-mux-cli.prev"
+Type: filesandordirs; Name: "{app}\swe-mux.failed"
+Type: filesandordirs; Name: "{app}\swe-mux-supervisor.failed"
+Type: filesandordirs; Name: "{app}\swe-mux-cli.failed"
+Type: filesandordirs; Name: "{app}\.staging"
 
 [Icons]
 Name: "{group}\swe-mux"; Filename: "{app}\swe-mux\swe-mux.exe"; IconFilename: "{app}\swe-mux.ico"; Comment: "swe-mux workspace"
@@ -265,10 +281,20 @@ Filename: "{app}\swe-mux\swe-mux.exe"; Description: "Launch swe-mux"; Flags: now
 [UninstallDelete]
 ; The bundles are removed by the uninstall log; these cover anything created
 ; beside them after install (a staged or rolled-back tree, a log written into the
-; bundle root) so an uninstall does not leave a half-empty directory behind.
+; bundle root) so an uninstall does not leave a half-empty directory behind. The
+; in-app updater swaps whole bundle directories under the same names, so a copy
+; it installed uninstalls exactly like the one this installer wrote - and its
+; rollback, failure and staging slots go with it.
 Type: filesandordirs; Name: "{app}\swe-mux"
 Type: filesandordirs; Name: "{app}\swe-mux-supervisor"
 Type: filesandordirs; Name: "{app}\swe-mux-cli"
+Type: filesandordirs; Name: "{app}\swe-mux.prev"
+Type: filesandordirs; Name: "{app}\swe-mux-supervisor.prev"
+Type: filesandordirs; Name: "{app}\swe-mux-cli.prev"
+Type: filesandordirs; Name: "{app}\swe-mux.failed"
+Type: filesandordirs; Name: "{app}\swe-mux-supervisor.failed"
+Type: filesandordirs; Name: "{app}\swe-mux-cli.failed"
+Type: filesandordirs; Name: "{app}\.staging"
 Type: dirifempty; Name: "{app}"
 
 [Code]

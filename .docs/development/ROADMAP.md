@@ -3882,10 +3882,51 @@ No update server: static manifest plus GitHub Releases covers the whole loop.
   and the install is reached from `mux update --install` or the endpoint.)
   A release that requires a supervisor update keeps its reap-everything semantics and says so
   in its release notes rather than hiding it in the updater.
-- [ ] Publish the desktop bundle as a release artifact: a Windows job in `release.yml` that
+- [x] Publish the desktop bundle as a release artifact: a Windows job in `release.yml` that
   builds `dist/swe-mux` plus the supervisor bundle, runs `packaging/package_desktop_release.py`,
   and uploads the result so the manifest step hashes it. This is the half that turns the
   updater on; everything downstream of the artifact already exists and is tested.
+  (Done: `build-desktop` in `release.yml` builds all three bundles and publishes the portable
+  archive, its sidecars, and the installer; 0.2.3's `version.json` carries them with hashes.)
+- [x] **The updater works on an installed copy, with one press, and asks before it ends a
+  session.** Every limit the 2026-08-28 entry recorded as deliberate is closed.
+  (Done 2026-09-05. `src/swe_mux/bundle_apply.py`, `swemux update-apply`,
+  `POST /api/update/plan`, `accept_supervisor_update`, `frontend/src/UpdateDialog.tsx`;
+  contract in `design/interfaces.md`, mechanics in `design/features/desktop-shell.md`.
+  **The swap has one implementation and two processes that run it.** The stage-stop-swap-
+  relaunch-rollback core moved out of `packaging/redeploy_desktop.py` into the package, keyed
+  on a `Layout` derived from one install root, and the script now calls it after its build.
+  The frozen console client runs the same core as `swemux update-apply` from a copy under the
+  data directory - the process that could not exist before: the app bundle cannot rename the
+  directory it runs from, and the supervisor is never touched, so the swap needs a process
+  outside every tree it moves. The release archive carries `swe-mux-cli/` (and
+  `swe-mux-supervisor/`) beside `swe-mux/` so the applier is always the release being
+  installed; an older archive falls back to the installed client, and only when neither
+  exists is the install refused (`no_applier`, which replaced `no_swap_tool`). No checkout
+  and no `uv` are needed, so an installer install and a portable unpack update exactly as a
+  checkout's `dist/` does; after a healthy swap of an installer install the applier brings the
+  Add/Remove Programs entry up to the new version.
+  **The supervisor question is answered before the download and consented to explicitly.**
+  The bundle's `bundle.json` is published beside the archive as a hashed sidecar, so
+  `POST /api/update/plan` says which mode the release needs - `swap` around the sessions, or
+  `replace`, which ends every one - and how many sessions the daemon counts live. A release
+  needing replace mode is refused (`consent: "supervisor_update"`) until the request carries
+  `accept_supervisor_update: true`, sent only from the dialog button labelled "End every
+  session and install" or the `--accept-supervisor-update` flag. Consent is permission rather
+  than instruction: a release that can be installed around the sessions is, whatever the
+  flag says. The same gate covers a supervisor running from inside the app bundle and an
+  install with none.
+  **There is a UI surface.** The banner's Update button and Settings' Install button open one
+  dialog that renders the plan, sends the press, follows the download, and hands over to the
+  redeploy chip - which the daemon's `daemon_redeploy_started` now reaches with
+  `kind: "update"` and the mode, so the outage overlay never promises sessions the operator
+  agreed to end.
+  Deliberately not done: **a source install still upgrades by its own tool's command**, shown
+  exactly (`uv tool upgrade`, `pipx upgrade`, or the interpreter's pip) with a copy control.
+  Upgrading a venv underneath a running daemon on Windows fails on the `.pyd` files it holds,
+  and the supervisor runs from the same venv, so there is no in-place path that is honest
+  about sessions. And **no POSIX desktop artifact**, because there is no POSIX desktop shell;
+  the reader and the naming contract are ready for one.)
 
 ### Demo environment and launch assets
 

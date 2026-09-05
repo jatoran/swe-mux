@@ -1,10 +1,12 @@
-"""Starting `packaging/redeploy_desktop.py`, for the two callers that do it.
+"""Starting the staged swap in a detached process, for the two callers that do it.
 
-The staged swap has exactly one implementation and this module is how it is
-reached: `POST /api/daemon/redeploy` (rebuild locally) and the frozen-app updater
-(`update_install.py`, which downloads a verified archive and hands it to the same
-script with `--from-archive`). Both need the identical three things, and getting
-any of them subtly different is how two of the redeploy's recorded incidents
+The staged swap has exactly one implementation (`bundle_apply.py`) and two
+processes that run it: `packaging/redeploy_desktop.py` in a source checkout
+(`POST /api/daemon/redeploy`, the rebuild-from-source path) and the frozen
+console client's `swemux update-apply` (the in-app updater, `update_install.py`,
+which downloads a verified archive and hands it to a copy of that client in the
+data directory). Both spawns need the identical three things, and getting any
+of them subtly different is how two of the redeploy's recorded incidents
 happened:
 
 - **The single-flight lock is claimed before the spawn, atomically.** Writing it
@@ -65,9 +67,10 @@ def redeploy_source_root() -> Path | None:
 
     Frozen builds live at ``<root>/dist/swe-mux/swe-mux.exe`` inside the
     checkout; source runs resolve from this file. A frozen app deployed away
-    from its checkout has neither, and both redeploy and the updater's handoff
-    are refused - which is the honest answer, because the swap script is not
-    carried in the bundle.
+    from its checkout has neither, and the rebuild-from-source redeploy is
+    refused - which is the honest answer, because the build needs a checkout.
+    The in-app updater no longer needs one: it installs a release through the
+    frozen console client (`spawn_applier`), which carries the swap itself.
     """
     import sys
 
@@ -150,6 +153,77 @@ def spawn_redeploy(
     # detach-stops a *different* instance while swapping the shared bundle.
     if (config_path := getattr(config, "config_path", None)) is not None:
         command += ["--config", str(config_path)]
+    return _spawn_detached(
+        command,
+        cwd=root,
+        lock_path=lock_path,
+        log_path=log_path,
+        what="redeploy script",
+        detail={"redeploy_root": str(root), "redeploy_extra_args": " ".join(extra_args)},
+    )
+
+
+def spawn_applier(
+    config: Config,
+    *,
+    applier: Path,
+    archive: Path,
+    sha256: str,
+    install_root: Path,
+    mode: str,
+    lock_path: Path,
+    log_path: Path,
+) -> subprocess.Popen[bytes]:
+    """Start the frozen console client's `update-apply` detached, lock recorded.
+
+    `applier` is a `swemux` executable in a copy of the client bundle under the
+    data directory (`update_install.UpdateInstaller._prepare_applier`), which is
+    the whole reason this works without a checkout: it runs from outside every
+    tree it renames. The working directory is the data directory for the same
+    reason the script's is the checkout - never inside the install root, whose
+    bundles are about to be renamed and which a cwd would lock.
+    """
+    command = [
+        str(applier),
+        "update-apply",
+        "--archive",
+        str(archive),
+        "--archive-sha256",
+        sha256,
+        "--install-root",
+        str(install_root),
+        "--mode",
+        mode,
+        "--restore-visibility",
+        "--lock-held",
+    ]
+    if (config_path := getattr(config, "config_path", None)) is not None:
+        command += ["--config", str(config_path)]
+    return _spawn_detached(
+        command,
+        cwd=Path(config.data_dir),
+        lock_path=lock_path,
+        log_path=log_path,
+        what="update applier",
+        detail={
+            "update_applier": str(applier),
+            "update_archive": str(archive),
+            "update_install_root": str(install_root),
+            "update_mode": mode,
+        },
+    )
+
+
+def _spawn_detached(
+    command: list[str],
+    *,
+    cwd: Path,
+    lock_path: Path,
+    log_path: Path,
+    what: str,
+    detail: dict[str, str],
+) -> subprocess.Popen[bytes]:
+    """The one spawn: detached from this daemon and its Job, output into `log_path`."""
     log_path.parent.mkdir(parents=True, exist_ok=True)
     try:
         with log_path.open("wb", buffering=0) as log_file:
@@ -158,7 +232,7 @@ def spawn_redeploy(
                 stdin=subprocess.DEVNULL,
                 stdout=log_file,
                 stderr=subprocess.STDOUT,
-                cwd=str(root),
+                cwd=str(cwd),
                 env=scrub_claude_session_markers(os.environ),
                 creationflags=background_creation_flags()
                 | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
@@ -170,12 +244,8 @@ def spawn_redeploy(
         raise
     write_redeploy_lock(lock_path, process.pid)
     log.info(
-        "redeploy script spawned",
-        extra={
-            "redeploy_pid": process.pid,
-            "redeploy_root": str(root),
-            "redeploy_log": str(log_path),
-            "redeploy_extra_args": " ".join(str(part) for part in extra_args),
-        },
+        "%s spawned",
+        what,
+        extra={"redeploy_pid": process.pid, "redeploy_log": str(log_path), **detail},
     )
     return process

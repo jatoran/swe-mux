@@ -34,10 +34,14 @@ from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
 from swe_mux import app_keys as keys
+from swe_mux import bundle_apply
 from swe_mux.bundle_archive import (
     ARCHIVE_ROOT,
+    CLI_ROOT,
+    SUPERVISOR_ROOT,
     TAR_GZ_SUFFIX,
     ArchiveError,
+    archive_bundle_names,
     read_archive_metadata,
     validate_members,
 )
@@ -55,17 +59,23 @@ from swe_mux.config import Config
 from swe_mux.routes import update as update_routes
 from swe_mux.update_check import MANIFEST_URL, parse_github_release, parse_manifest
 from swe_mux.update_install import (
+    CONSENT_SUPERVISOR_UPDATE,
     INSTALL_FROZEN,
     INSTALL_SOURCE,
+    MANAGED_CHECKOUT,
+    MANAGED_INSTALLER,
+    MANAGED_PORTABLE,
     PHASE_HANDED_OFF,
     PHASE_REFUSED,
     REASON_ARCHIVE_INVALID,
     REASON_BUNDLE_METADATA_MISSING,
     REASON_HASH_MISMATCH,
     REASON_MALFORMED,
+    REASON_NO_APPLIER,
     REASON_NO_ARTIFACT,
     REASON_NO_SUPERVISOR,
     REASON_SOURCE_INSTALL,
+    REASON_SUPERVISOR_IN_BUNDLE,
     REASON_SUPERVISOR_UNKNOWN,
     REASON_SUPERVISOR_UPDATE_REQUIRED,
     REASON_TRUNCATED,
@@ -76,8 +86,11 @@ from swe_mux.update_install import (
     InstallKind,
     UpdateInstaller,
     UpdateRefused,
+    applier_executable_name,
     detect_install_kind,
+    prepare_applier,
     release_archive_name,
+    release_bundle_metadata_name,
     release_file_manifest_name,
     release_installer_name,
     release_platform_tag,
@@ -156,20 +169,30 @@ class FakeDownload:
 
 
 class Handoff:
-    """Stands in for spawning the redeploy script. Records what it was given."""
+    """Stands in for spawning the applier. Records what it was given."""
 
     def __init__(self) -> None:
-        self.calls: list[tuple[Path, str]] = []
+        self.calls: list[tuple[Path, str, str]] = []
 
-    def __call__(self, archive: Path, version: str) -> int:
-        self.calls.append((archive, version))
+    def __call__(self, archive: Path, version: str, mode: str) -> int:
+        self.calls.append((archive, version, mode))
         return 4242
 
 
 def make_bundle(
-    directory: Path, *, version: str = NEXT, protocol: int = SUPERVISOR_PROTOCOL
+    directory: Path,
+    *,
+    version: str = NEXT,
+    protocol: int = SUPERVISOR_PROTOCOL,
+    siblings: bool = True,
 ) -> Path:
-    """A directory shaped like a built bundle, small enough to zip in a test."""
+    """A directory shaped like a built bundle, small enough to zip in a test.
+
+    `siblings` lays the console client and the supervisor bundle out beside it,
+    the way `build_desktop.py` and the installer do - the client is what the
+    updater runs the swap from, so an archive without one is the pre-2026-09-05
+    shape and the tests that want that say so.
+    """
     directory.mkdir(parents=True, exist_ok=True)
     (directory / "swe-mux.exe").write_bytes(b"MZ not really an executable")
     (directory / "_internal").mkdir(exist_ok=True)
@@ -180,15 +203,32 @@ def make_bundle(
             version=version, supervisor_protocol=protocol, platform=release_platform_tag()
         ),
     )
+    if siblings:
+        cli = directory.parent / CLI_ROOT
+        cli.mkdir(parents=True, exist_ok=True)
+        (cli / applier_executable_name()).write_bytes(b"MZ not really a client")
+        supervisor = directory.parent / SUPERVISOR_ROOT
+        supervisor.mkdir(parents=True, exist_ok=True)
+        (supervisor / "swe-mux-supervisor.exe").write_bytes(b"MZ not really a supervisor")
     return directory
 
 
 def make_archive(
-    tmp_path: Path, *, version: str = NEXT, protocol: int = SUPERVISOR_PROTOCOL
+    tmp_path: Path,
+    *,
+    version: str = NEXT,
+    protocol: int = SUPERVISOR_PROTOCOL,
+    siblings: bool = True,
 ) -> Path:
     """A real release archive, produced by the real packaging writer."""
-    bundle = make_bundle(tmp_path / "build" / "swe-mux", version=version, protocol=protocol)
-    return package_desktop_release.build_archive(bundle, tmp_path / "out")[0]
+    bundle = make_bundle(
+        tmp_path / "build" / "swe-mux", version=version, protocol=protocol, siblings=siblings
+    )
+    return package_desktop_release.build_archive(
+        bundle,
+        tmp_path / "out",
+        siblings=package_desktop_release.sibling_bundles(bundle) if siblings else None,
+    )[0]
 
 
 def write_plain_archive(path: Path, members: dict[str, bytes]) -> Path:
@@ -244,18 +284,14 @@ def write_supervisor(data_dir: Path, *, protocol: int | None = SUPERVISOR_PROTOC
 
 
 @pytest.fixture(autouse=True)
-def swap_tool_available(monkeypatch: Any) -> None:
-    """Pretend the redeploy script and `uv` are reachable.
+def no_redeploy_in_flight(monkeypatch: Any) -> None:
+    """Pretend no redeploy lock is held.
 
     Stubbed rather than relied on: the preflight's answer would otherwise depend
-    on whether the machine running the suite happens to have `uv` on PATH, which
-    is a fact about the runner and not about the updater. The one test that cares
-    overrides this.
+    on whether the machine running the suite has a live `redeploy.lock` in the
+    fixture's data dir, which it never does, but saying so is cheaper than
+    reasoning about it in every test.
     """
-    monkeypatch.setattr(
-        "swe_mux.update_install.redeploy_source_root", lambda: Path("/checkout")
-    )
-    monkeypatch.setattr("swe_mux.update_install.shutil.which", lambda _name: "uv")
     monkeypatch.setattr("swe_mux.update_install.redeploy_lock_pid", lambda _config: None)
 
 
@@ -266,6 +302,8 @@ def build(
     download: FakeDownload | None = None,
     handoff: Handoff | None = None,
     frozen: bool = True,
+    managed: str = MANAGED_PORTABLE,
+    supervisor_exe: Path | None = None,
 ) -> UpdateInstaller:
     data_dir = tmp_path / "data"
     data_dir.mkdir(parents=True, exist_ok=True)
@@ -274,6 +312,8 @@ def build(
             kind=INSTALL_FROZEN,
             bundle_root=tmp_path / "dist" / "swe-mux",
             upgrade_command="",
+            managed=managed,
+            install_root=tmp_path / "dist",
         )
         if frozen
         else InstallKind(
@@ -288,12 +328,17 @@ def build(
         install_kind=kind,
         handoff=handoff or Handoff(),
         platform_tag=release_platform_tag(),
+        # The running supervisor's image: outside the app bundle unless a test
+        # puts it inside to exercise the `--supervisor-child` fallback case.
+        supervisor_exe=lambda: supervisor_exe or tmp_path / "dist" / SUPERVISOR_ROOT / "s.exe",
     )
 
 
-async def run_install(installer: UpdateInstaller, version: str = NEXT) -> dict[str, Any]:
+async def run_install(
+    installer: UpdateInstaller, version: str = NEXT, *, accept: bool = False
+) -> dict[str, Any]:
     """Start an install and let it finish, returning the final snapshot."""
-    await installer.start(version)
+    await installer.start(version, accept_supervisor_update=accept)
     await installer.wait()
     return installer.snapshot()
 
@@ -407,7 +452,8 @@ async def test_a_release_needing_a_new_supervisor_is_refused_not_installed(
     # The property the whole feature is built around: the swap preserves sessions
     # only because the supervisor outlives it, and a release whose daemon speaks
     # a different supervisor protocol cannot be installed without reaping the
-    # fleet. So it stops here, with the manual flow named.
+    # fleet. So it stops here - and says what accepting would cost, because the
+    # same request with consent is what proceeds.
     archive = make_archive(tmp_path, protocol=SUPERVISOR_PROTOCOL + 1)
     fetch = FakeFetch({MANIFEST_URL: manifest(artifacts=[artifact_entry(archive)])})
     handoff = Handoff()
@@ -420,11 +466,51 @@ async def test_a_release_needing_a_new_supervisor_is_refused_not_installed(
 
     assert snapshot["phase"] == PHASE_REFUSED
     assert snapshot["reason"] == REASON_SUPERVISOR_UPDATE_REQUIRED
-    assert "muxd --shutdown" in snapshot["message"]
+    assert snapshot["consent"] == CONSENT_SUPERVISOR_UPDATE
+    assert "ends every live terminal session" in snapshot["message"]
     assert handoff.calls == []
-    # The verified archive is kept: the operator may still install it by hand,
-    # and re-downloading hundreds of megabytes to do so would be a waste.
+    # The verified archive is kept: the operator may still consent, and
+    # re-downloading hundreds of megabytes to do so would be a waste.
     assert (installer.downloads_dir / archive.name).is_file()
+
+
+async def test_consent_installs_the_supervisor_release_in_replace_mode(tmp_path: Path) -> None:
+    # The other half of the gate. Consent turns the refusal into a replace-mode
+    # handoff - the applier stops with quit intent and swaps the supervisor
+    # bundle too - and the archive verified by the refused attempt is reused.
+    archive = make_archive(tmp_path, protocol=SUPERVISOR_PROTOCOL + 1)
+    fetch = FakeFetch({MANIFEST_URL: manifest(artifacts=[artifact_entry(archive)])})
+    handoff = Handoff()
+    download = FakeDownload(archive.read_bytes())
+    installer = build(tmp_path, fetch=fetch, download=download, handoff=handoff)
+    write_supervisor(Path(installer._config.data_dir), protocol=SUPERVISOR_PROTOCOL)
+    assert (await run_install(installer))["reason"] == REASON_SUPERVISOR_UPDATE_REQUIRED
+
+    snapshot = await run_install(installer, accept=True)
+
+    assert snapshot["phase"] == PHASE_HANDED_OFF
+    assert snapshot["mode"] == bundle_apply.MODE_REPLACE
+    assert "Every live session ends" in snapshot["message"]
+    assert handoff.calls == [(installer.downloads_dir / archive.name, NEXT, "replace")]
+    assert len(download.calls) == 1
+
+
+async def test_consent_is_permission_not_an_instruction(tmp_path: Path) -> None:
+    # A release that can be installed around the sessions is, whatever the flag
+    # says: the operator accepted a reap *if needed*, not a reap.
+    archive = make_archive(tmp_path)
+    fetch = FakeFetch({MANIFEST_URL: manifest(artifacts=[artifact_entry(archive)])})
+    handoff = Handoff()
+    installer = build(
+        tmp_path, fetch=fetch, download=FakeDownload(archive.read_bytes()), handoff=handoff
+    )
+    write_supervisor(Path(installer._config.data_dir))
+
+    snapshot = await run_install(installer, accept=True)
+
+    assert snapshot["phase"] == PHASE_HANDED_OFF
+    assert snapshot["mode"] == bundle_apply.MODE_SWAP
+    assert handoff.calls[0][2] == "swap"
 
 
 async def test_a_supervisor_downgrade_is_refused_for_the_same_reason_as_a_bump(
@@ -453,6 +539,7 @@ async def test_a_supervisor_whose_protocol_cannot_be_read_is_a_refusal_not_a_def
     snapshot = await run_install(installer)
 
     assert snapshot["reason"] == REASON_SUPERVISOR_UNKNOWN
+    assert snapshot["consent"] == CONSENT_SUPERVISOR_UPDATE
 
 
 async def test_no_running_supervisor_refuses_because_a_swap_would_reap_sessions(
@@ -465,6 +552,35 @@ async def test_no_running_supervisor_refuses_because_a_swap_would_reap_sessions(
     snapshot = await run_install(installer)
 
     assert snapshot["reason"] == REASON_NO_SUPERVISOR
+    assert snapshot["consent"] == CONSENT_SUPERVISOR_UPDATE
+
+
+async def test_a_supervisor_running_inside_the_app_bundle_needs_consent(
+    tmp_path: Path,
+) -> None:
+    # The `--supervisor-child` fallback: the supervisor shares the app's image,
+    # so renaming the bundle kills it. Not a protocol question, and not one a
+    # matching protocol number can answer - which is why it is its own word.
+    archive = make_archive(tmp_path)
+    fetch = FakeFetch({MANIFEST_URL: manifest(artifacts=[artifact_entry(archive)])})
+    handoff = Handoff()
+    installer = build(
+        tmp_path,
+        fetch=fetch,
+        download=FakeDownload(archive.read_bytes()),
+        handoff=handoff,
+        supervisor_exe=tmp_path / "dist" / "swe-mux" / "swe-mux.exe",
+    )
+    write_supervisor(Path(installer._config.data_dir))
+
+    refused = await run_install(installer)
+    assert refused["reason"] == REASON_SUPERVISOR_IN_BUNDLE
+    assert refused["consent"] == CONSENT_SUPERVISOR_UPDATE
+    assert handoff.calls == []
+
+    accepted = await run_install(installer, accept=True)
+    assert accepted["phase"] == PHASE_HANDED_OFF
+    assert accepted["mode"] == bundle_apply.MODE_REPLACE
 
 
 async def test_a_source_install_declines_to_swap_and_says_what_to_run(
@@ -502,11 +618,77 @@ async def test_a_verified_archive_reaches_the_staged_swap(tmp_path: Path) -> Non
 
     assert snapshot["phase"] == PHASE_HANDED_OFF
     assert len(handoff.calls) == 1
-    handed, version = handoff.calls[0]
+    handed, version, mode = handoff.calls[0]
     assert version == NEXT
+    assert mode == bundle_apply.MODE_SWAP
     assert handed == installer.downloads_dir / archive.name
     # What was handed over is byte-identical to what the manifest hashed.
     assert handed.read_bytes() == archive.read_bytes()
+    # The applier came out of the archive, under the data dir - never inside a
+    # tree the swap renames - and it is the release's own client.
+    applier = Path(snapshot["applier"])
+    assert applier.is_file()
+    assert applier.name == applier_executable_name()
+    assert applier.is_relative_to(installer.downloads_dir)
+    assert not applier.is_relative_to(tmp_path / "dist")
+
+
+async def test_an_archive_without_a_client_falls_back_to_the_installed_one(
+    tmp_path: Path,
+) -> None:
+    # Every archive published before 2026-09-05 carries only `swe-mux/`. The
+    # client already installed beside the app performs the swap for those.
+    archive = make_archive(tmp_path, siblings=False)
+    assert archive_bundle_names(archive) == (ARCHIVE_ROOT,)
+    fetch = FakeFetch({MANIFEST_URL: manifest(artifacts=[artifact_entry(archive)])})
+    installer = build(tmp_path, fetch=fetch, download=FakeDownload(archive.read_bytes()))
+    write_supervisor(Path(installer._config.data_dir))
+    installed_cli = tmp_path / "dist" / CLI_ROOT
+    installed_cli.mkdir(parents=True)
+    (installed_cli / applier_executable_name()).write_bytes(b"MZ the installed client")
+
+    snapshot = await run_install(installer)
+
+    assert snapshot["phase"] == PHASE_HANDED_OFF
+    assert Path(snapshot["applier"]).read_bytes() == b"MZ the installed client"
+
+
+async def test_no_client_anywhere_is_a_refusal_that_names_the_manual_path(
+    tmp_path: Path,
+) -> None:
+    # A portable archive unpacked without its siblings, updating to an old
+    # release: nothing on the machine can run the swap from outside the app.
+    archive = make_archive(tmp_path, siblings=False)
+    fetch = FakeFetch({MANIFEST_URL: manifest(artifacts=[artifact_entry(archive)])})
+    handoff = Handoff()
+    installer = build(
+        tmp_path, fetch=fetch, download=FakeDownload(archive.read_bytes()), handoff=handoff
+    )
+    write_supervisor(Path(installer._config.data_dir))
+
+    snapshot = await run_install(installer)
+
+    assert snapshot["phase"] == PHASE_REFUSED
+    assert snapshot["reason"] == REASON_NO_APPLIER
+    assert "by hand" in snapshot["message"]
+    assert handoff.calls == []
+
+
+def test_prepare_applier_prefers_the_archive_and_reports_the_shape(tmp_path: Path) -> None:
+    archive = make_archive(tmp_path)
+    layout = bundle_apply.Layout(tmp_path / "dist")
+    launcher = prepare_applier(archive, tmp_path / "applier", layout)
+    assert launcher == tmp_path / "applier" / CLI_ROOT / applier_executable_name()
+    assert launcher is not None and launcher.read_bytes() == b"MZ not really a client"
+    # Re-preparing into the same directory starts from empty rather than merging.
+    (tmp_path / "applier" / "stale.txt").write_text("old", encoding="utf-8")
+    prepare_applier(archive, tmp_path / "applier", layout)
+    assert not (tmp_path / "applier" / "stale.txt").exists()
+    # Nothing to prepare from answers None rather than a launcher that is not there.
+    bare = make_archive(tmp_path / "bare", siblings=False)
+    empty = bundle_apply.Layout(tmp_path / "x")
+    assert prepare_applier(bare, tmp_path / "applier-2", empty) is None
+    assert not (tmp_path / "applier-2").exists()
 
 
 async def test_an_already_verified_archive_is_reused_rather_than_refetched(
@@ -753,10 +935,15 @@ def test_a_source_run_is_a_source_install_even_beside_a_built_bundle() -> None:
     kind = detect_install_kind(frozen=False, executable="/checkout/.venv/bin/python")
     assert kind.kind == INSTALL_SOURCE
     assert kind.swappable is False
-    assert "uv tool upgrade" in kind.upgrade_command
+    assert kind.managed == ""
+    # The command is derived from how *this* copy was installed - the suite
+    # runs from a checkout, and a checkout is told to pull rather than to run a
+    # tool command it has no tool for.
+    assert kind.upgrade_command
+    assert "swe-mux" in kind.upgrade_command or "uv sync" in kind.upgrade_command
 
 
-def test_a_frozen_run_names_the_bundle_it_lives_in(tmp_path: Path) -> None:
+def test_a_frozen_run_names_the_bundle_it_lives_in(tmp_path: Path, monkeypatch: Any) -> None:
     exe = tmp_path / "dist" / "swe-mux" / "swe-mux.exe"
     exe.parent.mkdir(parents=True)
     exe.write_bytes(b"MZ")
@@ -764,6 +951,53 @@ def test_a_frozen_run_names_the_bundle_it_lives_in(tmp_path: Path) -> None:
     assert kind.kind == INSTALL_FROZEN
     assert kind.swappable is True
     assert kind.bundle_root == exe.parent
+    assert kind.install_root == exe.parent.parent
+    assert kind.layout is not None and kind.layout.app == exe.parent
+    # Run from the suite, the package sits in a checkout, which is what the
+    # frozen app on a developer machine looks like from inside the bundle.
+    assert kind.managed == MANAGED_CHECKOUT
+
+
+def test_a_frozen_run_tells_an_installer_install_from_a_portable_one(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    # The three frozen shapes swap identically; what the answer decides is
+    # whether the installer's Add/Remove Programs entry is brought up to date
+    # afterwards. Read from the registry rather than guessed from a path.
+    monkeypatch.setattr("swe_mux.update_install.redeploy_source_root", lambda: None)
+    exe = tmp_path / "Programs" / "swe-mux" / "swe-mux" / "swe-mux.exe"
+    exe.parent.mkdir(parents=True)
+    exe.write_bytes(b"MZ")
+    install_root = exe.parent.parent
+
+    def registered_here(_key: str, name: str) -> str | None:
+        return {"InstallLocation": str(install_root), "DisplayVersion": "0.2.2"}.get(name)
+
+    def registered_elsewhere(_key: str, name: str) -> str | None:
+        return {"InstallLocation": str(tmp_path / "other")}.get(name)
+
+    def unregistered(_key: str, _name: str) -> str | None:
+        return None
+
+    if sys.platform != "win32":
+        # The registry is a Windows thing; off it the reader is never consulted
+        # and every frozen copy outside a checkout is portable.
+        kind = detect_install_kind(
+            frozen=True, executable=str(exe), registration_reader=registered_here
+        )
+        assert kind.managed == MANAGED_PORTABLE
+        return
+    kind = detect_install_kind(
+        frozen=True, executable=str(exe), registration_reader=registered_here
+    )
+    assert kind.managed == MANAGED_INSTALLER
+    assert kind.install_root == install_root
+    kind = detect_install_kind(
+        frozen=True, executable=str(exe), registration_reader=registered_elsewhere
+    )
+    assert kind.managed == MANAGED_PORTABLE
+    kind = detect_install_kind(frozen=True, executable=str(exe), registration_reader=unregistered)
+    assert kind.managed == MANAGED_PORTABLE
 
 
 def test_the_supervisor_protocol_is_read_from_the_discovery_file(tmp_path: Path) -> None:
@@ -806,14 +1040,15 @@ async def test_the_state_file_records_every_phase_of_an_attempt(tmp_path: Path) 
     payload = json.loads(
         (Path(installer._config.data_dir) / "update-install.json").read_text(encoding="utf-8")
     )
-    assert payload["schema"] == 1
+    assert payload["schema"] == 2
     assert payload["phase"] == PHASE_HANDED_OFF
     assert payload["version"] == NEXT
     assert payload["install_id"]
+    assert payload["mode"] == bundle_apply.MODE_SWAP
     phases = [event["phase"] for event in payload["events"]]
     assert phases[0] == "downloading"
     assert phases[-1] == PHASE_HANDED_OFF
-    assert "verifying" in phases and "inspecting" in phases
+    assert "verifying" in phases and "inspecting" in phases and "preparing" in phases
 
 
 async def test_a_corrupt_state_file_starts_from_empty(tmp_path: Path) -> None:
@@ -825,130 +1060,102 @@ async def test_a_corrupt_state_file_starts_from_empty(tmp_path: Path) -> None:
     assert installer.snapshot()["phase"] == "idle"
 
 
-# --- the other end: what the redeploy script does with the archive -------------
+# --- the other end: what the applier does with the archive ----------------------
 #
-# The daemon verified the download, and the script re-verifies it. That is not
-# belt-and-braces for its own sake: the script is separately invocable with any
-# path a person can type, and a guarantee that holds only when you were called by
-# the right process is not a guarantee.
-
-
-def redeploy_module() -> Any:
-    import importlib.util
-
-    from swe_mux import redeploy_launch
-
-    root = redeploy_launch.PACKAGE_DIR.parents[1]
-    sys.path.insert(0, str(root / "packaging"))
-    try:
-        spec = importlib.util.spec_from_file_location(
-            "redeploy_desktop_from_archive", root / "packaging" / "redeploy_desktop.py"
-        )
-        assert spec is not None and spec.loader is not None
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-    finally:
-        sys.path.pop(0)
-    return module
+# The daemon verified the download, and the applier re-verifies it. That is not
+# belt-and-braces for its own sake: `bundle_apply` is separately invocable with
+# any path a person can type (`swemux update-apply`, `redeploy_desktop.py
+# --from-archive`), and a guarantee that holds only when you were called by the
+# right process is not a guarantee.
 
 
 class FakeOutcome:
     def __init__(self) -> None:
         self.records: list[tuple[str, int]] = []
+        self.facts: dict[str, Any] = {}
 
     def record(self, kind: str, detail: str, *, code: int) -> None:
         self.records.append((kind, code))
 
-
-def isolate_script(module: Any, tmp_path: Path, monkeypatch: Any) -> Path:
-    """Point the script's two real paths at `tmp_path`, and say why.
-
-    `STAGING_ROOT` has always had to move. `APP_DIST` joined it when staging
-    became a delta: the script now reads the installed bundle to reuse from it,
-    and a suite that left it pointing at `dist/swe-mux` would hash whatever
-    happens to be built on the machine running the tests - hundreds of megabytes
-    of somebody's real app, on a different volume from `tmp_path`, so every
-    hard link would fail over to a copy. Returns the staging root.
-    """
-    staging = tmp_path / "staging"
-    monkeypatch.setattr(module, "STAGING_ROOT", staging)
-    monkeypatch.setattr(module, "APP_DIST", tmp_path / "no-installed-bundle")
-    monkeypatch.setattr(module, "log", lambda _message: None)
-    return staging
+    def describe(self, **facts: Any) -> None:
+        self.facts.update(facts)
 
 
-def test_the_script_stages_a_delta_against_the_installed_bundle(
-    tmp_path: Path, monkeypatch: Any
-) -> None:
+@pytest.fixture(autouse=True)
+def quiet_applier(monkeypatch: Any) -> None:
+    """The applier prints progress; a test suite does not want it on stdout."""
+    monkeypatch.setattr(bundle_apply, "log", lambda _message: None)
+
+
+def test_the_applier_stages_a_delta_against_the_installed_bundle(tmp_path: Path) -> None:
     # The other half of the updater's win, in the process that actually performs
     # it. The daemon's preview is advisory; this is the code that decides what
     # gets written, and it decides from the manifest *inside* the archive - the
     # copy the whole-archive digest it just checked already covers.
-    module = redeploy_module()
-    staging = isolate_script(module, tmp_path, monkeypatch)
-    installed = make_bundle(tmp_path / "installed", version=CURRENT)
+    layout = bundle_apply.Layout(tmp_path / "installed")
+    installed = make_bundle(layout.app, version=CURRENT)
     (installed / "_internal" / "heavy.bin").write_bytes(b"H" * 200_000)
-    monkeypatch.setattr(module, "APP_DIST", installed)
     bundle = make_bundle(tmp_path / "build" / "swe-mux", version=NEXT)
     (bundle / "_internal" / "heavy.bin").write_bytes(b"H" * 200_000)
-    archive, _ = package_desktop_release.build_archive(bundle, tmp_path / "out")
+    archive, _ = package_desktop_release.build_archive(
+        bundle, tmp_path / "out", siblings=package_desktop_release.sibling_bundles(bundle)
+    )
     digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+    outcome = FakeOutcome()
 
-    assert module.stage_from_archive(SimpleArgs(archive, digest), outcome := FakeOutcome()) == 0
+    code, result, metadata = bundle_apply.stage_from_archive(archive, digest, layout, outcome)
+
+    assert code == 0 and result is not None and metadata is not None
+    assert metadata.version == NEXT
     assert outcome.records == []
-    staged = staging / "swe-mux"
+    staged = layout.staged(bundle_apply.APP_BUNDLE)
     assert (staged / "swe-mux.exe").is_file()
     # The 200 KB standing in for the machine-learning closure was not rewritten;
     # it is the same filesystem object, which is what keeps its scan verdict.
     assert (staged / "_internal" / "heavy.bin").read_bytes() == b"H" * 200_000
     assert (staged / "_internal" / "heavy.bin").samefile(installed / "_internal" / "heavy.bin")
+    # The siblings arrive beside it, whole, under the names the swap moves.
+    assert result.bundles == (ARCHIVE_ROOT, SUPERVISOR_ROOT, CLI_ROOT)
+    assert (layout.staged(CLI_ROOT) / applier_executable_name()).is_file()
+    assert (layout.staged(SUPERVISOR_ROOT) / "swe-mux-supervisor.exe").is_file()
 
 
-def test_the_script_refuses_an_archive_whose_hash_it_was_given_and_does_not_match(
-    tmp_path: Path, monkeypatch: Any
+def test_the_applier_refuses_an_archive_whose_hash_it_was_given_and_does_not_match(
+    tmp_path: Path,
 ) -> None:
-    module = redeploy_module()
-    isolate_script(module, tmp_path, monkeypatch)
+    layout = bundle_apply.Layout(tmp_path / "installed")
     archive = make_archive(tmp_path)
-    args = SimpleArgs(from_archive=archive, archive_sha256="0" * 64)
     outcome = FakeOutcome()
 
-    assert module.stage_from_archive(args, outcome) == 2
+    code, result, _ = bundle_apply.stage_from_archive(archive, "0" * 64, layout, outcome)
+
+    assert code == 2 and result is None
     assert outcome.records == [("refused", 2)]
-    assert not (tmp_path / "staging").exists()
+    assert not layout.staging_root.exists()
 
 
-def test_the_script_extracts_a_verified_archive_into_the_staging_tree(
-    tmp_path: Path, monkeypatch: Any
+def test_the_applier_extracts_a_verified_archive_into_the_staging_tree(
+    tmp_path: Path,
 ) -> None:
-    module = redeploy_module()
-    staging = isolate_script(module, tmp_path, monkeypatch)
+    layout = bundle_apply.Layout(tmp_path / "installed")
     archive = make_archive(tmp_path)
     digest = hashlib.sha256(archive.read_bytes()).hexdigest()
     outcome = FakeOutcome()
 
-    assert module.stage_from_archive(SimpleArgs(archive, digest), outcome) == 0
+    code, result, _ = bundle_apply.stage_from_archive(archive, digest, layout, outcome)
+
+    assert code == 0 and result is not None
     assert outcome.records == []
-    assert (staging / "swe-mux" / "swe-mux.exe").is_file()
-    assert (staging / "swe-mux" / "bundle.json").is_file()
+    assert (layout.staged("swe-mux") / "swe-mux.exe").is_file()
+    assert (layout.staged("swe-mux") / "bundle.json").is_file()
 
 
-def test_the_script_refuses_an_archive_that_is_not_there(
-    tmp_path: Path, monkeypatch: Any
-) -> None:
-    module = redeploy_module()
-    isolate_script(module, tmp_path, monkeypatch)
+def test_the_applier_refuses_an_archive_that_is_not_there(tmp_path: Path) -> None:
+    layout = bundle_apply.Layout(tmp_path / "installed")
     outcome = FakeOutcome()
-    assert module.stage_from_archive(SimpleArgs(tmp_path / "nope.zip", ""), outcome) == 2
+    code, _, _ = bundle_apply.stage_from_archive(tmp_path / "nope.zip", "", layout, outcome)
+    assert code == 2
     assert outcome.records == [("refused", 2)]
-
-
-class SimpleArgs:
-    """The two fields `stage_from_archive` reads off the parsed arguments."""
-
-    def __init__(self, from_archive: Path, archive_sha256: str = "") -> None:
-        self.from_archive = from_archive
-        self.archive_sha256 = archive_sha256
 
 
 # --- the route -----------------------------------------------------------------
@@ -1083,9 +1290,7 @@ class FakeDownloads:
         if payload is None:
             return DownloadOutcome(status=404, declared_bytes=None, received_bytes=0)
         write(payload)
-        return DownloadOutcome(
-            status=200, declared_bytes=len(payload), received_bytes=len(payload)
-        )
+        return DownloadOutcome(status=200, declared_bytes=len(payload), received_bytes=len(payload))
 
 
 #: The stand-in for the ~370 MB of machine-learning dependencies that dominate a
@@ -1102,7 +1307,9 @@ def make_release(
     bundle = make_bundle(tmp_path / "build" / "swe-mux", version=version)
     for name, payload in (extra or {}).items():
         (bundle / name).write_bytes(payload)
-    return package_desktop_release.build_archive(bundle, tmp_path / "out")
+    return package_desktop_release.build_archive(
+        bundle, tmp_path / "out", siblings=package_desktop_release.sibling_bundles(bundle)
+    )
 
 
 async def test_the_install_reports_how_much_of_the_release_is_already_here(
@@ -1197,9 +1404,203 @@ async def test_the_sidecar_manifest_name_cannot_collide_with_the_archives(
     names = {
         release_archive_name(version, "windows-x64"),
         release_file_manifest_name(version, "windows-x64"),
+        release_bundle_metadata_name(version, "windows-x64"),
         release_installer_name(version, "windows-x64"),
     }
-    assert len(names) == 3
+    assert len(names) == 4
     archive, sidecar = make_release(tmp_path)
     assert sidecar.name == release_file_manifest_name(NEXT, release_platform_tag())
     assert sidecar.name != archive.name
+    # The metadata sidecar is the bundle's own `bundle.json`, byte for byte, so
+    # the plan reads exactly what the install will re-read out of the archive.
+    described = sidecar.with_name(release_bundle_metadata_name(NEXT, release_platform_tag()))
+    assert described.is_file()
+    assert described.read_bytes() == (tmp_path / "build" / "swe-mux" / "bundle.json").read_bytes()
+
+
+# --- the plan: what the press would do, said before it ---------------------------
+
+
+def release_with_sidecars(
+    tmp_path: Path, *, protocol: int = SUPERVISOR_PROTOCOL
+) -> tuple[dict[str, Any], FakeDownloads, Path]:
+    """A manifest naming the archive and both sidecars, and a downloader for all three."""
+    bundle = make_bundle(tmp_path / "build" / "swe-mux", version=NEXT, protocol=protocol)
+    archive, files = package_desktop_release.build_archive(
+        bundle, tmp_path / "out", siblings=package_desktop_release.sibling_bundles(bundle)
+    )
+    described = files.with_name(release_bundle_metadata_name(NEXT, release_platform_tag()))
+    entries = [artifact_entry(archive), artifact_entry(files), artifact_entry(described)]
+    payloads = {
+        entries[0]["url"]: archive.read_bytes(),
+        entries[1]["url"]: files.read_bytes(),
+        entries[2]["url"]: described.read_bytes(),
+    }
+    return manifest(artifacts=entries), FakeDownloads(payloads), archive
+
+
+async def test_the_plan_says_before_the_download_whether_sessions_survive(
+    tmp_path: Path,
+) -> None:
+    # The question the operator has to answer before anything is fetched, and
+    # the reason the metadata sidecar exists: a few hundred bytes, read instead
+    # of a few hundred megabytes.
+    manifest_payload, download, archive = release_with_sidecars(
+        tmp_path, protocol=SUPERVISOR_PROTOCOL + 1
+    )
+    fetch = FakeFetch({MANIFEST_URL: manifest_payload})
+    installer = build(tmp_path, fetch=fetch, download=download)
+    write_supervisor(Path(installer._config.data_dir), protocol=SUPERVISOR_PROTOCOL)
+
+    plan = await installer.plan(NEXT)
+
+    assert plan["version"] == NEXT
+    assert plan["mode"] == bundle_apply.MODE_REPLACE
+    assert plan["reaps_sessions"] is True
+    assert plan["consent"] == CONSENT_SUPERVISOR_UPDATE
+    assert plan["consent_reason"] == REASON_SUPERVISOR_UPDATE_REQUIRED
+    assert plan["supervisor"]["known"] is True
+    assert plan["supervisor"]["incoming_protocol"] == SUPERVISOR_PROTOCOL + 1
+    assert plan["supervisor"]["running_protocol"] == SUPERVISOR_PROTOCOL
+    assert plan["archive_cached"] is False
+    # The archive itself was never fetched: only the manifest and the sidecars.
+    assert archive.name not in " ".join(download.calls)
+    # And a plan is a question, not an attempt: the attempt state is untouched.
+    assert installer.snapshot()["phase"] == "idle"
+    assert installer.snapshot()["artifact"] == ""
+
+
+async def test_the_plan_reports_a_preserving_release_and_the_delta(tmp_path: Path) -> None:
+    manifest_payload, download, _ = release_with_sidecars(tmp_path)
+    fetch = FakeFetch({MANIFEST_URL: manifest_payload})
+    installer = build(tmp_path, fetch=fetch, download=download)
+    write_supervisor(Path(installer._config.data_dir))
+    make_bundle(tmp_path / "dist" / "swe-mux", version=CURRENT)
+
+    plan = await installer.plan(NEXT)
+
+    assert plan["mode"] == bundle_apply.MODE_SWAP
+    assert plan["reaps_sessions"] is False
+    assert plan["consent"] == ""
+    assert "preserved" in plan["supervisor"]["message"]
+    assert plan["delta"]["reason"] in {"ok", "too_little_reuse"}
+    assert plan["managed"] == MANAGED_PORTABLE
+
+
+async def test_a_release_without_the_metadata_sidecar_plans_as_unknown(
+    tmp_path: Path,
+) -> None:
+    # Every release before 2026-09-05. The plan does not guess; the install
+    # answers from the archive after the download, exactly as it always did.
+    archive = make_archive(tmp_path, protocol=SUPERVISOR_PROTOCOL + 1)
+    fetch = FakeFetch({MANIFEST_URL: manifest(artifacts=[artifact_entry(archive)])})
+    installer = build(tmp_path, fetch=fetch, download=FakeDownload(archive.read_bytes()))
+    write_supervisor(Path(installer._config.data_dir))
+
+    plan = await installer.plan(NEXT)
+
+    assert plan["supervisor"]["known"] is False
+    assert plan["supervisor"]["incoming_protocol"] is None
+    assert plan["mode"] == bundle_apply.MODE_SWAP
+    assert plan["consent"] == ""
+    snapshot = await run_install(installer)
+    assert snapshot["reason"] == REASON_SUPERVISOR_UPDATE_REQUIRED
+
+
+async def test_the_plan_refuses_a_source_install_with_the_command_to_run(
+    tmp_path: Path,
+) -> None:
+    fetch = FakeFetch({MANIFEST_URL: manifest()})
+    installer = build(tmp_path, fetch=fetch, frozen=False)
+    with pytest.raises(UpdateRefused) as refusal:
+        await installer.plan(NEXT)
+    assert refusal.value.reason == REASON_SOURCE_INSTALL
+    assert "uv tool upgrade swe-mux" in refusal.value.message
+    assert fetch.calls == []
+
+
+async def test_the_plan_route_needs_its_own_gesture_and_reports_live_sessions(
+    tmp_path: Path,
+) -> None:
+    manifest_payload, download, _ = release_with_sidecars(
+        tmp_path, protocol=SUPERVISOR_PROTOCOL + 1
+    )
+    fetch = FakeFetch({MANIFEST_URL: manifest_payload})
+    installer = build(tmp_path, fetch=fetch, download=download)
+    write_supervisor(Path(installer._config.data_dir), protocol=SUPERVISOR_PROTOCOL)
+    app = route_app(installer)
+
+    class Pty:
+        def __init__(self, alive: bool) -> None:
+            self._alive = alive
+
+        def isalive(self) -> bool:
+            return self._alive
+
+    class Session:
+        def __init__(self, alive: bool) -> None:
+            self.pty = Pty(alive)
+
+    app[keys.SESSIONS] = type(  # type: ignore[assignment]
+        "Sessions", (), {"sessions": {"a": Session(True), "b": Session(True), "c": Session(False)}}
+    )()
+    client = TestClient(TestServer(app))
+    await client.start_server()
+    try:
+        wrong_word = await client.post(
+            "/api/update/plan",
+            json={"version": NEXT},
+            headers={"X-Mux-User-Gesture": "update-install"},
+        )
+        assert wrong_word.status == 400
+        assert fetch.calls == []
+        response = await client.post(
+            "/api/update/plan",
+            json={"version": NEXT},
+            headers={"X-Mux-User-Gesture": "update-plan"},
+        )
+        assert response.status == 200
+        plan = await response.json()
+        assert plan["reaps_sessions"] is True
+        assert plan["live_sessions"] == 2
+        # Then the install without consent is refused over the route, with the
+        # consent word a client needs to know what to ask.
+        refused = await client.post(
+            "/api/update/install",
+            json={"version": NEXT},
+            headers={"X-Mux-User-Gesture": "update-install"},
+        )
+        assert refused.status == 202
+        await installer.wait()
+        snapshot = installer.snapshot()
+        assert snapshot["reason"] == REASON_SUPERVISOR_UPDATE_REQUIRED
+        assert snapshot["consent"] == CONSENT_SUPERVISOR_UPDATE
+        accepted = await client.post(
+            "/api/update/install",
+            json={"version": NEXT, "accept_supervisor_update": True},
+            headers={"X-Mux-User-Gesture": "update-install"},
+        )
+        assert accepted.status == 202
+        await installer.wait()
+        assert installer.snapshot()["phase"] == PHASE_HANDED_OFF
+        assert installer.snapshot()["mode"] == bundle_apply.MODE_REPLACE
+    finally:
+        await client.close()
+
+
+async def test_the_handoff_tells_every_client_which_kind_of_swap_began(
+    tmp_path: Path,
+) -> None:
+    archive = make_archive(tmp_path)
+    fetch = FakeFetch({MANIFEST_URL: manifest(artifacts=[artifact_entry(archive)])})
+    installer = build(tmp_path, fetch=fetch, download=FakeDownload(archive.read_bytes()))
+    write_supervisor(Path(installer._config.data_dir))
+    announced: list[tuple[int, str]] = []
+
+    async def announce(pid: int, mode: str) -> None:
+        announced.append((pid, mode))
+
+    installer.announce = announce
+    snapshot = await run_install(installer)
+    assert snapshot["phase"] == PHASE_HANDED_OFF
+    assert announced == [(4242, "swap")]

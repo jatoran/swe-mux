@@ -785,3 +785,142 @@ def test_requests_outside_a_pane_carry_no_identity(monkeypatch) -> None:
     monkeypatch.setattr(cli.urllib.request, "urlopen", fake_urlopen)
     cli.request("GET", "/api/sessions", base="http://127.0.0.1:1")
     assert not any(key.lower().startswith("x-mux-caller") for key in seen)
+
+
+# --------------------------------------------------------------------------- #
+# The in-app updater's three commands
+# --------------------------------------------------------------------------- #
+
+
+def _capture_update_requests(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
+    captured: list[dict[str, Any]] = []
+
+    def _request(
+        method: str,
+        path: str,
+        body: Any = None,
+        *,
+        base: str,
+        headers: dict[str, str] | None = None,
+        timeout: float = 10,
+    ) -> Any:
+        captured.append({"method": method, "path": path, "body": body, "headers": headers or {}})
+        return {"phase": "downloading", "version": "0.3.0", "mode": "swap"}
+
+    monkeypatch.setattr(cli, "request", _request)
+    return captured
+
+
+def test_update_install_carries_the_gesture_and_the_consent_flag(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    captured = _capture_update_requests(monkeypatch)
+    assert cli.main(["update", "--install", "0.3.0", "--json"]) == cli.EXIT_OK
+    assert captured[0]["path"] == "/api/update/install"
+    assert captured[0]["headers"] == {"X-Mux-User-Gesture": "update-install"}
+    # Absent consent is sent as an explicit False: the daemon's default is the
+    # same, and a body that says so is one a reader can audit.
+    assert captured[0]["body"] == {"version": "0.3.0", "accept_supervisor_update": False}
+    captured.clear()
+    assert (
+        cli.main(["update", "--install", "0.3.0", "--accept-supervisor-update", "--json"])
+        == cli.EXIT_OK
+    )
+    assert captured[0]["body"] == {"version": "0.3.0", "accept_supervisor_update": True}
+
+
+def test_update_plan_uses_its_own_gesture_word(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    captured = _capture_update_requests(monkeypatch)
+    assert cli.main(["update", "--plan", "0.3.0", "--json"]) == cli.EXIT_OK
+    assert captured[0]["path"] == "/api/update/plan"
+    assert captured[0]["headers"] == {"X-Mux-User-Gesture": "update-plan"}
+    assert captured[0]["body"] == {"version": "0.3.0"}
+
+
+def test_the_plan_renders_the_cost_before_the_command() -> None:
+    text = cli._render_update_plan(
+        {
+            "version": "0.3.0",
+            "current_version": "0.2.3",
+            "install_kind": "frozen",
+            "managed": "installer",
+            "mode": "replace",
+            "reaps_sessions": True,
+            "consent": "supervisor_update",
+            "supervisor": {"known": True, "message": "This release speaks protocol 2."},
+            "delta": {
+                "eligible": True,
+                "fetch_files": 63,
+                "fetch_bytes": 32_400_000,
+                "reuse_files": 2874,
+            },
+        }
+    )
+    assert "sessions  ENDED" in text
+    assert "63 file(s) / 32.4 MB" in text
+    assert text.rstrip().endswith("update --install 0.3.0 --accept-supervisor-update")
+    quiet = cli._render_update_plan(
+        {"version": "0.3.0", "mode": "swap", "reaps_sessions": False, "supervisor": {"known": True}}
+    )
+    assert "sessions  preserved" in quiet
+    assert "--accept-supervisor-update" not in quiet
+
+
+def test_a_refused_install_names_the_flag_that_would_proceed() -> None:
+    text = cli._render_update_install(
+        {
+            "phase": "refused",
+            "version": "0.3.0",
+            "message": "This release replaces the supervisor.",
+            "consent": "supervisor_update",
+        }
+    )
+    assert "--accept-supervisor-update" in text
+    assert "ends every live session" in text
+    assert "--accept-supervisor-update" not in cli._render_update_install(
+        {"phase": "handed_off", "version": "0.3.0", "message": "running"}
+    )
+
+
+def test_update_apply_runs_locally_and_exits_with_the_swaps_verdict(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`update-apply` is the applier itself, so it never asks a daemon anything
+    and its exit code is the swap's outcome rather than the request's."""
+    seen: list[Any] = []
+
+    def _never(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError("update-apply must not talk to a daemon")
+
+    monkeypatch.setattr(cli, "request", _never)
+
+    def fake_apply(args: Any) -> tuple[Any, Any]:
+        seen.append(args)
+        code = 0 if args.mode == "swap" else 1
+        return {"outcome": "succeeded" if code == 0 else "rolled_back", "exit_code": code}, None
+
+    monkeypatch.setattr(cli, "update_apply_command", fake_apply)
+    argv = [
+        "update-apply",
+        "--archive",
+        "C:/x/swe-mux-0.3.0-windows-x64.zip",
+        "--archive-sha256",
+        "ab" * 32,
+        "--install-root",
+        "C:/x/dist",
+        "--lock-held",
+        "--restore-visibility",
+        "--json",
+    ]
+    assert cli.main(argv) == cli.EXIT_OK
+    args = seen[0]
+    assert Path(args.archive).name == "swe-mux-0.3.0-windows-x64.zip"
+    assert args.archive_sha256 == "ab" * 32
+    assert Path(args.install_root) == Path("C:/x/dist")
+    assert args.mode == "swap" and args.lock_held and args.restore_visibility
+    assert cli.main([*argv, "--mode", "replace"]) == cli.EXIT_LOCAL_FAIL
+    with pytest.raises(SystemExit) as usage:
+        cli.main(["update-apply", "--json"])  # argparse: --archive is required
+    assert usage.value.code == 2

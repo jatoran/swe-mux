@@ -30,6 +30,8 @@ const STATE: RedeployState = {
     'INFO: collecting submodules for swe_mux',
     'INFO: Building EXE from EXE-00.toc',
   ],
+  kind: 'redeploy',
+  reap: false,
 }
 
 document.body.style.margin = '0'

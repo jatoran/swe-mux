@@ -13,7 +13,7 @@ from typing import Any
 import pytest
 
 from swe_mux import app_keys as keys
-from swe_mux import server
+from swe_mux import bundle_apply, server
 from swe_mux.routes import system as system_routes
 
 
@@ -368,7 +368,7 @@ def _redeploy_module() -> Any:
 
 
 def test_replace_dir_moves_and_reports_failure(tmp_path: Path) -> None:
-    module = _redeploy_module()
+    module = bundle_apply
 
     source = tmp_path / "bundle"
     source.mkdir()
@@ -383,7 +383,7 @@ def test_replace_dir_moves_and_reports_failure(tmp_path: Path) -> None:
 def test_redeploy_health_wait_allows_cold_start_but_stops_on_process_exit(
     monkeypatch: Any,
 ) -> None:
-    module = _redeploy_module()
+    module = bundle_apply
     health_calls: list[object] = []
     monkeypatch.setattr(
         module,
@@ -406,7 +406,7 @@ def test_health_wait_reports_each_startup_phase_once(monkeypatch: Any) -> None:
     rule is the point - the elapsed seconds in the rendered line move on every
     poll, so comparing rendered text would put two lines a second in the log.
     """
-    module = _redeploy_module()
+    module = bundle_apply
     answers = [
         {"ok": False, "status": "starting", "phase": "stores", "phase_seconds": 1.0,
          "elapsed_seconds": 1.0, "phases": []},
@@ -438,7 +438,7 @@ def test_health_reads_the_starting_daemons_503_body(monkeypatch: Any) -> None:
     `health()` must still say "no usable daemon" for it - every caller of that
     means "can I use this port" - while `health_payload()` recovers the phase.
     """
-    module = _redeploy_module()
+    module = bundle_apply
     body = json.dumps({"ok": False, "status": "starting", "phase": "supervisor-connect"})
 
     def raise_503(*_args: Any, **_kwargs: Any) -> Any:
@@ -464,7 +464,7 @@ def test_health_reads_the_starting_daemons_503_body(monkeypatch: Any) -> None:
 def test_ui_redeploy_restores_desktop_window_visibility(
     monkeypatch: Any, window_visible: bool, expected_hidden: bool
 ) -> None:
-    module = _redeploy_module()
+    module = bundle_apply
     monkeypatch.setattr(module, "app_window_visible", lambda: window_visible)
 
     assert (
@@ -481,7 +481,7 @@ def test_in_session_helpers_are_not_confused_with_the_shell_or_daemon() -> None:
     helpers and took down the one session that was mid-tool-call. Only the shell and
     the daemon may be stopped by the ordinary path.
     """
-    module = _redeploy_module()
+    module = bundle_apply
     exe = r"D:\PROJECTS\swe-mux\dist\swe-mux\swe-mux.exe"
 
     def fake(*argv: str) -> Any:
@@ -504,7 +504,7 @@ def test_in_session_helpers_are_not_confused_with_the_shell_or_daemon() -> None:
 
 def test_unreadable_argv_is_spared_rather_than_killed() -> None:
     """An unprovable process must not be killed: a lock straggler is the cheaper risk."""
-    module = _redeploy_module()
+    module = bundle_apply
     import psutil
 
     def denied() -> list[str]:
@@ -515,7 +515,7 @@ def test_unreadable_argv_is_spared_rather_than_killed() -> None:
 
 def test_ordinary_stop_terminates_only_shell_pids(monkeypatch: Any) -> None:
     """The stop path signals enumerated pids and never a whole image name."""
-    module = _redeploy_module()
+    module = bundle_apply
     argv = {
         11: [r"dist\swe-mux\swe-mux.exe"],
         12: [r"dist\swe-mux\swe-mux.exe", "--daemon-child"],
@@ -903,8 +903,10 @@ def test_a_build_environment_without_the_voice_extra_is_refused_first(
     def _must_not_run(*args: Any, **kwargs: Any) -> Any:
         raise AssertionError("the preflight must refuse before inspecting anything")
 
-    monkeypatch.setattr(module, "supervisor_process", _must_not_run)
-    monkeypatch.setattr(module, "processes_by_image", _must_not_run)
+    # The process inspection lives in the shared swap module now; the script
+    # reaches it through that module, so that is where the tripwire goes.
+    monkeypatch.setattr(bundle_apply, "supervisor_process", _must_not_run)
+    monkeypatch.setattr(bundle_apply, "processes_by_image", _must_not_run)
 
     config = SimpleNamespace(data_dir=tmp_path)
     outcome = module.Outcome(config, 1.0)
@@ -932,7 +934,8 @@ def test_the_extra_preflight_is_skipped_when_no_build_will_run(
         reached.append("supervisor")
         return None
 
-    monkeypatch.setattr(module, "supervisor_process", _supervisor)
+    monkeypatch.setattr(bundle_apply, "supervisor_process", _supervisor)
+    monkeypatch.setattr(bundle_apply, "log", lambda _message: None)
     config = SimpleNamespace(data_dir=tmp_path)
     outcome = module.Outcome(config, 1.0)
     # Refused for the *supervisor* reason, having got past the extra check.
@@ -981,13 +984,13 @@ def test_an_unreachable_daemon_does_not_stop_the_redeploy(
     tmp_path: Path, monkeypatch: Any
 ) -> None:
     """The announcement only buys the UI a progress chip; it is never load-bearing."""
-    module = _redeploy_module()
 
     def refuse(*_args: Any, **_kwargs: Any) -> Any:
         raise OSError("connection refused")
 
-    monkeypatch.setattr(module.urllib.request, "urlopen", refuse)
-    module.announce_start(SimpleNamespace(data_dir=tmp_path, port=1))
+    monkeypatch.setattr(bundle_apply.urllib.request, "urlopen", refuse)
+    monkeypatch.setattr(bundle_apply, "log", lambda _message: None)
+    bundle_apply.announce_start(SimpleNamespace(data_dir=tmp_path, port=1))
 
 
 async def test_a_stale_log_is_not_served_as_the_running_redeploys_progress(

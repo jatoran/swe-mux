@@ -132,7 +132,9 @@ listener, with optional Tailscale Serve for browser-recognized HTTPS.
   it happens only on an explicit act naming a version (`POST /api/update/install`,
   `swemux update --install`, `design/interfaces.md`), it fetches the artifact the manifest
   names from GitHub Releases, and it verifies the SHA-256 before anything is staged. The
-  same switch gates it, so "off means nothing leaves the machine" holds for both halves.
+  plan the confirm dialog shows first (`POST /api/update/plan`) fetches the manifest and two
+  small hashed sidecars, also only on a press. The same switch gates all of it, so "off
+  means nothing leaves the machine" holds for every half.
   Every other outbound path in the app belongs to a feature the operator turned on and
   points at a service they configured: the OpenRouter-compatible endpoint for
   summarization and the assistant, the browser vendor's web-push service, and experimental

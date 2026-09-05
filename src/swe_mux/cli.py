@@ -277,16 +277,13 @@ def _mcp_rpc(url: str, token: str, method: str, params: dict[str, Any]) -> Any:
         raise CliError(f"daemon returned HTTP {exc.code}: {detail}", EXIT_HTTP) from exc
     except urllib.error.URLError as exc:
         raise CliError(
-            f"cannot reach the mux MCP endpoint at {url}: {exc.reason}. "
-            "Is the daemon running?",
+            f"cannot reach the mux MCP endpoint at {url}: {exc.reason}. Is the daemon running?",
             EXIT_CONNECTION,
             reason=str(exc.reason),
         ) from exc
     error = payload.get("error") if isinstance(payload, dict) else None
     if error:
-        raise CliError(
-            f"the daemon refused the call: {error.get('message', error)}", EXIT_HTTP
-        )
+        raise CliError(f"the daemon refused the call: {error.get('message', error)}", EXIT_HTTP)
     return payload.get("result") if isinstance(payload, dict) else payload
 
 
@@ -367,11 +364,7 @@ def agent_command(args: Any) -> tuple[Any, Callable[[Any], str] | None]:
             unwrapped = json.loads(text) if text else {}
         except ValueError:
             unwrapped = {"text": text}
-        if (
-            isinstance(unwrapped, dict)
-            and isinstance(result, dict)
-            and bool(result.get("isError"))
-        ):
+        if isinstance(unwrapped, dict) and isinstance(result, dict) and bool(result.get("isError")):
             # Stamped only on refusals, so a success prints the tool's own
             # shape untouched and a script can branch on the exit code alone.
             unwrapped["isError"] = True
@@ -611,7 +604,8 @@ def _render_update(result: Any) -> str:
     if not install.get("swappable") and install.get("upgrade_command"):
         lines.append(f"upgrade   {install['upgrade_command']}")
     elif check.get("update_available") and latest.get("version"):
-        lines.append(f"upgrade   mux update --install {latest['version']}")
+        lines.append(f"plan      {invoked_as()} update --plan {latest['version']}")
+        lines.append(f"upgrade   {invoked_as()} update --install {latest['version']}")
     if install.get("phase") and install.get("phase") != "idle":
         lines.append(f"last      {install.get('phase')} {install.get('reason', '')}".rstrip())
         if install.get("message"):
@@ -623,7 +617,116 @@ def _render_update_install(result: Any) -> str:
     payload = result if isinstance(result, dict) else {}
     head = f"{payload.get('phase', '?')} {payload.get('version', '')}".strip()
     message = payload.get("message") or payload.get("error") or ""
-    return f"{head}\n{message}".strip()
+    lines = [head, message]
+    if payload.get("consent"):
+        lines.append(
+            "re-run with --accept-supervisor-update to install anyway; that ends every live session"
+        )
+    return "\n".join(line for line in lines if line).strip()
+
+
+def _render_update_plan(result: Any) -> str:
+    """What the install would do, in the order an operator decides on it."""
+    payload = result if isinstance(result, dict) else {}
+    supervisor = payload.get("supervisor") or {}
+    delta = payload.get("delta") or {}
+    lines = [
+        f"version   {payload.get('version', '?')} (running {payload.get('current_version', '?')})",
+        f"install   {payload.get('install_kind', '?')} {payload.get('managed', '')}".rstrip(),
+        f"mode      {payload.get('mode', '?')}",
+    ]
+    if payload.get("reaps_sessions"):
+        lines.append("sessions  ENDED - this release replaces the PTY supervisor")
+    elif supervisor.get("known") is False:
+        lines.append("sessions  decided after download (no metadata sidecar published)")
+    else:
+        lines.append("sessions  preserved")
+    if supervisor.get("message"):
+        lines.append(f"          {supervisor['message']}")
+    if delta.get("eligible"):
+        lines.append(
+            f"rewrite   {delta.get('fetch_files', '?')} file(s) / "
+            f"{float(delta.get('fetch_bytes', 0)) / 1e6:.1f} MB; "
+            f"{delta.get('reuse_files', '?')} reused"
+        )
+    if payload.get("archive_cached"):
+        lines.append("archive   already downloaded and verified")
+    if payload.get("consent"):
+        lines.append(
+            f"install   {invoked_as()} update --install {payload.get('version', '')} "
+            "--accept-supervisor-update"
+        )
+    else:
+        lines.append(f"install   {invoked_as()} update --install {payload.get('version', '')}")
+    return "\n".join(lines)
+
+
+def update_apply_command(args: argparse.Namespace) -> tuple[Any, Any]:
+    """Run the staged swap here, without asking a daemon anything.
+
+    The frozen console client is the process this exists for: the daemon
+    unpacked a copy of it under the data directory and spawned this command
+    with the verified archive, so everything about the swap - the lock, the
+    stop, the renames, the health wait, the rollback - runs from a tree that is
+    not being replaced. `--lock-held` is what the daemon passes; a run started
+    from a terminal claims the lock itself and announces itself, exactly as
+    `packaging/redeploy_desktop.py` does.
+
+    The result is the outcome record, and the exit code follows it through
+    `main`: a person running this by hand gets `redeploy-result.json`'s answer
+    on stdout and a non-zero exit for anything but a healthy new app.
+    """
+    from . import bundle_apply
+    from .config import load_config
+    from .install_location import record_installed_version
+
+    config = load_config(args.config)
+    started_at = time.time()
+    if not bundle_apply.claim_lock(config, already_held=args.lock_held):
+        return {"outcome": bundle_apply.OUTCOME_REFUSED, "exit_code": 2}, _render_update_apply
+    if not args.lock_held:
+        bundle_apply.announce_start(config)
+    layout = bundle_apply.Layout(Path(args.install_root))
+    outcome = bundle_apply.Outcome(config, started_at)
+
+    def bring_registry_up_to_date(metadata: Any) -> None:
+        # Only an installer-managed install has an entry to bring up to date;
+        # `record_installed_version` answers False for the other two shapes.
+        if record_installed_version(metadata.version, layout.install_root):
+            bundle_apply.log(f"Add/Remove Programs entry now reads swe-mux {metadata.version}")
+
+    try:
+        code = bundle_apply.apply_archive(
+            config,
+            layout,
+            outcome,
+            archive=Path(args.archive),
+            expected_sha256=args.archive_sha256,
+            mode=args.mode,
+            hidden=args.hidden,
+            restore_visibility=args.restore_visibility,
+            no_launch=args.no_launch,
+            force=args.force,
+            on_success=bring_registry_up_to_date,
+        )
+    except BaseException:
+        outcome.record(
+            bundle_apply.OUTCOME_FAILED,
+            "The update applier exited unexpectedly. See redeploy.log.",
+            code=1,
+        )
+        raise
+    code = outcome.finish(code)
+    try:
+        record = json.loads((config.data_dir / "redeploy-result.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        record = {}
+    return {**record, "exit_code": code}, _render_update_apply
+
+
+def _render_update_apply(result: Any) -> str:
+    payload = result if isinstance(result, dict) else {}
+    return f"{payload.get('outcome', '?')}: {payload.get('detail', '')}".strip()
 
 
 def _render_ui_overlay(result: Any) -> str:
@@ -988,6 +1091,73 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
             "download exactly this version, verify its SHA-256 against the published "
             "manifest, and hand it to the staged swap (frozen desktop app only)"
         ),
+    )
+    update.add_argument(
+        "--plan",
+        metavar="VERSION",
+        help=(
+            "say what installing this version would do - whether your sessions survive, "
+            "how much of the bundle is rewritten - without downloading it"
+        ),
+    )
+    update.add_argument(
+        "--accept-supervisor-update",
+        action="store_true",
+        help=(
+            "with --install: consent to replacing the PTY supervisor if this release "
+            "needs it, which ENDS EVERY LIVE SESSION. Without it such a release is "
+            "refused and nothing is changed"
+        ),
+    )
+
+    apply = sub.add_parser(
+        "update-apply",
+        parents=[common],
+        help="perform a staged bundle swap from a verified release archive (internal)",
+        description=(
+            "The process the in-app updater spawns to replace the desktop app: it "
+            "runs from a copy of this console client under the data directory, "
+            "outside every bundle it renames, and performs the same staged swap "
+            "`packaging/redeploy_desktop.py` does in a checkout - stage, stop, "
+            "rename, relaunch, health-check, roll back. Nothing here downloads or "
+            "verifies against a manifest; the daemon did that and passes the hash."
+        ),
+    )
+    apply.add_argument("--archive", type=Path, required=True, help="the verified release archive")
+    apply.add_argument(
+        "--archive-sha256", default="", help="the SHA-256 the archive must match (re-checked)"
+    )
+    apply.add_argument(
+        "--install-root",
+        type=Path,
+        required=True,
+        help="the directory holding swe-mux/, swe-mux-supervisor/ and swe-mux-cli/",
+    )
+    apply.add_argument(
+        "--mode",
+        choices=("swap", "replace"),
+        default="swap",
+        help=(
+            "swap: replace the app around live sessions (default); replace: end every "
+            "session and replace the PTY supervisor bundle too"
+        ),
+    )
+    apply.add_argument("--config", type=Path, help="config path (default: ~/.mux/config.toml)")
+    presentation = apply.add_mutually_exclusive_group()
+    presentation.add_argument("--hidden", action="store_true", help="relaunch minimized to tray")
+    presentation.add_argument(
+        "--restore-visibility",
+        action="store_true",
+        help="restore whether the desktop window is visible when the app stops",
+    )
+    apply.add_argument("--no-launch", action="store_true", help="swap but do not relaunch")
+    apply.add_argument(
+        "--force", action="store_true", help="proceed past the bundle-holder and supervisor gates"
+    )
+    apply.add_argument(
+        "--lock-held",
+        action="store_true",
+        help="redeploy.lock is already claimed for this process (set by the daemon)",
     )
 
     overlay = sub.add_parser(
@@ -1406,11 +1576,25 @@ def dispatch(args: argparse.Namespace, base: str) -> tuple[Any, Any]:
                 request(
                     "POST",
                     "/api/update/install",
-                    {"version": args.install},
+                    {
+                        "version": args.install,
+                        "accept_supervisor_update": bool(args.accept_supervisor_update),
+                    },
                     base=base,
                     headers={"X-Mux-User-Gesture": "update-install"},
                 ),
                 _render_update_install,
+            )
+        if args.plan:
+            return (
+                request(
+                    "POST",
+                    "/api/update/plan",
+                    {"version": args.plan},
+                    base=base,
+                    headers={"X-Mux-User-Gesture": "update-plan"},
+                ),
+                _render_update_plan,
             )
         return (
             {
@@ -1419,6 +1603,8 @@ def dispatch(args: argparse.Namespace, base: str) -> tuple[Any, Any]:
             },
             _render_update,
         )
+    if args.command == "update-apply":
+        return update_apply_command(args)
     if args.command == "reload-daemon":
         return request("POST", "/api/daemon/restart", {"force": args.force}, base=base), None
     if args.command == "compact-db":
@@ -1511,9 +1697,7 @@ def _plugin_command(args: argparse.Namespace, base: str) -> tuple[Any, Any]:
             ), None
         return request("GET", "/api/plugins/development", base=base), None
     if action == "check-updates":
-        return request(
-            "POST", "/api/plugins/updates/check", {}, base=base, timeout=240
-        ), None
+        return request("POST", "/api/plugins/updates/check", {}, base=base, timeout=240), None
     if action == "schema":
         from importlib.resources import files
 
@@ -1594,9 +1778,7 @@ def _plugin_command(args: argparse.Namespace, base: str) -> tuple[Any, Any]:
             timeout=240,
         ), None
     if action == "approve-update":
-        return request(
-            "POST", f"/api/plugins/{args.plugin_id}/update/approve", {}, base=base
-        ), None
+        return request("POST", f"/api/plugins/{args.plugin_id}/update/approve", {}, base=base), None
     if action == "discard-update":
         return request("DELETE", f"/api/plugins/{args.plugin_id}/update", base=base), None
     if action == "restart-panes":
@@ -1684,6 +1866,12 @@ def main(argv: list[str] | None = None) -> int:
         # land exits non-zero. Gating on `supported` too would make the command
         # red on every POSIX machine that merely asked.
         if result.get("supported") and not result.get("ok", True):
+            return EXIT_LOCAL_FAIL
+    if args.command == "update-apply" and isinstance(result, dict):
+        # The swap's own code: 0 is a healthy new app, anything else means the
+        # previous one is back (or needs looking at), and a script driving this
+        # by hand must hear which.
+        if result.get("exit_code"):
             return EXIT_LOCAL_FAIL
     # doctor is the one command whose exit code reflects the daemon's health, not
     # just whether the request succeeded, so a script can gate on `swemux doctor`.

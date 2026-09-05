@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'preact/hooks'
-import { elapsedLabel, phaseDetail, phaseLabel, type RedeployState } from './redeployProgress.ts'
+import {
+  elapsedLabel, phaseDetail, phaseLabel, sessionsNote, type RedeployState,
+} from './redeployProgress.ts'
 
 /** The persistent redeploy indicator: a spinner in the top bar.
  *
@@ -34,14 +36,15 @@ export function RedeployChip({ state, inline }: { state: RedeployState; inline?:
   // already expanded onto the previous one's log.
   useEffect(() => { if (state.phase === 'idle') setExpanded(false) }, [state.phase])
   if (state.phase === 'idle') return null
-  const label = phaseLabel(state.phase)
+  const label = phaseLabel(state.phase, state.kind)
+  const detail = phaseDetail(state.phase, state.kind, state.reap)
   const elapsed = elapsedLabel(state.startedAt, now)
   return <div class={`redeploy-chip ${state.phase}${inline ? ' redeploy-chip-inline' : ''}`} role="status" aria-live="polite">
     <button
       type="button"
       class="redeploy-chip-summary"
       aria-expanded={expanded}
-      title={`${label} - ${phaseDetail(state.phase)}`}
+      title={`${label} - ${detail}`}
       onClick={() => setExpanded(value => !value)}
     >
       <span class="redeploy-spinner" aria-hidden="true" />
@@ -53,13 +56,16 @@ export function RedeployChip({ state, inline }: { state: RedeployState; inline?:
       <small>{elapsed}</small>
     </button>
     {expanded && <div class="redeploy-chip-body">
-      <p>{phaseDetail(state.phase)}</p>
+      <p>{detail}</p>
       {/* Real build output while the daemon is still up to serve it. Once it is
           gone the last lines simply stop advancing, which is honest: no process
           the browser can reach knows any more than this. */}
       {state.logTail.length > 0 && <pre>{state.logTail.slice(-8).join('\n')}</pre>}
-      {state.phase === 'down' && <p class="redeploy-chip-note">
-        Your sessions are held by the PTY supervisor and are not affected.
+      {/* The reassurance is only true for a session-preserving swap. A consented
+          supervisor update says the opposite, plainly, rather than promising
+          sessions that the operator agreed to end. */}
+      {state.phase === 'down' && <p class={`redeploy-chip-note${state.reap ? ' redeploy-chip-reap' : ''}`}>
+        {sessionsNote(state.reap)}
       </p>}
     </div>}
   </div>

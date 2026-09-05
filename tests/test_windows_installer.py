@@ -520,6 +520,75 @@ def test_uninstall_leaves_no_bundle_and_no_empty_install_directory() -> None:
     assert 'Type: dirifempty; Name: "{app}"' in uninstall
 
 
+def test_the_updaters_slots_are_cleared_by_an_installer_upgrade_and_by_uninstall() -> None:
+    """The in-app updater keeps a rollback copy and a staging tree under `{app}`.
+
+    Neither is the version an installer upgrade writes, and a `.prev` from an
+    older release left beside a fresh install would be what the next in-app
+    update rolls back to. Every slot `bundle_apply` can create is named from
+    its own constants, so a renamed slot fails here rather than being orphaned.
+    """
+    from swe_mux import bundle_apply
+
+    install_delete = section("[InstallDelete]")
+    uninstall = section("[UninstallDelete]")
+    for name in bundle_apply.ALL_BUNDLES:
+        for suffix in (bundle_apply.PREV_SUFFIX, bundle_apply.FAILED_SUFFIX):
+            entry = f'Type: filesandordirs; Name: "{{app}}\\{name}{suffix}"'
+            assert entry in install_delete, entry
+            assert entry in uninstall, entry
+    staging = f'Type: filesandordirs; Name: "{{app}}\\{bundle_apply.STAGING_DIRNAME}"'
+    assert staging in install_delete
+    assert staging in uninstall
+
+
+def test_the_installers_product_id_is_the_one_the_updater_reads() -> None:
+    """One GUID, two readers: the installer keys its uninstall entry off it and
+    the updater reads that entry to tell an installer install from a portable
+    one. A drift would make every installer install read as portable, and its
+    Add/Remove Programs entry go stale on the first in-app update."""
+    from swe_mux.install_location import INSTALLER_APP_ID, INSTALLER_UNINSTALL_KEY
+
+    assert f'#define AppGuid "{INSTALLER_APP_ID}"' in script_text()
+    # Inno registers a `lowest`-privilege install under HKCU with `_is1` appended.
+    assert INSTALLER_UNINSTALL_KEY.endswith(f"{INSTALLER_APP_ID}_is1")
+    assert "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{#AppGuid}_is1" in (
+        script_text()
+    )
+
+
+def test_a_release_archive_carries_the_siblings_the_installer_lays_out(
+    tmp_path: Path,
+) -> None:
+    """The archive reproduces `{app}`'s three-sibling shape, so the in-app
+    updater can refresh the console client it runs the swap from and, with
+    consent, the supervisor. Optional on the reading side: an archive built
+    from an app bundle alone is still a release."""
+    from swe_mux.bundle_archive import CLI_ROOT, SUPERVISOR_ROOT, archive_bundle_names
+
+    bundle = make_bundle(tmp_path / "dist" / "swe-mux", platform=release_platform_tag())
+    (tmp_path / "dist" / SUPERVISOR_ROOT).mkdir()
+    (tmp_path / "dist" / SUPERVISOR_ROOT / "swe-mux-supervisor.exe").write_bytes(b"MZ s")
+    (tmp_path / "dist" / CLI_ROOT).mkdir()
+    (tmp_path / "dist" / CLI_ROOT / "swemux.exe").write_bytes(b"MZ c")
+    siblings = package_desktop_release.sibling_bundles(bundle)
+    assert set(siblings) == {SUPERVISOR_ROOT, CLI_ROOT}
+    archive, _ = package_desktop_release.build_archive(bundle, tmp_path / "out", siblings=siblings)
+    assert archive_bundle_names(archive) == (ARCHIVE_ROOT, SUPERVISOR_ROOT, CLI_ROOT)
+    root = extract_bundle(archive, tmp_path / "staging")
+    assert root == tmp_path / "staging" / ARCHIVE_ROOT
+    assert (tmp_path / "staging" / CLI_ROOT / "swemux.exe").read_bytes() == b"MZ c"
+    assert (tmp_path / "staging" / SUPERVISOR_ROOT / "swe-mux-supervisor.exe").is_file()
+    # An app-only archive still reads, and names only what it carries.
+    alone, _ = package_desktop_release.build_archive(bundle, tmp_path / "alone")
+    assert archive_bundle_names(alone) == (ARCHIVE_ROOT,)
+    # A tree with no app bundle at all is not a release, whatever else it holds.
+    with pytest.raises(ArchiveError, match="no swe-mux/"):
+        from swe_mux.bundle_archive import validate_members
+
+        validate_members([f"{CLI_ROOT}/swemux.exe"])
+
+
 def test_no_pascal_brace_comment_survives_in_the_code_section() -> None:
     # A `{ ... }` comment ends at its first `}`, and every comment in [Code] is
     # about `{app}` - so a braced one terminates mid-sentence and the rest of the
