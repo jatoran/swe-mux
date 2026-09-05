@@ -1064,10 +1064,46 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
     <h1>Changelog</h1>
     <div class="rel">
       <div class="relhead">
-        <h2><a href="https://github.com/jatoran/swe-mux/compare/v0.2.2...HEAD">Unreleased</a></h2>
+        <h2><a href="https://github.com/jatoran/swe-mux/compare/v0.2.3...HEAD">Unreleased</a></h2>
         <span class="fill"></span>
       </div>
       <p class="prose">Nothing yet.</p>
+    </div>
+    <div class="rel">
+      <div class="relhead">
+        <h2><a href="https://github.com/jatoran/swe-mux/releases/tag/v0.2.3">0.2.3</a></h2>
+        <span class="when">2026-09-05</span>
+        <span class="fill"></span>
+        <a class="relnotes" href="https://github.com/jatoran/swe-mux/releases/tag/v0.2.3">release notes</a>
+      </div>
+      <div class="relgroups">
+        <div><span class="k">Added</span> <span class="sep">4 entries</span></div>
+        <div><span class="k">Changed</span> <span class="sep">3 entries</span></div>
+        <div><span class="k">Fixed</span> <span class="sep">4 entries</span></div>
+      </div>
+      <details class="relmore">
+        <summary>all 11 entries</summary>
+        <div class="changetype">Added</div>
+        <ul class="bullets">
+          <li><span><b>A resumable setup experience, shared across browser, desktop, and phone.</b> Setup now covers the experience tier, model provider, harnesses, existing accounts, project folders, and desktop integration before offering the UI tour. Continue later preserves progress in Getting started, a collapsible sidebar section above Usage that also holds optional first steps, documentation, and the live demo. Individual steps can be dismissed and restored, and Help can bring back the whole section.</span></li>
+          <li><span><b>Guided model configuration before enabling Automations.</b> Choose OpenRouter or a compatible local or hosted endpoint, store any required key, review cheap, standard, timeline, and assistant models, and set spending limits inside setup. Endpoint and model-role checks must succeed before activation; local servers can use one model without an API key. Deferring this step explicitly continues with Deterministic and leaves model setup available for later.</span></li>
+          <li><span><b>Project suggestions from native harness history and capture of existing logins.</b> Select recently active project folders from a checklist, with duplicate paths and worktrees grouped and unavailable folders identified, or browse for a folder manually. Choose the default harness for new sessions and save an already-signed-in supported account for usage and quota tracking without signing in again.</span></li>
+          <li><span><b>A choice to reuse retained settings or start with fresh global preferences.</b> Fresh setup backs up preferences before resetting them and preserves Projects, repository files, history, accounts, credentials, and connection addresses. Help and <code>swemux setup --restart</code> reopen this choice; <code>swemuxd --new-user-profile NAME</code> provides separate data and a separate local port for first-use testing.</span></li>
+        </ul>
+        <div class="changetype">Changed</div>
+        <ul class="bullets">
+          <li><span><b>Experience tiers now set the global automation defaults Projects inherit, as well as the master switches.</b> Automations includes the Deterministic defaults, while explicit Project choices and unrelated global customizations remain respected. Setup and Settings show the defaults and their changes before applying them.</span></li>
+          <li><span><b>Desktop and phone integration are guided setup steps.</b> Desktop setup checks actual Start Menu, desktop, and sign-in registrations and offers the missing choices without a competing native prompt. The phone guide includes private access, HTTPS setup, connection refresh, and a QR code. Worktrees move to optional advanced exploration, while adding a Project and launching a first session are first steps.</span></li>
+          <li><span>Installation instructions and the startup banner now explain how to launch the browser or desktop interface, add shortcuts, and return to setup.</span></li>
+        </ul>
+        <div class="changetype">Fixed</div>
+        <ul class="bullets">
+          <li><span>Initial configuration failures retry instead of silently hiding setup until another setting changes.</span></li>
+          <li><span>First-step cards no longer appear twice or occupy the empty workspace behind setup.</span></li>
+          <li><span>The UI tour follows setup, preserves its current step when deferred, and shares progress across clients instead of unexpectedly restarting in the desktop WebView.</span></li>
+          <li><span>Model-dependent project options and grant controls require completed provider and model setup, and refresh in place after successful verification.</span></li>
+        </ul>
+      </details>
     </div>
     <div class="rel">
       <div class="relhead">
