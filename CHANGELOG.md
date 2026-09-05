@@ -15,6 +15,44 @@ The release procedure that maintains this file is [`RELEASING.md`](RELEASING.md)
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-09-05
+
+### Added
+
+- **A resumable setup experience, shared across browser, desktop, and phone.**
+  Setup now covers the experience tier, model provider, harnesses, existing accounts, project folders, and desktop integration before offering the UI tour.
+  Continue later preserves progress in Getting started, a collapsible sidebar section above Usage that also holds optional first steps, documentation, and the live demo.
+  Individual steps can be dismissed and restored, and Help can bring back the whole section.
+- **Guided model configuration before enabling Automations.**
+  Choose OpenRouter or a compatible local or hosted endpoint, store any required key, review cheap, standard, timeline, and assistant models, and set spending limits inside setup.
+  Endpoint and model-role checks must succeed before activation; local servers can use one model without an API key.
+  Deferring this step explicitly continues with Deterministic and leaves model setup available for later.
+- **Project suggestions from native harness history and capture of existing logins.**
+  Select recently active project folders from a checklist, with duplicate paths and worktrees grouped and unavailable folders identified, or browse for a folder manually.
+  Choose the default harness for new sessions and save an already-signed-in supported account for usage and quota tracking without signing in again.
+- **A choice to reuse retained settings or start with fresh global preferences.**
+  Fresh setup backs up preferences before resetting them and preserves Projects, repository files, history, accounts, credentials, and connection addresses.
+  Help and `swemux setup --restart` reopen this choice; `swemuxd --new-user-profile NAME` provides separate data and a separate local port for first-use testing.
+
+### Changed
+
+- **Experience tiers now set the global automation defaults Projects inherit, as well as the master switches.**
+  Automations includes the Deterministic defaults, while explicit Project choices and unrelated global customizations remain respected.
+  Setup and Settings show the defaults and their changes before applying them.
+- **Desktop and phone integration are guided setup steps.**
+  Desktop setup checks actual Start Menu, desktop, and sign-in registrations and offers the missing choices without a competing native prompt.
+  The phone guide includes private access, HTTPS setup, connection refresh, and a QR code.
+  Worktrees move to optional advanced exploration, while adding a Project and launching a first session are first steps.
+- Installation instructions and the startup banner now explain how to launch the browser or desktop interface, add shortcuts, and return to setup.
+
+### Fixed
+
+- Initial configuration failures retry instead of silently hiding setup until another setting changes.
+- First-step cards no longer appear twice or occupy the empty workspace behind setup.
+- The UI tour follows setup, preserves its current step when deferred, and shares progress across clients instead of unexpectedly restarting in the desktop WebView.
+- Model-dependent project options and grant controls require completed provider and model setup, and refresh in place after successful verification.
+
+
 ## [0.2.2] - 2026-09-05
 
 ### Added
@@ -802,7 +840,8 @@ macOS is implemented and typechecked but has never been executed.
   resolved dependency closure that runs in the test suite, and a payload check over the built
   desktop bundle. No GPL or AGPL code ships; the two LGPL libraries ship as replaceable source.
 
-[Unreleased]: https://github.com/jatoran/swe-mux/compare/v0.2.2...HEAD
+[Unreleased]: https://github.com/jatoran/swe-mux/compare/v0.2.3...HEAD
+[0.2.3]: https://github.com/jatoran/swe-mux/releases/tag/v0.2.3
 [0.2.2]: https://github.com/jatoran/swe-mux/releases/tag/v0.2.2
 [0.2.1]: https://github.com/jatoran/swe-mux/releases/tag/v0.2.1
 [0.2.0]: https://github.com/jatoran/swe-mux/releases/tag/v0.2.0
