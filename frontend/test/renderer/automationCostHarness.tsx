@@ -77,15 +77,15 @@ const TELEMETRY = {
 // them could not tell an inherited row from a pinned one.
 const MATRIX = {
   automations: [
-    { id: 'raw_store', kind: 'substrate', label: 'Raw event store', requires: [], implemented: true, spends: false, install_default: true, globally_allowed: true, install_switch: null },
-    { id: 'tier0', kind: 'substrate', label: 'Tier 0 facts', requires: ['raw_store'], implemented: true, spends: false, install_default: true, globally_allowed: true, install_switch: null },
-    { id: 'scan_timeline', kind: 'substrate', label: 'Scan timeline', requires: ['raw_store', 'tier0'], implemented: true, spends: true, needs_llm: true, install_default: false, globally_allowed: true, install_switch: 'scan_timeline_enabled' },
-    { id: 'loop_detection', kind: 'consumer', label: 'Loop detection', requires: ['tier0'], implemented: true, spends: false, install_default: true, globally_allowed: true, install_switch: null },
+    { id: 'raw_store', family: 'facts', kind: 'substrate', label: 'Raw event store', requires: [], implemented: true, spends: false, install_default: true, globally_allowed: true, install_switch: null },
+    { id: 'tier0', family: 'facts', kind: 'substrate', label: 'Tier 0 facts', requires: ['raw_store'], implemented: true, spends: false, install_default: true, globally_allowed: true, install_switch: null },
+    { id: 'scan_timeline', family: 'facts', kind: 'substrate', label: 'Scan timeline', requires: ['raw_store', 'tier0'], implemented: true, spends: true, needs_llm: true, install_default: false, globally_allowed: true, install_switch: 'scan_timeline_enabled' },
+    { id: 'loop_detection', family: 'checks', kind: 'consumer', label: 'Loop detection', requires: ['tier0'], implemented: true, spends: false, install_default: true, globally_allowed: true, install_switch: null },
     // One row under the install-wide ceiling, so the spec can see the greyed cell.
-    { id: 'doc_debt', kind: 'consumer', label: 'Doc-debt ledger', requires: ['tier0'], implemented: true, spends: false, install_default: false, globally_allowed: false, install_switch: null },
-    { id: 'session_control', kind: 'consumer', label: 'Agent session control', requires: [], implemented: true, spends: false, default_on: true, install_default: true, globally_allowed: true, install_switch: null },
-    { id: 'catch_me_up', kind: 'consumer', label: 'Catch-me-up digest', requires: ['scan_timeline'], implemented: true, spends: false, install_default: false, globally_allowed: true, install_switch: null },
-    { id: 'cross_session_interlocks', kind: 'consumer', label: 'Cross-session interlocks', requires: ['tier0'], implemented: false, spends: false, install_default: false, globally_allowed: true, install_switch: null },
+    { id: 'doc_debt', family: 'checks', kind: 'consumer', label: 'Doc-debt ledger', requires: ['tier0'], implemented: true, spends: false, install_default: false, globally_allowed: false, install_switch: null },
+    { id: 'session_control', family: 'capabilities', kind: 'consumer', label: 'Agent session control', requires: [], implemented: true, spends: false, default_on: true, install_default: true, globally_allowed: true, install_switch: null },
+    { id: 'catch_me_up', family: 'timeline', kind: 'consumer', label: 'Catch-me-up digest', requires: ['scan_timeline'], implemented: true, spends: false, install_default: false, globally_allowed: true, install_switch: null },
+    { id: 'cross_session_interlocks', family: 'attention', kind: 'consumer', label: 'Cross-session interlocks', requires: ['tier0'], implemented: false, spends: false, install_default: false, globally_allowed: true, install_switch: null },
   ],
   projects: [
     // p1 pins loop detection off against an install that defaults it on, so the

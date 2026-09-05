@@ -1,4 +1,5 @@
 import { expect, test } from 'playwright/test'
+import { harnessReady } from './harnessReady'
 
 test('WebGL survives repeated pane switches, resizes, and concurrent output', async ({ page }, testInfo) => {
   const rendererErrors: string[] = []
@@ -8,6 +9,7 @@ test('WebGL survives repeated pane switches, resizes, and concurrent output', as
   })
 
   await page.goto('/renderer-harness.html')
+  await harnessReady(page, 'runTerminalRendererStress')
   const result = await page.evaluate(() => window.runTerminalRendererStress())
   expect(result.renderer).toBe('webgl')
   expect(result.cols).toBeGreaterThan(0)
@@ -55,6 +57,7 @@ test('WebGL survives repeated pane switches, resizes, and concurrent output', as
 
 test('same-grid reflow restores a stale DOM renderer surface', async ({ page }) => {
   await page.goto('/renderer-harness.html')
+  await harnessReady(page, 'runTerminalDomDimensionRepair')
   const result = await page.evaluate(() => window.runTerminalDomDimensionRepair())
 
   expect(result.cols).toBeGreaterThan(0)
@@ -65,6 +68,7 @@ test('same-grid reflow restores a stale DOM renderer surface', async ({ page }) 
 
 test('mobile IME focus initializes a visible Codex DOM cursor', async ({ page }) => {
   await page.goto('/renderer-harness.html')
+  await harnessReady(page, 'runTerminalMobileCursorInitialization')
   const result = await page.evaluate(() => window.runTerminalMobileCursorInitialization())
 
   expect(result.beforeInitialized, 'a normal-screen Codex frame alone does not initialize xterm cursor rendering').toBe(false)
@@ -75,6 +79,7 @@ test('mobile IME focus initializes a visible Codex DOM cursor', async ({ page })
 
 test('a synthetic touch tap reaches xterm mouse tracking as press and release reports',async({page})=>{
   await page.goto('/renderer-harness.html')
+  await harnessReady(page, 'runTerminalSyntheticMouseTap')
   const result=await page.evaluate(()=>window.runTerminalSyntheticMouseTap())
 
   expect(result.tracking).toBe('vt200')
@@ -85,6 +90,7 @@ test('a synthetic touch tap reaches xterm mouse tracking as press and release re
 
 test('an unstyled Codex composer resolves against xterm buffer cells',async({page})=>{
   await page.goto('/renderer-harness.html')
+  await harnessReady(page, 'runUnstyledCodexCaretResolution')
   const result=await page.evaluate(()=>window.runUnstyledCodexCaretResolution())
 
   expect(result.prefixBgMode).toBe(0)
@@ -99,6 +105,7 @@ test('a warm pane keeps rendering under visibility:hidden; display:none pauses i
   // xterm gains real visibility awareness, this test failing is the signal that the
   // warm-pane render cost has disappeared and any mitigation can be removed.
   await page.goto('/renderer-harness.html')
+  await harnessReady(page, 'runWarmPaneRenderCost')
   const result=await page.evaluate(()=>window.runWarmPaneRenderCost())
 
   expect(result.writes).toBeGreaterThan(0)
@@ -115,6 +122,7 @@ test('a warm pane keeps rendering under visibility:hidden; display:none pauses i
 
 test('repeated active/warm cycling with streaming output converges on a correct pane',async({page})=>{
   await page.goto('/renderer-harness.html')
+  await harnessReady(page, 'runWarmPaneCycleSoak')
   const result=await page.evaluate(()=>window.runWarmPaneCycleSoak())
 
   expect(result.cols,'grid must match a fresh fit of the final box').toBe(result.proposedCols)
@@ -126,6 +134,7 @@ test('repeated active/warm cycling with streaming output converges on a correct 
 
 test('agent width policies keep Codex above 80 columns and Claude near 120',async({page})=>{
   await page.goto('/renderer-harness.html')
+  await harnessReady(page, 'runTerminalWidthPolicies')
   const result=await page.evaluate(()=>window.runTerminalWidthPolicies())
 
   expect(result.codex.initialCols).toBeLessThan(80)
@@ -145,6 +154,7 @@ test('restoring the font is enough to leave a letterbox; no renderer reflow is n
   // grid. Adding the reflow there is a no-op that reads like a fix; if an xterm upgrade
   // ever makes the font path stop self-repairing, this fails and the call belongs back.
   await page.goto('/renderer-harness.html')
+  await harnessReady(page, 'runLetterboxExitRepair')
   const result = await page.evaluate(() => window.runLetterboxExitRepair())
 
   expect(result.cols).toBeGreaterThan(0)
