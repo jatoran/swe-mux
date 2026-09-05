@@ -58,7 +58,10 @@ def tree(root: Path, name: str, marker: bytes) -> Path:
     """A bundle directory with an executable and a marker saying which build it is."""
     directory = root / name
     directory.mkdir(parents=True, exist_ok=True)
-    exe = "swe-mux.exe" if name == APP_BUNDLE else f"{name}.exe"
+    # The app's launcher name is the host's (`swe-mux.exe` on Windows, `swe-mux`
+    # elsewhere), because `apply_staged` refuses a staging tree without it and
+    # CI runs this on all three hosts.
+    exe = bundle_apply.app_exe_name() if name == APP_BUNDLE else f"{name}.exe"
     (directory / exe).write_bytes(b"MZ " + marker)
     (directory / "marker").write_bytes(marker)
     if name == APP_BUNDLE:
