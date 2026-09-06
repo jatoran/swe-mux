@@ -50,6 +50,7 @@
 - Passive session CLI tools, extensions, policies, and configuration inventory: `features/agent-environment.md`
 - The shipped agent skill and its installer: `features/agent-skill-delivery.md`
 - First run: experience tiers and the setup sequence: `features/first-run.md`
+- Returning the install to first run, and what a reset must never take: `features/factory-reset.md`
 - Trusted task discovery and the Project Run menu: `features/project-actions.md`
 - External-process plugins, lifecycle, contributions, and marketplace: `features/plugins.md`
 - Mixed-view panes, tabs, drag/drop, and mobile projection: `features/workspace-layout.md`

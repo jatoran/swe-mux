@@ -74,6 +74,10 @@ from .deterministic_consumers import ConsumerContext, DeterministicConsumerServi
 from .device_presence import DevicePresenceStore
 from .errors import NotFound
 from .event_bus import EventBus
+from .factory_reset import clear_request as clear_factory_reset_request
+from .factory_reset import describe as describe_factory_reset
+from .factory_reset import perform_reset
+from .factory_reset import read_request as read_factory_reset_request
 from .fleet_intelligence import FleetIntelligence
 from .frontend_overlay import (
     OverlayStore,
@@ -939,7 +943,11 @@ async def _restore_durable_sessions(
 
 
 async def _wait_for_exclusive_database(
-    config: Config, predecessor_pid: int, operations: tuple[str, ...]
+    config: Config,
+    predecessor_pid: int,
+    operations: tuple[str, ...],
+    *,
+    label: str = "database maintenance",
 ) -> bool:
     """Wait for the predecessor to release `mux.db`. True when it is ours.
 
@@ -958,8 +966,9 @@ async def _wait_for_exclusive_database(
     if predecessor_pid <= 0 or not pid_running(predecessor_pid):
         return True
     log.warning(
-        "database maintenance (%s) is pending and the previous daemon (pid %d) still "
+        "%s (%s) is pending and the previous daemon (pid %d) still "
         "holds %s; waiting up to %.0fs for it to exit",
+        label,
         ", ".join(operations),
         predecessor_pid,
         config.database_path,
@@ -984,13 +993,63 @@ async def _wait_for_exclusive_database(
         await asyncio.sleep(0.25)
     log.warning(
         "previous daemon pid %d did not exit within %.0fs, so this start cannot own %s. "
-        "The maintenance request is kept and the next start will try again; if this "
+        "The %s request is kept and the next start will try again; if this "
         "repeats, stop swe-mux fully once and start it again.",
         predecessor_pid,
         MAINTENANCE_PREDECESSOR_WAIT_SECONDS,
         config.database_path,
+        label,
     )
     return False
+
+
+async def _run_pending_factory_reset(config: Config, predecessor_pid: int = -1) -> None:
+    """Honour a factory-reset request, if one is pending.
+
+    Returns immediately when there is none, which is every ordinary start: the
+    phase costs one failed file read.
+
+    It runs *before* database maintenance, and both run before any store opens a
+    file. The order matters in one direction only - a reset moves `mux.db` into
+    the trash, so compacting first would be minutes of work on a database that
+    is about to stop existing - and a pending request for each is a combination
+    nothing produces on purpose, so the reset simply wins.
+
+    Exclusivity is checked the same way, and for a sharper reason: the route
+    that wrote this request already reaped the sessions and stopped the
+    supervisor, but a predecessor daemon that has not finished its teardown
+    still holds `mux.db`, and renaming a file another process has open fails on
+    Windows. A request that could not run is kept, so the next start does it.
+
+    Never raises. `perform_reset` records what it could not do rather than
+    throwing, and a daemon that refuses to start because a reset half-failed is
+    the worst possible outcome for a person who has just erased their install.
+    """
+    request = read_factory_reset_request(config.data_dir)
+    if request is None:
+        return
+    if not await _wait_for_exclusive_database(
+        config, predecessor_pid, ("factory reset",), label="factory reset"
+    ):
+        return
+    log.warning(
+        "factory reset requested; this daemon will return %s to a fresh install and will "
+        "not serve until it finishes. Sessions were reaped before the restart that "
+        "brought this process up.",
+        config.data_dir,
+    )
+    # Cleared *before* the work rather than after: unlike a compaction, a reset
+    # that dies part-way has already moved an unknowable amount of the install
+    # aside, and re-running it on the next start would sweep the fresh one it
+    # had just begun writing. Once is the whole contract.
+    clear_factory_reset_request(config.data_dir)
+    try:
+        result = await asyncio.to_thread(perform_reset, config, request)
+    except Exception:  # noqa: BLE001 - a failed reset must not stop the daemon
+        log.exception("factory reset raised; continuing with whatever it managed")
+        return
+    level = logging.ERROR if result.failed else logging.WARNING
+    log.log(level, "%s", describe_factory_reset(result))
 
 
 async def _run_pending_maintenance(config: Config, predecessor_pid: int = -1) -> None:
@@ -1257,6 +1316,12 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
     # reports itself while it runs, and the alternative is stopping swe-mux,
     # which reaps every live session. Nothing schedules it and no route triggers
     # it.
+    # Ahead of maintenance and of every store, for the same reason and one more:
+    # this is the only moment the data directory has no handles into it, which
+    # is what a reset needs to move it aside. Nothing schedules it; an operator
+    # confirmed it in Settings and the daemon they confirmed it in is gone.
+    timeline.mark("factory-reset")
+    await _run_pending_factory_reset(config, app.get(keys.PREDECESSOR_PID, -1))
     timeline.mark("database-maintenance")
     await _run_pending_maintenance(config, app.get(keys.PREDECESSOR_PID, -1))
     timeline.mark("database-integrity")

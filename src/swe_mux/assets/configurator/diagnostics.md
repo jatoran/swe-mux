@@ -21,7 +21,7 @@ that compromises terminal ownership, cleanup, or message delivery.
 
 Rank by severity, not by position in the list.
 
-**Export diagnostics** (Settings → Diagnostics) produces a bundle for a bug report.
+**Export diagnostics** (Settings → Maintenance) produces a bundle for a bug report.
 It carries no terminal bytes and no message content. If the operator is about to
 reproduce a problem they intend to report, tell them to set the log level to `DEBUG`
 *first*: the bundle carries the daemon log, and the interesting lines only exist if

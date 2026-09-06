@@ -30,18 +30,10 @@ import { FleetQueue } from './FleetQueue'
 import { ContinuityBanner } from './ContinuityBanner'
 import { DaemonStallBanner } from './DaemonStallBanner'
 import { UpdateBanner } from './UpdateBanner'
-import { DirectoryPicker } from './DirectoryPicker'
 import { Dropdown } from './Dropdown'
-import { folderNameFromPath } from './pathNames'
 import { agentTargetName } from './agentTargets'
 import { runDisplayName, sessionDisplayName } from './sessionNames'
-import {
-  defaultInitScriptSelection, emptyProjectCreateDraft, inheritedOn, projectCreateEffective,
-  projectCreateFolder, projectCreateOverrides, projectCreateReady, projectCreateRoot,
-  seedRecommendedOverrides, selectedStartingSets, setCreateAutomation, suggestFolderName,
-  toggleInitScript,
-  type InheritedAutomation, type InitScript, type ProjectCreateDraft, type StartingSetCatalog,
-} from './projectCreate'
+import { ProjectCreateDialog } from './ProjectCreateDialog'
 import { isStaticPreview, previewLabel, type FleetSnapshot, type Preview } from './processFleet'
 import { isPreviewableDocument } from './staticPreview'
 import { ResourceUsageSummary } from './ResourceUsage'
@@ -61,7 +53,6 @@ import { PromptLibrary } from './PromptLibrary'
 import { PROMPT_RAIL_EVENT } from './promptRail'
 import { UtilityDrawer } from './UtilityDrawer'
 import { INSTALL_CONFIG_CHANGED } from './installSwitches'
-import { forgetProjectAutomations } from './projectAutomations'
 import { OPEN_SETTING_EVENT, settingTarget, type OpenSettingDetail, type SettingTargetId } from './settingTargets'
 import { OverflowRail } from './RailScroller'
 import { PaneRunTrigger } from './PaneRunTrigger'
@@ -432,21 +423,6 @@ type NoteContext = { resourceId:string;projectId:string;x:number;y:number } | nu
 type StaticPreviewContext = { previewId:string;projectId:string;label:string;x:number;y:number } | null
 type TabContext = { leaf:PaneLeaf;label:string;projectId:string;x:number;y:number;source:'tab'|'mobile' } | null
 type RenameTarget = { kind: 'session'; session: Session } | { kind: 'project'; project: Project }
-/** What the create dialog needs from `GET /api/grants`: the named starting sets its
- *  checkboxes apply, the provider verdict the model-backed one discloses, and what a
- *  new Project inherits before anything is ticked. */
-type GrantsCatalogue={
-  project_starting_sets:StartingSetCatalog
-  llm:{ready:boolean;reason:string}
-  /** The registry with each entry's resolved install-wide ceiling and its
-   *  resolved install default, so the creation form can grey a set the daemon
-   *  would refuse to grant and show what inheriting actually means here. */
-  automations?:InheritedAutomation[]
-  /** The install's default template as stored - which ids the operator has an
-   *  opinion about at all, as opposed to what those opinions resolve to. */
-  project_defaults?:Record<string,boolean>
-  recommended_project_automations?:string[]
-}
 type NoteTarget={projectId:string;kind:'note'|'global-note'|'file'|'worktree-file';resourceId:string;worktree?:string}
 type StartupMilestone = 'pane_mounted' | 'socket_open' | 'replay_ready'
 type ClientStartupTiming = Partial<Record<'api_response' | StartupMilestone, number>>
@@ -702,40 +678,7 @@ export function App() {
   const [renameTarget, setRenameTarget] = useState<RenameTarget | null>(null)
   const renameInput = useRef<HTMLInputElement>(null)
   const [renameValue, setRenameValue] = useState('')
-  const [projectCreate,setProjectCreate]=useState<ProjectCreateDraft>(emptyProjectCreateDraft())
   const [projectCreateOpen,setProjectCreateOpen]=useState(false)
-  // User-authored setup commands, read fresh when the dialog opens. They live in the
-  // daemon config (Settings → General), never in a repository.
-  const [initScripts,setInitScripts]=useState<InitScript[]>([])
-  // The grants catalogue, read when the create dialog opens: the named starting sets
-  // its checkboxes apply, and the provider verdict the model-backed one discloses.
-  const [grantsCatalogue,setGrantsCatalogue]=useState<GrantsCatalogue|null>(null)
-  // A starting set with any member under the install-wide ceiling is offered
-  // greyed rather than granted-and-refused: POST /api/grants answers such a
-  // request with `automation_globally_disabled`, and the form knowing that
-  // before the press is the whole point of the catalogue carrying the ceiling.
-  const startingSetBlocked=(setName:keyof StartingSetCatalog):boolean=>{
-    const set=grantsCatalogue?.project_starting_sets?.[setName]
-    if(!set||!grantsCatalogue?.automations)return false
-    const ceiling=new Map(grantsCatalogue.automations.map(item=>[item.id,item.globally_allowed!==false]))
-    return set.automations.some(id=>ceiling.get(id)===false)
-  }
-  // The rows the create dialog's expansion offers: everything implemented that the
-  // install-wide ceiling permits, ordered the way the policy matrix orders it
-  // (substrate first, then what reads from it) so the two surfaces read alike.
-  const projectCreateAutomationRows:InheritedAutomation[]=(grantsCatalogue?.automations||[])
-    .filter(item=>item.implemented&&item.globally_allowed!==false)
-    .sort((left,right)=>left.requires.length-right.requires.length||left.label.localeCompare(right.label))
-  // What the dialog says before anyone expands it. A count plus the first few names,
-  // because "5 on" alone tells you nothing about whether it is the set you wanted and
-  // the full list does not fit on a summary line.
-  const projectCreateAutomationSummary=(():string=>{
-    if(!grantsCatalogue)return 'reading this install’s defaults…'
-    const effective=projectCreateEffective(projectCreate,projectCreateAutomationRows)
-    if(!effective.length)return 'none — this install turns nothing on by default'
-    const shown=effective.slice(0,3).map(item=>item.label).join(', ')
-    return `${effective.length} on · ${shown}${effective.length>3?`, +${effective.length-3} more`:''}`
-  })()
   const [projectsManagerOpen,setProjectsManagerOpen]=useState(false)
   // Which Project the registry should land on, and whether on its record or its
   // settings. Projects is the only per-Project editor, so every "project settings"
@@ -769,7 +712,6 @@ export function App() {
     const timeout=window.setTimeout(()=>setDrawerNoteClaimRequest(current=>current?.token===token?null:current),5000)
     return()=>window.clearTimeout(timeout)
   },[drawerNoteClaimRequest?.token])
-  const [folderPickerOpen,setFolderPickerOpen]=useState(false)
   // `adoptProjectId` is set only when the dialog was opened from a Project's Group submenu:
   // the new Group takes that Project with it, which is the whole reason the row is there.
   const [groupEdit,setGroupEdit]=useState<{id?:string;name:string;adoptProjectId?:string}|null>(null)
@@ -4075,33 +4017,7 @@ export function App() {
     await updateLayout(targetProject,nextLayout)
   }
 
-  const createProject = async () => {
-    setProjectCreate(emptyProjectCreateDraft())
-    setInitScripts([])
-    setGrantsCatalogue(null)
-    setProjectCreateOpen(true)
-    try{
-      const config=await api<{project_init_scripts?:InitScript[]}>('GET','/api/config')
-      const scripts=config.project_init_scripts||[]
-      setInitScripts(scripts)
-      setProjectCreate(value=>({...value,scripts:defaultInitScriptSelection(scripts)}))
-    }catch{/* the dialog still registers a Project without its optional setup commands */}
-    try{
-      const catalogue=await api<GrantsCatalogue>('GET','/api/grants')
-      setGrantsCatalogue(catalogue)
-      // Pre-tick the free set only where this install has no opinion about it,
-      // so a fresh install's first Project still has working analysis panes and
-      // an install that has expressed a policy is left to inherit it. Applied
-      // once, when the catalogue lands, rather than derived on every render:
-      // it is a starting position the operator may then disagree with, and a
-      // derived value would keep overwriting their disagreement.
-      setProjectCreate(value=>({...value,automationOverrides:seedRecommendedOverrides(
-        catalogue.recommended_project_automations||[],
-        catalogue.automations||[],
-        catalogue.project_defaults||{},
-      )}))
-    }catch{/* the form still registers a Project; it just inherits with nothing ticked */}
-  }
+  const createProject = () => setProjectCreateOpen(true)
 
   const openProjectsManager=(focus?:{project:Project;setting?:string})=>{
     setProjectsManagerFocus(focus?{projectId:focus.project.id,setting:focus.setting}:null)
@@ -4195,10 +4111,8 @@ export function App() {
   }
   useEffect(()=>{
     const open=()=>setProviderSetupOpen(true)
-    const refreshed=()=>{void api<GrantsCatalogue>('GET','/api/grants').then(setGrantsCatalogue).catch(()=>{})}
     window.addEventListener('mux:setup-provider',open)
-    window.addEventListener('mux:llm-provider-changed',refreshed)
-    return()=>{window.removeEventListener('mux:setup-provider',open);window.removeEventListener('mux:llm-provider-changed',refreshed)}
+    return()=>{window.removeEventListener('mux:setup-provider',open)}
   },[])
   /** Open help on one topic, or on the index with `''`. */
   const openHelp=(topic:string)=>{setMainMenuOpen(false);setPaletteOpen(false);setHelpTopicOpen(topic)}
@@ -4225,100 +4139,32 @@ export function App() {
       if(chrome==='side-panel'){setSidebarOpen(false);setClipboardOpen(true)}
     }
     if(step==='welcome'||step==='projects'){
-      setSettingsOpen(false);setProjectsManagerOpen(false);setProjectCreateOpen(false);setFolderPickerOpen(false)
+      setSettingsOpen(false);setProjectsManagerOpen(false);setProjectCreateOpen(false)
       revealMobileChrome(step)
       return
     }
     if(step==='project-add'||step==='project-open'){
-      setSettingsOpen(false);setProjectCreateOpen(false);setFolderPickerOpen(false);setProjectsManagerOpen(true);return
+      setSettingsOpen(false);setProjectCreateOpen(false);setProjectsManagerOpen(true);return
     }
     if(step==='project-create'){
       setSettingsOpen(false);setProjectsManagerOpen(true);return
     }
     if(step==='accounts'){
-      setProjectCreateOpen(false);setFolderPickerOpen(false);setProjectsManagerOpen(false);openSettings('Accounts');return
+      setProjectCreateOpen(false);setProjectsManagerOpen(false);openSettings('Accounts');return
     }
     if(['run','run-choice','workspace','new-tab','tabs','splits','resources','gates','features','feature-menu','configurator','ready'].includes(step)){
-      setSettingsOpen(false);setProjectsManagerOpen(false);setProjectCreateOpen(false);setFolderPickerOpen(false)
+      setSettingsOpen(false);setProjectsManagerOpen(false);setProjectCreateOpen(false)
       const first=projectsRef.current[0]
       if(first&&!projectsRef.current.some(project=>project.id===projectId))setProjectId(first.id)
       revealMobileChrome(step)
     }
   }
 
-  const submitProject=async()=>{
-    const next=await api<Project>('POST','/api/projects',{
-      name:projectCreate.name,
-      root:projectCreateRoot(projectCreate),
-      group_id:projectCreate.group_id||null,
-      create_missing:projectCreate.mode==='new',
-    })
-    setProjects(items=>[...items,next]);setProjectId(next.id);setProjectCreateOpen(false);setFolderPickerOpen(false)
-    // Land in the new Project's workspace, not on the registry that happens to be behind
-    // this dialog (operator decision 2026-08-22). The sidebar's `+` opens Manage projects
-    // as a backdrop for the create form, so submitting used to reveal the settings editor
-    // for a Project nobody has looked at yet - a configuration screen offered before the
-    // thing being configured has been seen. The registry is one click away from the
-    // sidebar for anyone who actually wants it, and the tutorial's own `project-open` step
-    // reopens it by name. On a phone the sidebar closes too, or the Project is selected
-    // behind a panel covering the workspace it just switched to.
+  const projectCreated=(next:Project)=>{
+    setProjects(items=>[...items.filter(item=>item.id!==next.id),next])
+    setProjectId(next.id);setProjectCreateOpen(false)
     setProjectsManagerOpen(false);setProjectsManagerFocus(null);setSidebarOpen(false)
     emitTutorialAction({action:'project-created'})
-    // Two writes, in this order, and only what actually deviates from what the new
-    // Project would inherit. After the registration and never before it: a Project
-    // that exists with nothing written down is the *normal* state now, and one that
-    // failed to register has nothing to opt in. `restored` is skipped because that
-    // Project already has whatever table it was registered with.
-    //
-    // First the per-automation deviations, through the ordinary revision-checked
-    // Project write. `projectCreateOverrides` drops every id that agrees with the
-    // inherited answer, so a form nobody expanded writes nothing at all and the
-    // Project goes on following this install for as long as it is not told otherwise.
-    //
-    // Then the two optional starting sets, through the ordinary grant path so they
-    // leave the same audit record as a gate press. They stay explicit writes because
-    // one can bill and the other hands agents authority: those are decisions about a
-    // repository, not postures to inherit quietly.
-    if(!(next as Project&{restored?:boolean}).restored){
-      try{
-        const catalogue=grantsCatalogue??await api<GrantsCatalogue>('GET','/api/grants')
-        const overrides=projectCreateOverrides(projectCreate,catalogue.automations||[])
-        if(Object.keys(overrides).length){
-          await api('PUT',`/api/projects/${next.id}/automations`,{automations:overrides})
-          forgetProjectAutomations(next.id)
-        }
-        // A set the ceiling blocks was greyed on the form; strip it here too so
-        // a stale draft flag cannot turn one grant refusal into losing both.
-        const selection=selectedStartingSets({
-          ...projectCreate,
-          llm:projectCreate.llm&&!startingSetBlocked('llm'),
-          autonomy:projectCreate.autonomy&&!startingSetBlocked('autonomy'),
-        },catalogue.project_starting_sets)
-        if(selection.automations.length||Object.keys(selection.values).length){
-          await api('POST','/api/grants',{
-            project_id:next.id,
-            automations:selection.automations,
-            values:selection.values,
-          })
-          forgetProjectAutomations(next.id)
-        }
-      }catch(cause){
-        // Reported, never unwound: the Project is registered and usable, and every one
-        // of these switches is reachable from the surface that needs it.
-        setError(`The Project was created; its starting features were not turned on (${cause instanceof Error?cause.message:String(cause)}). Turn them on from the Projects registry or any Activity tab.`)
-      }
-    }
-    // The registration is already durable, so a setup command that fails to launch is
-    // reported without unwinding the Project the user just made.
-    const scripts=projectCreate.scripts.filter(id=>initScripts.some(script=>script.id===id))
-    if(!scripts.length)return
-    try{
-      const result=await api<{errors:{script:string;error:string}[]}>(
-        'POST',`/api/projects/${next.id}/init-scripts/run`,{script_ids:scripts})
-      if(result.errors.length<scripts.length)markProjectRecent(next.id)
-      if(result.errors.length)setError(result.errors.map(item=>`${item.script}: ${item.error}`).join(' · '))
-      await refresh()
-    }catch(cause){setError(cause instanceof Error?cause.message:String(cause))}
   }
 
   /** Move one Project into a Group (or back to the root list), from the Project menu.
@@ -7014,9 +6860,7 @@ export function App() {
   useDismissLevel(() => setPaletteOpen(false), paletteOpen, 'palette')
   useDismissLevel(() => setLauncherOpen(false), launcherOpen, 'quick-launcher')
   useDismissLevel(() => setRenameTarget(null), !!renameTarget, 'rename')
-  useDismissLevel(() => setProjectCreateOpen(false), projectCreateOpen, 'project-create')
   // Opened from inside project create, so it opens later and correctly closes first.
-  useDismissLevel(() => setFolderPickerOpen(false), folderPickerOpen, 'folder-picker')
   useDismissLevel(() => setGroupEdit(null), !!groupEdit, 'group-edit')
   useDismissLevel(() => setRedeployConfirmOpen(false), redeployConfirmOpen, 'redeploy-confirm')
   useDismissLevel(() => setHandoffState(null), !!handoffState, 'handoff-export')
@@ -9113,93 +8957,11 @@ export function App() {
         worked in, and the alphabetically-first Project is nobody's intent. */}
     {projectsManagerOpen&&<ProjectsManager projects={projects} groups={projectGroups} sessions={sessions} profiles={profiles} initialProjectId={projectsManagerFocus?.projectId||projectId} initialSetting={projectsManagerFocus?.setting} revealToken={revealToken} onClose={()=>{setProjectsManagerOpen(false);setProjectsManagerFocus(null)}} onAdd={()=>void createProject()} onAddGroup={()=>setGroupEdit({name:''})} onOpen={project=>{setProjectId(project.id);setProjectsManagerOpen(false)}} onPatch={patchManagedProject} onRemove={removeProject}/>}
 
-    {projectCreateOpen&&<div class="modal-layer project-registry-dialog-layer" onMouseDown={event=>event.target===event.currentTarget&&setProjectCreateOpen(false)}>
-      <form data-tutorial="project-form" class="modal" onSubmit={event=>{event.preventDefault();void submitProject()}}>
-        <div class="modal-heading"><div><span>PROJECT::CREATE</span><h2>Add a project</h2></div><button type="button" onClick={()=>setProjectCreateOpen(false)}>×</button></div>
-        {/* Registering a folder that exists and making a new one are the same
-            registration with a different first step, so they are two modes of one
-            form rather than two dialogs that would each need their own setup list. */}
-        <div class="project-create-mode" role="tablist" aria-label="How to add this project">
-          <button type="button" role="tab" aria-selected={projectCreate.mode==='existing'} class={projectCreate.mode==='existing'?'active':''} onClick={()=>setProjectCreate(value=>({...value,mode:'existing'}))}>Existing folder</button>
-          <button type="button" role="tab" aria-selected={projectCreate.mode==='new'} class={projectCreate.mode==='new'?'active':''} onClick={()=>setProjectCreate(value=>({...value,mode:'new'}))}>Create new folder</button>
-        </div>
-        <label>Name<input value={projectCreate.name} onInput={event=>setProjectCreate(value=>({...value,name:event.currentTarget.value}))} autofocus /></label>
-        {projectCreate.mode==='existing'
-          ?<label>Folder<div class="project-folder-field"><input value={projectCreate.root} onInput={event=>setProjectCreate(value=>({...value,root:event.currentTarget.value}))} placeholder="D:\\projects\\horizon" /><button type="button" onClick={()=>setFolderPickerOpen(true)}>Browse…</button></div></label>
-          :<>
-            <label>Parent folder<div class="project-folder-field"><input value={projectCreate.parent} onInput={event=>setProjectCreate(value=>({...value,parent:event.currentTarget.value}))} placeholder="D:\\projects" /><button type="button" onClick={()=>setFolderPickerOpen(true)}>Browse…</button></div></label>
-            <label>New folder name<input value={projectCreateFolder(projectCreate)} onInput={event=>setProjectCreate(value=>({...value,folder:event.currentTarget.value,folderTouched:true}))} placeholder={suggestFolderName(projectCreate.name)||'horizon'} /></label>
-          </>}
-        <label>Group<Dropdown value={projectCreate.group_id} onChange={group=>setProjectCreate(value=>({...value,group_id:group}))} options={[{value:'',label:'Ungrouped'},...projectGroups.map(group=>({value:group.id,label:group.name}))]}/></label>
-        {/* What this Project will run, and where the answer came from. It is a summary
-            with an expansion rather than a row of checkboxes, because the common case
-            is that the install has already decided and there is nothing here to do:
-            deviating is the exception, and the panel below is where the exception is
-            expressed. A row the install-wide ceiling blocks is not offered at all -
-            the daemon would refuse it, and a control that then errors is worse than
-            one that is not there. */}
-        <details class="project-create-automations">
-          <summary>Automations · {projectCreateAutomationSummary}</summary>
-          <p class="modal-note">These follow this install’s defaults, set once in
-          Automation → Policy. Nothing is written into this Project’s
-          <code>.swe-mux/config.toml</code> unless you change one of them here, so a
-          Project you leave alone keeps following the install as you change your mind.</p>
-          {projectCreateAutomationRows.map(item=>{
-            const on=projectCreate.automationOverrides[item.id]??inheritedOn(item)
-            const deviates=projectCreate.automationOverrides[item.id]!==undefined
-              &&projectCreate.automationOverrides[item.id]!==inheritedOn(item)
-            return <label class="check" key={item.id}>
-              <input type="checkbox" checked={on} disabled={!!item.spends&&!grantsCatalogue?.llm.ready} onChange={event=>setProjectCreate(value=>({
-                ...value,
-                automationOverrides:setCreateAutomation(
-                  value,projectCreateAutomationRows,item.id,event.currentTarget.checked),
-              }))} />
-              <span><strong>{item.label}</strong>
-              {item.spends&&<em class="project-setting-chip spends">spends</em>}
-              <small>{deviates
-                ?`Just this Project — the install default is ${inheritedOn(item)?'on':'off'}.`
-                :`Inherited from the install default (${inheritedOn(item)?'on':'off'}).`}</small></span>
-            </label>
-          })}
-        </details>
-        {/* The two optional sets. Never defaulted on: one can bill and the other hands
-            agents real authority, so each is a deliberate choice rather than part of
-            the common name-folder-Enter path. Both apply through the same grant path
-            as the free set, dependency closure and audit record included. */}
-        {grantsCatalogue&&!grantsCatalogue.llm.ready&&<button type="button" onClick={()=>setProviderSetupOpen(true)}>Set up model provider…</button>}
-        <label class="check project-create-automations">
-          <input type="checkbox" checked={projectCreate.llm&&!startingSetBlocked('llm')} disabled={startingSetBlocked('llm')||!grantsCatalogue?.llm.ready} onChange={event=>setProjectCreate(value=>({...value,llm:event.currentTarget.checked}))} />
-          <span><strong>Turn on the model-backed automations</strong>
-          {/* "re-titled", not "titles": naming a pane is the Session titler, an
-              install-wide switch in the Automation workspace that runs whatever a
-              Project opted into. Declining this does not decline session titles. */}
-          <small>Scan timeline (armed for every new session), sessions re-titled when
-          their scope changes, and model narration, plus the detectors they rank over.
-          These call your configured model and can cost money; the budgets are
-          install-wide, in the Automation workspace.{grantsCatalogue&&!grantsCatalogue.llm.ready?' Set up and verify a model provider before enabling these.':''}{startingSetBlocked('llm')?' Part of this set is disabled install-wide in Automation → Policy.':''}</small></span>
-        </label>
-        <label class="check project-create-automations">
-          <input type="checkbox" checked={projectCreate.autonomy&&!startingSetBlocked('autonomy')} disabled={startingSetBlocked('autonomy')} onChange={event=>setProjectCreate(value=>({...value,autonomy:event.currentTarget.checked}))} />
-          <span><strong>Let agents act without per-request approval</strong>
-          <small>Agents working in this Project can spawn sessions and start auto-merges
-          directly, each still under its hourly budget, with spawn-request review on for
-          anything that still arrives as a draft. Interrupting or messaging into live
-          sessions stays behind its own approval. Recorded in the Project’s
-          <code>.swe-mux/config.toml</code>; lower it any time in the Projects registry.</small></span>
-        </label>
-        {!!initScripts.length&&<details class="project-init-scripts">
-          <summary>Setup commands · {projectCreate.scripts.length} selected</summary>
-          {initScripts.map(script=><label class="check" key={script.id}>
-            <input type="checkbox" checked={projectCreate.scripts.includes(script.id)} onChange={event=>setProjectCreate(value=>({...value,scripts:toggleInitScript(value.scripts,script.id,event.currentTarget.checked)}))} />
-            <span><strong>{script.label}</strong><code>{script.command}</code></span>
-          </label>)}
-          <p class="modal-note">Each selected command opens its own terminal in the new Project, started in this order. They are your own commands from Settings → General, never anything read out of the folder.</p>
-        </details>}
-        <p class="modal-note">{projectCreate.mode==='new'?'The parent folder must already exist; only the new folder is created. ':''}Creating the project initializes .swe-mux in <code>{projectCreateRoot(projectCreate)||'the chosen folder'}</code>. Every session starts at this exact root.</p>
-        <div class="modal-footer"><button type="button" onClick={()=>setProjectCreateOpen(false)}>Cancel</button><button class="primary" type="submit" disabled={!projectCreateReady(projectCreate)}>Create project</button></div>
-      </form>
-    </div>}
-    {folderPickerOpen&&<DirectoryPicker initialPath={projectCreate.mode==='new'?projectCreate.parent:projectCreate.root} onCancel={()=>setFolderPickerOpen(false)} onSelect={root=>{setProjectCreate(value=>value.mode==='new'?{...value,parent:root}:{...value,root,name:folderNameFromPath(root)});setFolderPickerOpen(false)}} />}
+    {projectCreateOpen&&<ProjectCreateDialog groups={projectGroups} onClose={()=>setProjectCreateOpen(false)} onCreated={projectCreated} onSetupComplete={(project,result)=>{
+      if(result.started)markProjectRecent(project.id)
+      if(result.errors.length)setError(`Project created. ${result.errors.map(item=>`${item.script}: ${item.error}`).join(' · ')}`)
+      void refresh()
+    }}/>}
 
     {groupEdit&&<div class="modal-layer project-registry-dialog-layer" onMouseDown={event=>event.target===event.currentTarget&&setGroupEdit(null)}><form class="modal rename-modal" onSubmit={event=>{event.preventDefault();void submitGroup()}}><div class="modal-heading"><div><span>GROUP::{groupEdit.id?'RENAME':'CREATE'}</span><h2>Sidebar group</h2></div><button type="button" onClick={()=>setGroupEdit(null)}>×</button></div><label>Name<input value={groupEdit.name} onInput={event=>setGroupEdit(current=>current?{...current,name:event.currentTarget.value}:current)} autofocus /></label><p class="modal-note">Groups only organize the sidebar. They never affect sessions, panes, or project data.</p><div class="modal-footer"><button type="button" onClick={()=>setGroupEdit(null)}>Cancel</button><button class="primary" type="submit" disabled={!groupEdit.name.trim()}>Save group</button></div></form></div>}
 

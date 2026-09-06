@@ -3817,7 +3817,7 @@ No update server: static manifest plus GitHub Releases covers the whole loop.
   `SECURITY.md`, `remote-access.md`, and `desktop-shell.md`, and it carries nothing that
   identifies the install: no query string, no custom header, no body, and a `DummyCookieJar`
   so a `Set-Cookie` from the site cannot become an install id on the next day's request.
-  `update_check_enabled` is on by default and visible in Settings → Diagnostics; off means
+  `update_check_enabled` is on by default and visible in Settings → Maintenance; off means
   no request under any caller, which is proven by counting fetches rather than asserted.
   *A restart loop cannot become a request loop.* The interval is enforced against a
   wall-clock timestamp in `<data_dir>/update-check.json`, so five restarts make one request;

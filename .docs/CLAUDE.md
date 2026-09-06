@@ -115,6 +115,19 @@
   The rule the feature turns on: a tier sets defaults and never locks capability - no
   backend module may branch on `experience_tier`, which is enforced by a test, and every
   key a tier assigns is an ordinary config key with its own in-place switch.
+- Changing the factory reset - what a reset takes, what it keeps, the request/startup-phase
+  handoff, or the confirmation surface: `design/features/factory-reset.md`,
+  `design/features/first-run.md`, `design/interfaces.md`, `design/features/ui.md`,
+  `technical/backend/packages/routes.md`, `technical/frontend/packages/composition.md`,
+  `src/swe_mux/factory_reset.py`.
+  Three rules the design turns on. **A reset cannot run in the daemon that was asked for it** -
+  it is a durable request honoured by a successor in a startup phase before any store opens a
+  file, because that is the only moment the data directory has no handles into it. **What
+  survives is a keep-list, not a delete-list**, because residue is what defeats the feature and
+  a new data-dir entry is far more likely to be state than to be load-bearing; the list is
+  pinned by a test so adding a load-bearing file forces the decision. And **a repository is
+  never touched** - `.swe-mux/` is committed content in someone else's tree and worktree
+  checkouts may hold the only copy of uncommitted work, so both are reported rather than removed.
 - Changing panes, tabs, splits, drag/drop, or the mobile workspace projection:
   `design/features/workspace-layout.md`, `technical/frontend/workspace-state.md`
 - Changing browser chrome, sidebar interaction, settings, focus, or overlays:

@@ -49,6 +49,14 @@ The checkout resolution, the lock claim, and the detached spawn moved to `redepl
 
 **Not:** the restart's successor-spawn policy beyond spawning it, or the redeploy build itself (`packaging/redeploy_desktop.py`).
 
+### `routes/maintenance.py`
+
+`GET /api/maintenance/factory-reset` (what one would take, measured rather than described - the live sessions named, the entries it would move, the keepers, the worktrees it leaves, the last result) and `POST` (write the request, reap every session and stop the supervisor, spawn the successor, stop).
+Loopback-only, refused without a relaunchable entry point, refused during a redeploy, and refused without the daemon's own confirmation phrase typed back.
+Registered immediately after `system` because it uses that module's successor-spawn and redeploy-lock helpers through the package's module-reference rule.
+
+**Not:** the reset itself, which cannot run here (`factory_reset.py`, and `design/features/factory-reset.md` for why).
+
 ### `routes/update.py`
 
 `GET /api/update` (the last check's answer; reads state and never reaches the network), `POST /api/update/check` (behind the `update-check` gesture header and refused with `409 update_check_disabled` while the switch is off), and `POST /api/update/dismiss`.

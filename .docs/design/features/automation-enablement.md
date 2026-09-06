@@ -393,29 +393,28 @@ gate depends on this). The contract, the disclosures, and the refusals: `setting
 
 ## First-use starting sets
 
-Three named sets are offered as checkboxes when a Project is created, served by
-`GET /api/grants` (`project_starting_sets`) so the form and the daemon cannot drift.
-Each is applied through the ordinary grant path as one POST for whatever was ticked, and none
-is an inherited default template - each is written into that Project's own file, so "nothing
-runs on a Project that did not opt in" stays literally true and no existing Project changes
-behaviour because a constant did.
+New Projects inherit global defaults without creating an automation or authority override.
+The creation form neither seeds recommended features nor requests a grant.
+Three named sets remain available as explicit presets on the Automation Policy matrix after creation, served by `GET /api/grants` (`project_starting_sets`).
+Applying a Project-scoped preset writes an explicit Project decision through the ordinary grant path.
+Global presets instead update the inherited default template.
 
-- `RECOMMENDED_PROJECT_AUTOMATIONS` (defaulted on): the model-free set - the four detectors
+- `RECOMMENDED_PROJECT_AUTOMATIONS`: the model-free set - the four detectors
   plus `code_graph`, with `raw_store` and `tier0` under them.
   `_validate_recommended` refuses at import to let a spending automation into it.
-- `LLM_PROJECT_AUTOMATIONS` (off): the model tier - `scan_timeline`, `session_titler`,
+- `LLM_PROJECT_AUTOMATIONS`: the model tier - `scan_timeline`, `session_titler`,
   `attention_observers`, `continuous_title`, `model_narration` - whose closure drags in
   `attention_ranking` and the detectors under it;
   its values half (`grants.LLM_PROJECT_VALUES`) sets `scan_timeline_auto_enable` so the
   timeline arms per run. `_validate_llm_set` holds every member to `needs_llm` and the
   closure to `implemented`.
-- `AUTONOMY_PROJECT_AUTOMATIONS` (off): `session_control`, `land_queue`, and - deliberately -
+- `AUTONOMY_PROJECT_AUTOMATIONS`: `session_control`, `land_queue`, and - deliberately -
   `observation_inbox`, so whatever still drafts under the raised authority gets its review
   surface; its values half (`grants.AUTONOMY_PROJECT_VALUES`) raises `spawn_grant` and
   `land_grant` to `granted` and deliberately leaves `session_control_grant` and
   `interject_grant` at their inert defaults. `_validate_autonomy_set` holds it free to run.
 
-The disclosures each checkbox owes, and why the exclusions are what they are:
+Preset disclosures and authority boundaries:
 `setting-links.md` § First use.
 
 ## Configuration

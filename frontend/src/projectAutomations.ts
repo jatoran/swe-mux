@@ -22,6 +22,10 @@ import { api } from './api.ts'
 
 export const PROJECT_AUTOMATIONS_CHANGED = 'mux:project-automations-changed'
 
+/** Named policy presets edited after registration, in the Automation workspace. */
+export type StartingSet = {automations:string[];values:Record<string,unknown>}
+export type StartingSetCatalog = {recommended:StartingSet;llm:StartingSet;autonomy:StartingSet}
+
 export type ProjectAutomationState = {
   revision: string
   requested: Record<string, boolean>

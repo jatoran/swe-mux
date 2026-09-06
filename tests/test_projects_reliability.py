@@ -9,14 +9,78 @@ from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
 from swe_mux import app_keys as keys
+from swe_mux.automation_registry import install_defaults, requested_from_config
+from swe_mux.config import Config, update_config
 from swe_mux.event_bus import EventBus
 from swe_mux.history import HistoryIndex
 from swe_mux.layouts import MAX_LAYOUT_LEAVES, layout_terminal_ids, normalize_layout
 from swe_mux.models import SessionRecord
-from swe_mux.project_files import read_note
+from swe_mux.project_files import read_note, read_project_config
 from swe_mux.projects import ProjectManager
-from swe_mux.routes.projects import delete_project, record_project_use
+from swe_mux.routes.projects import _project_snapshot, delete_project, record_project_use
 from swe_mux.server import error_middleware
+
+
+@pytest.mark.parametrize("create_missing", [False, True])
+async def test_new_projects_follow_changing_globals_without_pinning_settings(
+    tmp_path: Path,
+    create_missing: bool,
+) -> None:
+    config = Config(data_dir=tmp_path, config_path=tmp_path / "global.toml")
+    update_config(
+        config, {"default_backend": "claude", "automation_project_defaults": {"doc_debt": True}}
+    )
+    history = HistoryIndex(tmp_path / "mux.db")
+    projects = ProjectManager(history)
+    await projects.start()
+    root = tmp_path / "repo"
+    if not create_missing:
+        root.mkdir()
+    try:
+        project = await projects.create("Repo", str(root), create_missing=create_missing)
+        request = SimpleNamespace(app={keys.CONFIG: config})
+        snapshot = await _project_snapshot(request, project, {})
+        values = (await read_project_config(root))["values"]
+        original = (root / ".swe-mux" / "config.toml").read_bytes()
+        assert original.decode("utf-8").splitlines() == ["version = 1"]
+        assert values == {}
+        assert project.default_backend is None
+        assert project.default_profile_id is None
+        assert project.default_agent_profiles == {}
+        assert snapshot["effective_options"]["backend"] == "claude"
+        assert snapshot["option_sources"]["backend"] == "global"
+        assert "doc_debt" in requested_from_config(
+            values.get("automations"), install_defaults(config.automation_project_defaults)
+        )
+
+        update_config(
+            config, {"default_backend": "codex", "automation_project_defaults": {"doc_debt": False}}
+        )
+        snapshot = await _project_snapshot(request, project, {})
+        values = (await read_project_config(root))["values"]
+        assert snapshot["effective_options"]["backend"] == "codex"
+        assert "doc_debt" not in requested_from_config(
+            values.get("automations"), install_defaults(config.automation_project_defaults)
+        )
+        assert (root / ".swe-mux" / "config.toml").read_bytes() == original
+    finally:
+        history.close()
+
+
+async def test_registering_existing_repository_keeps_its_explicit_settings(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    (root / ".swe-mux").mkdir(parents=True)
+    path = root / ".swe-mux" / "config.toml"
+    original = "version = 1\nautomations = { doc_debt = false }\n"
+    path.write_text(original, encoding="utf-8", newline="\n")
+    history = HistoryIndex(tmp_path / "mux.db")
+    projects = ProjectManager(history)
+    await projects.start()
+    try:
+        await projects.create("Repo", str(root))
+        assert path.read_text(encoding="utf-8") == original
+    finally:
+        history.close()
 
 
 async def test_project_creation_initializes_resources_and_persists_layout(
@@ -384,9 +448,7 @@ async def test_project_removal_api_reports_live_session_conflict(tmp_path: Path)
     app = web.Application(middlewares=[error_middleware])
     app[keys.PROJECTS] = projects
     app[keys.HISTORY] = history
-    app[keys.SESSIONS] = SimpleNamespace(
-        sessions={record.id: SimpleNamespace(record=record)}
-    )
+    app[keys.SESSIONS] = SimpleNamespace(sessions={record.id: SimpleNamespace(record=record)})
     app[keys.EVENTS] = events
     app.router.add_delete("/projects/{project_id}", delete_project)
 
@@ -398,9 +460,7 @@ async def test_project_removal_api_reports_live_session_conflict(tmp_path: Path)
     assert payload == {
         "error": "1 live session must be closed before removal",
         "code": "project_has_live_sessions",
-        "live_sessions": [
-            {"id": record.id, "name": record.name, "state": record.state}
-        ],
+        "live_sessions": [{"id": record.id, "name": record.name, "state": record.state}],
     }
     assert project.id in projects.projects
     history.close()
