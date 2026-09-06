@@ -128,6 +128,33 @@ class SourceError(RuntimeError):
     """One source could not be collected. The others still are."""
 
 
+def credential(name: str) -> str | None:
+    """The environment first, then the Windows user environment in the registry.
+
+    `setx` writes to `HKEY_CURRENT_USER\\Environment` and broadcasts a change that only
+    *newly launched* processes act on, so every terminal, editor, and agent session that
+    was already open keeps the old block for its entire life. The result is a credential
+    that is correctly stored and invisible to the shell you just stored it from - which
+    reads as "the token does not work" and sends people back to the dashboard to make a
+    second one.
+
+    Reading the registry as a fallback makes storing and using a credential one step
+    instead of two-plus-restart-everything. The environment still wins when it is set, so
+    a deliberate per-run override is unaffected.
+    """
+    value = os.environ.get(name)
+    if value or os.name != "nt":
+        return value
+    try:
+        import winreg
+
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment") as key:
+            stored, _ = winreg.QueryValueEx(key, name)
+    except (ImportError, OSError):
+        return None
+    return str(stored) or None
+
+
 @dataclass(frozen=True)
 class Observation:
     """One number, for one day, from one source.
@@ -318,8 +345,8 @@ def collect_cloudflare(days: int) -> list[Observation]:
     is the form Cloudflare's own documentation uses and is known to be supported; the
     result is a UTC day boundary, converted to a date here.
     """
-    account = os.environ.get("CLOUDFLARE_ACCOUNT_ID")
-    token = os.environ.get("CLOUDFLARE_ANALYTICS_TOKEN")
+    account = credential("CLOUDFLARE_ACCOUNT_ID")
+    token = credential("CLOUDFLARE_ANALYTICS_TOKEN")
     if not account or not token:
         raise SourceError(
             "CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_ANALYTICS_TOKEN must both be set "
