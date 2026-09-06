@@ -10,7 +10,7 @@ import { automationRequested, forgetProjectAutomations, inheritedDefault } from 
 import type { AutomationRegistryEntry } from './projectAutomations'
 import { projectDropdownOptions } from './projectOptions'
 import { ProjectContextEditor } from './ProjectContextEditor'
-import type { StartingSetCatalog } from './projectCreate'
+import type { StartingSetCatalog } from './projectAutomations'
 
 // The policy matrix: every automation is one row, the install-wide answer and
 // the selected Project's own answer side by side, with a fleet column saying how

@@ -12,7 +12,7 @@ import { runDisplayName } from './sessionNames'
 import { AutomationPolicyView } from './AutomationPolicyView'
 import { AutomationPolicyMatrix } from './AutomationMatrix'
 import type { MatrixData } from './AutomationMatrix'
-import type { StartingSetCatalog } from './projectCreate'
+import type { StartingSetCatalog } from './projectAutomations'
 import { revealSetting } from './settingReveal'
 import type { Project } from './types'
 
