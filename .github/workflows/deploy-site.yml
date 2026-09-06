@@ -38,6 +38,7 @@ on:
     branches: [master]
     paths:
       - "site/**"
+      - "worker/**"
       - "wrangler.jsonc"
       - ".github/workflows/deploy-site.yml"
   # After a release, because a push-triggered run stages its bytes at checkout
@@ -74,6 +75,15 @@ on:
 # authenticates with `CLOUDFLARE_API_TOKEN`, scoped to Workers Scripts: Edit on
 # one account. That is a real stored credential where the Pages OIDC exchange
 # needed none, and it is the one thing this migration traded away.
+#
+# Since 2026-09-06 the deploy also uploads a Worker script (`worker/index.js`,
+# the `version.json` counter) with an Analytics Engine binding. The dataset is
+# created on first write rather than provisioned, so Workers Scripts: Edit is
+# still the whole scope - but a first deploy after this change is the moment to
+# check that, because a permission refusal here fails the deploy rather than
+# degrading. The *reading* token is a separate one and lives on the operator's
+# machine, not in this repository: `tools/metrics_snapshot.py` needs Account
+# Analytics: Read and CI has no reason to hold it.
 permissions:
   contents: read
 

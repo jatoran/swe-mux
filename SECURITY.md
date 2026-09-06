@@ -117,6 +117,12 @@ A vulnerability is something that breaks the boundary above **as designed**:
 - Making the release update check identify the install - a query string, a header, a cookie,
   or any per-machine value on the request - or making it fire while `update_check_enabled`
   is off. The no-telemetry property is a design commitment, not a side effect.
+  Since 2026-09-06 the *website* counts requests for `version.json`, which does not weaken
+  that: the count's whole schema is a constant label and an HTTP status (`worker/index.js`),
+  the request itself is unchanged, and nothing per-machine is recorded at either end.
+  Making that counter store anything derived from a request - an address, a user agent, a
+  hash of either - is in scope here, and is what `tests/test_site_metrics_counter.py` fails
+  the build over.
 - Making the updater replace the PTY supervisor, or otherwise end live sessions, on a
   request that did not carry `accept_supervisor_update`.
 - Getting an artifact staged by the updater without matching the SHA-256 the manifest

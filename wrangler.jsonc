@@ -17,11 +17,19 @@
 // turns every deploy into a preview that never reaches the custom domain and
 // still exits 0. Workers have versions instead, and no such trap.
 //
-// **No `main`.** This is an assets-only Worker: every request is answered from
-// `site/` and no script runs. If server-side logic is ever wanted here - the
-// obvious candidate is computing `version.json` from the Releases API instead of
-// restoring it from a release asset in CI - it arrives as a `main` entry point
-// and this comment is where to start.
+// **There is a `main` now, and it does one thing.** This was an assets-only
+// Worker until 2026-09-06, when `worker/index.js` arrived to count requests to
+// `/version.json` - the daily poll every install makes, and therefore the only
+// adoption signal available to a project with no telemetry. `run_worker_first`
+// below is what makes that possible at all: with static assets, a path that
+// matches a file is served without the script ever running, so counting an
+// *asset* requires naming it. Everything else on the site still goes straight to
+// assets and pays nothing.
+//
+// The script's own header is the argument for the schema it writes and for why
+// the counter can never break the endpoint. The short version: a constant label
+// and a status code, no request-derived field of any kind, and the response is
+// produced before the write and returned regardless of it.
 //
 // Deployment is `wrangler deploy` from `.github/workflows/deploy-site.yml` and
 // from `release.yml`'s `update-manifest` job. Never deploy this by hand: both
@@ -31,7 +39,32 @@
 {
   "name": "swe-mux",
   "compatibility_date": "2026-08-31",
+  "main": "./worker/index.js",
   "assets": {
-    "directory": "./site"
-  }
+    "directory": "./site",
+    // The Worker reaches static files through this binding rather than by
+    // reading them, so `site/` stays the single source of what is published and
+    // the script adds no copy of anything.
+    "binding": "ASSETS",
+    // An array, not `true`. `true` would run the script ahead of every request
+    // on the site to count one path, which is the same answer at 30x the
+    // invocations. Keep this in step with `COUNTED_PATH` in `worker/index.js`;
+    // `tests/test_site_metrics_counter.py` fails if the two drift, because a
+    // silent drift here is a counter that reads zero forever while everything
+    // still serves correctly.
+    "run_worker_first": ["/version.json"]
+  },
+  // Created on first write - there is nothing to provision in the dashboard, and
+  // nothing here works differently if the dataset does not exist yet. Free-plan
+  // allowance is 100,000 data points a day against an expected volume of roughly
+  // one per install per day, so the headroom is three orders of magnitude and
+  // overrunning it would be good news. Note the retention: Cloudflare keeps
+  // three months, which is why `tools/metrics_snapshot.py` copies the daily
+  // totals into a local database that keeps them forever.
+  "analytics_engine_datasets": [
+    {
+      "binding": "METRICS",
+      "dataset": "swemux_site"
+    }
+  ]
 }

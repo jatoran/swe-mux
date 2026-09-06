@@ -15,6 +15,16 @@ The release procedure that maintains this file is [`RELEASING.md`](RELEASING.md)
 
 ## [Unreleased]
 
+### Changed
+
+- **swemux.dev now counts requests for the update manifest, and the privacy page says so.**
+  Nothing your install sends has changed: it is the same once-a-day `GET` of `version.json`, with no query string, no header, no cookie and no identifier, and `update_check_enabled` still turns it off entirely - which also removes you from the count, because the request is then never made.
+  What is new is at the other end. The site adds 1 to a daily total when that file is asked for, and the counter stores two values and no others: the constant text `version-check`, and the HTTP status of the response.
+  No address, no user agent, no country, no referer, and nothing derived from any of them - not "kept briefly", but never written, so there is no record of you to lose or to be asked for later.
+  It is the only path on the site that is counted; pages you read are not.
+  The reason it exists is that a project with no telemetry otherwise has no way to tell whether anyone still runs it a month after installing, and the reason it is this small is that guessing is a better trade than identifying anybody.
+  The whole thing is nine lines in `worker/index.js`, the [privacy page](https://swemux.dev/privacy/) describes it in the same terms, and a test fails the build if that data point ever grows a field taken from the request.
+
 ## [0.2.5] - 2026-09-05
 
 ### Changed
