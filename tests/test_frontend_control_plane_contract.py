@@ -35,10 +35,13 @@ def test_automation_dashboard_exposes_outcomes_diagnostics_and_reviewed_batches(
     assert "/api/attention/inbox" not in dashboard
     assert "/api/annotations" not in dashboard
     assert "Findings" in (ROOT / "FindingsPane.tsx").read_text(encoding="utf-8")
-    # The workload table went to Resources, following the cost column that had already left
-    # the same view for the same reason.
+    # The workload table left this view, following the cost column that had already left it
+    # for the same reason, and is now the Runs view of Usage & activity -> Activity.
     assert "Observed workload telemetry" not in dashboard
-    assert "Observed workload" in (ROOT / "WorkloadTelemetry.tsx").read_text(encoding="utf-8")
+    assert "/api/telemetry/v2/runs" not in dashboard
+    workload = (ROOT / "WorkloadTelemetry.tsx").read_text(encoding="utf-8")
+    assert "Runs started in this period" in workload
+    assert "/api/telemetry/v2/runs" in workload
     assert "Select up to 25 ended runs" in dashboard
     assert "never modify a repository" in dashboard
     assert "start reviewed batch" in dashboard

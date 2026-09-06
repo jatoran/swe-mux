@@ -826,7 +826,9 @@ def test_process_fleet_groups_sessions_and_daemon_infrastructure() -> None:
     )
     assert "All projects, sessions, and swe-mux infrastructure" in panel
     assert "PROCESS::FLEET" in panel
-    assert "SESSION PROCESSES" in panel
+    # Drilling into one session retitles the frame, so the heading always says which of the
+    # two scopes is on screen rather than leaving the fleet's title over one session's trees.
+    assert "selectedSessionId ? 'Session processes' : 'System'" in panel
     assert "buildProcessTree" in view
     assert "renderDaemonGroup" in view
     # The runtime keeps its own group. Its heading dropped the `swe-mux::` prefix that the
