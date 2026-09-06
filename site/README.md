@@ -30,7 +30,8 @@ Detailed configuration belongs in `/docs/`.
 | Privacy and terms | `content/privacy.html`, `content/terms.html` | `privacy/`, `terms/` |
 | Plugins | `content/plugins.html`, `content/plugins.js` | `plugins/` |
 | Demo | `../frontend/src/demo/` | `demo/` |
-| Feature media | Demo scenario recordings | `img/showcase-*` |
+| Frontpage feature images | Focused crops from the demo | `img/frontpage/` |
+| Documentation examples | Existing demo stills | `img/showcase-*.webp` |
 
 `tools/build.py` reads the landing page's style block rather than maintaining another theme.
 Regenerate sibling pages after changing that style block or their content sources.
@@ -77,17 +78,20 @@ Use the app's terminal visual language: monospace headings, system-sans body tex
 Both light and dark themes must remain readable.
 Do not introduce remote fonts, analytics or third-party embeds.
 
-Each feature clip shows one task with an unobstructed view of the interface.
-Recorded media exclude tutorial cards, controls, callouts and cursor effects; the interactive demo keeps its guide.
-The landing examples separately show success and failure.
-Use MP4/WebM with WebP posters, native playback controls and reduced-motion behavior.
-Videos start only when the visitor presses Play and use native pause and seek controls.
-The page does not restart playback or loop a finished video.
+Below the interactive demo, the frontpage uses only static WebP images cropped to the relevant feature.
+Do not use full-workspace screenshots for a feature that fits in a panel, message or composer.
+Captures exclude tutorial cards, controls, callouts and transient notifications; the interactive demo keeps its guide.
+The landing examples separately show the verification gate and the failure returned to the agent.
+Feature examples remain visible without opening an expander or starting playback.
+`frontpage.css` holds homepage-only layout rules so its changes do not regenerate documentation pages.
 Audio features are described in prose; there are no audio samples or sound-preview buttons.
 
-Phone media use the same portrait proportions and restrained handset treatment as the demo.
-On a phone-sized page, remove the surrounding handset and use the available width.
+The phone still focuses on its question, composer and touch controls.
 Capture the phone layout directly; never crop a desktop recording to imitate it.
+
+Recapture with `node site/tools/capture-frontpage.mjs`, optionally followed by image names from `img/frontpage/manifest.json`.
+The script requires ffmpeg and the frontend's Playwright dependencies, archives previous output in `.trash/`, and updates homepage image revisions and dimensions.
+The manifest records each scenario, crop and file digest; `node site/tools/check-media.mjs` checks the delivered images and responsive page.
 
 ## Build and verify
 

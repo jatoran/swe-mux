@@ -1,0 +1,257 @@
+{
+  "version": 1,
+  "assets": [
+    {
+      "name": "fleet",
+      "file": "fleet.webp",
+      "scenario": "status",
+      "beat": 1,
+      "viewport": {
+        "width": 1400,
+        "height": 850
+      },
+      "crop": {
+        "x": 0,
+        "y": 79,
+        "width": 340,
+        "height": 443
+      },
+      "width": 680,
+      "height": 886,
+      "bytes": 48514,
+      "revision": "94a071433f7c",
+      "overlays": false
+    },
+    {
+      "name": "alert",
+      "file": "alert.webp",
+      "scenario": "status",
+      "beat": 2,
+      "viewport": {
+        "width": 1100,
+        "height": 620
+      },
+      "crop": {
+        "x": 507,
+        "y": 190,
+        "width": 584,
+        "height": 100
+      },
+      "width": 1168,
+      "height": 200,
+      "bytes": 21590,
+      "revision": "98f772d87dad",
+      "overlays": false
+    },
+    {
+      "name": "voice",
+      "file": "voice.webp",
+      "scenario": "voice",
+      "beat": 5,
+      "viewport": {
+        "width": 1100,
+        "height": 620
+      },
+      "crop": {
+        "x": 359,
+        "y": 4,
+        "width": 686,
+        "height": 280
+      },
+      "width": 1372,
+      "height": 560,
+      "bytes": 48824,
+      "revision": "50b5e465dd9c",
+      "overlays": false
+    },
+    {
+      "name": "communication",
+      "file": "communication.webp",
+      "scenario": "orchestrate",
+      "beat": 9,
+      "viewport": {
+        "width": 1100,
+        "height": 620
+      },
+      "crop": {
+        "x": 498,
+        "y": 35,
+        "width": 602,
+        "height": 341
+      },
+      "width": 1204,
+      "height": 682,
+      "bytes": 59546,
+      "revision": "bbf1bb9a6e9e",
+      "overlays": false
+    },
+    {
+      "name": "land",
+      "file": "land.webp",
+      "scenario": "land",
+      "beat": 4,
+      "viewport": {
+        "width": 1100,
+        "height": 620
+      },
+      "crop": {
+        "x": 498,
+        "y": 159,
+        "width": 602,
+        "height": 241
+      },
+      "width": 1204,
+      "height": 482,
+      "bytes": 39796,
+      "revision": "cb5501df2825",
+      "overlays": false
+    },
+    {
+      "name": "landfailure",
+      "file": "landfailure.webp",
+      "scenario": "landfailure",
+      "beat": 6,
+      "viewport": {
+        "width": 1100,
+        "height": 620
+      },
+      "crop": {
+        "x": 498,
+        "y": 35,
+        "width": 602,
+        "height": 231
+      },
+      "width": 1204,
+      "height": 462,
+      "bytes": 39430,
+      "revision": "633389ca5515",
+      "overlays": false
+    },
+    {
+      "name": "input",
+      "file": "input.webp",
+      "scenario": "input",
+      "beat": 2,
+      "viewport": {
+        "width": 1100,
+        "height": 620
+      },
+      "crop": {
+        "x": 351,
+        "y": 508,
+        "width": 330,
+        "height": 67
+      },
+      "width": 660,
+      "height": 134,
+      "bytes": 9350,
+      "revision": "1d029a7579bf",
+      "overlays": false
+    },
+    {
+      "name": "clipboard",
+      "file": "clipboard.webp",
+      "scenario": "clipboard",
+      "beat": 1,
+      "viewport": {
+        "width": 1100,
+        "height": 620
+      },
+      "crop": {
+        "x": 498,
+        "y": 69,
+        "width": 602,
+        "height": 294
+      },
+      "width": 1204,
+      "height": 588,
+      "bytes": 49570,
+      "revision": "abd114432469",
+      "overlays": false
+    },
+    {
+      "name": "panes",
+      "file": "panes.webp",
+      "scenario": "preview",
+      "beat": 5,
+      "viewport": {
+        "width": 1440,
+        "height": 420
+      },
+      "crop": {
+        "x": 344,
+        "y": 0,
+        "width": 1056,
+        "height": 420
+      },
+      "width": 2112,
+      "height": 840,
+      "bytes": 114026,
+      "revision": "1f19744a0bf6",
+      "overlays": false
+    },
+    {
+      "name": "history",
+      "file": "history.webp",
+      "scenario": "history",
+      "beat": 2,
+      "viewport": {
+        "width": 1100,
+        "height": 620
+      },
+      "crop": {
+        "x": 498,
+        "y": 35,
+        "width": 602,
+        "height": 261
+      },
+      "width": 1204,
+      "height": 522,
+      "bytes": 54904,
+      "revision": "9adacc549b81",
+      "overlays": false
+    },
+    {
+      "name": "phone",
+      "file": "phone.webp",
+      "scenario": "status",
+      "beat": 3,
+      "viewport": {
+        "width": 390,
+        "height": 640
+      },
+      "crop": {
+        "x": 0,
+        "y": 357,
+        "width": 390,
+        "height": 283
+      },
+      "width": 780,
+      "height": 566,
+      "bytes": 39372,
+      "revision": "775e03d1a944",
+      "overlays": false
+    },
+    {
+      "name": "attachment",
+      "file": "attachment.webp",
+      "scenario": "attachment",
+      "beat": 3,
+      "viewport": {
+        "width": 1100,
+        "height": 620
+      },
+      "crop": {
+        "x": 351,
+        "y": 508,
+        "width": 330,
+        "height": 67
+      },
+      "width": 660,
+      "height": 134,
+      "bytes": 9712,
+      "revision": "cf998224b26a",
+      "overlays": false
+    }
+  ]
+}

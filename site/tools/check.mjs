@@ -229,7 +229,7 @@ console.log(
 console.log('asset reachability')
 {
   const markup = PAGES.map((p) => readFileSync(p.file, 'utf8')).join('\n')
-  const assets = readdirSync(join(site, 'img'))
+  const assets = readdirSync(join(site, 'img'), { recursive: true }).map(name => name.split(sep).join('/'))
     .filter((name) => /\.(webp|png|mp4|webm|mp3)$/.test(name))
     .filter((name) => !/^logo/.test(name)) // chrome, referenced from the shell rather than a page
   const unreferenced = assets.filter((name) => !markup.includes(`img/${name}`))

@@ -1,0 +1,32 @@
+/* Homepage-only feature crops. The shared stylesheet and docs stay unchanged. */
+.feature-shot {
+  max-width: 900px;
+  margin: 24px auto;
+  padding: clamp(10px, 2vw, 20px);
+  border: 1px solid var(--line-2);
+  background: var(--panel);
+}
+.feature-shot img { display: block; width: 100%; height: auto; }
+.feature-image { display: block; cursor: zoom-in; }
+.feature-shot figcaption { padding-top: 14px; font: 13px/1.6 var(--sans); color: var(--fg-2); }
+.feature-shot figcaption strong { color: var(--fg); }
+.feature-fleet { display: grid; grid-template-columns: minmax(0, 360px) minmax(0, 1fr); gap: 32px; align-items: center; }
+.feature-fleet .feature-shot { margin: 0; }
+.feature-fleet { margin: 28px 0; }
+.feature-states { display: flex; flex-wrap: wrap; gap: 10px 20px; margin: 0 0 20px; padding: 0; list-style: none; font: 13px/1.5 var(--mono); }
+.feature-states li::before { content: ''; display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 8px; background: var(--state-color); }
+.feature-states li:nth-child(1) { --state-color: #81a8ef; }
+.feature-states li:nth-child(2) { --state-color: #dbb369; }
+.feature-states li:nth-child(3) { --state-color: #96c867; }
+.feature-phone { max-width: 390px; border-radius: 20px; }
+.feature-phone img { border-radius: 8px; }
+.feature-inputs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; }
+.feature-inputs .feature-shot { min-width: 0; margin: 24px 0; }
+.feature-keys { display: flex; flex-wrap: wrap; gap: 8px 18px; margin-top: 10px; }
+.feature-keys kbd { font: 12px var(--mono); color: var(--fg); }
+@media (max-width: 760px) {
+  .feature-fleet, .feature-inputs { grid-template-columns: 1fr; gap: 20px; }
+  .feature-fleet > .feature-shot { width: min(100%, 360px); margin-inline: auto; box-sizing: border-box; }
+  .feature-inputs .feature-shot { margin: 0; }
+  .feature-inputs { margin: 24px 0; }
+}
