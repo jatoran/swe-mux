@@ -32,7 +32,7 @@ export const settingsTabs = [
   {id:'voice',label:'Voice',group:'Interface'},
   {id:'notifications',label:'Alerts',group:'System'},
   {id:'remote',label:'Remote',group:'System'},
-  {id:'diagnostics',label:'Diagnostics',group:'System'},
+  {id:'maintenance',label:'Maintenance',group:'System'},
 ] as const
 
 export type SettingsTab = typeof settingsTabs[number]['id']
@@ -165,6 +165,10 @@ export const SECTION_ALIASES:Record<string,SettingsTab> = {
   notes:'notes','note editor':'notes',
   'hooks and notifications':'notifications',notifications:'notifications',
   'remote and security':'remote',
+  // The tab this renamed from. It is an alias rather than a label match because
+  // Voice still has a page called "Diagnostics"; without this entry a deep link
+  // saying "diagnostics" would fall through to General.
+  diagnostics:'maintenance','system prerequisites':'maintenance','factory reset':'maintenance',
   'auto-delivery':'queue','agent messaging':'queue','prompt queue':'queue',
   extensions:'plugins','plugin manager':'plugins',
   // The schedules themselves live in the drawer's Schedule tab; only the install-wide
@@ -186,7 +190,9 @@ export const tabForSection = (section:string):SettingsTab => {
  * General after the split, which reads as the panel forgetting rather than as a
  * tab having been renamed.
  */
-export const LEGACY_TAB_IDS:Record<string,SettingsTab> = {workspace:'git',agents:'harnesses'}
+export const LEGACY_TAB_IDS:Record<string,SettingsTab> = {
+  workspace:'git',agents:'harnesses',diagnostics:'maintenance',
+}
 
 // Which tab Settings opens on when nothing asked for a specific one. Persisted per
 // device rather than held in App state so it survives a reload — Settings is opened,

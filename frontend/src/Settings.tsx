@@ -38,6 +38,7 @@ import { WslBridgePanel } from './WslBridgePanel'
 import { type WslBridgeStatus } from './wslBridge'
 import { ConnectPhone } from './ConnectPhone'
 import { UpdateDialog } from './UpdateDialog'
+import { FactoryResetDialog } from './FactoryResetDialog'
 import { VoiceLatencyReport } from './VoiceLatencyReport'
 import { WakeWordTester } from './WakeWordTester'
 import {
@@ -437,6 +438,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   const [wslBusy,setWslBusy]=useState('')
   const [wslProbing,setWslProbing]=useState(false)
   const [wslMessage,setWslMessage]=useState('')
+  const [factoryResetOpen,setFactoryResetOpen]=useState(false)
   const [diagnosticsBusy,setDiagnosticsBusy]=useState(false)
   const [diagnosticsMessage,setDiagnosticsMessage]=useState('')
   const [diagnosticsText,setDiagnosticsText]=useState('')
@@ -723,7 +725,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
       api<VoiceStatusInfo>('GET','/api/voice').then(setVoiceInfo).catch(()=>setVoiceInfo(null))
       api<LatencyReportPayload>('GET','/api/voice/stt-latency').then(setLatencyReport).catch(()=>setLatencyReport(null))
     }
-    if(activeTab==='diagnostics'&&first('diagnostics'))
+    if(activeTab==='maintenance'&&first('maintenance'))
       api<{prerequisites:Prerequisite[]}>('GET','/api/diagnostics/prerequisites')
         .then(p=>setPrerequisites(p.prerequisites)).catch(()=>setPrerequisites(null))
     if(activeTab==='terminals'&&first('terminals'))
@@ -2658,7 +2660,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
         {/* Support tooling, not remote configuration: what the host is missing, how to
             push new code into the running app, and one bundle to hand over when
             something is wrong. */}
-        {activeTab==='diagnostics'&&<Fragment>
+        {activeTab==='maintenance'&&<Fragment>
           {/* First on the tab, because "which build am I on" is the question every
               other answer here is qualified by: a prerequisite report, a log level,
               and an exported bundle all describe a specific version, and the one a
@@ -2780,6 +2782,23 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           {diagnosticsMessage&&<p aria-live="polite">{diagnosticsMessage}</p>}
           {diagnosticsText&&<label>Diagnostics bundle<textarea readOnly rows={10} value={diagnosticsText} onClick={event=>event.currentTarget.select()} /></label>}
           </section>
+
+          {/* Last on the tab, and the only control here that destroys anything.
+              Everything above it is a way to understand or repair this install;
+              this is the way to stop having it. The dialog does the explaining -
+              this section is deliberately short, because a wall of warnings
+              beside the button is read as decoration. */}
+          <section data-section="factory-reset"><h3>Factory reset</h3>
+          <p>Returns swe-mux to a fresh install: configuration, Projects, history, the database,
+            notes, prompts, plugins and stored credentials are moved out of the data directory,
+            and the app comes back on the first-run setup with nothing carried over.</p>
+          <p class="profile-hint">Files inside your repositories are never touched, worktree
+            checkouts are left where they are, and nothing is deleted - the old install is moved
+            into the data directory's <code>.trash</code> folder. <strong>Every live session is
+            terminated</strong>, so stop anything mid-run first.</p>
+          <div class="theme-actions"><button class="danger" onClick={()=>setFactoryResetOpen(true)}>Factory reset…</button></div>
+          </section>
+          {factoryResetOpen&&<FactoryResetDialog onClose={()=>setFactoryResetOpen(false)}/>}
         </Fragment>}
 
         {activeTab==='appearance'&&<Fragment><section><h3>Theme</h3>

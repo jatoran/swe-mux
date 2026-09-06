@@ -52,6 +52,9 @@ The index itself stays free of the tab registry and knows nothing about which ta
 Browser-free: the tabs and their four contiguous groups, declared subpages, deep-link name resolution, legacy id migration, and the remembered tab and per-tab remembered page.
 It is split out of the component because none of it needs a renderer, and the rules that decide *where a setting is* are worth asserting without mounting a panel of this size.
 A group is a run of the array rather than a declared membership, and `tabForSection` matches a tab's own label before consulting its alias table, so neither can drift the way a hand-maintained heading-to-tab map does.
+Renaming a tab therefore moves both of the things that address it, and the Diagnostics-to-Maintenance rename is the worked example.
+The id goes into `LEGACY_TAB_IDS`, so a device that remembered the old one does not silently reopen on General.
+The old *name* needs a `SECTION_ALIASES` entry rather than the label match, because Voice still has a page called "Diagnostics" and a deep link matching that would land on the wrong tab.
 
 ### Separate pages and the sidebar as sole navigation
 

@@ -942,9 +942,28 @@ body {
 .daemon-reload-modal .modal-actions button.update-dialog-reap:hover { border-color:var(--red);background:color-mix(in srgb,var(--panel) 65%,var(--red)) }
 .redeploy-chip-body .redeploy-chip-note.redeploy-chip-reap { color:var(--amber) }
 .settings-update-actions { display:flex;flex-direction:column;gap:6px;align-items:stretch }
-/* The running version leads the Diagnostics tab, so it is read at a glance rather than
+/* The running version leads the Maintenance tab, so it is read at a glance rather than
    found: it is the fact every other answer on the tab is qualified by. */
 .settings-running-version { font-size:13px }
+/* The factory-reset dialog reuses the same frame again, and adds two lists and a
+   typed confirmation. It is wider than its siblings because the session list is
+   the point of it: a name that wraps to three lines is a session the reader
+   cannot recognize, and recognizing them is the decision being asked for. */
+.factory-reset-dialog { width:min(560px,calc(100% - 30px)) }
+.factory-reset-dialog p + p { margin-top:10px }
+.factory-reset-dialog code { padding:1px 4px;background:var(--panel2);color:var(--text);font:10.5px 'Cascadia Mono',Consolas,monospace;overflow-wrap:anywhere }
+.factory-reset-sessions { display:grid;gap:4px;max-height:180px;overflow:auto;margin:10px 0 0;padding:9px 11px;border:1px solid var(--line);background:var(--bg);list-style:none }
+.factory-reset-sessions li { display:grid;gap:1px }
+.factory-reset-sessions strong { color:var(--text);font-size:11.5px;font-weight:600;overflow-wrap:anywhere }
+.factory-reset-sessions small { color:var(--muted);font-size:10px }
+.factory-reset-left { margin:8px 0 0;padding-left:18px;color:var(--muted);font-size:11px;line-height:1.5 }
+.factory-reset-dialog label.check { display:grid;gap:3px;margin-top:12px;color:var(--text);font-size:11.5px }
+.factory-reset-dialog label.check span { display:flex;align-items:center;gap:7px }
+.factory-reset-dialog label.check small { color:var(--muted);font-size:10.5px;line-height:1.5 }
+.factory-reset-confirm { display:grid;gap:5px;margin-top:14px;color:var(--text);font-size:11.5px }
+.factory-reset-confirm input { min-height:calc(32px*var(--ui-scale));padding:0 9px;border:1px solid var(--line);background:var(--bg);color:var(--text);font:11.5px 'Cascadia Mono',Consolas,monospace }
+.factory-reset-confirm input:focus-visible { outline:1px solid var(--red);outline-offset:-1px }
+.theme-actions button.danger { border-color:color-mix(in srgb,var(--red) 55%,var(--line));color:var(--red) }
 
 /* The redeploy chip: a floating, persistent, expandable progress indicator that
    every client shows for the whole redeploy, not just the tab that started it.

@@ -55,6 +55,20 @@ test('no alias or legacy id points at a tab that no longer exists', () => {
   }
 })
 
+test('the renamed Diagnostics tab stays reachable by its old id and its old name', () => {
+  // Renaming the tab to Maintenance moved both of the things that address it: the
+  // id a device persisted and the name a deep link passes. A label match cannot
+  // cover the old name here, because Voice still has a page called "Diagnostics" -
+  // so without the alias the link would silently land on General, which reads as
+  // Settings forgetting rather than as a tab having been renamed.
+  assert.equal(LEGACY_TAB_IDS.diagnostics,'maintenance')
+  assert.equal(tabForSection('diagnostics'),'maintenance')
+  assert.equal(tabForSection('Diagnostics'),'maintenance')
+  assert.equal(tabForSection('Maintenance'),'maintenance')
+  assert.equal(tabForSection('Factory reset'),'maintenance')
+  assert.ok(settingsTabs.some(tab=>tab.id==='maintenance'&&tab.label==='Maintenance'))
+})
+
 test('the section names the app actually passes all resolve somewhere deliberate', () => {
   // The section names App.tsx and UtilityDrawer.tsx actually pass today. Each must
   // land somewhere deliberate; General is the fallback, so reaching it means the name

@@ -46,6 +46,7 @@ from . import (
     history,
     insights,
     land,
+    maintenance,
     notes,
     observations,
     onboarding,
@@ -75,6 +76,7 @@ from . import (
 #: and session domains, then the agent-facing ingress, and the WebSockets last.
 ORDER = (
     system,
+    maintenance,
     update,
     frontend,
     settings,

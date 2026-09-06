@@ -134,6 +134,8 @@ Writes replace the document atomically; malformed state is preserved before a re
 
 Start fresh backs up global configuration, keyboard bindings, and progress under `setup-backups/`.
 Projects, repository files, history, accounts, credential stores, and connection identity remain.
+Start fresh replays setup against the install that exists; the factory reset ends that install and re-enters this sequence with nothing to replay against (`factory-reset.md`).
+The two are not degrees of each other: everything Start fresh deliberately keeps is what a factory reset exists to remove.
 Installation-location changes offer retained preferences again.
 Help and `swemux setup --restart` provide an explicit restart at any time.
 
@@ -167,3 +169,4 @@ Credentials are excluded.
 - `keybindings.md`: presets, host conflicts, and shortcut editing.
 - `voice.md`: speech engines, downloads, and transcription.
 - `desktop-shell.md`, `remote-access.md`: desktop integration and phone access.
+- `factory-reset.md`: ending the install and re-entering this sequence from nothing.
