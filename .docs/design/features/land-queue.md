@@ -8,6 +8,20 @@ The daemon owns the three mechanical commands an operator otherwise runs by hand
 A conflict and a verification failure are the two steps that need intelligence, and both belong to the branch's own agent, which holds the context.
 Neither is resolved here; both return to that agent as a bounded deterministic message.
 
+## What it is called
+
+**The surface says "auto-merge"; the code says `land`, and the split is deliberate.**
+Every identifier stays as it is - `/api/land`, `mux.request_land`, `land_queue_enabled`, `land_grant`, `land_verify_grant`, the `drawer.git.land` keybinding, the `git/land` retired segment, this document's own filename.
+Those are contracts held by agents, config files, keymaps and stored selections, and renaming them would break each of those readers to change a word.
+
+What changed is the label, and only because the label is read by somebody who does not yet know what the feature does.
+"Landing" is this project's internal word for the act and carries none of its meaning to a first reader; the strip's whole job on a repository that has never used the feature is to explain itself, and it cannot do that in a vocabulary the reader has to be told first.
+"Auto-merge" names the outcome (the branch ends on the trunk) and the automation (nobody drives it), and is the term the surrounding industry already uses for exactly this.
+
+The rule that follows: **a string a user reads says auto-merge; a string a machine matches says land.**
+A label, a heading, a button, a message body and a settings row are the first kind.
+A route, a tool name, a config key, a CSS class, a command id and a database column are the second.
+
 ## The fixed vocabulary
 
 The pipeline runs exactly four git commands and no others: `merge <trunk-ref>` inside the worktree, `merge --abort` to undo a conflicted reconcile, `merge --ff-only <branch>` in the primary checkout, and the read-only queries the preconditions ask.
@@ -348,11 +362,20 @@ The editor writes exactly one key, guarded by the Project config's own revision,
 An empty command **clears** the override and falls back to the `.worktree-verify` convention, which is a decision ("run the script in the tree") rather than a no-op.
 A read-only or malformed config is not offered as editable.
 
-### Setting one up in another repository
+### Setting one up in this repository
 
 A repository with no verification command gets nothing from the land queue: `verify` refuses rather than runs, and every land refuses with it.
-Writing that command in an unfamiliar repository is real work - which suite is the full one, what it must not collide with, what its exit code has to mean - and all of it is already stated in this document.
-So the strip's verification section carries a copyable prompt that hands an agent exactly that, rather than leaving each operator to reconstruct it from memory in a new repo.
+Writing that command is real work - which suite is the full one, what it must not collide with, what its exit code has to mean - and all of it is already stated in this document.
+So the strip carries a copyable prompt that hands an agent exactly that, rather than leaving each operator to reconstruct it from memory.
+
+**It is drawn only on a repository that has no command, and it sets up that repository.**
+It used to sit under every gate, configured or not, behind a disclosure reading "Setting this up in another repository" - which named the wrong repository (the prompt's own first line has always said "this repository") and offered a setup act to an operator who had already completed the setup.
+It now belongs to the unconfigured strip, beside the explanation of what the feature does, which is the one place a reader both needs it and can act on it.
+
+**The prompt is copied rather than displayed, and readable one disclosure away.**
+Rendering 60 lines of contract written for an agent made the section read as something to study before pressing anything, which is what an operator meeting the feature for the first time is least able to do.
+The text stays behind a "Read what it says" disclosure rather than being removed, because it is an instruction to write the thing that decides what reaches a trunk unattended and may not be unreadable before it is handed over.
+The copy is best-effort by construction - `navigator.clipboard` is absent in an insecure context and refusable everywhere - so a refusal says so and points at the disclosure.
 
 The prompt states four things and ends with a fifth:
 the pipeline the command sits in (reconcile, gate, fast-forward) and that its **exit code is the only verdict**;
@@ -369,8 +392,6 @@ This is deliberately a *statement* rather than a mechanism, because the mechanis
 Nothing in the prompt can approve anything: approval is a digest over bytes, submitted through its own route, and an agent that wrote a script has moved the bytes rather than authorised them.
 What the ending prevents is a narrower and more ordinary failure - sending an agent off to do work whose final step it is not permitted to take, without saying so, and having it either stall or start looking for a way to finish the job.
 
-The prompt is **shown as well as copied**, in a collapsed disclosure beside the editor.
-It is an instruction being handed to an agent that will write somebody's gate, so a copy button whose payload nobody can read before pressing it is the wrong shape for it; and the copy itself is best-effort, because `navigator.clipboard` is absent in an insecure context and refusable everywhere, so a refusal says so and the text is already on screen to select by hand.
 It is a frontend template rather than a daemon read: every fact in it is a property of this design rather than of an install, and the one variable (the script convention's name) is already in the strip's own gate payload.
 
 ### What a running gate says about itself
@@ -412,13 +433,13 @@ It passes every precondition unchanged.
 
 All of them are reported by `GET /api/land` (`installed_enabled`, `project_enabled`, `agent_grant`, `verify_grant`), because none of them could be told apart from an ordinary quiet queue.
 The install stop is the sharpest case: it is checked by the sweep before anything else, so with it off a request enqueues and then sits at `queued` forever - identical, on screen, to a pipeline working through a backlog.
-It also had no control in any overlay until it gained one in the Automation workspace (Policy → Limits & budgets → Land queue).
+It also had no control in any overlay until it gained one in the Automation workspace (Policy → Limits & budgets → Auto-merge).
 
 **All three are Project-wide or wider, so all three are drawn once, in the landing strip.**
 A control that answers "for every branch in this repository" copied into each expanded row is a standing fixture in a per-checkout pane, which is exactly what `setting-links.md` forbids - and it is the same repetition that sent the verification block up here.
 The **install stop**'s gate is rendered outside the strip's disclosure so a collapsed strip cannot hide it: a gate is what a surface renders *instead of* working, and hiding one behind a summary is the same defect as rendering the surface empty.
 The **Project opt-in** and **`land_grant`** decide what happens to an *agent's* `request_land` and never touch the operator's own button, so they sit inside the disclosure as one statement.
-**`land_verify_grant`** sits there too, as its own sentence rather than a clause on that one, because it is the only one of them that also changes what the *operator's* own Land button executes.
+**`land_verify_grant`** sits there too, as its own sentence rather than a clause on that one, because it is the only one of them that also changes what the *operator's* own Auto-merge button executes.
 They grant in place through the ordinary additive path; the Automation dashboard's **Agent authority** rows are where any of them is lowered again, and where an install-wide default or ceiling over either land field is set (`automation-enablement.md`).
 
 A Map row that cannot land because of one of them names it and **sends the reader to the control** rather than drawing a second copy: one press opens the strip.
@@ -590,7 +611,7 @@ So the map holds both halves, split by **what each part is a property of**:
 - **The row owns the act**, and only the act.
   A collapsed worktree with an active request shows the request's state plus the useful detail available for that state: its queue position, observed verification step, skipped-gate note, or daemon-supplied reason.
   Its full-height leading rail takes the state's colour, and its operational reading gets a third line rather than competing with branch identity or Git metrics.
-  Expanding the worktree shows that branch's Land button, the same live land state, a Cancel while the request is still cancellable, and what stopped it last time - a conflict's paths or a refusal's reason, which are facts about *this* branch.
+  Expanding the worktree shows that branch's Auto-merge button, the same live land state, a Cancel while the request is still cancellable, and what stopped it last time - a conflict's paths or a refusal's reason, which are facts about *this* branch.
   It sits **above** the expansion's change groups (operator decision 2026-08-22).
   Those groups are unbounded - a branch with sixty changed files is ordinary - so below them the row's one action, and the live state it reports, were reachable only by scrolling past the thing they act on.
   The destructive control keeps the bottom: "remove worktree" is not what should be under the cursor when a row opens.
@@ -609,7 +630,8 @@ So the map holds both halves, split by **what each part is a property of**:
   All three cells remain visible while folded, so an idle Project teaches the same operating model as a busy one and a queued branch does not require expansion to find.
   Verification configuration follows in a `Verification settings` disclosure, because configuration serves the operation rather than being the operation.
   An approved repository script keeps that disclosure closed and offers the compact `Use a different command` override action only after it is opened.
-  An unapproved or unconfigured gate opens the settings disclosure when the operator reaches the expanded strip, so moving configuration out of the lead position never hides the act that clears a gate.
+  An unapproved gate opens the settings disclosure when the operator reaches the expanded strip, so moving configuration out of the lead position never hides the act that clears a gate.
+  An **unconfigured** one does not, because there is nothing there to clear and the explanation beside it owns that case.
 
 Nothing Project-wide is drawn on a row, and that is the whole point of the split rather than a detail of it.
 A fact that is true of the Project is drawn N times if it lives on a row, and the verification block shipped that way once: the same paragraph about approved bytes under each of eight expansions, burying the diff the expansion was opened for.
@@ -619,10 +641,18 @@ It is one compact heading plus three bounded status cells, with configuration, a
 It **opens itself when a land is stuck on a human**, which is three states - the install stop is off, a verification command exists but its bytes are not approved, or a worktree's own copy of the gate refused a land - and in all three the act that clears it is inside; a surface that cannot work must not render as merely quiet (`setting-links.md`).
 **A repository with no verification command at all is deliberately not one of them** (operator decision 2026-08-22).
 It used to be, on the reading that nothing can land there so the surface must announce itself.
-But that reading fires on the resting state of every repository that never opted into the land queue, and unfolding a landing panel over the map on each of them reports an emergency that does not exist.
+But that reading fires on the resting state of every repository that never opted into the land queue, and unfolding a panel over the map on each of them reports an emergency that does not exist.
 Nothing is stuck: the queue was never set up.
 The rule is about a surface someone is *trying to use*, which is why the half-finished case - bytes written, nobody has read them - still opens.
-An explicit collapse wins after either default and nothing re-opens under the reader, which stays honest because the gate cell goes on stating the warning while closed, and the setup is one click behind it.
+An explicit collapse wins after either default and nothing re-opens under the reader, which stays honest because the strip goes on saying it is not set up while closed, and the setup is one click behind it.
+
+**And that repository gets a different strip, not a quieter version of the operational one** (operator report 2026-09-05).
+The three cells describe an *operation*, and there is none: they read "Not configured · Idle · Queue clear", which is two cells of nothing beside the one that matters, and a reader had to already know what the feature was to see which one that was.
+So when the gate resolves no command **and nothing is in flight**, the folded strip collapses to one sentence - `AUTO-MERGE · not set up for this repository` - and the expansion is an explanation followed by a single setup act, with the queue list, the authority table and the history disclosure all absent because none of them has anything to say yet.
+The verification editor stays underneath and stays **closed**: it used to unfold itself here on the same "unapproved" reading that opens it over written bytes, which put a form over a field whose value the reader did not yet know how to fill in - stating the answer before the question. It is the manual path for an operator who would rather write the command than delegate writing it.
+
+The condition is narrower than "no command" on purpose.
+Anything in flight, anything waiting on a human, and the install-wide stop all return the operational reading, because a strip that hid a live request behind "not set up" would be reporting the configuration instead of the queue (`landingSummary().notConfigured`, `gitLand.ts`).
 
 **A bounced request stops speaking for the queue once its branch gets another answer.**
 The collapsed headline picks the most interesting row, and a handed-back or refused request is terminal *and* unresolved, so it outranks a quiet queue.
@@ -714,7 +744,7 @@ Two tools make the safe call the short one and let the grant say different thing
 | `land_verify_grant` | `<project>/.swe-mux/config.toml` | `draft` / `granted`, default `granted`. Whether this Project's own agents' gate edits run unapproved. Falls to `draft` on a malformed config. |
 | `[worktree] verify_command` | `<project>/.swe-mux/config.toml` | Explicit override of the `.worktree-verify` convention. |
 
-Every `global` row above is edited in the Automation workspace: the install stop is the Land queue row's Global switch on the Policy matrix, and the numeric bounds live under Policy → Limits & budgets → **Land queue**.
+Every `global` row above is edited in the Automation workspace: the install stop is the Auto-merge row's Global switch on the Policy matrix, and the numeric bounds live under Policy → Limits & budgets → **Auto-merge**.
 The install stop had a control from the start and the other four did not, which is the shape
 this feature's own prose already names for the verification command: a bound that only a
 config-file edit can reach is a bound nobody adjusts and nobody can see.

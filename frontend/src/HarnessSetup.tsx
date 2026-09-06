@@ -148,7 +148,7 @@ const OVERRIDE_COPY: Record<string, { label: string; hint: string }> = {
   request_spawn_enabled: { label: 'Spawn requests', hint: 'Agents can draft new-session requests for you to approve.' },
   session_watch_enabled: { label: 'Session watches', hint: 'An agent can ask to be told once when another session settles.' },
   scheduled_runs_enabled: { label: 'Scheduled runs', hint: 'Sessions this machine starts on its own schedule.' },
-  land_queue_enabled: { label: 'Land queue', hint: 'Reconcile, verify, and fast-forward finished branches one at a time.' },
+  land_queue_enabled: { label: 'Auto-merge', hint: 'Reconcile, verify, and fast-forward finished branches one at a time.' },
   automation_enabled: { label: 'Automation rules', hint: 'The model-backed pipeline; per-Project opt-ins and budgets still apply.' },
   scan_timeline_enabled: { label: 'Scan timeline', hint: 'Periodic model reads of session activity, under its own budget.' },
 }

@@ -478,7 +478,7 @@ _AUTOMATIONS: tuple[Automation, ...] = (
     Automation(
         "land_queue",
         CONSUMER,
-        "Land queue",
+        "Auto-merge",
         (),
         family="capabilities",
         description=(

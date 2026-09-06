@@ -89,8 +89,8 @@ test('bulk land sends one request per branch in map order', async ({ page }) => 
   await page.getByRole('checkbox', { name: 'Select wt-dirty' }).check()
   await page.getByRole('checkbox', { name: 'Select wt-clean' }).check()
 
-  await page.getByRole('button', { name: 'Land 2' }).click()
-  await expect(page.locator('.git-map-bulk .git-state')).toHaveText('2 branches queued to land.')
+  await page.getByRole('button', { name: 'Auto-merge 2' }).click()
+  await expect(page.locator('.git-map-bulk .git-state')).toHaveText('2 branches queued to merge.')
   // Map order, not click order: what runs is what the reader saw.
   expect(await page.evaluate(() => (globalThis as unknown as Harness).__landed)).toEqual([CLEAN, DIRTY])
 })

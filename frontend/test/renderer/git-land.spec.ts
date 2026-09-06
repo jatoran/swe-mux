@@ -16,8 +16,8 @@ test('a Map row offers the land of the branch it is showing, and nothing Project
   const landing = page.locator('.git-land-row-section')
   await expect(landing).toBeVisible()
   // The button names the branch, because the row it is on is the branch it lands.
-  await expect(landing.getByRole('button', { name: /^Land / }))
-    .toHaveText('Land sidebar-session-git-lines-fix')
+  await expect(landing.getByRole('button', { name: /^Auto-merge / }))
+    .toHaveText('Auto-merge sidebar-session-git-lines-fix')
   // Nothing here moves a trunk, and the copy says so where the button is.
   await expect(landing.locator('.git-land-launch small'))
     .toHaveText('fast-forward only · the daemon runs it, not this button')
@@ -244,21 +244,30 @@ test('the verification command shows what resolved, and edits without approving'
   await expect(page.locator('.git-land-pipeline .gate strong')).toHaveText('Needs approval')
 })
 
-test('the setup prompt is offered beside the gate, and hands over no authority', async ({ page }) => {
+test('the setup prompt is offered where it applies, and hands over no authority', async ({ page }) => {
+  // Only on a repository that has no verification command. It used to sit under every
+  // gate, configured or not, behind a summary reading "Setting this up in another
+  // repository" - which named the wrong repository, since the prompt has always set up
+  // the one you are standing in.
   await page.setViewportSize({ width: 420, height: 900 })
   await page.goto('/git-land-harness.html')
   await page.locator('.git-landing-summary').click()
   await page.locator('.git-land-gate-summary').click()
+  await expect(page.locator('.git-land-setup-prompt')).toHaveCount(0)
 
-  // Collapsed by default: it answers a question about *another* repository, so it must
-  // not push this Project's own gate down the pane.
+  await page.goto('/git-land-harness.html?unconfigured=1')
+  await page.locator('.git-landing-summary').click()
   const setup = page.locator('.git-land-setup-prompt')
-  await expect(setup.locator('pre')).toBeHidden()
-  await setup.locator('summary').click()
 
-  // Shown as well as copyable. It is an instruction being handed to an agent that will
-  // write somebody's gate, so a payload nobody can read before pressing is the wrong shape.
+  // The button is the surface; 60 lines of contract written for an agent made the
+  // section read as something to study rather than something to press.
   await expect(setup.getByRole('button', { name: 'Copy setup prompt' })).toBeVisible()
+  await expect(setup.locator('pre')).toBeHidden()
+
+  // Readable all the same, one disclosure away: it is an instruction to write the thing
+  // that decides what reaches a trunk unattended, so it may not be unreadable before it
+  // is handed over.
+  await setup.locator('summary').click()
   const prompt = setup.locator('pre')
   await expect(prompt).toContainText('exit code is the only verdict')
   await expect(prompt).toContainText('parallel-safe')
@@ -300,12 +309,36 @@ test('a repository that never set up verification opens on its map, not on the s
   await expect(page.locator('.git-landing-summary')).toBeVisible()
   await expect(page.locator('.git-landing-summary')).toHaveAttribute('aria-expanded', 'false')
   await expect(page.locator('.git-landing-body')).toHaveCount(0)
-  await expect(page.locator('.git-land-pipeline .gate strong')).toHaveText('Not configured')
-  await expect(page.locator('.git-land-pipeline .gate')).toHaveClass(/warn/)
 
-  // Folded, never removed: the setup is one click behind the same summary line, which is
-  // what keeps "stays quiet" from becoming "cannot be found".
+  // One sentence, not three status cells. "Not configured · Idle · Queue clear" described
+  // an operation this repository does not have, and two of its three cells said nothing
+  // at all - a reader had to already know what the feature was to see which one mattered.
+  await expect(page.locator('.git-land-pipeline')).toHaveCount(0)
+  await expect(page.locator('.git-landing-headline'))
+    .toHaveText('not set up for this repository')
+
+  // Folded, never removed: the explanation and the setup are one click behind the same
+  // summary line, which is what keeps "stays quiet" from becoming "cannot be found".
   await page.locator('.git-landing-summary').click()
-  await expect(page.locator('.git-landing-body')).toHaveCount(1)
-  await expect(page.locator('.git-land-setup-prompt')).toHaveCount(1)
+  const body = page.locator('.git-landing-body')
+  await expect(body).toHaveCount(1)
+
+  // What it does, before how to switch it on. Three plain sentences about the branch, the
+  // checks, and what happens when they fail.
+  const intro = page.locator('.git-land-intro')
+  await expect(intro.locator('h4')).toHaveText('Auto-merge is not set up for this repository')
+  await expect(intro).toContainText('merges the trunk into it')
+  await expect(intro).toContainText('verification command')
+  await expect(intro).toContainText('nothing moves')
+  await expect(intro.getByRole('button', { name: 'Copy setup prompt' })).toBeVisible()
+
+  // And the editor stays underneath, closed. An unfolded form over a field whose value
+  // the reader does not yet know how to fill in states the answer before the question.
+  const gate = page.locator('.git-land-gate')
+  await expect(gate).toHaveCount(1)
+  await expect(gate).not.toHaveAttribute('open', '')
+
+  // None of the operational furniture, because none of it has anything to say here.
+  await expect(body.locator('.git-land-list')).toHaveCount(0)
+  await expect(body.locator('.git-land-authority')).toHaveCount(0)
 })

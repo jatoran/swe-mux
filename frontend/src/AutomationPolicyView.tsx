@@ -88,8 +88,8 @@ export function AutomationPolicyView({initialSetting,revealToken=0}:{initialSett
       <label>Sweep seconds<input type="number" min="1" max="300" value={draft.scheduled_runs_poll_seconds} onInput={event=>change('scheduled_runs_poll_seconds',Number(event.currentTarget.value))}/></label>
       <label>Run history days<input type="number" min="1" max="3650" value={draft.scheduled_run_retention_days} onInput={event=>change('scheduled_run_retention_days',Number(event.currentTarget.value))}/></label>
     </section>
-    <section class="usage-table"><h3>Land queue</h3>
-      <p>Whether the queue may move trunks at all is the Land queue row's Global switch in the matrix.</p>
+    <section class="usage-table"><h3>Auto-merge</h3>
+      <p>Whether the queue may move trunks at all is the Auto-merge row's Global switch in the matrix.</p>
       <label>Agent requests per hour<input type="number" value={draft.land_hourly_budget} onInput={event=>change('land_hourly_budget',Number(event.currentTarget.value))}/></label>
       <label>Busy-worktree hold seconds<input type="number" value={draft.land_hold_timeout_seconds} onInput={event=>change('land_hold_timeout_seconds',Number(event.currentTarget.value))}/></label>
       <label class="check"><span>Retry a failed verification once</span><input type="checkbox" checked={draft.land_retry_verification} onChange={event=>change('land_retry_verification',event.currentTarget.checked)}/></label>

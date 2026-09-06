@@ -234,7 +234,7 @@ A worktree is a different case and deliberately syncs less: `.worktree-setup` ru
 | `uv tool` | `uv tool upgrade swe-mux` |
 | `pipx` | `pipx upgrade swe-mux` |
 | Source checkout | `git pull`, then the sync command for that checkout, then `npm --prefix frontend ci && npm --prefix frontend run build` if frontend dependencies or sources changed |
-| Installer (`-setup.exe`) or portable archive | Press **Update** on the banner (or Settings → Diagnostics → Software updates → Install). The dialog says what the update does before you confirm; the app is replaced in place and your sessions survive. Running the new release's installer over the top still works and is the path for a copy older than 0.2.4. |
+| Installer (`-setup.exe`) or portable archive | Press **Update** on the banner (or Settings → Diagnostics → swe-mux version → Install). The dialog says what the update does before you confirm; the app is replaced in place and your sessions survive. Running the new release's installer over the top still works and is the path for a copy older than 0.2.4. |
 | Frozen desktop app in a checkout | The same in-app update; or `uv run python packaging/redeploy_desktop.py` / the UI menu's "Rebuild + redeploy app (keep sessions)" (`POST /api/daemon/redeploy`) to rebuild from source |
 
 Four upgrade properties are worth knowing before you rely on them.

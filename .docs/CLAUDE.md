@@ -477,6 +477,13 @@
   `design/features/mux-mcp.md`, `design/interfaces.md`, `design/data-model.md`,
   `technical/backend/packages.md`, `technical/backend/sqlite.md`,
   `technical/frontend/packages.md`.
+  **The surface says "auto-merge" and the code says `land`** (2026-09-05), which is a
+  rule rather than an inconsistency: a string a user reads says auto-merge, a string a
+  machine matches says land. Routes, `mux.request_land`, config keys, CSS classes,
+  command ids, columns and this document set's own filenames are contracts held by
+  agents, config files and stored selections and are never renamed for a word; labels,
+  headings, buttons and message bodies are read by somebody who does not yet know what
+  the feature does, and "landing" carries none of its meaning to them.
   The rule the design turns on: the pipeline executes a *fixed* git vocabulary and never
   decides anything - fast-forward-only is what makes the trunk step safe for a machine,
   because Git refuses it on divergence and refuses to overwrite local changes, so the
@@ -566,8 +573,9 @@
   an answer - nothing closes the old row and the redo is a new id, so without the rule the
   strip reports a branch as returned-to-agent forever; and it is derived at the reading
   rather than written back, because the trail is an audit that must go on saying the
-  handback happened. And the verification section's copyable setup prompt for another
-  repository ends by telling the receiving agent it cannot approve what it wrote - the
+  handback happened. And the copyable setup prompt - drawn only where it applies, on a
+  repository with no verification command, and for **that** repository rather than for
+  some other one - ends by telling the receiving agent it cannot approve what it wrote - the
   daemon enforces that regardless, but a prompt that omitted it would send an agent to do
   work whose last step it is not allowed to take, without saying so.
 - Changing attention ranking, the interrupt budget, the four delivery channels, breakpoint

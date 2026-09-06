@@ -82,6 +82,14 @@ globalThis.fetch=async(input,init)=>{
       plan:{steps:['pytest','ruff','mypy','mypy (per-platform implementations)','frontend tsc','frontend renderer tsc','frontend tests'],duration_ms:212_000,observed_at:1786800000},
     })
   }
+  // A repository that never set auto-merge up has no requests either - a queue full of
+  // rows is exactly what makes the strip go on narrating an operation, so serving both
+  // at once would describe a state that cannot occur here and would hide the collapsed
+  // headline this harness exists to observe.
+  if(url.startsWith('/api/land')&&unconfigured)return response({
+    hourly_budget:12,hold_timeout_seconds:1800,retry_verification:false,
+    installed_enabled:true,project_enabled:false,agent_grant:'draft',requests:[],
+  })
   if(url.startsWith('/api/land'))return response({
     hourly_budget:12,hold_timeout_seconds:1800,retry_verification:false,
     installed_enabled:true,project_enabled:true,agent_grant:'draft',

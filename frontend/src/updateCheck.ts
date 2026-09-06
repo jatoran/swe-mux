@@ -105,6 +105,25 @@ export function updateStatusSummary(status: UpdateStatus | null): string | null 
 }
 
 /**
+ * The version this daemon is actually running, for the Settings heading.
+ *
+ * Stated on its own line rather than left to be inferred from "This is the
+ * latest release." An operator who has just pressed Install, or who is checking
+ * whether a redeploy took, is asking *which build am I on* - and the update
+ * check's verdict answers a different question, says nothing at all while the
+ * check is off, and reads identically on a daemon three releases behind whose
+ * check cannot reach the manifest.
+ *
+ * `null` when the daemon did not report one, which is an older daemon or a
+ * partially-built app rather than a version of zero; the caller renders no line
+ * instead of inventing a number.
+ */
+export function runningVersionLabel(status: UpdateStatus | null): string | null {
+  const current = status?.current_version
+  return typeof current === 'string' && current.length > 0 ? current : null
+}
+
+/**
  * Absolute rather than relative ("2 hours ago"): this is read once, in Settings,
  * beside a control, and a relative label would need a ticking timer to stay
  * honest for a number nobody watches change.

@@ -51,12 +51,12 @@ const AUTHORITY_COPY:{setting:string;levels:Record<string,string>;note:string}[]
   {
     setting: 'land_grant',
     levels:{draft:'Approve each',granted:'Direct'},
-    note:'Needs Land queue. Fast-forward only.',
+    note:'Needs Auto-merge. Fast-forward only.',
   },
   {
     setting: 'land_verify_grant',
     levels:{draft:'Approve each',granted:'Run directly'},
-    note:'Needs Land queue. Direct covers only this machine’s edits.',
+    note:'Needs Auto-merge. Direct covers only this machine’s edits.',
   },
   {
     setting: 'interject_grant',

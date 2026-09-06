@@ -15,6 +15,21 @@ The release procedure that maintains this file is [`RELEASING.md`](RELEASING.md)
 
 ## [Unreleased]
 
+### Changed
+
+- **The Git drawer's landing strip is called Auto-merge, and explains itself on a repository that has not set it up.**
+  It used to show three status cells reading "Not configured · Idle · Queue clear" on every repository with no verification command - two cells of nothing beside the one that mattered, in a vocabulary you had to already know.
+  It now collapses to one line, `AUTO-MERGE · not set up for this repository`, and expanding it says what the feature does in plain terms: swe-mux merges the trunk into your branch, runs this repository's checks there, and merges the branch onto the trunk only if they pass - and if they fail, nothing moves.
+  Setting it up is one button, **Copy setup prompt**, which puts a prompt for an agent on the clipboard instead of filling the pane with the text of it; the full text is still one disclosure away, and the prompt still ends by telling that agent it cannot approve what it wrote.
+  The prompt sets up *this* repository, which is what it always did - the disclosure that said "setting this up in another repository" named the wrong one.
+  The verification editor no longer unfolds itself over a repository that has no command yet, because a form is not an explanation.
+- **"Landing" is now "auto-merge" everywhere it is read.**
+  The strip, the button on a worktree row, the bulk action, the Automation policy row, the Project authority rows and the Harnesses setup switch all say auto-merge; the word names what happens to the branch rather than this project's own jargon for it.
+  Nothing an agent, config file or keybinding names has changed: `mux.request_land`, `/api/land`, `land_queue_enabled`, `land_grant`, `land_verify_grant` and the palette command ids are all exactly as they were.
+- **Settings → Diagnostics leads with the version you are running.**
+  The section previously called "Software updates" is now **swe-mux version**, sits at the top of the tab, and states the running version outright rather than leaving you to infer it from "This is the latest release" - which says nothing while the update check is off, and reads the same on a copy that cannot reach the update manifest.
+  The switch, Check now and Install are unchanged and still there.
+
 ## [0.2.4] - 2026-09-05
 
 ### Added

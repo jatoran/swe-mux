@@ -142,7 +142,7 @@ it is a plain `GET` of one file that is byte-identical for every install, with n
 query string, no custom header, no cookie jar (`DummyCookieJar`, so a
 `Set-Cookie` from the site cannot become an install id on the next day's
 request), and no body. `update_check_enabled` (Settings → Diagnostics →
-**Software updates**, on by default) gates it, and off means *no request is
+**swe-mux version**, on by default) gates it, and off means *no request is
 made*, under any caller including the explicit one below.
 
 The interval is enforced against a wall-clock timestamp persisted in
@@ -160,6 +160,11 @@ and can never be the reason a request hangs - and returns
 update_available, latest, dismissed[], banner, manifest_url}`. `latest` is
 `{version, tag, published, changelog, source}` or `null`, where `source` is
 `manifest` or `github`.
+`current_version` is carried on every answer including the `unavailable` one a
+daemon built without a checker returns, because which build this is does not
+depend on the update check existing and Settings → Diagnostics → **swe-mux
+version** states it outright rather than leaving it to be inferred from the
+check's verdict.
 
 `status` is the daemon's own word and is never collapsed into a boolean, because
 `never_checked` ("we have not looked") and `unreachable`/`malformed`/

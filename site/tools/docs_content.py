@@ -2652,7 +2652,7 @@ DATA = Page(
         ),
         (
             "p",
-            "One switch turns it off, in Settings, Diagnostics, Software updates, and off means no "
+            "One switch turns it off, in Settings, Diagnostics, swe-mux version, and off means no "
             "request is made at all rather than a request that is discarded.",
         ),
         (

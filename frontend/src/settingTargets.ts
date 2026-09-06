@@ -172,7 +172,7 @@ export const SETTING_TARGETS = {
   // a queue with it off accepts requests and then silently never advances one.
   'automation.landQueue': {
     surface: 'automation', setting: 'land_queue_enabled',
-    label: 'Let the land queue move trunks', where: 'Automation → Global policy',
+    label: 'Let auto-merge move trunks', where: 'Automation → Global policy',
   },
   // Per-Project opt-ins. Every one of these is off until a human turns it on for that
   // Project, so a surface reading from one is inert rather than empty until then.
@@ -229,7 +229,7 @@ export const SETTING_TARGETS = {
   },
   'project.landQueue': {
     surface: 'automation', setting: 'automation:land_queue',
-    label: 'Land queue', where: 'Automation → Projects',
+    label: 'Auto-merge', where: 'Automation → Projects',
   },
   'project.sessionControl': {
     surface: 'automation', setting: 'automation:session_control',
@@ -251,7 +251,7 @@ export const SETTING_TARGETS = {
   },
   'project.landGrant': {
     surface: 'automation', setting: 'land_grant',
-    label: 'Agent-initiated landing', where: 'Automation → Policy',
+    label: 'Agent-started auto-merge', where: 'Automation → Policy',
   },
   'project.landVerifyGrant': {
     surface: 'project', setting: 'land_verify_grant',

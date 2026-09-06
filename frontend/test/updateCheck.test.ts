@@ -2,7 +2,8 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
   bytesLabel, CONSENT_SUPERVISOR_UPDATE, installFinished, installPhaseLabel, lastCheckedLabel,
-  planCostLine, planInstallLine, planSessionsLine, refusalNeedsConsent, shouldShowUpdateBanner,
+  planCostLine, planInstallLine, planSessionsLine, refusalNeedsConsent, runningVersionLabel,
+  shouldShowUpdateBanner,
   updateBannerText, updateStatusSummary, UPDATE_CHECK_GESTURE, UPDATE_INSTALL_GESTURE,
   UPDATE_PLAN_GESTURE,
   type UpdatePlan, type UpdateStatus,
@@ -94,6 +95,28 @@ test('every check outcome has its own sentence, and none of them read as an erro
   assert.equal(updateStatusSummary(null), null)
   assert.equal(summary('unavailable'), null)
   assert.equal(summary('something-a-later-build-invented'), null)
+})
+
+test('the running version is read from the daemon and never invented', () => {
+  // The Settings heading states which build this is outright. It is a fact the
+  // daemon reports, so a payload without it draws no line at all rather than a
+  // guess - an older daemon and a partially-built app both answer that way, and
+  // neither is running version zero.
+  assert.equal(runningVersionLabel(status({ current_version: '0.2.5' })), '0.2.5')
+  assert.equal(runningVersionLabel(status({ current_version: '' })), null)
+  assert.equal(runningVersionLabel(status({ current_version: undefined })), null)
+  assert.equal(runningVersionLabel(null), null)
+
+  // And it is independent of the check's own verdict: a daemon that cannot reach
+  // the manifest, or whose check is switched off, still knows what it is running.
+  assert.equal(
+    runningVersionLabel(status({ status: 'disabled', enabled: false, current_version: '0.2.5' })),
+    '0.2.5',
+  )
+  assert.equal(
+    runningVersionLabel(status({ status: 'unreachable', current_version: '0.2.5' })),
+    '0.2.5',
+  )
 })
 
 test('a last-checked line appears only when there is a real timestamp', () => {

@@ -25,6 +25,7 @@ from typing import Any
 
 from aiohttp import web
 
+from .. import __version__
 from .. import (
     app_keys as keys,
 )
@@ -58,11 +59,17 @@ def _unavailable() -> web.Response:
     has to distinguish "no update" from "this daemon has no update check" by
     catching an HTTP error would end up rendering an error where the honest
     answer is silence.
+
+    It still names the running version. Which build this is does not depend on
+    an update checker having been built, and Settings states it outright beside
+    the switch - so leaving it out here would blank the one fact this daemon
+    knows for certain on exactly the installs least able to find it elsewhere.
     """
     return json_response(
         {
             "enabled": False,
             "status": "unavailable",
+            "current_version": __version__,
             "update_available": False,
             "latest": None,
             "banner": False,
@@ -109,7 +116,7 @@ async def post_update_check(request: web.Request) -> web.Response:
                 "error": "update_check_disabled",
                 "message": (
                     "the update check is turned off, so nothing was requested; "
-                    "enable it in Settings → Diagnostics"
+                    "enable it in Settings → Diagnostics → swe-mux version"
                 ),
                 **checker.snapshot(),
             },

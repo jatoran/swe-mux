@@ -38,7 +38,9 @@ Index: `../packages.md`.
 - The poll is an hour and only re-reads an answer the daemon already holds (it checks once a day).
   A failed poll leaves the previous answer in place rather than blinking the banner away and back through a daemon restart.
 - Dismissal hides the strip immediately and persists in the background: the press is the decision, and it is recorded per version by the daemon, so it holds across a reload, a restart, and the phone.
-- The switch, the last-check status, a "Check now" button, and an "Install <version>" button opening the same dialog are in Settings → Diagnostics → **Software updates** (`update_check_enabled`).
+- The switch, the last-check status, a "Check now" button, and an "Install <version>" button opening the same dialog are in Settings → Diagnostics → **swe-mux version** (`update_check_enabled`), which is the tab's first section.
+  It leads with the version the daemon is running (`runningVersionLabel`, over `current_version`) rather than only the check's verdict.
+  "This is the latest release" answers a different question, says nothing while the check is off, and reads identically on a daemon whose check cannot reach the manifest - while the reader arriving here has just pressed Install or redeployed and is asking which build this is.
   Endpoint and reasoning: `../../design/interfaces.md`, `../../design/features/desktop-shell.md`, `../../design/features/remote-access.md`.
 
 ## Frontend overlay

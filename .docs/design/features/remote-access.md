@@ -125,7 +125,7 @@ listener, with optional Tailscale Serve for browser-recognized HTTPS.
   string, no custom header, no cookie jar, no body, and no identifier of this machine or
   install, so it is byte-identical for every copy of swe-mux on earth and the server
   learns nothing from it that an IP address does not already say.
-  It is gated by `update_check_enabled` (Settings → Diagnostics → **Software updates**,
+  It is gated by `update_check_enabled` (Settings → Diagnostics → **swe-mux version**,
   on by default), and off means no request is made at all - not a reduced one, not a
   deferred one. Nothing downloads or installs.
   Installing an update **does** download, and it stays on the operator's side of that line:

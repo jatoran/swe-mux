@@ -739,7 +739,7 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
     const queued=landPlan.landable.length-failures.length
     setBulkNote(failures.length
       ?`${queued} queued · ${failures.join(' · ')}`
-      :`${queued} branch${queued===1?'':'es'} queued to land.`)
+      :`${queued} branch${queued===1?'':'es'} queued to merge.`)
     await refreshLand()
   }
   const runBulkRemove=async()=>{
@@ -843,16 +843,16 @@ export function GitTab({view,onView,project,sessions,onOpenFile,onOpenWorktreeFi
         {selectedTrees.length>0&&<div class="git-map-bulk-badges">
           {removalPlan.blocked.length>0&&<em class="warn">{skippedLabel(removalPlan.blocked.reduce<Record<string,number>>((counts,item)=>{for(const block of item.blocks)counts[block]=(counts[block]||0)+1;return counts},{}))}</em>}
           {removalPlan.warned.length>0&&<em class="warn">{removalPlan.warned.length} with {[...new Set(removalPlan.warned.flatMap(item=>item.warnings))].map(removalWarningLabel).join(' / ')} work</em>}
-          {landPlan.blocked.length>0&&<em>{landPlan.blocked.length} cannot land ({[...new Set(landPlan.blocked.map(item=>landBlockLabel(item.reason)))].join(', ')})</em>}
+          {landPlan.blocked.length>0&&<em>{landPlan.blocked.length} cannot be merged ({[...new Set(landPlan.blocked.map(item=>landBlockLabel(item.reason)))].join(', ')})</em>}
         </div>}
         {!bulkRemoving&&<div class="git-map-actions">
           <button disabled={bulkBusy||busy||!landPlan.landable.length} onClick={()=>void runBulkLand()}>
-            {bulkBusy?'Queueing…':`Land ${landPlan.landable.length}`}
+            {bulkBusy?'Queueing…':`Auto-merge ${landPlan.landable.length}`}
           </button>
           <button disabled={bulkBusy||busy||!removalPlan.removable.length} onClick={()=>setBulkRemoving(true)}>
             Remove {removalPlan.removable.length}…
           </button>
-          <small>one land request per branch · the queue runs them one at a time</small>
+          <small>one request per branch · the queue runs them one at a time</small>
         </div>}
         {bulkRemoving&&<div class="git-map-actions">
           <button class="danger" disabled={bulkBusy||busy||!removalTargets.length} onClick={()=>void runBulkRemove()}>

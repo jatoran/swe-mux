@@ -365,6 +365,41 @@ test('a repository with no verification command keeps the strip folded', () => {
   assert.equal(written.opensByDefault, true)
 })
 
+test('an unconfigured repository with nothing in flight says so instead of narrating a queue', () => {
+  // The three status cells describe an operation, and a repository that never set
+  // auto-merge up has none: "Not configured · Idle · Queue clear" is two cells of nothing
+  // beside the one that matters. `notConfigured` is what collapses the strip to a single
+  // sentence and swaps the body for an explanation and one setup act.
+  const fresh = landingSummary(queueOf({ requests: [] }), gateOf({ configured: false }))
+  assert.equal(fresh.notConfigured, true)
+
+  // Deliberately narrower than `!configured`. Anything in flight, waiting on a human, or
+  // stopped install-wide is an operation the strip has to keep narrating - hiding a live
+  // request behind "not set up" would report the configuration instead of the queue.
+  const running = landingSummary(queueOf({
+    requests: [{ id: 'a', state: 'verifying', branch: 'worktree-a', created_at: 10 }],
+  }), gateOf({ configured: false }))
+  assert.equal(running.notConfigured, false)
+
+  const bounced = landingSummary(queueOf({
+    requests: [{ id: 'a', state: 'handed_back', branch: 'worktree-a', created_at: 10 }],
+  }), gateOf({ configured: false }))
+  assert.equal(bounced.notConfigured, false)
+
+  const stopped = landingSummary(
+    queueOf({ installed_enabled: false, requests: [] }), gateOf({ configured: false }),
+  )
+  assert.equal(stopped.notConfigured, false)
+
+  // And a repository that *has* a command is never in this state, however its gate stands.
+  assert.equal(landingSummary(queueOf({ requests: [] }), gateOf({})).notConfigured, false)
+  assert.equal(
+    landingSummary(queueOf({ requests: [] }), gateOf({ approved: false })).notConfigured, false,
+  )
+  // A gate that has not been read yet is not an answer either way.
+  assert.equal(landingSummary(queueOf({ requests: [] }), null).notConfigured, false)
+})
+
 test('a gate that will run on the Project’s standing authority does not open the strip', () => {
   // 2026-08-29. `approved` stopped being the whole question: a Project may let its own
   // agents change the gate, and unfolding the strip over bytes that are about to run

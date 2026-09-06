@@ -802,6 +802,23 @@ export type LandingSummary = {
   opensByDefault: boolean
   /** Checkouts whose own gate copy refused a land and can be approved from the strip. */
   blockedWorktrees: { worktreeRoot: string; branch: string }[]
+  /**
+   * This repository never set auto-merge up, and nothing here is in flight.
+   *
+   * The strip's three status cells describe an *operation*, and on a Project that has
+   * no verification command there is no operation to describe: gate, active branch and
+   * queue rendered "Not configured · Idle · Queue clear", which is three cells of
+   * nothing where a reader has to already know what the feature is to see that the
+   * first one is the only one that matters. So this state collapses the headline to a
+   * single sentence and the expansion to an explanation plus one setup act.
+   *
+   * It is deliberately narrower than `!gate.configured`. A repository with no command
+   * can still have rows - a refused land, a request an operator queued before reading
+   * this - and a strip that hid a live request behind "not set up" would be reporting
+   * the configuration instead of the queue. Anything in flight, anything waiting on a
+   * human, and the ordinary operational reading comes back.
+   */
+  notConfigured: boolean
 }
 
 /**
@@ -907,5 +924,15 @@ export function landingSummary(
     queueText = landed > 0 ? `nothing queued · ${landed} landed recently` : 'nothing queued'
     tone = gateTone === 'warn' ? 'warn' : 'idle'
   }
-  return { gate: gateText, gateTone, queue: queueText, tone, opensByDefault, blockedWorktrees }
+  // Never set up, and nothing happening: the strip has no operation to narrate, so it
+  // says so in one line instead of three empty cells. Every other clause here is a
+  // reason the operational reading is still the right one.
+  const notConfigured = gate !== null && !gate.configured
+    && !installStopped && !running && active.length === 0 && attention === null
+    && blockedWorktrees.length === 0
+
+  return {
+    gate: gateText, gateTone, queue: queueText, tone, opensByDefault, blockedWorktrees,
+    notConfigured,
+  }
 }

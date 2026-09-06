@@ -942,6 +942,9 @@ body {
 .daemon-reload-modal .modal-actions button.update-dialog-reap:hover { border-color:var(--red);background:color-mix(in srgb,var(--panel) 65%,var(--red)) }
 .redeploy-chip-body .redeploy-chip-note.redeploy-chip-reap { color:var(--amber) }
 .settings-update-actions { display:flex;flex-direction:column;gap:6px;align-items:stretch }
+/* The running version leads the Diagnostics tab, so it is read at a glance rather than
+   found: it is the fact every other answer on the tab is qualified by. */
+.settings-running-version { font-size:13px }
 
 /* The redeploy chip: a floating, persistent, expandable progress indicator that
    every client shows for the whole redeploy, not just the tab that started it.
@@ -5670,6 +5673,15 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .git-land-setup-prompt>div{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin:6px 0}
 .git-land-setup-prompt small{color:var(--muted);font-size:9px}
 .git-land-setup-prompt .git-land-source{max-height:320px;white-space:pre-wrap;overflow-wrap:anywhere}
+
+/* What auto-merge is, for a repository that has not set it up. Ordinary prose at reading
+   size rather than the strip's 8px operational chrome: this is the one place in the tab
+   addressed to somebody who does not yet know what the feature does, and the status
+   typography that serves a reader watching a gate run is unreadable as an explanation. */
+.git-land-intro{display:grid;gap:6px;padding:10px;border:1px solid var(--line);border-radius:6px;background:var(--panel)}
+.git-land-intro h4{margin:0;font-size:11px;letter-spacing:.02em}
+.git-land-intro p{margin:0;color:var(--muted);font-size:10px;line-height:1.5}
+.git-land-intro .git-land-setup-prompt{margin-top:2px}
 
 /* Landing, on the Map row of the worktree it acts on. Set apart from the row's change
    groups by a rule rather than a box: it is another reading of the same checkout, not a

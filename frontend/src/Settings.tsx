@@ -67,7 +67,8 @@ import { ModelRoutingSummary } from './ModelRoutingSummary'
 import { EdgeTtsSettings, type EdgeProviderStatus } from './EdgeTtsSettings'
 import { PluginsSettings } from './PluginsSettings'
 import {
-  fetchUpdateStatus, lastCheckedLabel, requestUpdateCheck, updateStatusSummary,
+  fetchUpdateStatus, lastCheckedLabel, requestUpdateCheck, runningVersionLabel,
+  updateStatusSummary,
   type UpdateStatus,
 } from './updateCheck'
 import {
@@ -452,6 +453,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   useEffect(()=>{void fetchUpdateStatus().then(setUpdateStatus).catch(()=>{})},[])
   const updateSummary=updateStatusSummary(updateStatus)
   const updateChecked=lastCheckedLabel(updateStatus)
+  const runningVersion=runningVersionLabel(updateStatus)
   const checkForUpdates=async()=>{
     if(updateBusy)return
     setUpdateBusy(true);setUpdateError('')
@@ -2655,6 +2657,35 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
             push new code into the running app, and one bundle to hand over when
             something is wrong. */}
         {activeTab==='diagnostics'&&<Fragment>
+          {/* First on the tab, because "which build am I on" is the question every
+              other answer here is qualified by: a prerequisite report, a log level,
+              and an exported bundle all describe a specific version, and the one a
+              reader is standing in front of is the fact they came to check after
+              pressing Install or redeploying. The running version is stated
+              outright rather than left to be inferred from "This is the latest
+              release", which says nothing while the check is off and reads the same
+              on a daemon whose check cannot reach the manifest. */}
+          <section><h3>swe-mux version</h3>
+          <p class="settings-running-version">Running <strong>swe-mux {runningVersion||'(version not reported)'}</strong>{runningVersion&&updateStatus?.status==='ok'&&!updateStatus.update_available?' · the latest release':''}</p>
+          <p>Once a day the daemon asks <code>{updateStatus?.manifest_url||'https://swemux.dev/version.json'}</code> whether a newer release exists, and shows a dismissible banner if one does. <strong>Nothing downloads and nothing installs until you press Install</strong>, which first shows what the update would do - and whether your live sessions survive it - and then replaces the app in place.</p>
+          <p class="profile-hint">The check is the only request swe-mux makes on its own behalf. It is a plain fetch of one file that is identical for every install: no query string, no custom header, no cookie, and no identifier of this machine. Turning it off means no request is made at all.</p>
+          <label class="check" data-setting="update_check_enabled"><span>Check for new releases</span><input type="checkbox" checked={draft.update_check_enabled} onChange={e=>change('update_check_enabled',e.currentTarget.checked)}/><small>At most one check a day, remembered across restarts.</small></label>
+          <div class="settings-config-actions"><div>
+            <p>{updateSummary||' '}</p>
+            {updateChecked&&<p class="profile-hint">Last checked {updateChecked}.</p>}
+            {updateStatus?.latest?.changelog&&updateStatus.update_available
+              ?<p><a href={updateStatus.latest.changelog} target="_blank" rel="noreferrer">Release notes for {updateStatus.latest.version}</a></p>
+              :null}
+          </div>
+            <div class="settings-update-actions">
+              <button disabled={updateBusy||!draft.update_check_enabled} onClick={()=>void checkForUpdates()}>{updateBusy?'Checking…':'Check now'}</button>
+              {updateStatus?.update_available&&updateStatus.latest?.version&&<button class="primary" onClick={()=>setUpdateInstallOpen(true)}>Install {updateStatus.latest.version}</button>}
+            </div>
+          </div>
+          {updateError&&<p aria-live="polite">{updateError}</p>}
+          {updateInstallOpen&&updateStatus?.latest?.version&&<UpdateDialog version={updateStatus.latest.version} changelog={updateStatus.latest.changelog} onClose={()=>setUpdateInstallOpen(false)}/>}
+          </section>
+
           <section><h3>System prerequisites</h3>
           <p class="profile-hint">These back specific features. Each fails gracefully when absent, so a missing one reads as unconfigured, not broken.</p>
           {/* Re-scan is a POST, not a re-fetch: the daemon inherited its PATH once
@@ -2683,32 +2714,8 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
             :<p>Prerequisite status is unavailable.</p>}
           </section>
 
-          {/* Above Rebuild and reload because it is the question that comes first:
-              "is there anything new", then "put it on this machine". It is also the
-              one place in the app that has to be honest about an outbound request,
-              which is why the switch is here in full rather than as a link. */}
-          <section><h3>Software updates</h3>
-          <p>Once a day the daemon asks <code>{updateStatus?.manifest_url||'https://swemux.dev/version.json'}</code> whether a newer release exists, and shows a dismissible banner if one does. <strong>Nothing downloads and nothing installs until you press Install</strong>, which first shows what the update would do - and whether your live sessions survive it - and then replaces the app in place.</p>
-          <p class="profile-hint">The check is the only request swe-mux makes on its own behalf. It is a plain fetch of one file that is identical for every install: no query string, no custom header, no cookie, and no identifier of this machine. Turning it off means no request is made at all.</p>
-          <label class="check" data-setting="update_check_enabled"><span>Check for new releases</span><input type="checkbox" checked={draft.update_check_enabled} onChange={e=>change('update_check_enabled',e.currentTarget.checked)}/><small>At most one check a day, remembered across restarts.</small></label>
-          <div class="settings-config-actions"><div>
-            <p>{updateSummary||' '}</p>
-            {updateChecked&&<p class="profile-hint">Last checked {updateChecked}.</p>}
-            {updateStatus?.latest?.changelog&&updateStatus.update_available
-              ?<p><a href={updateStatus.latest.changelog} target="_blank" rel="noreferrer">Release notes for {updateStatus.latest.version}</a></p>
-              :null}
-          </div>
-            <div class="settings-update-actions">
-              <button disabled={updateBusy||!draft.update_check_enabled} onClick={()=>void checkForUpdates()}>{updateBusy?'Checking…':'Check now'}</button>
-              {updateStatus?.update_available&&updateStatus.latest?.version&&<button class="primary" onClick={()=>setUpdateInstallOpen(true)}>Install {updateStatus.latest.version}</button>}
-            </div>
-          </div>
-          {updateError&&<p aria-live="polite">{updateError}</p>}
-          {updateInstallOpen&&updateStatus?.latest?.version&&<UpdateDialog version={updateStatus.latest.version} changelog={updateStatus.latest.changelog} onClose={()=>setUpdateInstallOpen(false)}/>}
-          </section>
-
-          {/* Between "is there anything new" and "put a whole new app on this
-              machine", because it is the cheap version of the second: the static
+          {/* The cheap version of a whole-app update, which is why it sits between
+              the version section and Rebuild and reload: the static
               tree is a few megabytes of the ~370 MB a bundle swap rewrites.
               Hidden entirely until an overlay exists - an empty panel explaining a
               mechanism nobody is using is noise. */}

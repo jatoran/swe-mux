@@ -1067,7 +1067,18 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
         <h2><a href="https://github.com/jatoran/swe-mux/compare/v0.2.4...HEAD">Unreleased</a></h2>
         <span class="fill"></span>
       </div>
-      <p class="prose">Nothing yet.</p>
+      <div class="relgroups">
+        <div><span class="k">Changed</span> <span class="sep">3 entries</span></div>
+      </div>
+      <details class="relmore">
+        <summary>all 3 entries</summary>
+        <div class="changetype">Changed</div>
+        <ul class="bullets">
+          <li><span><b>The Git drawer's landing strip is called Auto-merge, and explains itself on a repository that has not set it up.</b> It used to show three status cells reading "Not configured · Idle · Queue clear" on every repository with no verification command - two cells of nothing beside the one that mattered, in a vocabulary you had to already know. It now collapses to one line, <code>AUTO-MERGE · not set up for this repository</code>, and expanding it says what the feature does in plain terms: swe-mux merges the trunk into your branch, runs this repository's checks there, and merges the branch onto the trunk only if they pass - and if they fail, nothing moves. Setting it up is one button, <b>Copy setup prompt</b>, which puts a prompt for an agent on the clipboard instead of filling the pane with the text of it; the full text is still one disclosure away, and the prompt still ends by telling that agent it cannot approve what it wrote. The prompt sets up <em>this</em> repository, which is what it always did - the disclosure that said "setting this up in another repository" named the wrong one. The verification editor no longer unfolds itself over a repository that has no command yet, because a form is not an explanation.</span></li>
+          <li><span><b>"Landing" is now "auto-merge" everywhere it is read.</b> The strip, the button on a worktree row, the bulk action, the Automation policy row, the Project authority rows and the Harnesses setup switch all say auto-merge; the word names what happens to the branch rather than this project's own jargon for it. Nothing an agent, config file or keybinding names has changed: <code>mux.request_land</code>, <code>/api/land</code>, <code>land_queue_enabled</code>, <code>land_grant</code>, <code>land_verify_grant</code> and the palette command ids are all exactly as they were.</span></li>
+          <li><span><b>Settings → Diagnostics leads with the version you are running.</b> The section previously called "Software updates" is now <b>swe-mux version</b>, sits at the top of the tab, and states the running version outright rather than leaving you to infer it from "This is the latest release" - which says nothing while the update check is off, and reads the same on a copy that cannot reach the update manifest. The switch, Check now and Install are unchanged and still there.</span></li>
+        </ul>
+      </details>
     </div>
     <div class="rel">
       <div class="relhead">

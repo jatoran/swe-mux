@@ -111,7 +111,7 @@ Also: read-specific timeout guidance, failed-removal refresh with the mutation e
 Landing has no view of its own and is split by what each part is a *property of*.
 
 `GitTab.tsx` projects each active request onto its collapsed Map row, matched by normalized worktree root or branch, so queue position and observed gate progress are visible before expansion.
-`GitLandRow.tsx` draws the act inside the expanded Map row of the worktree it acts on: the Land button, that request's live state, a Cancel, and what stopped it last time including a conflict's paths.
+`GitLandRow.tsx` draws the act inside the expanded Map row of the worktree it acts on: the Auto-merge button, that request's live state, a Cancel, and what stopped it last time including a conflict's paths.
 It offers **only** Land: a verify-only run is an agent surface (`request_verify`), and an operator with a worktree open has a terminal in it, so the row renders such requests without being able to start one.
 It draws **nothing Project-wide at all**, because a row is repeated once per worktree and a Project-wide fact drawn there is drawn N times.
 A row that cannot land names the blocker and *opens the strip* instead of drawing a second copy of its control.

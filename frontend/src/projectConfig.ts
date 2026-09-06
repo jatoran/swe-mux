@@ -173,7 +173,7 @@ const CONFLICT_LABELS: Record<string, string> = {
   title_refinements: 'the title refinement count',
   session_control_grant: 'the session-control authority',
   spawn_grant: 'the spawn authority',
-  land_grant: 'the landing authority',
+  land_grant: 'the auto-merge authority',
   land_verify_grant: 'the verification-command authority',
   interject_grant: 'the interject authority',
   approval_allow: "the Project's approval rules",

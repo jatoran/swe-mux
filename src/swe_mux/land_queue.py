@@ -1539,7 +1539,7 @@ class LandQueueService:
                 solicited_by=row["id"] if armed else None,
                 sender_kind="rule",
                 sender_id="land_queue",
-                sender_label="Land queue",
+                sender_label="Auto-merge",
                 correlation_id=row["correlation_id"] or row["id"],
             )
             # Read the arming back off the row rather than reporting what was asked
@@ -1766,7 +1766,7 @@ class LandQueueService:
                 [
                     "",
                     "Approving is a human act against the exact bytes, in the Git tab's "
-                    "Landing strip. You cannot approve it yourself, and neither can the "
+                    "Auto-merge strip. You cannot approve it yourself, and neither can the "
                     f"daemon. Once it is approved, request the {what} again.",
                 ]
             )

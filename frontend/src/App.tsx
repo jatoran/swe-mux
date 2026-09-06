@@ -9170,7 +9170,7 @@ export function App() {
         <label class="check project-create-automations">
           <input type="checkbox" checked={projectCreate.autonomy&&!startingSetBlocked('autonomy')} disabled={startingSetBlocked('autonomy')} onChange={event=>setProjectCreate(value=>({...value,autonomy:event.currentTarget.checked}))} />
           <span><strong>Let agents act without per-request approval</strong>
-          <small>Agents working in this Project can spawn sessions and start landings
+          <small>Agents working in this Project can spawn sessions and start auto-merges
           directly, each still under its hourly budget, with spawn-request review on for
           anything that still arrives as a draft. Interrupting or messaging into live
           sessions stays behind its own approval. Recorded in the Project’s

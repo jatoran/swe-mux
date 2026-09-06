@@ -29,7 +29,18 @@ import { verifySetupPrompt } from './landSetupPrompt'
 import { shortSha } from './gitWorktrees'
 import type { Project } from './types'
 
-// Landing, as one compact section at the head of the Map.
+// Auto-merge, as one compact section at the head of the Map.
+//
+// **The user-facing name is "auto-merge"; the code, the routes, the MCP tool and the
+// config keys keep `land`.** "Landing" is this project's own word for the act and reads
+// as jargon to anyone who has not already been told what it means - which is exactly the
+// reader this strip has to reach, because the strip's job on a repository that has never
+// used the feature is to explain it. "Auto-merge" names the outcome (the branch ends up
+// on the trunk) and the automation (nobody drives it), and is the word the surrounding
+// industry already uses. The identifiers are contracts and are deliberately left alone:
+// renaming `mux.request_land`, `/api/land`, `land_queue_enabled` or the palette command
+// ids would break every agent, config file and keybinding that names them, and buys
+// nothing a label does not.
 //
 // It was a segment of its own until the map rows learned to land their own branch, and
 // then it was a second surface holding one copy of everything the rows could not: the
@@ -115,15 +126,20 @@ export function GitLandBar({ project, queue, error, onChanged, open, onOpen }: P
   // stays folded; the pipeline's gate cell says so where it stands (`gitLand.ts`).
   const isOpen = open ?? summary.opensByDefault
 
-  return <section class="git-landing" aria-label="Landing">
+  return <section class="git-landing" aria-label="Auto-merge">
     <button class={`git-landing-summary ${summary.tone}`} aria-expanded={isOpen}
       onClick={() => onOpen(!isOpen)}>
       <span class="git-landing-summary-head">
-        <span class="git-landing-title">LANDING</span>
-        <span class="git-landing-headline">{activeHeadline}</span>
+        <span class="git-landing-title">AUTO-MERGE</span>
+        <span class="git-landing-headline">{summary.notConfigured
+          ? 'not set up for this repository' : activeHeadline}</span>
         <span class="git-landing-chevron" aria-hidden="true">{isOpen ? '−' : '+'}</span>
       </span>
-      <LandPipeline queue={queue} gate={gate} summary={summary} />
+      {/* Three cells describe an operation, and an unconfigured repository has none:
+          "Not configured · Idle · Queue clear" is two cells of nothing beside the one
+          that matters, and reads as a broken readout rather than as an invitation. The
+          headline says the whole fact instead, and the expansion explains it. */}
+      {!summary.notConfigured && <LandPipeline queue={queue} gate={gate} summary={summary} />}
     </button>
 
     {shown && <p class="git-state error" role="alert">{shown}</p>}
@@ -135,14 +151,26 @@ export function GitLandBar({ project, queue, error, onChanged, open, onOpen }: P
         anything else, so with it off a request enqueues and then sits at `queued`
         forever - identical on screen to a pipeline working through a backlog. */}
     {queue && !queue.installedEnabled && <GrantGate ids={['automation.landQueue']}
-      heading="The land queue is switched off for this install."
+      heading="Auto-merge is switched off for this install."
       onGranted={onChanged}>
       <p>Branches can still be queued from the rows below, and nothing will move them:
       the daemon's sweep is the only thing that reconciles, verifies, and fast-forwards,
       and it stops on this switch before reading anything else.</p>
     </GrantGate>}
 
-    {isOpen && <div class="git-landing-body">
+    {/* A repository that never set this up gets the explanation and the one act that
+        sets it up, and none of the operational furniture: an empty queue list, an
+        authority table deciding who may start something impossible, and a history
+        disclosure with nothing in it are all answers to questions this reader has not
+        got to yet. The editor stays underneath, closed, for the operator who would
+        rather write the command than delegate it. */}
+    {isOpen && summary.notConfigured && <div class="git-landing-body">
+      <AutoMergeIntroduction scriptName={gate?.scriptName || '.worktree-verify'} />
+      <VerifyCommandEditor project={project} gate={gate} busy={busy} setBusy={setBusy}
+        onError={setLocalError} onGate={setGate} onRefresh={refreshGate} />
+    </div>}
+
+    {isOpen && !summary.notConfigured && <div class="git-landing-body">
       <VerifyCommandEditor project={project} gate={gate} busy={busy} setBusy={setBusy}
         onError={setLocalError} onGate={setGate} onRefresh={refreshGate} />
 
@@ -163,18 +191,18 @@ export function GitLandBar({ project, queue, error, onChanged, open, onOpen }: P
           whole strip exists to remove. */}
       {queue && project && <details class="git-land-authority">
         <summary>
-          <span>Agent-initiated landing</span>
+          <span>Agent-started auto-merge</span>
           <em class={queue.projectEnabled && queue.agentGrant === 'granted' ? 'ok' : 'warn'}>{
             !queue.projectEnabled ? 'not permitted'
               : queue.agentGrant === 'granted' ? 'starts without asking' : 'you approve each one'
           }</em>
         </summary>
-        <p>Your own Land button never consults this — you are the authority it defers to.
+        <p>Your own Auto-merge button never consults this - you are the authority it defers to.
         It decides what happens when an agent in a worktree here calls
         <code>mux.request_land</code> instead.</p>
         {!queue.projectEnabled
           ? <GrantGate ids={['project.landQueue']} projectId={project.id}
-              heading="This Project has not permitted the land queue for agents."
+              heading="This Project has not permitted auto-merge for agents."
               onGranted={onChanged}>
               <p>With it off, an agent's <code>request_land</code> is refused outright.
               With it on, the request is still drafted for you to approve until you raise
@@ -213,10 +241,10 @@ export function GitLandBar({ project, queue, error, onChanged, open, onOpen }: P
       {/* The queue, in the order the pipeline will reach it. Oldest first: the request
           about to run is the one a reader looks at first, and the daemon's own
           newest-first listing put it at the bottom. */}
-      <div class="git-land-list" aria-label="Queued lands">
-        <h4>QUEUE<small>{queued.length ? `${queued.length} waiting to land` : 'nothing queued'}</small></h4>
+      <div class="git-land-list" aria-label="Merge queue">
+        <h4>QUEUE<small>{queued.length ? `${queued.length} waiting to merge` : 'nothing queued'}</small></h4>
         {queued.length === 0 && <p class="git-change-empty">
-          Land a branch from its row below — expand the worktree and press Land.
+          Auto-merge a branch from its row below - expand the worktree and press Auto-merge.
         </p>}
         {queued.map((request, index) => <LandRow key={request.id} request={request}
           position={index + 1} busy={busy} onCancel={() => void cancel(request.id)} />)}
@@ -230,7 +258,7 @@ export function GitLandBar({ project, queue, error, onChanged, open, onOpen }: P
   </section>
 }
 
-/** The short sentence beside LANDING; the cells carry the detail. */
+/** The short sentence beside AUTO-MERGE; the cells carry the detail. */
 function landingHeadline(queue: LandQueue | null, fallback: string): string {
   if (queue !== null && !queue.installedEnabled) return 'sweep stopped'
   const ordered = landQueueOrder(queue?.requests || [])
@@ -282,7 +310,7 @@ function LandPipeline({ queue, gate, summary }: {
   const queueLabel = waiting ? `${waiting} waiting` : 'Queue clear'
   const queueDetail = waiting ? `next ${behind[0].branch}` : 'Nothing behind the active branch'
 
-  return <span class="git-land-pipeline" aria-label="Landing pipeline">
+  return <span class="git-land-pipeline" aria-label="Auto-merge pipeline">
     <span class={`git-land-pipeline-step gate ${gate === null ? 'idle' : summary.gateTone === 'ok' ? 'complete' : 'warn'}`}>
       <strong>{gateLabel}</strong>
       <small>{gateDetail}</small>
@@ -341,12 +369,18 @@ function VerifyCommandEditor({ project, gate, busy, setBusy, onError, onGate, on
   // that it is theirs, and a poll that overwrote it mid-sentence would be the note
   // editor's own retired bug in a new place.
   useEffect(() => { if (!editing) setDraft(gate?.configCommand || '') }, [gate?.configCommand, editing])
-  // A written command awaiting approval is a gate, and an unconfigured Project only
-  // reaches this component after the operator deliberately opened Landing. In both
-  // cases the relevant settings start visible. A deliberate close then stands until
-  // the resolved bytes change, so nothing reopens under the reader.
+  // A written command awaiting approval is a gate, and the act that clears it is in
+  // here, so those settings start visible. A deliberate close then stands until the
+  // resolved bytes change, so nothing reopens under the reader.
+  //
+  // An **unconfigured** repository deliberately does not open it. There is nothing to
+  // approve and no command to read, so an editor unfolded over a field whose value the
+  // reader does not yet know what to put in states the answer before the question -
+  // which is what made this section read as a form to fill in rather than as a thing to
+  // understand. The explanation above it owns that case, and this stays the manual path
+  // for an operator who would rather type the command than delegate writing it.
   useEffect(() => {
-    if (gate && !gate.approved) setSettingsOpen(true)
+    if (gate && gate.configured && !gate.approved) setSettingsOpen(true)
   }, [gate?.digest, gate?.configured, gate?.approved])
 
   if (!project) return null
@@ -504,7 +538,6 @@ function VerifyCommandEditor({ project, gate, busy, setBusy, onError, onGate, on
       </>}
     </div>
 
-    <SetupPromptDisclosure scriptName={gate?.scriptName || '.worktree-verify'} />
     </div>
   </details>
 }
@@ -628,47 +661,78 @@ function BlockedWorktreeGate({
 }
 
 /**
- * The same command, for a repository that does not have one yet.
+ * What auto-merge is, and the one act that sets it up here.
  *
- * It sits under the editor because that is where the question arises: an operator reading
- * what this Project's gate is, or that this Project has none, is the one about to set one
- * up somewhere else, and everything the receiving agent needs is already written down in
- * `land-queue.md` rather than being anybody's to remember in a new repository.
+ * Drawn only on a repository that has no verification command, which is the only state
+ * in which a reader needs either. It replaced a status readout of three empty cells over
+ * a disclosure labelled "Setting this up in another repository" - a sentence that named
+ * the wrong repository (the prompt has always said "this repository", and the whole
+ * point is to set up the one you are standing in) beside an editor unfolded over a field
+ * whose value nobody yet knew how to fill in.
  *
- * The prompt is **shown** rather than only copied. It is an instruction being handed to an
- * agent that will write the thing deciding what reaches a trunk unattended, and a copy
- * button whose payload nobody can read before pressing it is the wrong shape for that.
- * The copy itself is best-effort by construction - `navigator.clipboard` is absent in an
- * insecure context and refusable everywhere - so a failure says so and the text is already
- * on screen to select by hand, rather than the button silently doing nothing.
+ * **The explanation comes before the act, and it is three sentences.** What happens to a
+ * branch, what decides whether it happens, and what happens when the decision is no.
+ * Everything else this feature can do - grants, budgets, verify-only runs, the
+ * documentation fast path - is a refinement of that sentence and belongs to a reader who
+ * has one.
  *
- * **The prompt's last paragraph is what keeps this from being an authority leak**, and it
- * is the reason this is a button rather than something that could ever run: it tells the
- * agent it cannot approve what it just wrote, and that the human presses approve in this
- * very section. See `landSetupPrompt.ts` and `land-queue.md`.
+ * **The prompt is copied, not displayed.** It is 60 lines of contract written for an
+ * agent, and rendering it in full made the section look like something to read rather
+ * than something to press; the text stays one disclosure away for whoever wants to check
+ * what they are handing over, which is not nothing - it is an instruction to write the
+ * thing that decides what reaches a trunk unattended. The copy itself is best-effort by
+ * construction (`navigator.clipboard` is absent in an insecure context and refusable
+ * everywhere), so a refusal says so and points at the disclosure rather than the button
+ * silently doing nothing.
+ *
+ * **The prompt's last paragraph is what keeps this from being an authority leak**: it
+ * tells the agent it cannot approve what it just wrote, and that the human presses
+ * approve here. See `landSetupPrompt.ts` and `land-queue.md`.
  */
-function SetupPromptDisclosure({ scriptName }: { scriptName: string }) {
+function AutoMergeIntroduction({ scriptName }: { scriptName: string }) {
   const [note, setNote] = useState('')
+  const [showing, setShowing] = useState(false)
   const prompt = verifySetupPrompt(scriptName)
   const copy = async () => {
     try { await navigator.clipboard.writeText(prompt); setNote('Setup prompt copied.') }
-    catch { setNote('Clipboard access was blocked. Select the text below and copy it.') }
+    catch { setNote('Clipboard access was blocked. Open "Read what it says" and copy it by hand.') }
   }
-  return <details class="git-land-setup-prompt" onToggle={() => setNote('')}>
-    <summary>Setting this up in another repository</summary>
-    <p class="git-state">
-      A prompt for an agent in a repository that has no verification command yet. It states
-      what the gate is used for, the contract the command has to satisfy, the two
-      conventions, and how to prove it fails when it should - and it ends by telling that
-      agent it cannot approve what it wrote. Approving stays a human act, here, against the
-      exact bytes.
+  return <div class="git-land-intro">
+    <h4>Auto-merge is not set up for this repository</h4>
+    <p>
+      Auto-merge finishes a worktree branch for you. One branch at a time, swe-mux merges
+      the trunk into it, runs this repository's own check suite there, and merges the
+      branch onto the trunk only if those checks pass. If they fail - or the merge
+      conflicts - nothing moves and the branch goes back to whoever asked, with the
+      output.
     </p>
-    <div>
-      <button onClick={() => void copy()}>Copy setup prompt</button>
-      {note && <small role="status">{note}</small>}
+    <p>
+      It needs one thing: a <strong>verification command</strong> - the checks that decide
+      whether a branch is good enough to merge. This repository has none, so nothing can
+      be merged automatically here.
+    </p>
+    <div class="git-land-setup-prompt">
+      <div>
+        <button class="primary" onClick={() => void copy()}>Copy setup prompt</button>
+        {note && <small role="status">{note}</small>}
+      </div>
+      <small>
+        Paste it to an agent working in this repository. It says what the command has to
+        do, where to put it, and how to prove it fails when it should - and it ends by
+        telling that agent it cannot approve what it wrote. That stays yours, here,
+        against the exact bytes.
+      </small>
+      <details open={showing} onToggle={event => setShowing(event.currentTarget.open)}>
+        <summary>Read what it says</summary>
+        <pre class="git-land-source">{prompt}</pre>
+      </details>
     </div>
-    <pre class="git-land-source">{prompt}</pre>
-  </details>
+    <p class="git-state">
+      Or write it yourself: an executable <code>{scriptName}</code> at the repository root
+      is all it takes. Verification settings has the override if the command cannot be a
+      file in the repository.
+    </p>
+  </div>
 }
 
 function LandRow({ request, busy, onCancel, position }: {

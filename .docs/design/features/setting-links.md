@@ -76,7 +76,7 @@ Everything here is that pattern generalised.
   timeline's Project permission out of the Timeline tab (`test/scanTimeline.test.ts`).
   A **per-item** surface takes that further and carries no Project-wide gate at all. A Git
   Map row draws none of the land queue's three switches, including the install stop that
-  does make its own Land button pointless: a row is repeated once per worktree, so a gate
+  does make its own Auto-merge button pointless: a row is repeated once per worktree, so a gate
   on it is the same block under each of eight expansions. They live once, in the landing
   strip at the head of that map, and a blocked row **sends the reader there** with one
   press (`land-queue.md`). That still satisfies "naming a switch obliges offering it" -

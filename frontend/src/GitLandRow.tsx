@@ -79,27 +79,27 @@ export function GitLandRow({ project, worktreeRoot, branch, detached, queue, onC
 
   const installStopped = queue !== null && !queue.installedEnabled
 
-  return <section class="git-land-row-section" aria-label={`Land ${branch || worktreeRoot}`}>
+  return <section class="git-land-row-section" aria-label={`Auto-merge ${branch || worktreeRoot}`}>
     {error && <p class="git-state error" role="alert">{error}</p>}
 
     {/* A detached worktree is stated rather than offered and then refused: the daemon
         has no branch name to fast-forward from. */}
     {detached && <p class="git-change-empty">
-      This worktree is on a detached HEAD. Create a named branch here before landing.
+      This worktree is on a detached HEAD. Create a named branch here before merging it.
     </p>}
 
     {!detached && (active
       ? <LandProgress request={active} busy={busy} onCancel={() => void cancel(active.id)} />
       : <div class="git-land-launch">
         <button disabled={busy || !branch} onClick={() => void enqueue()}>
-          Land {branch}
+          Auto-merge {branch}
         </button>
         <small>fast-forward only · the daemon runs it, not this button</small>
         {/* One line, and a way to act on it. The strip states which of the two causes
             it is and holds the control; repeating either here would put a Project-wide
             answer under every worktree, which is the repetition this row shed. */}
         {installStopped && <button class="git-land-elsewhere" onClick={onShowLanding}>
-          the land queue is switched off — open Landing
+          auto-merge is switched off - open Auto-merge
         </button>}
       </div>)}
 
