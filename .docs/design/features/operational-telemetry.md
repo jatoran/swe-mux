@@ -351,7 +351,7 @@ records must be sanitized into the versioned fixture corpus.
 `/api/telemetry/operational` is read by two dialogs, for different halves of one payload.
 
 - **Usage → Quota** takes `quota.attributions`, beside the quota charts and the reset log (`usage.md`).
-- **Resources → Fleet activity** takes `tools` and `compactions`, and draws `runs + workload` from `/api/telemetry/workloads` beside them (`ui.md`).
+- **Usage & activity → Activity** takes `tools` and `compactions`, and browses canonical runs, tools, checks, context, and patterns through `/api/telemetry/v2/*` (`ui.md`).
 
 The split follows the question rather than the endpoint.
 Quota movement is one of the three pots of spend; tool calls, skill invocations, and compaction events measure behavior and are not a currency, so they sit beside Processes rather than beside a bill.

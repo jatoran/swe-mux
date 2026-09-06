@@ -1,3 +1,4 @@
+import { usageWindow } from './analyticsPresentation.ts'
 import { sumUsageRows, type UsageRow, type UsageSource } from './usageAnalytics'
 import type { ProviderQuotaWindows, QuotaWindowDisplay } from './providerAccountDisplay'
 
@@ -39,8 +40,7 @@ export function agentPot(sources: UsageSource[], days: number): AgentPot {
     byDate.set(row.date, rows)
   }
   const dates = [...byDate.keys()].sort((a, b) => b.localeCompare(a))
-  const window = dates.slice(0, days)
-  const totals = sumUsageRows(window.flatMap(date => byDate.get(date) || []))
+  const totals = sumUsageRows(usageWindow(sources, days))
   const latest_date = dates[0] || null
   return {
     cost_usd: totals.cost_usd || 0,

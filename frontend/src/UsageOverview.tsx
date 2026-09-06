@@ -1,3 +1,4 @@
+import type { Session } from './types'
 import { useEffect, useState } from 'preact/hooks'
 import { api } from './api'
 import { exactMoney, formatCount, formatMoney, type SpendBreakdown } from './automationCost'
@@ -7,19 +8,6 @@ import { serverNow } from './serverClock.ts'
 import type { UsageSource } from './usageAnalytics'
 import { agentPot, quotaWindowLabel, tightestQuota } from './usagePots'
 import type { UsageSegment } from './usageSegments'
-
-// The headline the old Tokens segment never had.
-//
-// Six domain tabs sat behind that name and not one of them answered "what am I burning".
-// Three of the six were not money at all, and the three that were are three different
-// things that must not be added up, so no tab could hold the total and none of them tried.
-// The result was a surface named for spending where the first screen was a filter row.
-//
-// This is that missing screen, and the constraint that shaped it is the same one that broke
-// the old layout: the pots do not sum. So the tile is the unit rather than the row - three
-// figures, each stamped with the basis that makes it mean something, each a door into the
-// segment that explains it. What a reader takes away is "which of these three is large",
-// which is a comparison they can make and the only one that is honest.
 
 type UsageCache = {
   enabled: boolean
@@ -32,7 +20,7 @@ type Dashboard = {
 
 const AGENT_WINDOW_DAYS = 30
 
-export function UsageOverview({ onOpen }: { onOpen: (segment: UsageSegment) => void }) {
+export function UsageOverview({ onOpen, sessions=[] }: { onOpen: (segment: UsageSegment) => void; sessions?:Session[] }) {
   const [usage, setUsage] = useState<UsageCache | null>(null)
   const [dashboard, setDashboard] = useState<Dashboard | null>(null)
   const [accounts, setAccounts] = useState<ProviderAccountsStatus | null>(null)
@@ -69,28 +57,28 @@ export function UsageOverview({ onOpen }: { onOpen: (segment: UsageSegment) => v
   const quota = tightestQuota(providerQuotaWindows(accounts?.accounts || [], accounts?.selected || {}))
   const now = serverNow()
 
-  return <main class="usage-overview">
+  return <main class="usage-overview analytics-content">
     {error && <div class="usage-error" role="alert">{error}</div>}
     <div class="usage-pots">
       <button class="usage-pot" onClick={() => onOpen('agents')}>
-        <header><strong>Agents</strong><em>subscription · estimated</em></header>
+        <header><strong>Agent usage</strong><em>transcript estimate</em></header>
         {usage?.enabled
           ? <>
             <b title={exactMoney(agents.cost_usd)}>{formatMoney(agents.cost_usd)}</b>
-            <span>{formatCount(agents.total_tokens)} tokens over the last {agents.days} cached days</span>
+            <span>{formatCount(agents.total_tokens)} tokens over {agents.days} days ending {agents.latest_date||'with the newest record'}</span>
             <small>{agents.latest_date
               ? `newest cached day ${agents.latest_date} · ${formatMoney(agents.latest?.cost_usd || 0)}`
               : 'no cached historical usage yet'}</small>
           </>
           : <>
-            <b class="usage-pot-off">off</b>
-            <span>Historical collection is switched off, so agent spend is unmeasured.</span>
+            <b class="usage-pot-off">{usage?'Off':'Unavailable'}</b>
+            <span>{usage?'Historical collection is switched off.':'Historical usage could not be read yet.'}</span>
             <small>Turn on ccusage in Agents to read it.</small>
           </>}
       </button>
       <button class="usage-pot" onClick={() => onOpen('automation')}>
         <header><strong>Automation</strong><em>metered · billed</em></header>
-        <b title={exactMoney(totals?.cost_usd || 0)}>{unpriced ? '≥ ' : ''}{formatMoney(totals?.cost_usd || 0)}</b>
+        <b title={dashboard?exactMoney(totals?.cost_usd || 0):undefined}>{dashboard?`${unpriced?'≥ ':''}${formatMoney(totals?.cost_usd || 0)}`:'Unavailable'}</b>
         <span>{formatCount(totals?.calls || 0)} calls over {observerDays} days</span>
         <small class={unpriced ? 'warn' : ''}>{unpriced
           ? `${formatCount(unpriced)} calls reported no cost, so this is a floor`
@@ -107,17 +95,18 @@ export function UsageOverview({ onOpen }: { onOpen: (segment: UsageSegment) => v
               : `${Math.round(quota.used_percent)}% used`}</small>
           </>
           : <>
-            <b>—</b>
+            <b>Unavailable</b>
             <span>No selected account is reporting a readable quota window.</span>
             <small>Unknown headroom is not full headroom.</small>
           </>}
       </button>
     </div>
-    <details class="usage-pots-rule">
-      <summary>Different units, shown side by side and never totaled. <span>Why?</span></summary>
-      <p>Agents is a transcript-based estimate, Automation is metered call spend, and Quota
-      is provider-window capacity rather than money.</p>
-    </details>
+    <button class="analytics-live-summary" onClick={()=>onOpen('activity')}>
+      <strong>Agent activity</strong>
+      <span>{sessions.filter(session=>['starting','running','working','idle','awaiting'].includes(session.state)&&session.backend!=='shell').length} live agents</span>
+      <span>{sessions.filter(session=>session.state==='awaiting'&&session.backend!=='shell').length} waiting for input or approval</span>
+      <small>Open runs and recorded activity →</small>
+    </button>
     <p class="usage-overview-freshness">
       {usage?.cache?.updated_at
         ? `ccusage cache updated ${new Date(usage.cache.updated_at * 1000).toLocaleString()}`

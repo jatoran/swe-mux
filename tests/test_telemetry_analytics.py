@@ -483,3 +483,38 @@ def test_quality_reports_per_version_denominators_and_capabilities(tmp_path: Pat
         "matching_calls"
     ] == 1
     ledger.close()
+
+
+def test_run_pages_filter_model_before_counting_and_pagination(tmp_path: Path) -> None:
+    ledger = CanonicalTelemetryLedger(tmp_path / "telemetry")
+    try:
+        for index, model in enumerate(("model-a", "model-b", "model-a")):
+            dims = dimensions(run_id=f"filter-run-{index}")
+            dims["model"] = model
+            ledger.record_event(
+                event("agent_run_started", ts=DAY + index, run_id=dims["run_id"]), dims
+            )
+        window = {"from_ts": DAY, "to_ts": DAY + 100}
+        first = ledger.entity_page(
+            kind="runs", limit=1, filters={"model": "model-a"}, **window
+        )
+        assert first["matching"] == 2
+        assert first["items"][0]["run_id"] == "filter-run-2"
+        assert first["items"][0]["last_observed_at"] == DAY + 2
+        assert first["filters"]["model"] == "model-a"
+        second = ledger.entity_page(
+            kind="runs", limit=1, cursor=first["next_cursor"],
+            filters={"model": "model-a"}, **window
+        )
+        assert second["matching"] == 2
+        assert second["items"][0]["run_id"] == "filter-run-0"
+        assert second["next_cursor"] is None
+        dims = dimensions(run_id="filter-run-1")
+        dims["model"] = "model-c"
+        ledger.record_event(event("turn_started", ts=DAY + 10), dims)
+        mixed = ledger.entity_page(kind="runs", filters={"model": "mixed"}, **window)
+        assert mixed["matching"] == 1
+        assert mixed["items"][0]["run_id"] == "filter-run-1"
+        assert not ledger.entity_page(kind="runs", filters={"model": "missing"}, **window)["items"]
+    finally:
+        ledger.close()

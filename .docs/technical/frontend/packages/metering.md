@@ -3,68 +3,40 @@
 Index: `../packages.md`.
 Design: `../../../design/features/usage.md`, `../../../design/features/processes-and-previews.md`, `../../../design/features/operational-telemetry.md`, `../../../design/features/remote-access.md`.
 
-## Two dialogs, one shell
+## System and Usage & activity
 
-`ResourcesModal.tsx` and `UsageModal.tsx` draw the same frame - `.usage-panel.resources-panel`, a flex column with a segmented control - because they are the same shape.
-The panel is a flex column rather than a fixed grid template, since segments contribute different numbers of rows.
-Forking the shell to change a title is how two dialogs stop agreeing about their own chrome.
+`ResourcesModal.tsx` owns **System** with Processes, Network, and Storage.
+`UsageModal.tsx` owns **Usage & activity** with Overview, Agent usage, Quota, Activity, and Automation.
+Both use the viewport-bounded flex shell; analytics-specific responsive rules live in `analytics.css`.
+Inactive main sections unmount so opening one does not retain another section's pollers.
+The session-scoped Processes drawer remains available beside the terminal.
 
-What separates them is the question, not the unit.
-Resources is live readings of one host that go stale in seconds; Usage is a retrospective question asked of a ledger.
+`AnalyticsPrimitives.tsx` provides responsive navigation, touch/keyboard exact-value expansion, expandable historical rows, token details, and bounded date-positioned charts.
+Desktop primary tabs become a native section selector on mobile.
+Secondary navigation retains short visible tabs, and extra filters use a bounded disclosure.
+`analyticsPresentation.ts` owns compact number formatting and calendar-based historical windows.
+`usagePots.ts` uses the same window helper for the Overview; it also owns tightest-window quota selection.
 
-## Resources dialog
+`UsageDashboardView.tsx` owns Summary, Trends, and Models, the source picker, and explicit collection operations.
+`UsageModelBreakdown.tsx` aggregates by exact source/model identity and offers selected-model history.
+`QuotaAnalytics.tsx` owns Current, History, Resets, and Attribution and fetches only the evidence needed by the selected view.
+Current readings are reloaded once a minute while the document is visible; quota provider polling remains owned by the backend.
+Attribution requests 500 recent rows filtered by provider/account, then labels and applies its date filter to that bounded result.
 
-`ResourcesModal.tsx`, `NetworkUsageModal.tsx` (`NetworkUsageView`), `StorageUsageModal.tsx`
-(`StorageUsageView`), `FleetActivityView.tsx`, `WorkloadTelemetry.tsx`, `ProcessFleetView.tsx`
+`FleetActivityView.tsx` owns Runs, Tools, Checks, Context, and Patterns.
+The selected date window is frozen in a memoized query until a filter changes or the operator reloads, so result renders cannot restart reads and cursor pages share one upper bound.
+Project/model/harness filters apply across views; layer, family, outcome, and evidence filters apply only to Tools and Patterns.
+`WorkloadTelemetry.tsx` owns the run browser, Live agents now projection, and run/turn inspection.
+The historical browser reads `/api/telemetry/v2/runs` and uses the canonical matching count, not displayed page length.
+It retains exact run identity when opening History or matching a live session.
+The workload aggregate endpoint only supplies available filter dimensions.
+Tools and Checks use cursor-paged entity reads; totals and per-field measurement denominators remain explicit.
+Collection diagnostics contain field coverage, parser and reconciliation state, export links, and lazy legacy comparison.
 
-Four segments: **Processes**, **Network**, **Storage**, **Fleet activity**.
-It replaces three separate modals that were three implementations of one shape - layer, focus trap, header, close - reached from three app-menu rows.
-
-`FleetActivityView.tsx` holds `runs + workload`, `tools`, `skills + verification`, `context + compaction`, `inefficiencies`, and - only while `canonical_telemetry_legacy_dashboard_enabled` is on - `legacy + shadow`; the first four were domains of a retired **Tokens** segment and measure neither a token nor a dollar.
-Processes says what the fleet is running now; Fleet activity says what it has been doing.
-Money is deliberately absent: the Usage dialog is the whole cost picture, and a second table of one number under a second name is the drift this split removed.
-Every tab reads the canonical telemetry v2 routes (`/api/telemetry/v2/*`), never the legacy operational snapshot, and every figure is the daemon's exact total over the selected window; nothing is summed from a displayed page.
-The controls above the tabs - range (24 hours, 7 days, 30 days, all retained), cohort, backend, Project, model, and on the tool tabs layer, family, outcome, and evidence quality - are one query string shared by every tab, so switching tabs never silently changes the question.
-The backend, Project, and model pickers offer what the ledger has actually seen in the window rather than the harness registry, because a harness that never ran here is not a filter anyone can use and an imported one that mux never launched still is.
-Every total is drawn with `TelemetryCaption` (`telemetryCaption.tsx`), which names the range, the cohort, the active filters, the denominator, and how the window was answered (rolled-up days and hours against hours read from entities); a figure without that caption is the bug the component exists to stop.
-The tools tab drills down: an aggregate row opens its matching calls (`/api/telemetry/v2/tools`), a call opens its evidence audit, and a call's run or turn opens the run or turn audit (`/api/telemetry/v2/runs/{id}`, `/turns/{id}`), each page carrying the exact matching count rather than the page length.
-`skills + verification` draws the skill and verification summaries, the provider-metric summary with the per-run `codex.tool.call` agreement, and a cohort comparison split by model, backend, or Project that shows `comparable: false` and the reason instead of a ranking when the cohorts differ on an unfixed dimension.
-`inefficiencies` carries review buttons (`useful`, `noise`, `already known`) that post to `/api/telemetry/v2/inefficiencies/review`; a review hides nothing by default and never changes configuration.
-Collection health is a collapsed `<details>` inside `tools` rather than a peer table, because it says whether those figures were collectable rather than what they are.
-It carries the field-completeness denominators per backend and per harness version, each harness's measured capability set, the provider event names seen per harness version with whether the reducer understood them, the native reconciliation status, and any ledger schema drift.
-The export section beside it links the JSONL and CSV attachments the daemon streams for the same window and filters, one per entity kind including provider metrics and evidence.
-`LegacyToolTelemetry.tsx` is the legacy tab: the old per-run `tool_events` table and the shadow comparison (`/api/telemetry/v2/shadow`) with every disagreement classified, kept so an operator can read the comparison before turning the legacy path off in Settings → Usage.
-
-Each view keeps its own fetching and is **unmounted when not selected** on purpose, since Processes and Network poll and a dialog holding live pollers open would cost more than the modals it replaced.
-
-The drawer's **Processes tab is not made redundant by it**: a modal covers the terminal, and that tab pins the focused session beside it - the same watch-here/act-there split the prompt Queue has with the Fleet Queue.
-
-## Usage dialog
-
-`UsageModal.tsx`, `usageSegments.ts`, `UsageOverview.tsx`, `usagePots.ts`,
-`UsageDashboardView.tsx` (`UsageAgentsView`), `UsageModelBreakdown.tsx`, `usageAnalytics.ts`,
-`AutomationSpendView.tsx`, `automationCost.ts`, `QuotaAnalytics.tsx`
-
-Four segments: **Overview**, **Agents**, **Automation**, **Quota**.
-`usageSegments.ts` holds the segment type and descriptors so the Overview's tiles can navigate to siblings without importing the dialog that contains them.
-
-`usagePots.ts` is the pure half of the Overview: `agentPot` windows the ccusage cache **by day rather than by row**, so two harnesses reporting the same date are one day; `tightestQuota` picks the window closest to running out across every provider's selected account and returns `null` for unreadable, never full headroom.
-Both invariants are the ones that fail silently in the wrong direction, which is why they are functions with tests rather than expressions in JSX (`frontend/test/usagePots.test.ts`).
-
-`AutomationSpendView.tsx` is drawn identically by the Automation dashboard and by Usage → Automation, as the **same component** rather than two views over one endpoint.
-Both readings are legitimate - which rule burned this, beside the rules; what am I burning in total, beside the other pots - and duplicating the markup would reproduce the drift this consolidation removed elsewhere.
-Its agent-model table is labelled by its denominator (`observed runs`) everywhere it appears, because `provider_cost_dimensions` is a subset of what ccusage reads and two bare totals were two competing answers to one question.
-
-`automationCost.ts` owns magnitude-aware spend formatting, ranked per-rule rows, and the prompt-cache hit rate (`cacheHit`).
-Its `null` return is deliberately distinct from a `0%` rate: null is "nothing was billed in this window", which an unused rule and a daemon predating cache accounting both look like, and printing 0% for either accuses a working cache of being broken.
-
-Every control belongs to the one segment it applies to.
-The source multi-select popover, the collector refresh, and the cache controls are on `Agents` alone; the provider filter is on `Quota` alone.
-Historical source controls derive from cache metadata instead of the launch-harness registry, and issue one unified refresh request.
-`usageAnalytics.ts` owns source and model aggregation.
-
-`operationalTelemetry.ts` holds the `/api/telemetry/operational` shapes, which Usage → Quota reads for `quota.attributions`.
-Resources → Fleet activity no longer reads that snapshot; its tool and compaction tables moved to the canonical ledger routes on 2026-09-02, and the legacy `tools` and `compactions` halves stay in the shape for the Usage dialog's reader and for the legacy tab while the switch is on.
+`AutomationSpendView.tsx` remains shared with the Automation dashboard.
+Metered call costs remain primary; observed-agent estimates are labelled by their subset and collapsed.
+`automationCost.ts` owns its cost, count, cache, and duration formatting.
+`operationalTelemetry.ts` supplies the quota attribution types; Activity uses canonical v2 routes.
 
 ## Bandwidth, storage, and processes
 

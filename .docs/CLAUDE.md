@@ -220,16 +220,15 @@
   so segments and sections are registered in `drawerSegments.ts` rather than held in a tab's
   local state, their selection persists per Project beside the tab's, and every retired command
   and tab id migrates forward (`keybindings.py`, `drawerLayout.ts`) rather than being dropped.
-- Changing the Resources dialog (its four segments - processes, bandwidth, storage, fleet
-  activity - or what any of them measures): `design/features/ui.md`,
+- Changing the System dialog (Processes, Network, and Storage, or what they measure): `design/features/ui.md`,
   `design/features/processes-and-previews.md`, `design/features/remote-access.md`,
   `design/features/operational-telemetry.md`, `technical/frontend/packages.md`.
   The rule it turns on: the drawer's Processes *tab* is not made redundant by the dialog's
   Processes segment - a modal covers the terminal, and the tab exists to answer "what is this
   session running" beside it - which is the same watch-here/act-there split the prompt Queue
   has with the Fleet Queue.
-- Changing the Usage dialog (its four segments - overview, agents, automation, quota - or how
-  any spend figure is drawn): `design/features/usage.md`, `design/features/ui.md`,
+- Changing the Usage & activity dialog (Overview, Agent usage, Quota, Activity, Automation, or how
+  any spend or activity figure is drawn): `design/features/usage.md`, `design/features/ui.md`,
   `design/features/automation.md`, `design/features/budgets.md`,
   `technical/frontend/packages.md`.
   The rule it turns on: **the three pots are never summed, and every figure carries its

@@ -18,8 +18,8 @@ import { expect, test } from 'playwright/test'
 
 const openSegment = async (page: import('playwright/test').Page, label: string) => {
   await page.goto('/usage-harness.html')
-  await page.waitForSelector('.usage-segmented button')
-  await page.locator('.usage-segmented button', { hasText: label }).click()
+  await page.waitForSelector('.analytics-primary .analytics-tab-row button')
+  await page.locator('.analytics-primary .analytics-tab-row button', { hasText: label }).click()
 }
 
 test('the overview shows three pots, each stamped with its basis, and no total', async ({ page }) => {
@@ -29,11 +29,11 @@ test('the overview shows three pots, each stamped with its basis, and no total',
 
   const pots = page.locator('.usage-pot')
   await expect(pots).toHaveCount(3)
-  await expect(pots.locator('header strong')).toHaveText(['Agents', 'Automation', 'Quota headroom'])
+  await expect(pots.locator('header strong')).toHaveText(['Agent usage', 'Automation', 'Quota headroom'])
   // The basis is the whole reason these are three tiles. `$499` read back out of
   // transcripts and `$1.88` billed by the call are not the same kind of claim.
   await expect(pots.locator('header em')).toHaveText([
-    'subscription · estimated', 'metered · billed', '% of window',
+    'transcript estimate', 'metered · billed', '% of window',
   ])
 
   // Three tiles on one row, so they are compared rather than read in sequence.
@@ -51,7 +51,7 @@ test('the overview shows three pots, each stamped with its basis, and no total',
   // spec kept asserting the retired element and its retired phrasing ("never added
   // together"), so it went red the first time this suite ran on CI - the invariant
   // was intact the whole time and only its rendering had moved.
-  await expect(page.locator('.usage-panel > footer')).toContainText('never summed')
+  await expect(page.locator('.usage-panel > footer')).toContainText('cost basis')
 })
 
 test('the quota tile names the tightest window rather than an average', async ({ page }) => {
@@ -74,7 +74,7 @@ test('a pot opens the segment that explains it', async ({ page }) => {
   await page.locator('.usage-pot').first().waitFor()
 
   await page.locator('.usage-pot').nth(1).click()
-  await expect(page.locator('.usage-segmented button[aria-selected="true"]')).toHaveText('Automation')
+  await expect(page.locator('.analytics-primary .analytics-tab-row button[aria-selected="true"]')).toHaveText('Automation')
   await page.locator('.cost-table tbody tr').first().waitFor()
 })
 
@@ -91,21 +91,21 @@ test('the spend view is the same table here as on the Automation dashboard', asy
 
   // The agent figure beside it is labelled by its denominator, never as the agent total:
   // it covers only runs mux observed, while the Agents segment reads every transcript.
-  await expect(page.locator('.cost-summary article').nth(4).locator('span')).toHaveText('agents · observed runs')
-  await expect(page.locator('.usage-table h3', { hasText: 'Agent model spend' }))
-    .toHaveText('Agent model spend · observed runs only')
+  const subset=page.locator('details', {hasText:'Agent model spend · observed runs only'})
+  await expect(subset).toHaveJSProperty('open',false)
+
 })
 
 test('every segment fits the shared frame without overlapping its chrome', async ({ page }) => {
   await page.setViewportSize({ width: 1200, height: 900 })
   await page.goto('/usage-harness.html')
-  await page.waitForSelector('.usage-segmented button')
+  await page.waitForSelector('.analytics-primary .analytics-tab-row button')
 
-  const labels = await page.locator('.usage-segmented button').allInnerTexts()
-  expect(labels).toEqual(['Overview', 'Agents', 'Automation', 'Quota'])
+  const labels = await page.locator('.analytics-primary .analytics-tab-row button').allInnerTexts()
+  expect(labels).toEqual(['Overview', 'Agent usage', 'Quota', 'Activity', 'Automation'])
 
   for (const label of labels) {
-    await page.locator('.usage-segmented button', { hasText: label }).click()
+    await page.locator('.analytics-primary .analytics-tab-row button', { hasText: label }).click()
     const geometry = await page.evaluate(() => {
       const box = (selector: string) => {
         const element = document.querySelector<HTMLElement>(selector)
@@ -114,7 +114,7 @@ test('every segment fits the shared frame without overlapping its chrome', async
       const panel = document.querySelector<HTMLElement>('.resources-panel')!
       return {
         header: box('.resources-panel > header')!,
-        segmented: box('.usage-segmented')!,
+        segmented: box('.analytics-primary .analytics-tab-row')!,
         body: box('.resources-panel > main')!,
         panel: panel.getBoundingClientRect().toJSON(),
         overflow: panel.scrollHeight - panel.clientHeight,
@@ -145,4 +145,24 @@ test('at phone width the pots stack and the basis labels survive', async ({ page
   expect(await page.evaluate(
     () => document.documentElement.scrollWidth <= document.documentElement.clientWidth,
   )).toBe(true)
+})
+
+
+test('mobile usage expands exact totals without widening the dialog', async ({page})=>{
+  await page.setViewportSize({width:390,height:800})
+  await page.goto('/usage-harness.html')
+  await page.locator('.analytics-section-picker select').selectOption('agents')
+  const tokens=page.locator('.analytics-headlines .metric-value').first()
+  await expect(tokens).toHaveText('15.1B')
+  await tokens.click()
+  await expect(tokens).toHaveText('15,140,545,000')
+  const row=page.locator('.analytics-record').first()
+  await row.locator('summary').click()
+  await expect(row).toContainText('Cache read')
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true)
+  await page.locator('.analytics-section-picker select').selectOption('quota')
+  await expect(page.locator('.quota-account-card')).toHaveCount(2)
+  await page.getByRole('tab',{name:'History',exact:true}).click()
+  await expect(page.locator('.quota-account-card')).toHaveCount(0)
+  await expect(page.locator('.quota-chart')).toHaveCount(1)
 })

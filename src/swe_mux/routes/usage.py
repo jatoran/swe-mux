@@ -12,6 +12,7 @@ from aiohttp import web
 from .. import (
     app_keys as keys,
 )
+from .. import session_titles
 from ..http_support import json_response
 from ..operational_telemetry import OperationalTelemetryStore
 from ..provider_accounts import (
@@ -172,6 +173,22 @@ async def canonical_tool_calls(request: web.Request) -> web.Response:
     return json_response(result)
 
 
+async def _name_telemetry_runs(request: web.Request, rows: list[dict[str, Any]]) -> None:
+    """Join titles only to an exact historical run, never a rolled-over session."""
+    if keys.HISTORY not in request.app:
+        return
+    ids = {str(row["run_id"]) for row in rows}
+    names = await request.app[keys.HISTORY].history_naming_rows(sorted(ids))
+    titles = await session_titles.generated_titles(request.app.get(keys.AUTOMATION_STORE), ids)
+    for row in rows:
+        entry = names.get(str(row["run_id"]))
+        if entry and entry["id"] == row["run_id"]:
+            row["name"] = entry["name"]
+            row["auto_named"] = entry["auto_named"]
+            row["generated_title"] = titles.get(str(row["run_id"]), "")
+            row["history_id"] = entry["id"]
+
+
 async def canonical_entity_page(request: web.Request) -> web.Response:
     """Newest-first page of runs, turns, skills, verifications, requests, or metrics."""
 
@@ -183,6 +200,12 @@ async def canonical_entity_page(request: web.Request) -> web.Response:
         result = await service.entity_page(**_page_arguments(request, kind))
     except ValueError as exc:
         raise web.HTTPBadRequest(text=str(exc)) from None
+    if kind == "runs":
+        await _name_telemetry_runs(request, result["items"])
+        log.debug(
+            "telemetry_run_page matching=%s returned=%s",
+            result["matching"], len(result["items"]),
+        )
     return json_response(result)
 
 
@@ -229,6 +252,7 @@ async def canonical_run_audit(request: web.Request) -> web.Response:
     result = await request.app[keys.CANONICAL_TELEMETRY].run_audit(request.match_info["run_id"])
     if result is None:
         raise web.HTTPNotFound(text="unknown canonical run")
+    await _name_telemetry_runs(request, [result["run"]])
     return json_response(result)
 
 

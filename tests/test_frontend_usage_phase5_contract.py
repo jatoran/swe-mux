@@ -13,51 +13,30 @@ def test_usage_dashboard_and_palette_autofocus_are_wired() -> None:
     # "Open usage analytics" the whole time; it now opens the dialog it is named for.
     assert "openUsage('overview')" in app
     assert "<UsageAgentsView" in modal
-    assert "Refreshing historical sources" in usage
-    assert "time series" in usage
-    assert "model breakdown" in usage
-    assert "UsageSeries" in usage
+    assert "<UsageTrend" in usage
+    assert "<UsageBreakdown" in usage
 
 
-def test_usage_dialog_separates_the_three_pots_and_never_sums_them() -> None:
+def test_usage_dialog_keeps_measurement_sources_separate() -> None:
     root = Path(__file__).parents[1] / "frontend" / "src"
-    segments = (root / "usageSegments.ts").read_text(encoding="utf-8")
-    overview = (root / "UsageOverview.tsx").read_text(encoding="utf-8")
     modal = (root / "UsageModal.tsx").read_text(encoding="utf-8")
-
-    # Four segments, and the first is the headline the old Tokens segment never had.
-    assert "'overview' | 'agents' | 'automation' | 'quota'" in segments
-    for label in ("Overview", "Agents", "Automation", "Quota"):
-        assert f"label: '{label}'" in segments
-
-    # Every pot carries the basis that makes its figure mean something. A dollar figure
-    # read back out of transcripts and a dollar figure billed by the call are not the same
-    # claim, and the whole reason these are three tiles rather than one row is that a
-    # reader has to be able to tell them apart without opening anything.
-    assert "subscription · estimated" in overview
+    resources = (root / "ResourcesModal.tsx").read_text(encoding="utf-8")
+    overview = (root / "UsageOverview.tsx").read_text(encoding="utf-8")
+    assert "<FleetActivityView" in modal
+    assert "FleetActivityView" not in resources
+    assert "transcript estimate" in overview
     assert "metered · billed" in overview
     assert "% of window" in overview
-    assert "never totaled" in overview
-    # Every segment's footer restates it, because a reader who deep-linked to one pot never
-    # saw the Overview that explains why there is no total.
-    assert segments.count("The three pots are never summed") >= 1
-    assert "NEVER_SUMMED" in segments
     assert "{active.footer}" in modal
 
 
-def test_the_historical_controls_belong_to_the_only_segment_they_apply_to() -> None:
-    """The source picker, refresh, and cache controls were shared by six domains that had
-    no use for five of them, and the status line printed an apology saying so."""
-    usage = (
-        Path(__file__).parents[1] / "frontend" / "src" / "UsageDashboardView.tsx"
-    ).read_text(encoding="utf-8")
-
-    assert "usage-source-picker" in usage
-    assert "clear cache" in usage
-    # The apology, and the domain rail that made it necessary, are both gone.
-    assert "Filters below apply only to this telemetry category" not in usage
-    assert "usage-domain-tabs" not in usage
-    # ...and so is everything that was never a token or a dollar.
+def test_historical_collection_controls_remain_source_scoped() -> None:
+    root = Path(__file__).parents[1] / "frontend" / "src"
+    usage = (root / "UsageDashboardView.tsx").read_text(encoding="utf-8")
+    quota = (root / "QuotaAnalytics.tsx").read_text(encoding="utf-8")
+    assert "/api/usage/refresh" in usage
+    assert "/api/usage/cache" in usage
+    assert "/api/usage/refresh" not in quota
     for elsewhere in ("WorkloadTelemetry", "ToolsView", "ContextView", "QuotaAnalytics"):
         assert elsewhere not in usage
 

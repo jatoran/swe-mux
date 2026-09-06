@@ -51,7 +51,7 @@ const daily = (date: string, cost: number, tokens: number) => ({
   cache_creation_tokens: Math.round(tokens * 0.1),
   cache_read_tokens: Math.round(tokens * 0.8),
   total_tokens: tokens,
-  cost_usd: cost,
+  cost_usd: cost, cost_method: 'source_estimate',
 })
 
 const USAGE = {
@@ -95,16 +95,21 @@ const ACCOUNTS = {
     {
       id: 'account-claude', provider: 'claude', label: 'work', created_at: NOW, updated_at: NOW,
       // 91% of a 5h window: the tightest reading, so this is the one the tile has to pick.
-      quota: { status: 'ok', session: { used_percent: 91.4, window_minutes: 300, resets_at: NOW + 3300 }, weekly: { used_percent: 38.2, window_minutes: 10080, resets_at: NOW + 300_000 }, refreshed_at: NOW },
+      quota: { status: 'ready', session: { used_percent: 91.4, window_minutes: 300, resets_at: NOW + 3300 }, weekly: { used_percent: 38.2, window_minutes: 10080, resets_at: NOW + 300_000 }, refreshed_at: NOW },
     },
     {
       id: 'account-codex', provider: 'codex', label: 'personal', created_at: NOW, updated_at: NOW,
-      quota: { status: 'ok', session: { used_percent: 12, window_minutes: 300, resets_at: NOW + 1200 }, weekly: { used_percent: 44.5, window_minutes: 10080, resets_at: NOW + 400_000 }, refreshed_at: NOW },
+      quota: { status: 'ready', session: { used_percent: 12, window_minutes: 300, resets_at: NOW + 1200 }, weekly: { used_percent: 44.5, window_minutes: 10080, resets_at: NOW + 400_000 }, refreshed_at: NOW },
     },
   ],
 }
 
 const ROUTES: Array<[string, unknown]> = [
+  ['/api/telemetry/v2/workload', {dimensions:[]}],
+  ['/api/telemetry/v2/runs', {matching:0,items:[],next_cursor:null}],
+  ['/api/telemetry/v2/quality', {totals:{calls:0,with_duration:0},backends:[],versions:[],capabilities:{},parsers:[]}],
+  ['/api/telemetry/v2/shadow', {legacy_dashboard_enabled:false}],
+  ['/api/telemetry/quota-series', {resolution:'daily',series:[],resets:[]}],
   ['/api/telemetry/workloads', TELEMETRY],
   ['/api/telemetry/operational', { schema_version: 1, interpretation: '', quota: { samples: [], resets: [], attributions: [], rollups: [] }, tools: { metrics: [], skills: [], unknown_or_unmapped: 0, parser_version: 'v1', parser_versions: {}, coverage: [] }, compactions: [] }],
   ['/api/automation/dashboard', DASHBOARD],

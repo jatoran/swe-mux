@@ -3410,7 +3410,7 @@ Detailed UI behavior belongs with the owning feature:
 - Provider selection and reset review: `provider-accounts.md`
 - CPU/RSS and the Resources dialog's Processes segment: `processes-and-previews.md`
 - The Usage dialog, the three pots, and historical collection: `usage.md`
-- Quota/context/tool evidence, and the Resources dialog's Fleet activity segment: `operational-telemetry.md`
+- Quota/context/tool evidence, and the Usage & activity dialog's Activity segment: `operational-telemetry.md`
 - Automation navigation and diagnostics: `automation.md`
 - Project task discovery and trust: `project-actions.md`
 - Global Talk, registry-backed navigation, fleet speech, and guarded approvals: `voice.md`
@@ -3682,3 +3682,13 @@ Colour still arrives through the existing `.state-dot` state classes, so themes 
 - `frontend/src/daemonLiveness.ts`
 - `frontend/src/DaemonStallBanner.tsx`
 - `frontend/src/style.css`
+
+## Usage & activity and System dialogs
+
+Usage & activity owns Overview, Agent usage, Quota, Activity, and Automation.
+System owns Processes, Network, and Storage.
+The `fleetActivity.open` command opens Activity inside Usage & activity, while existing System command IDs stay stable.
+Desktop analytics uses primary and secondary tabs; mobile uses a section selector and visible secondary tabs.
+Historical tables become compact expandable rows, charts have bounded height, and one content region scrolls inside the dialog.
+Quota separates Current, History, Resets, and Attribution.
+See `usage.md` for measurement boundaries and `operational-telemetry.md` for canonical evidence.

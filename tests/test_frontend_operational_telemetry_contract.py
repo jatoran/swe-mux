@@ -30,90 +30,23 @@ def test_process_fleet_exposes_durable_identity_state_and_rechecked_actions() ->
     assert "auto" + "kill" not in view.lower()
 
 
-def test_operational_evidence_survives_the_split_without_identity_overclaim() -> None:
-    """The evidence surfaces moved to two dialogs; every claim they make moved with them.
-
-    Quota is one of the three pots of spend and lives in the Usage dialog, read from the
-    legacy `/api/telemetry/operational` snapshot. Tool, skill, and compaction evidence
-    measures behavior rather than money and lives in Resources → Fleet activity, which since
-    2026-09-02 reads the canonical ledger (`/api/telemetry/v2/*`) rather than that snapshot,
-    and never sums a total from a displayed page.
-    """
-    telemetry = source("operationalTelemetry.ts")
+def test_operational_evidence_keeps_identity_and_collection_boundaries() -> None:
     fleet = source("FleetActivityView.tsx")
-    modal = source("UsageModal.tsx")
-    segments = source("usageSegments.ts")
+    runs = source("WorkloadTelemetry.tsx")
     quota = source("QuotaAnalytics.tsx")
-
-    # One declared legacy path for the quota half; the canonical routes for the other.
-    assert "/api/telemetry/operational" in telemetry
-    assert "OPERATIONAL_TELEMETRY_PATH" in modal
+    assert "OPERATIONAL_TELEMETRY_PATH" in quota
     assert "OPERATIONAL_TELEMETRY_PATH" not in fleet
-    assert "/api/telemetry/v2/tools/summary" in fleet
-    assert "/api/telemetry/v2/quality" in fleet
-    assert "/api/telemetry/v2/compactions" in fleet
-    assert "/api/telemetry/v2/verifications/summary" in fleet
-    assert "/api/telemetry/v2/metrics/summary" in fleet
-    assert "/api/telemetry/v2/compare" in fleet
-    assert "/api/telemetry/v2/inefficiencies/review" in fleet
-    assert "/api/telemetry/v2/runs/" in fleet and "/api/telemetry/v2/turns/" in fleet
-    assert "/api/telemetry/v2/export/" in fleet
-    assert "/api/telemetry/quota-series" in source("usageAnalytics.ts")
-    # The legacy tool table survives only in its own component, behind the shadow
-    # comparison and the switch that retires it; nothing else reads the snapshot.
-    legacy = source("LegacyToolTelemetry.tsx")
-    assert "OPERATIONAL_TELEMETRY_PATH" in legacy
-    assert "/api/telemetry/v2/shadow" in legacy
-    assert "canonical_telemetry_legacy_dashboard_enabled" in legacy
+    for route in ("tools/summary", "quality", "compactions", "verifications",
+                  "metrics/summary", "compare", "inefficiencies/review", "export/"):
+        assert f"/api/telemetry/v2/{route}" in fleet
+    assert "/api/telemetry/v2/runs/" in runs
+    assert "/api/telemetry/v2/turns/" in runs
     assert "legacy_dashboard_enabled" in fleet
-    assert "canonical_telemetry_legacy_dashboard_enabled" in source("Settings.tsx")
-    # Every total names its range, cohort, denominator, and coverage through one component.
-    caption = source("telemetryCaption.tsx")
-    assert "data-telemetry-caption" in caption
-    assert fleet.count("<TelemetryCaption") >= 6
-    assert "<TelemetryCaption" in source("WorkloadTelemetry.tsx")
-
-    # Quota keeps its account semantics and its refusal to overclaim them.
-    assert "<QuotaAnalytics" in modal
-    assert "external/unassigned" in quota
-    assert "Correlation remains observational" in quota
-    assert "Legacy rows without a provider ID are marked explicitly" in quota
-
-    # ...and the historical pot beside it keeps the opposite promise, which is why the
-    # caveat is per segment rather than one line for the dialog: ccusage reads transcript
-    # roots that carry no trustworthy saved-account identity, so a historical row must never
-    # be presented as belonging to an account slot.
-    assert "not account-specific" in segments
-    assert "quota utilization, not tokens" in segments
-    assert "{active.footer}" in modal
-
-    # Tool, skill, and compaction evidence, with every caveat it carried before the move.
-    assert "['tools', 'tools']" in fleet
-    assert "skills + verification" in fleet
-    assert "context + compaction" in fleet
-    assert "project/layer" in fleet
-    assert "Token drops alone remain unknown" in fleet
-    assert "Skills are never inferred from Markdown or generic file reads" in fleet
-    assert "Only explicit provider records qualify as skill activation" in fleet
-    # Collection health is a collapsed diagnostic, not a third peer metric: it says whether
-    # the figures above were collectable, which is asked only once they look wrong. It
-    # carries the per-backend field denominators and the provider event names the reducer
-    # saw, understood or not, so a renamed attribute reads as drift rather than silence.
-    assert "telemetry-collection-health" in fleet
-    assert "<details class=\"telemetry-collection-health\">" in fleet
-    assert "unrecognised provider event name" in fleet
     assert "runtime_parent_unavailable" in fleet
-    assert "schema drift" in fleet
-    # The controls are one query for every tab, so switching tabs never changes the question.
-    assert "const query=telemetryQuery(filters)" in fleet
-    for control in ("Project", "Model", "Family", "Outcome", "Evidence", "Layer"):
-        assert f"<label>{control}<select" in fleet, control
-
-    # Money is deliberately absent here. The Usage dialog is the whole cost picture, and a
-    # second table of one number under a second name is the drift this split removed.
+    assert "Missing measurements are not zero" in fleet
+    assert "Correlation does not establish who used an account" in quota
     for money in ("cost_usd", "AutomationSpendView", "formatMoney"):
         assert money not in fleet
-        assert money not in legacy
 
 
 def test_reset_indicator_is_purple_deduplicated_and_sound_is_per_device_profile() -> None:

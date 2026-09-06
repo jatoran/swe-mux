@@ -384,6 +384,15 @@ class LedgerQueryMixin:
         for column, value in usable.items():
             clauses.append(_term(column))
             args.append(value)
+        # Runs have initial/final models rather than an event-level model column.
+        # Match the same explicit mixed-model group as the workload summary.
+        if kind == "runs" and filters and filters.get("model"):
+            clauses.append(
+                "(CASE WHEN initial_model IS NOT NULL AND final_model IS NOT NULL "
+                "AND initial_model!=final_model THEN 'mixed' "
+                "ELSE COALESCE(final_model,initial_model,'unknown') END)=?"
+            )
+            args.append(filters["model"])
         count_where = " AND ".join(clauses)
         count_args = tuple(args)
         decoded = self._decode_cursor(cursor, 2)
@@ -414,6 +423,20 @@ class LedgerQueryMixin:
             key=lambda row: (float(row[time_column] or 0), str(row[key_column])), reverse=True
         )
         page = candidates[:bounded_limit]
+        if kind == "runs" and page:
+            evidence_ids = list({str(row["last_evidence_id"]) for row in page})
+            placeholders = ",".join("?" for _ in evidence_ids)
+            latest = {
+                str(row["evidence_id"]): row
+                for row in self._query_all(
+                    "SELECT evidence_id,observed_at,event_type FROM telemetry_evidence "
+                    f"WHERE evidence_id IN ({placeholders})", tuple(evidence_ids)
+                )
+            }
+            for row in page:
+                evidence = latest.get(str(row["last_evidence_id"]))
+                row["last_observed_at"] = evidence["observed_at"] if evidence else None
+                row["last_event_type"] = evidence["event_type"] if evidence else None
         next_cursor = None
         if len(candidates) > bounded_limit and page:
             last = page[-1]
@@ -423,7 +446,11 @@ class LedgerQueryMixin:
             "from": from_ts,
             "to": to_ts,
             "origin": origin or "all",
-            "filters": dict(usable),
+            "filters": {
+                **usable,
+                **({"model": filters["model"]}
+                   if kind == "runs" and filters and filters.get("model") else {}),
+            },
             "matching": counted,
             "items": page,
             "next_cursor": next_cursor,

@@ -17,51 +17,30 @@ import { expect, test } from 'playwright/test'
  * practically unreadable. Those assertions follow the table to each new home.
  */
 
-const openDomain = async (page: import('playwright/test').Page, label: string) => {
-  await page.goto('/resources-harness.html')
-  await page.waitForSelector('.usage-domain-tabs button')
-  await page.locator('.usage-domain-tabs button', { hasText: label }).click()
+const openDomain = async (page:import('playwright/test').Page,label:string)=>{
+  await page.goto('/resources-harness.html?activity')
+  await page.getByRole('tab',{name:label,exact:true}).click()
 }
 
-test('the workload table reads at human scale rather than raw units', async ({ page }) => {
-  await page.setViewportSize({ width: 1200, height: 900 })
-  await openDomain(page, 'runs + workload')
-  await page.locator('.usage-table', { hasText: 'Observed workload' }).locator('tbody tr').first().waitFor()
-
-  const row = page.locator('.usage-table', { hasText: 'Observed workload' }).locator('tbody tr').first()
-  // 8403 seconds and 9,702,931,354 tokens are both technically present and practically unread.
-  await expect(row.locator('td').nth(2)).toContainText('1m 35s')
-  await expect(row.locator('td').nth(2)).toContainText('2h 20m wall')
-  await expect(row.locator('td').nth(6)).toHaveText('9.7B')
-  // The exact total is still one hover away rather than discarded by the rounding.
-  await expect(row.locator('td').nth(6)).toHaveAttribute('title', /9.702.931.354/)
+test('activity lists identifiable runs with compact and exact token values',async({page})=>{
+  await page.setViewportSize({width:1200,height:900})
+  await openDomain(page,'Runs')
+  await expect(page.locator('.analytics-run-card')).toContainText('Refactor usage')
+  await expect(page.locator('.analytics-run-card')).toContainText('swe-mux')
+  const tokens=page.locator('.analytics-run-meta .metric-value')
+  await expect(tokens).toHaveText('9.7B')
+  await tokens.click()
+  await expect(tokens).toHaveText('9,702,931,354')
 })
 
-test('collection health is collapsed beneath the metrics it qualifies', async ({ page }) => {
-  await page.setViewportSize({ width: 1200, height: 900 })
-  await openDomain(page, 'tools')
-  await page.locator('.usage-table', { hasText: 'Cross-project tool metrics' }).locator('tbody tr').first().waitFor()
-
-  // Parser coverage does not measure the fleet — it says whether the two tables above it
-  // were collectable at all. Drawn open as a third peer table it pushed the real metrics
-  // off the first screen, so it ships closed and the tables sit above it.
-  const health = page.locator('.telemetry-collection-health')
-  await expect(health).toHaveJSProperty('open', false)
-  await expect(health.locator('summary')).toContainText('4610/4821 calls have results')
-
-  const metrics = await page.locator('.usage-table', { hasText: 'Cross-project tool metrics' }).boundingBox()
-  const collapsed = await health.boundingBox()
-  expect(collapsed!.y).toBeGreaterThan(metrics!.y)
-
-  await health.locator('summary').click()
-  // Four tables: field completeness per backend, the same per harness version, what
-  // each harness's export can carry, and the provider event names seen. All are
-  // collection facts, not fleet metrics.
-  await expect(health.locator('table')).toHaveCount(4)
-  await expect(health.locator('table').first().locator('tbody tr')).toHaveCount(1)
-  await expect(health.locator('table').last().locator('tbody tr')).toHaveCount(1)
-  await expect(health.locator('table').last()).toContainText('tool_result')
-  await expect(health).toContainText('no native telemetry')
+test('collection coverage remains collapsed beside tools',async({page})=>{
+  await page.setViewportSize({width:1200,height:900})
+  await openDomain(page,'Tools')
+  await page.locator('.analytics-tool-record').first().waitFor()
+  const health=page.locator('.analytics-collection')
+  await expect(health).toHaveJSProperty('open',false)
+  await health.locator(':scope > summary').click()
+  await expect(health).toContainText('Missing measurements are not zero')
 })
 
 test('every segment fits the shared frame without overlapping its chrome', async ({ page }) => {
@@ -70,7 +49,7 @@ test('every segment fits the shared frame without overlapping its chrome', async
   await page.waitForSelector('.resources-segmented button')
 
   const labels = await page.locator('.resources-segmented button').allInnerTexts()
-  expect(labels).toEqual(['Processes', 'Network', 'Storage', 'Fleet activity'])
+  expect(labels).toEqual(['Processes', 'Network', 'Storage'])
 
   for (const label of labels) {
     await page.locator('.resources-segmented button', { hasText: label }).click()
@@ -97,16 +76,11 @@ test('every segment fits the shared frame without overlapping its chrome', async
   }
 })
 
-test('at phone width the dialog fills the screen without scrolling sideways', async ({ page }) => {
-  await page.setViewportSize({ width: 390, height: 800 })
-  await openDomain(page, 'tools')
-  await page.locator('.usage-table', { hasText: 'Cross-project tool metrics' }).locator('tbody tr').first().waitFor()
-  const overflow = await page.evaluate(() => ({
-    body: document.documentElement.scrollWidth <= document.documentElement.clientWidth,
-    cells: [...document.querySelectorAll('.usage-table td')]
-      .filter(cell => cell.scrollWidth > cell.clientWidth + 1).length,
-  }))
-  expect(overflow.body).toBe(true)
-  // The wide table scrolls inside its own container rather than widening the page.
-  expect(overflow.cells).toBe(0)
+test('mobile tool rows expand without widening the screen',async({page})=>{
+  await page.setViewportSize({width:390,height:800})
+  await openDomain(page,'Tools')
+  const tool=page.locator('.analytics-tool-record').first()
+  await tool.locator(':scope > summary').click()
+  await expect(tool).toContainText('Mean duration')
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true)
 })

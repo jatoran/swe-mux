@@ -816,7 +816,7 @@ export function App() {
     .then(setConfiguratorOptions).catch(()=>setConfiguratorOptions(null))
   const configuratorLaunch=useMemo(()=>launchState(configuratorOptions),[configuratorOptions])
   const [railVoiceRevision,setRailVoiceRevision]=useState(0)
-  // Processes, bandwidth, storage, and fleet activity are one dialog (`ResourcesModal`).
+  // Processes, bandwidth, and storage are one System dialog (`ResourcesModal`).
   // `null` is closed; the value is the segment it opens on, so every entry point that
   // named a resource still lands on that resource.
   const [resourcesOpen,setResourcesOpen]=useState<ResourceSegment|null>(null)
@@ -6018,16 +6018,13 @@ export function App() {
       voice: { phrases: [`help with ${topic.title.toLowerCase()}`, `explain ${topic.title.toLowerCase()}`] },
     })),
     { id: 'actions.configure', label: 'Configure Actions', category: 'view', available: true, run: openActionSettings },
-    // Two dialogs. The ids are unchanged so keybindings and menu rows that already name a
-    // surface keep working and keep landing on it — `usage.open` most of all, which has
-    // been called "Open usage analytics" the whole time while opening a segment of the
-    // dialog about processes and disk, and now opens the dialog it is named for.
-    { id: 'resources.open', label: 'Open resources', category: 'view', available: true, run: () => openResources('processes') },
-    { id: 'usage.open', label: 'Open usage analytics', category: 'view', available: true, run: () => openUsage('overview') },
+    // Existing command IDs keep saved bindings while the destinations are reorganized.
+    { id: 'resources.open', label: 'Open system resources', category: 'view', available: true, run: () => openResources('processes') },
+    { id: 'usage.open', label: 'Open usage & activity', category: 'view', available: true, run: () => openUsage('overview') },
     // Quota is the one reading here that is ever urgent, so it gets a command of its own
     // rather than being two clicks inside the one above.
     { id: 'usage.quota', label: 'Open provider quota windows', category: 'view', available: true, run: () => openUsage('quota') },
-    { id: 'fleetActivity.open', label: 'Open fleet activity telemetry', category: 'view', available: true, run: () => openResources('fleet') },
+    { id: 'fleetActivity.open', label: 'Open fleet activity telemetry', category: 'view', available: true, run: () => openUsage('activity') },
     { id: 'networkUsage.open', label: 'Open bandwidth usage', category: 'view', available: true, run: () => openResources('network') },
     { id: 'storageUsage.open', label: 'Open storage usage', category: 'view', available: true, run: () => openResources('storage') },
     { id: 'hooks.open', label: 'Open Automation', category: 'view', available: true, run: () => {openAutomation('policy',activeProject?.id);setMainMenuOpen(false)} },
@@ -8891,16 +8888,9 @@ export function App() {
       <button class="menu-row" onClick={() => runNamedCommand('queue.fleet')}><span class="menu-row-icon" aria-hidden="true"><QueueClockIcon/></span><span class="menu-row-label">Fleet queue{queuePendingTotal?` [${queuePendingTotal} pending]`:''}</span></button>
       <button class="menu-row" onClick={()=>runNamedCommand('prompts.open')}><span class="menu-row-icon" aria-hidden="true"><PromptsIcon/></span><span class="menu-row-label">Prompt library</span></button>
       <button class="menu-row" onClick={()=>runNamedCommand('clipboard.open')}><span class="menu-row-icon" aria-hidden="true"><ClipboardHistoryIcon/></span><span class="menu-row-label">Clipboard history</span></button>
-      {/* One row for processes, bandwidth, storage, and fleet activity — segments of one
-          dialog. The named entry points survive as palette commands and as the sidebar's
-          resource chip, which lands on the segment it was already showing. */}
-      <button class="menu-row" onClick={() => runNamedCommand('resources.open')}><span class="menu-row-icon" aria-hidden="true"><ProcessesIcon/></span><span class="menu-row-label">Resources</span></button>
-      {/* Spend is the eighth row, and it is worth the row. It was a segment of Resources,
-          where the surface named for money had no total on its first screen and three of
-          its six tabs measured neither a token nor a dollar. The menu-row budget is real
-          and this is what it is for: a subject nobody finds by guessing which meter it was
-          filed under. */}
-      <button class="menu-row" onClick={() => runNamedCommand('usage.open')}><span class="menu-row-icon" aria-hidden="true"><SpendIcon/></span><span class="menu-row-label">Usage &amp; spend</span></button>
+      {/* Host resources and agent analytics have separate destinations. */}
+      <button class="menu-row" onClick={() => runNamedCommand('resources.open')}><span class="menu-row-icon" aria-hidden="true"><ProcessesIcon/></span><span class="menu-row-label">System</span></button>
+      <button class="menu-row" onClick={() => runNamedCommand('usage.open')}><span class="menu-row-icon" aria-hidden="true"><SpendIcon/></span><span class="menu-row-label">Usage &amp; activity</span></button>
       <button class="menu-row" onClick={() => runNamedCommand('notifications.open')}><span class="menu-row-icon" aria-hidden="true"><AlertsIcon/></span><span class="menu-row-label">Notifications{notificationUnread?` [${notificationUnread} new]`:''}</span></button>
       <div class="context-rule"/>
       {/* The Project registry is reachable from the sidebar's own PROJECTS header too,
@@ -9004,6 +8994,11 @@ export function App() {
     />}
     {usageOpen&&<UsageModal
       initial={usageOpen}
+      sessions={sessions}
+      projects={projects}
+      onManageAccounts={()=>{setUsageOpen(null);openSettings('Accounts')}}
+      onOpenSession={id=>{const session=sessions.find(item=>item.id===id);if(session){setUsageOpen(null);void selectSession(session)}}}
+      onOpenHistory={id=>{setUsageOpen(null);showHistoryEntry(id)}}
       onConfigure={()=>{setUsageOpen(null);openSettings('Usage analytics')}}
       onOpenAutomation={()=>{setUsageOpen(null);openAutomation('usage',activeProject?.id)}}
       onClose={()=>setUsageOpen(null)}

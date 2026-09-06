@@ -9,6 +9,7 @@
 // human-scale formatting assertions that have followed this table through two homes keep
 // running against it and would notice a regression introduced by the move itself.
 import { render } from 'preact'
+import { UsageModal } from '../../src/UsageModal'
 import { ResourcesModal } from '../../src/ResourcesModal'
 import type { Project, Session } from '../../src/types'
 import '../../src/style.css'
@@ -126,6 +127,8 @@ const TOOL_PAGE = {
 }
 
 const ROUTES: Array<[string, unknown]> = [
+  ['/api/telemetry/v2/runs', {matching:1,next_cursor:null,items:[{run_id:'run-1',session_id:'session-1',project_id:'project',backend:'codex',final_model:'gpt-5.6-sol',name:'Refactor usage',started_at:NOW-8404,ended_at:NOW,input_tokens:9664898958,output_tokens:38032396,measurement_source:'transcript'}]}],
+  ['/api/telemetry/v2/verifications?', {matching:0,items:[]}],
   ['/api/telemetry/v2/workload', TELEMETRY],
   ['/api/telemetry/v2/tools/summary', CANONICAL],
   ['/api/telemetry/v2/tools?', TOOL_PAGE],
@@ -151,8 +154,10 @@ const SESSIONS: Session[] = []
 document.body.style.margin = '0'
 document.documentElement.style.setProperty('--ui-scale', '1')
 render(
-  <ResourcesModal
-    initial="fleet"
+  new URLSearchParams(location.search).has('activity')
+    ? <UsageModal initial="activity" projects={PROJECTS} sessions={SESSIONS} onClose={()=>{}} onConfigure={()=>{}}/>
+    : <ResourcesModal
+    initial="processes"
     sessions={SESSIONS}
     projects={PROJECTS}
     onClose={() => {}}

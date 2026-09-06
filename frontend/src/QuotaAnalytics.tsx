@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'preact/hooks'
 import { api } from './api'
-import { Dropdown } from './Dropdown'
+import { AnalyticsNav, useChartWidth } from './AnalyticsPrimitives'
+import { formatResetRemaining } from './providerAccountDisplay'
+import { OPERATIONAL_TELEMETRY_PATH, type OperationalStatus, type QuotaAttribution } from './operationalTelemetry'
 import { serverNow } from './serverClock.ts'
 import type { ProviderAccount, ProviderAccountsStatus } from './ProviderAccounts'
 import {
@@ -15,25 +17,6 @@ import {
   type ResetEvent,
 } from './usageAnalytics'
 
-type Attribution = {
-  sample_id:number
-  window:string
-  provider:string
-  account_id:string
-  quota_delta:number
-  correlated_estimate:number
-  correlated_low:number
-  correlated_high:number
-  external_estimate:number
-  external_low:number
-  external_high:number
-  confidence:string
-  sample_gap_seconds:number
-  concurrent_sessions:number
-  provider_lag_seconds:number
-  allocations:Array<{session_id:string;model?:string;native_tokens?:number;quota_percent_estimate:number}>
-}
-
 const palette = ['#34d399','#60a5fa','#f59e0b','#c084fc','#f472b6','#22d3ee','#fb7185','#a3e635']
 const percent = (value:number|null|undefined)=>value==null?'unavailable':`${value.toFixed(1)}%`
 
@@ -44,7 +27,7 @@ function accountFor(accounts:ProviderAccount[],series:QuotaSeries):ProviderAccou
 function seriesLabel(accounts:ProviderAccount[],series:QuotaSeries):string {
   const account=accountFor(accounts,series)
   const label=account?accountDisplayLabel(account):`${series.provider} · ${series.account_id.slice(0,8)}`
-  const owner=series.provider_account_uuid?` · verified ${series.provider_account_uuid.slice(-6)}`:' · legacy identity'
+  const owner=series.provider_account_uuid?'':' · unverified legacy identity'
   return `${label}${owner}`
 }
 
@@ -61,22 +44,23 @@ function QuotaChart({
   accounts:ProviderAccount[]
   resets:ResetEvent[]
 }) {
+  const [chartRef,width]=useChartWidth()
   const times=series.flatMap(item=>item.points.map(quotaPointTime))
   // Daemon clock: `times` are daemon-stamped sample instants, and an axis bound
   // taken from a browser clock that disagrees would shift the whole plot.
-  const minimum=Math.min(...times,serverNow())
-  const maximum=Math.max(...times,minimum+1)
-  const x=(time:number)=>52+(time-minimum)/(maximum-minimum)*692
+  const minimum=times.reduce((minimum,time)=>Math.min(minimum,time),serverNow())
+  const maximum=times.reduce((maximum,time)=>Math.max(maximum,time),minimum+1)
+  const x=(time:number)=>52+(time-minimum)/(maximum-minimum)*(width-68)
   const y=(value:number)=>164-Math.max(0,Math.min(100,value))/100*136
   const colored=series.map((item,index)=>({item,color:palette[index%palette.length]}))
-  return <section class="quota-chart">
+  return <section ref={chartRef} class="quota-chart">
     <h3>{title}</h3>
     <div class="quota-chart-legend">{colored.map(({item,color})=><span key={`${item.account_id}-${item.provider_account_uuid}`}>
       <i style={{background:color}}/>{seriesLabel(accounts,item)}
     </span>)}</div>
-    {times.length?<svg viewBox="0 0 760 188" role="img" aria-label={`${title} account timelines`}>
+    {times.length?<svg viewBox={`0 0 ${width} 188`} role="img" aria-label={`${title} account timelines`}>
       {[0,25,50,75,100].map(value=><g key={value}>
-        <line x1="52" x2="744" y1={y(value)} y2={y(value)} class="quota-grid-line"/>
+        <line x1="52" x2={width-16} y1={y(value)} y2={y(value)} class="quota-grid-line"/>
         <text x="45" y={y(value)+3} text-anchor="end">{value}%</text>
       </g>)}
       {resets.filter(item=>item.window===windowName&&item.observed_at>=minimum&&item.observed_at<=maximum).map(item=><line
@@ -95,33 +79,25 @@ function QuotaChart({
         ><title>{seriesLabel(accounts,item)}</title></polyline>
       })}
       <text x="52" y="184">{new Date(minimum*1000).toLocaleDateString()}</text>
-      <text x="744" y="184" text-anchor="end">{new Date(maximum*1000).toLocaleDateString()}</text>
+      <text x={width-16} y="184" text-anchor="end">{new Date(maximum*1000).toLocaleDateString()}</text>
     </svg>:<p>No {title.toLowerCase()} readings in this range.</p>}
   </section>
 }
 
 function QuotaDetail({status,accounts}:{status:QuotaSeriesStatus;accounts:ProviderAccount[]}) {
-  const rows=status.series.flatMap(series=>series.points.map(point=>({series,point}))).sort(
-    (a,b)=>quotaPointTime(b.point)-quotaPointTime(a.point),
-  )
-  return <section class="usage-table">
-    <h3>{status.resolution==='daily'?'Daily quota summaries':'Durable quota samples'}</h3>
-    {rows.length?<div class="usage-table-scroll"><table><thead><tr>
-      <th>{status.resolution==='daily'?'day':'time'}</th><th>account</th>
-      <th>5h used</th><th>weekly used</th><th>sample evidence</th>
-    </tr></thead><tbody>{rows.map(({series,point})=>{
-      const daily=!('sampled_at' in point)
-      const sample=point as QuotaRawPoint
-      const rollup=point as QuotaDailyPoint
-      return <tr key={`${series.account_id}-${series.provider_account_uuid}-${quotaPointTime(point)}`}>
-        <td>{daily?rollup.day:new Date(sample.sampled_at*1000).toLocaleString()}</td>
-        <td>{seriesLabel(accounts,series)}</td>
-        <td>{daily?`${percent(rollup.session_first)} to ${percent(rollup.session_last)} · range ${percent(rollup.session_min)}-${percent(rollup.session_max)}`:percent(sample.session?.used_percent)}</td>
-        <td>{daily?`${percent(rollup.weekly_first)} to ${percent(rollup.weekly_last)} · range ${percent(rollup.weekly_min)}-${percent(rollup.weekly_max)}`:percent(sample.weekly?.used_percent)}</td>
-        <td>{daily?`${rollup.samples} samples · ${rollup.errors} errors`:`${sample.freshness}${sample.error?` · ${sample.error}`:''}`}</td>
-      </tr>
-    })}</tbody></table></div>:<p>No account-specific quota evidence in this range.</p>}
-  </section>
+  const [limit,setLimit]=useState(50)
+  const rows=status.series.flatMap(series=>series.points.map(point=>({series,point}))).sort((a,b)=>quotaPointTime(b.point)-quotaPointTime(a.point))
+  return <details class="analytics-diagnostics"><summary>Recorded readings ({rows.length})</summary>
+    {rows.slice(0,limit).map(({series,point})=>{
+      const daily=!('sampled_at' in point),sample=point as QuotaRawPoint,rollup=point as QuotaDailyPoint
+      return <article class="quota-reading" key={`${series.account_id}-${series.provider_account_uuid}-${quotaPointTime(point)}`}>
+        <strong>{daily?rollup.day:new Date(sample.sampled_at*1000).toLocaleString()}</strong><span>{seriesLabel(accounts,series)}</span>
+        <dl class="analytics-facts"><div><dt>5h used</dt><dd>{daily?`${percent(rollup.session_first)} to ${percent(rollup.session_last)}`:percent(sample.session?.used_percent)}</dd></div><div><dt>Weekly used</dt><dd>{daily?`${percent(rollup.weekly_first)} to ${percent(rollup.weekly_last)}`:percent(sample.weekly?.used_percent)}</dd></div></dl>
+        <small>{daily?`${rollup.samples} samples · ${rollup.errors} errors · 5h range ${percent(rollup.session_min)} to ${percent(rollup.session_max)} · weekly range ${percent(rollup.weekly_min)} to ${percent(rollup.weekly_max)}`:`${sample.freshness}${sample.error?` · ${sample.error}`:''}`}</small>
+      </article>
+    })}
+    {rows.length>limit&&<button onClick={()=>setLimit(limit+50)}>Show more readings</button>}
+  </details>
 }
 
 function ResetLog({items,accounts}:{items:ResetEvent[];accounts:ProviderAccount[]}) {
@@ -135,78 +111,85 @@ function ResetLog({items,accounts}:{items:ResetEvent[];accounts:ProviderAccount[
   }):<p>No reset movements recorded in this range.</p>}</section>
 }
 
-export function QuotaAnalytics({
-  provider,
-  attribution,
-}:{
-  provider:'all'|string
-  attribution:Attribution[]
-}) {
+export function QuotaAnalytics({onManage}:{onManage?:()=>void}) {
+  const [view,setView]=useState<'current'|'history'|'resets'|'attribution'>('current')
   const [accountsStatus,setAccountsStatus]=useState<ProviderAccountsStatus|null>(null)
   const [status,setStatus]=useState<QuotaSeriesStatus|null>(null)
+  const [attribution,setAttribution]=useState<QuotaAttribution[]|null>(null)
+  const [provider,setProvider]=useState('all')
   const [account,setAccount]=useState('all')
   const [range,setRange]=useState<'7'|'30'|'90'|'all'>('30')
   const [resolution,setResolution]=useState<'raw'|'daily'>('daily')
+  const [windowName,setWindowName]=useState<'session'|'weekly'>('session')
   const [error,setError]=useState('')
-  const accounts=useMemo(()=>
-    (accountsStatus?.accounts||[]).filter(item=>(provider==='all'||item.provider===provider)&&(!item.conflict||item.conflict.is_primary)),
-    [accountsStatus,provider],
-  )
-
+  const [revision,setRevision]=useState(0)
+  const accounts=useMemo(()=>(accountsStatus?.accounts||[]).filter(item=>(provider==='all'||item.provider===provider)&&(!item.conflict||item.conflict.is_primary)),[accountsStatus,provider])
   useEffect(()=>{
-    void api<ProviderAccountsStatus>('GET','/api/provider-accounts').then(setAccountsStatus).catch(
-      cause=>setError(cause instanceof Error?cause.message:String(cause)),
-    )
-  },[])
+    let cancelled=false
+    api<ProviderAccountsStatus>('GET','/api/provider-accounts').then(value=>{if(!cancelled)setAccountsStatus(value)}).catch(cause=>{if(!cancelled)setError(String(cause))})
+    return()=>{cancelled=true}
+  },[revision])
+  useEffect(()=>{const timer=window.setInterval(()=>{if(!document.hidden)setRevision(value=>value+1)},60000);return()=>clearInterval(timer)},[])
+  useEffect(()=>{if(account!=='all'&&!accounts.some(item=>item.id===account))setAccount('all')},[accounts,account])
   useEffect(()=>{
-    if(account!=='all'&&!accounts.some(item=>item.id===account))setAccount('all')
-  },[provider,accounts,account])
-  useEffect(()=>{
-    const path=quotaSeriesPath({
-      provider:provider==='all'?undefined:provider,
-      account:account==='all'?undefined:account,
-      range,
-      resolution,
-    })
-    setError('')
-    void api<QuotaSeriesStatus>('GET',path).then(setStatus).catch(
-      cause=>setError(cause instanceof Error?cause.message:String(cause)),
-    )
-  },[provider,account,range,resolution])
-
-  const visibleAttribution=attribution.filter(item=>(provider==='all'||item.provider===provider)&&(account==='all'||item.account_id===account))
-  return <div class="operational-telemetry">
-    <p class="telemetry-caveat">
-      These charts show provider quota utilization percentages, not token usage. Account names
-      come from saved provider identities. Legacy rows without a provider ID are marked explicitly.
-      Correlation remains observational.
-    </p>
-    <div class="usage-view-controls quota-controls">
-      <label>account<Dropdown value={account} onChange={setAccount} options={[
-        {value:'all',label:'all saved accounts'},
-        ...accounts.map(item=>({value:item.id,label:accountDisplayLabel(item)})),
-      ]}/></label>
-      <label>range<Dropdown value={range} onChange={value=>setRange(value as typeof range)} options={[
-        {value:'7',label:'7 days'},{value:'30',label:'30 days'},
-        {value:'90',label:'90 days'},{value:'all',label:'all retained'},
-      ]}/></label>
-      <label>detail<Dropdown value={resolution} onChange={value=>setResolution(value as typeof resolution)} options={[
-        {value:'daily',label:'daily summaries'},{value:'raw',label:'raw samples'},
-      ]}/></label>
+    let cancelled=false
+    setError('');setStatus(null);setAttribution(null)
+    if(view==='history'||view==='resets'){
+      api<QuotaSeriesStatus>('GET',quotaSeriesPath({provider:provider==='all'?undefined:provider,account:account==='all'?undefined:account,range,resolution}))
+        .then(value=>{if(!cancelled)setStatus(value)}).catch(cause=>{if(!cancelled)setError(String(cause))})
+    }else if(view==='attribution'){
+      const query=new URLSearchParams({limit:'500'})
+      if(provider!=='all')query.set('provider',provider)
+      if(account!=='all')query.set('account',account)
+      api<OperationalStatus>('GET',`${OPERATIONAL_TELEMETRY_PATH}?${query}`).then(value=>{if(!cancelled)setAttribution(value.quota.attributions)}).catch(cause=>{if(!cancelled)setError(String(cause))})
+    }
+    return()=>{cancelled=true}
+  },[view,provider,account,range,resolution,revision])
+  const visibleAccounts=accounts.filter(item=>account==='all'||item.id===account)
+  const cutoff=range==='all'?0:serverNow()-Number(range)*86400
+  const visibleAttribution=(attribution||[]).filter(item=>item.interval_end>=cutoff)
+  return <>
+    <AnalyticsNav label="Quota views" value={view} onChange={setView} items={[{id:'current',label:'Current'},{id:'history',label:'History'},{id:'resets',label:'Resets'},{id:'attribution',label:'Attribution'}]}/>
+    <div class="analytics-toolbar">
+      {view!=='current'&&<label>Range<select value={range} onChange={event=>setRange(event.currentTarget.value as typeof range)}><option value="7">7 days</option><option value="30">30 days</option><option value="90">90 days</option><option value="all">All retained</option></select></label>}
+      <details class="analytics-filter-menu"><summary>Filters{provider!=='all'||account!=='all'?` (${Number(provider!=='all')+Number(account!=='all')})`:''}</summary><div>
+        <label>Provider<select value={provider} onChange={event=>{setProvider(event.currentTarget.value);setAccount('all')}}><option value="all">All providers</option>{(accountsStatus?.providers||[]).map(name=><option key={name} value={name}>{name}</option>)}</select></label>
+        <label>Account<select value={account} onChange={event=>setAccount(event.currentTarget.value)}><option value="all">All saved accounts</option>{accounts.map(item=><option key={item.id} value={item.id}>{accountDisplayLabel(item)}</option>)}</select></label>
+      </div></details>
+      {view==='history'&&<><label>Window<select value={windowName} onChange={event=>setWindowName(event.currentTarget.value as typeof windowName)}><option value="session">5 hours</option><option value="weekly">Weekly</option></select></label><label>Detail<select value={resolution} onChange={event=>setResolution(event.currentTarget.value as typeof resolution)}><option value="daily">Daily</option><option value="raw">Raw samples</option></select></label></>}
+      <button class="analytics-refresh" onClick={()=>setRevision(value=>value+1)}>Reload readings</button>
     </div>
-    {error&&<div class="usage-error" role="alert">{error}</div>}
-    {status?<>
-      <div class="quota-chart-grid">
-        <QuotaChart title="5h quota" windowName="session" series={status.series} accounts={accounts} resets={status.resets}/>
-        <QuotaChart title="Weekly quota" windowName="weekly" series={status.series} accounts={accounts} resets={status.resets}/>
-      </div>
-      <QuotaDetail status={status} accounts={accounts}/>
-      <ResetLog items={status.resets} accounts={accounts}/>
-    </>:<p>Loading account quota history...</p>}
-    <section class="attribution-log"><h3>Correlated mux activity</h3>{visibleAttribution.length?visibleAttribution.map(item=><article key={`${item.sample_id}-${item.window}`}>
-      <strong>{item.provider} {item.window} +{item.quota_delta.toFixed(2)}%</strong>
-      <span>correlated estimate {item.correlated_estimate.toFixed(2)}% (range {item.correlated_low.toFixed(2)}-{item.correlated_high.toFixed(2)}%) · external/unassigned {item.external_estimate.toFixed(2)}% (range {item.external_low.toFixed(2)}-{item.external_high.toFixed(2)}%)</span>
-      <small>confidence {item.confidence} · {item.concurrent_sessions} overlapping mux session(s) · sample gap {Math.round(item.sample_gap_seconds/60)}m · provider lag allowance {Math.round(item.provider_lag_seconds)}s</small>
-    </article>):<p>No positive quota deltas have attribution evidence yet.</p>}</section>
-  </div>
+    <main class="analytics-content">
+      {error&&<div class="usage-error" role="alert">{error}</div>}
+      <p class="analytics-caption">{provider==='all'?'All providers':provider} · {account==='all'?'All saved accounts':accounts.find(item=>item.id===account)?.label||account} · quota capacity</p>
+      {view==='current'&&<>
+        {onManage&&<div class="analytics-actions"><button onClick={onManage}>Manage accounts</button></div>}
+        {!accountsStatus?<p>Loading accounts…</p>:!visibleAccounts.length?<p>No saved accounts match these filters.</p>:<div class="quota-account-grid">{visibleAccounts.map(item=>{
+          const quota=item.quota,ready=quota?.status==='ready',now=serverNow()
+          const stale=!!quota?.refreshed_at&&(now-quota.refreshed_at)>(accountsStatus.stale_minutes||30)*60
+          return <article class="quota-account-card" key={item.id}>
+            <header><strong>{accountDisplayLabel(item)}</strong>{accountsStatus.selected[item.provider]===item.id&&<span class="analytics-badge">Selected</span>}</header>
+            <small>{quota?.refreshed_at?`Read ${new Date(quota.refreshed_at*1000).toLocaleString()}${stale?' · stale':''}`:'No successful reading'}</small>
+            {(['session','weekly','fable'] as const).filter(key=>key!=='fable'||quota?.fable).map(key=>{
+              const window=ready?quota?.[key]:null,remaining=window?Math.max(0,100-window.used_percent):null
+              return <div class="quota-capacity" key={key}><div><span>{key==='session'?'5 hours':key==='weekly'?'Weekly':'Fable'}</span><strong>{remaining==null?'Unavailable':`${Math.round(remaining)}% left`}</strong></div>
+                {remaining!=null&&<meter min="0" max="100" value={remaining} aria-label={`${key} quota remaining`}/>}
+                <small>{window?.resets_at?(window.resets_at<=now?'Reset due; awaiting a reading':`Resets in ${formatResetRemaining(window.resets_at,now)}`):'Reset time unavailable'}</small>
+              </div>
+            })}
+            {quota?.error&&<p class="usage-error">{quota.error}</p>}
+          </article>
+        })}</div>}
+      </>}
+      {view==='history'&&(status?<><QuotaChart title={windowName==='session'?'5-hour utilization':'Weekly utilization'} windowName={windowName} series={status.series} accounts={accounts} resets={status.resets}/><QuotaDetail status={status} accounts={accounts}/></>:!error&&<p>Loading quota history…</p>)}
+      {view==='resets'&&(status?<ResetLog items={status.resets} accounts={accounts}/>:!error&&<p>Loading reset history…</p>)}
+      {view==='attribution'&&<section class="attribution-log"><p class="analytics-caption">Estimates from the latest 500 recorded movements, filtered to this range. Correlation does not establish who used an account.</p>
+        {attribution===null&&!error?<p>Loading attribution…</p>:visibleAttribution.length?visibleAttribution.map(item=><details class="analytics-diagnostics" key={`${item.sample_id}-${item.window}`}>
+          <summary>{accounts.find(account=>account.id===item.account_id)?.label||item.provider} · {item.window==='session'?'5h':'Weekly'} +{item.quota_delta.toFixed(1)}% · {new Date(item.interval_end*1000).toLocaleString()}</summary>
+          <dl class="analytics-facts"><div><dt>Correlated mux activity</dt><dd>{item.correlated_estimate.toFixed(1)}% ({item.correlated_low.toFixed(1)}-{item.correlated_high.toFixed(1)}%)</dd></div><div><dt>External / unassigned</dt><dd>{item.external_estimate.toFixed(1)}% ({item.external_low.toFixed(1)}-{item.external_high.toFixed(1)}%)</dd></div><div><dt>Confidence</dt><dd>{item.confidence}</dd></div><div><dt>Overlapping sessions</dt><dd>{item.concurrent_sessions}</dd></div></dl>
+          <small>Sample gap {Math.round(item.sample_gap_seconds/60)}m · provider lag allowance {Math.round(item.provider_lag_seconds)}s</small>
+        </details>):<p>No attribution evidence in these recent movements for this range.</p>}
+      </section>}
+    </main>
+  </>
 }

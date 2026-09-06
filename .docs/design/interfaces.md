@@ -2667,6 +2667,13 @@ Sandboxed Preview fetch/XHR/WebSocket traffic to another registered Project serv
 
 ## Provider accounts and usage
 
+The Usage & activity run browser reads `GET /api/telemetry/v2/runs` with the standard window, cohort, Project, harness, model, and cursor parameters.
+Run model filtering uses the same initial/final/mixed classification as the workload summary.
+Run pages include `last_observed_at` and `last_event_type` from the latest linked canonical evidence.
+The run page and run audit enrich exact History matches with `name`, `auto_named`, `generated_title`, and `history_id`.
+A session-ID fallback is never used for that enrichment because it can name a different conversation after rollover.
+
+
 ```text
 GET    /provider-accounts
 GET    /provider-accounts/audit[?limit=]

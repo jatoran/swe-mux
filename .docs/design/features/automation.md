@@ -227,7 +227,7 @@ and the declared minimum observation capability.
   rule `AutomationSpendView` already carries for spend. A hand-rolled second inbox is the
   drift the contract tests refuse.
   The old `health` view stays split three ways: the deterministic-checks explainer lives in
-  the help panel, the observed-workload telemetry in Resources → Fleet activity, and the
+  the help panel, the observed-workload telemetry in Usage & activity → Activity, and the
   away report with the Alerts drawer (`ui.md`).
   Activity holds what only this dashboard can show beside the mirrored inbox: the
   firing/observer-call trail, learned fixes and the bounded knowledge batches, and the
