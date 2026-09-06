@@ -17,14 +17,14 @@
 // turns every deploy into a preview that never reaches the custom domain and
 // still exits 0. Workers have versions instead, and no such trap.
 //
-// **There is a `main` now, and it does one thing.** This was an assets-only
+// The Worker counts update checks and serves video byte ranges. This was an assets-only
 // Worker until 2026-09-06, when `worker/index.js` arrived to count requests to
 // `/version.json` - the daily poll every install makes, and therefore the only
 // adoption signal available to a project with no telemetry. `run_worker_first`
 // below is what makes that possible at all: with static assets, a path that
 // matches a file is served without the script ever running, so counting an
-// *asset* requires naming it. Everything else on the site still goes straight to
-// assets and pays nothing.
+// *asset* requires naming it. MP4 and WebM routes also invoke the Worker to
+// support seeking; pages and images continue directly to static assets.
 //
 // The script's own header is the argument for the schema it writes and for why
 // the counter can never break the endpoint. The short version: a constant label
@@ -46,13 +46,10 @@
     // reading them, so `site/` stays the single source of what is published and
     // the script adds no copy of anything.
     "binding": "ASSETS",
-    // An array, not `true`. `true` would run the script ahead of every request
-    // on the site to count one path, which is the same answer at 30x the
-    // invocations. Keep this in step with `COUNTED_PATH` in `worker/index.js`;
-    // `tests/test_site_metrics_counter.py` fails if the two drift, because a
-    // silent drift here is a counter that reads zero forever while everything
-    // still serves correctly.
-    "run_worker_first": ["/version.json"]
+    // Only the update-check counter and video byte-range delivery need code.
+    // Keep these routes in step with COUNTED_PATH and VIDEO_ROUTES; tests pin both.
+    // Video requests are never counted and no media request logs are stored.
+    "run_worker_first": ["/version.json", "/img/*.mp4", "/img/*.webm"]
   },
   // Created on first write - there is nothing to provision in the dashboard, and
   // nothing here works differently if the dataset does not exist yet. Free-plan

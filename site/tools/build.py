@@ -31,6 +31,7 @@ committing keeps the deploy a file copy. `--check` is what keeps that honest.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import html
 import json
 import re
@@ -1228,10 +1229,11 @@ def _doc_blocks_html(page: docs_content.Page, out: list[str]) -> None:
                 raise SystemExit(f"invalid demo example on {page.slug}")
             if not (SITE / "img" / f"{asset}.webp").is_file():
                 raise SystemExit(f"missing demo example image: {asset}")
+            revision = hashlib.sha256((SITE / "img" / f"{asset}.webp").read_bytes()).hexdigest()[:12]
             portrait = asset.endswith("-phone")
             width, height = (390, 844) if portrait else (1440, 810)
             out.append(
-                f'<figure class="showcase"><img src="../../img/{asset}.webp" '
+                f'<figure class="showcase"><img src="../../img/{asset}.webp?v={revision}" '
                 f'width="{width}" height="{height}" loading="lazy" alt="{html.escape(alt, quote=True)}" /></figure>'
             )
             out.append(f'<p class="note">Real interface, simulated activity. <a href="../../demo/?scenario={scenario}">Try this walkthrough</a>.</p>')

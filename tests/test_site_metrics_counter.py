@@ -30,6 +30,7 @@ Cloudflare account.
 
 from __future__ import annotations
 
+import ast
 import re
 from pathlib import Path
 from typing import Any
@@ -67,16 +68,13 @@ def _py_const(name: str) -> str:
     return match.group(1)
 
 
-def test_wrangler_runs_the_worker_first_on_exactly_the_path_the_worker_counts() -> None:
-    """The drift that produces a permanent zero while everything still serves.
-
-    Asserted as equality rather than membership on purpose. A `run_worker_first` that
-    grew a second entry would run the script ahead of a path nothing counts, which is
-    invocations spent for no data - and `true`, the other accepted value, would do that
-    for all thirty-one pages.
-    """
+def test_wrangler_runs_the_worker_only_for_the_counter_and_video_delivery() -> None:
+    """Video routes serve ranges without extending the counter or running on every page."""
     assets = _wrangler()["assets"]
-    assert assets["run_worker_first"] == [_js_const("COUNTED_PATH")]
+    media = (REPO_ROOT / "worker" / "media.mjs").read_text(encoding="utf-8")
+    declared = re.search(r"export const VIDEO_ROUTES = (\[[^\n]+\])", media)
+    assert declared, "video delivery must declare its Worker-first routes"
+    assert assets["run_worker_first"] == [_js_const("COUNTED_PATH"), *ast.literal_eval(declared[1])]
 
 
 def test_wrangler_points_at_the_worker_this_test_reads() -> None:

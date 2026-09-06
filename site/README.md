@@ -73,16 +73,17 @@ The operational copy checklist is [tools/COPY_CHECKLIST.md](tools/COPY_CHECKLIST
 
 ## Visuals and media
 
-Use the app's terminal visual language: monospace headings, system-sans body text, theme tokens, simple borders and restrained highlights.
+Use the app's terminal visual language: monospace headings, system-sans body text, theme tokens and simple borders.
 Both light and dark themes must remain readable.
 Do not introduce remote fonts, analytics or third-party embeds.
 
-Each feature clip shows one task with enough time to read the label and inspect the result.
+Each feature clip shows one task with an unobstructed view of the interface.
+Recorded media exclude tutorial cards, controls, callouts and cursor effects; the interactive demo keeps its guide.
 The landing examples separately show success and failure.
 Use MP4/WebM with WebP posters, native playback controls and reduced-motion behavior.
-Only short visible examples autoplay, silently; a user-paused clip stays paused.
-Voice and notification audio play only after an explicit press.
-The assistant recording has a text transcript.
+Videos start only when the visitor presses Play and use native pause and seek controls.
+The page does not restart playback or loop a finished video.
+Audio features are described in prose; there are no audio samples or sound-preview buttons.
 
 Phone media use the same portrait proportions and restrained handset treatment as the demo.
 On a phone-sized page, remove the surrounding handset and use the available width.
@@ -113,3 +114,14 @@ Deployments copy `site/` verbatim.
 A source edit without its regenerated page or demo bundle publishes stale content.
 Compare deployed content with the intended bundle after an authorized deployment.
 Committing a worktree does not authorize landing, pushing or deployment.
+
+## Video delivery
+
+`worker/media.mjs` implements single byte ranges for MP4 and WebM assets because the static-assets endpoint returned full 200 responses to Range requests during the 2026-09-06 check.
+Only the video paths and the existing update-check counter run through the Worker.
+Video delivery records no visitor data and never increments the counter.
+Ranges stream without buffering the whole file; matching validators return 206 and unsatisfiable ranges return 416.
+Cloudflare's `FixedLengthStream` preserves an accurate Content-Length for partial responses.
+The local capture server uses the same response implementation so headless playback checks exercise it.
+`worker/test/media.test.mjs` and `tests/test_site_video_ranges.py` cover the protocol without binding a port.
+The showcase exporter adds content revisions to media URLs, including the README image, and the docs generator does the same for its examples.

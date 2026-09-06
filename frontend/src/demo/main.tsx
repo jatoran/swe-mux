@@ -200,7 +200,7 @@ async function boot(): Promise<void> {
       <App />
       {/* Beside the app rather than inside it: the director points at the real chrome
           and must never be something the product build could accidentally ship. */}
-      <DemoDirector />
+      {!capture && <DemoDirector />}
     </DemoBoundary>,
     document.getElementById('app')!,
   )

@@ -178,7 +178,7 @@ let lazyCount = 0
 for (const page of PAGES) {
   const p = await browser.newPage({ viewport: { width: 1280, height: 900 } })
   const badRequests = []
-  p.on('requestfailed', (r) => badRequests.push(`${r.url()} (${r.failure()?.errorText ?? '?'})`))
+  p.on('requestfailed', (r) => badRequests.push({ url: r.url(), reason: r.failure()?.errorText ?? '?' }))
   await p.goto(url(page), { waitUntil: 'networkidle' })
   await settleImages(p, page.name)
   const imgs = await p.evaluate(() =>
@@ -191,7 +191,18 @@ for (const page of PAGES) {
       lazy: i.loading === 'lazy',
     })))
   for (const i of imgs) if (!i.ok) fail(`${page.name}: image did not load: ${i.src}`)
-  for (const u of badRequests) fail(`${page.name}: request failed: ${u}`)
+  // preload=metadata deliberately stops a transfer once metadata is decoded.
+  // Accept that cancellation only with positive evidence of a healthy video.
+  const media = await p.evaluate(() => [...document.querySelectorAll('video')].map(video => ({
+    src: video.currentSrc,
+    ready: video.readyState >= 1 && Number.isFinite(video.duration) && video.duration > 0 && !video.error,
+  })))
+  for (const request of badRequests) {
+    const metadataComplete = request.reason === 'net::ERR_ABORTED'
+      && media.some(video => video.src === request.url && video.ready)
+    if (!metadataComplete) fail(`${page.name}: request failed: ${request.url} (${request.reason})`)
+  }
+  for (const video of media) if (!video.ready) fail(`${page.name}: video metadata did not load: ${video.src}`)
   imageCount += imgs.length
   lazyCount += imgs.filter((i) => i.lazy).length
   await p.close()
@@ -219,7 +230,7 @@ console.log('asset reachability')
 {
   const markup = PAGES.map((p) => readFileSync(p.file, 'utf8')).join('\n')
   const assets = readdirSync(join(site, 'img'))
-    .filter((name) => /\.(webp|png|mp4)$/.test(name))
+    .filter((name) => /\.(webp|png|mp4|webm|mp3)$/.test(name))
     .filter((name) => !/^logo/.test(name)) // chrome, referenced from the shell rather than a page
   const unreferenced = assets.filter((name) => !markup.includes(`img/${name}`))
   if (unreferenced.length) {

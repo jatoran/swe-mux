@@ -649,7 +649,7 @@ footer .social svg { width: 15px; height: 15px; fill: currentColor; display: blo
 .demo-keymap-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 8px 12px; border-top: 1px solid var(--line); font-size: 12px; }
 .demo-keymap-bar[hidden] { display: none; }
 .demo-keymap-buttons { display: inline-flex; flex-wrap: wrap; gap: 4px; }
-.demo-keymap-bar button, .sound-examples button { font: inherit; color: var(--fg-2); background: var(--panel); border: 1px solid var(--line-2); padding: 5px 9px; cursor: pointer; }
+.demo-keymap-bar button { font: inherit; color: var(--fg-2); background: var(--panel); border: 1px solid var(--line-2); padding: 5px 9px; cursor: pointer; }
 .demo-keymap-bar button[aria-pressed="true"] { color: var(--green); border-color: var(--green); }
 #demokeymaphint { color: var(--fg-2); }
 .showcase { margin: 24px 0; border: 1px solid var(--line-2); background: var(--panel); overflow: hidden; }
@@ -659,12 +659,6 @@ footer .social svg { width: 15px; height: 15px; fill: currentColor; display: blo
 .handset::before { content: ''; position: absolute; width: 48px; height: 5px; background: var(--fg-3); top: 8px; left: calc(50% - 24px); border-radius: 4px; }
 .handset::after { content: ''; position: absolute; width: 75px; height: 4px; background: var(--fg-3); bottom: 6px; left: calc(50% - 37px); border-radius: 4px; }
 .handset img, .handset video { border-radius: 22px; }
-.voice-example { padding: 20px; border: 1px solid var(--line-2); margin-bottom: 22px; }
-.voice-example h3 { margin: 0 0 8px; }
-.voice-example p { font-family: var(--sans); color: var(--fg-2); }
-.voice-example audio { display: block; width: min(100%, 460px); margin: 12px 0; }
-.voice-example summary { cursor: pointer; }
-.sound-examples { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; font: 13px/1.5 var(--sans); }
 @media(max-width:760px) {
   .demo-keymap-bar { display: none; }
   .showcase-pair { grid-template-columns: minmax(0,1fr); gap: 8px; }
@@ -1126,21 +1120,30 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
   <div class="wrap">
     <div class="kick">direction, not dates</div>
     <h1>Roadmap</h1>
+    <p class="prose">Current direction, reviewed against the 0.2.6 source on 2026-09-06.
+    Planned items have no release date until they are scheduled.</p>
     <div class="rel">
-      <div class="relhead"><h2>Next</h2><span class="fill"></span></div>
+      <div class="relhead"><h2>Planned</h2><span class="fill"></span></div>
       <ul class="flat">
-        <li><b>More harnesses</b><span>The registry was built so a new agent CLI costs a descriptor and an adapter instead of a branch through every feature. The candidate study exists; spending that abstraction is the work.</span></li>
-        <li><b>macOS</b><span>The daemon and browser client now have required CI coverage, including a source-daemon test. Broader clean-machine and published-artifact validation remains useful.</span></li>
-        <li><b>The tray and the desktop window without a reinstall</b><span>The Windows Python install includes the native window and tray, and setup offers shortcuts. Continue improving the first-run and update experience across installation methods.</span></li>
-        <li><b>Agent reach without MCP, and an authenticated loopback</b><span>The local API authenticates nothing today, which is the gate on everything else: identify session-originated requests server-side, then let an agent reach the daemon through the CLI as well as MCP, through the same authority matrix.</span></li>
-        <li><b>Updates that only transfer what changed</b><span>An update already rewrites only the files that moved. It still ships the whole archive to do it.</span></li>
-        <li><b>Git operations from the Git tab</b><span>Commit with a message, manage the ignore file, and see failures plainly rather than dropping to a shell. The commit message is worth generating from the diff and the session record behind it.</span></li>
-        <li><b>Session restore after a restart or a crash</b><span>Sessions already outlive the browser, the daemon and app updates. They should also survive the machine going down, and offer to reopen what was open.</span></li>
-        <li><b>Hooks on swe-mux's own signals</b><span>Harness-neutral hooks that fire on PTY events, status transitions and the scan timeline, so a workflow built around them keeps working when you change agent CLI.</span></li>
-        <li><b>Deeper code analysis</b><span>Joining the structural graph to the behavioral record at the symbol level: cross-session conflict prediction, entity-level change facts, and stale-caller detection. swe-mux is the only observer that sees every parallel session's edits as they happen, which is what makes the first of those possible at all.</span></li>
-        <li><b>A portable verification contract</b><span>The setup and verify scripts a worktree needs are already repository-neutral, and the land queue is worth nothing without them. Making that pair reachable and adoptable from inside any repository is the gap.</span></li>
-        <li><b>Model routing in the assistant</b><span>A small request should not cost a large model. Route simple asks cheaply and escalate the ones that need reasoning or several tool calls in a row.</span></li>
-        <li><b>A shared browser surface</b><span>Gated on an authorization decision that has not been made. Today's previews are safe precisely because they cannot navigate anywhere and no agent can drive them; letting either change is a product decision about trust, not a feature.</span></li>
+        <li><b>Native Linux and macOS apps</b><span>Native desktop UIs and installers for both platforms, including platform integration and an update path. Today Linux and macOS run the local daemon with a browser.</span></li>
+        <li><b>More capable plugins</b><span>Expand the pane types, interface contributions, lifecycle events and permission-scoped host APIs available to plugins. Build on the existing actions, terminal panes, hooks and link handlers.</span></li>
+        <li><b>More agent CLIs</b><span>Extend status, transcripts, history and input support to additional coding agents through the harness registry.</span></li>
+        <li><b>Smaller update downloads</b><span>Transfer only what changed between releases. Updates already replace changed files selectively, but still download the full archive.</span></li>
+        <li><b>Commit from the Git tab</b><span>Extend the existing diff and worktree tools with staging, commits and general ignore-file editing.</span></li>
+        <li><b>Deeper analysis across sessions</b><span>Connect symbol-level changes with the behavioral record, including cross-session conflicts and callers affected by a changed interface.</span></li>
+        <li><b>Easier verification setup</b><span>Guide new repositories through defining and validating their worktree setup and verification commands. The conventions and approved-check landing queue already exist.</span></li>
+        <li><b>Automatic assistant model selection</b><span>Route simple requests to a smaller model and escalate harder requests while respecting the configured endpoint and budgets. Model selection is currently explicit.</span></li>
+        <li><b>A shared browser surface</b><span>A browser that the operator and agent can use together, with an explicit navigation and control boundary. Existing local previews remain a separate capability.</span></li>
+      </ul>
+    </div>
+    <div class="rel">
+      <div class="relhead"><h2>Already available</h2><span class="fill"></span></div>
+      <ul class="flat">
+        <li><b>Windows desktop setup</b><span>The Python install includes the window and tray; setup offers shortcuts and startup integration. <a href="../docs/install/">Install guide</a></span></li>
+        <li><b>Agent CLI and MCP</b><span>Authenticated agent-mode CLI calls use the same session identity and permissions as MCP. <a href="../docs/cli/">CLI guide</a></span></li>
+        <li><b>Crash recovery</b><span>Sessions that lose their processes return as readable, resumable records. This complements live sessions surviving ordinary daemon and app restarts. <a href="../docs/sessions/">Sessions</a></span></li>
+        <li><b>Universal hooks</b><span>Harness-neutral rules respond to normalized session events, with bounded annotation, notification and observer actions. <a href="../docs/automation/">Automation</a></span></li>
+        <li><b>Plugin management</b><span>Install and approve external-process plugins, use their contributions, and review updates or roll back to a prior version. <a href="../docs/plugins/">Plugin guide</a></span></li>
       </ul>
     </div>
 

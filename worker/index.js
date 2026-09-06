@@ -1,5 +1,5 @@
 /**
- * swemux.dev's Worker entry point. It exists to count one thing.
+ * swemux.dev's Worker entry point: a bounded update counter and video byte ranges.
  *
  * `wrangler.jsonc` used to have no `main` at all: every request was answered
  * from `site/` by Workers Assets and no script ran. That comment predicted this
@@ -45,7 +45,9 @@
  * request count and obvious in a 404 count.
  */
 
-/** The one path whose requests are counted. Must equal `run_worker_first` in `wrangler.jsonc`. */
+import { isVideoPath, serveVideo } from './media.mjs'
+
+/** The one counted path. The other worker-first routes only deliver video ranges. */
 const COUNTED_PATH = '/version.json'
 
 /** `blob1` for every data point this Worker writes. A label, not a value from the request. */
@@ -57,6 +59,11 @@ export default {
    * @param {{ ASSETS: { fetch: (r: Request) => Promise<Response> }, METRICS?: { writeDataPoint: (p: object) => void } }} env
    */
   async fetch(request, env) {
+    if (isVideoPath(new URL(request.url).pathname) && ['GET', 'HEAD'].includes(request.method)) {
+      // Workers Assets currently returns a full 200 for video Range requests.
+      // Fetch the complete representation, then stream only the requested bytes.
+      return serveVideo(request, env.ASSETS)
+    }
     // Serving the asset is the job; everything below it is bookkeeping. Assets
     // answers 404 for a path it does not have, which is what we want recorded
     // rather than replaced.

@@ -840,6 +840,7 @@
   step-down plan that `pyproject.toml` and the root `CLAUDE.md` both point at, and § S12.2
   names `component-jsx` and `composition-root` as the source-text test debt a renderer
   harness is the way off.
+- Changing public-site recordings, video playback, or roadmap claims: `site/README.md`, `site/DEMO.md`, `site/ROADMAP_AUDIT.md`; range delivery lives in `worker/media.mjs` and is covered by `tests/test_site_video_ranges.py`.
 - Changing launch marketing material - blog/post drafts, the positioning line, or the venue
   checklist: `marketing/README.md` (index + rules) and `development/ROADMAP.md` Phase 11.
   The rule the drafts carry: every claim must be true of the shipped artifact on the day it

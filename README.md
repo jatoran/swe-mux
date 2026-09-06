@@ -6,7 +6,7 @@ Keep Claude Code, Codex and other coding agents side by side, with live status, 
 Work from your desktop or phone.
 Dictate prompts, hear replies, and ask the assistant what needs attention.
 
-[![Agents and a preview arranged in the swe-mux workspace](site/img/showcase-panes.webp)](https://swemux.dev/demo/)
+[![Agents and a preview arranged in the swe-mux workspace](site/img/showcase-panes.webp?v=e8ebca109a98)](https://swemux.dev/demo/)
 
 [Try the interactive demo](https://swemux.dev/demo/) or [read the setup guide](https://swemux.dev/docs/install/).
 The demo runs the real interface with simulated agent activity and needs no provider connection.
@@ -108,7 +108,7 @@ CI builds, validates and install-smokes the wheel on Windows, Linux and macOS ev
 No CI job starts a daemon from a **published artifact**, which is exactly where the proof stops.
 
 - **Windows 10/11 is the proving platform.** The full gate runs there, including real ConPTY integration and the Playwright renderer suite, and it is the only platform the desktop app ships on.
-- **Linux runs headless plus a browser**, on a required CI leg. There is no Linux desktop app, by design.
+- **Linux runs headless plus a browser**, on a required CI leg. A native Linux desktop app and installer are planned; the current UI runs in a browser.
 - **macOS runs the daemon and browser client**, with required CI checks including the source-daemon tier.
 
 What each claim rests on: [`.docs/development/CROSS_PLATFORM_FINDINGS.md`](.docs/development/CROSS_PLATFORM_FINDINGS.md).

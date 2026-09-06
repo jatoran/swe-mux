@@ -28,9 +28,11 @@
 import { createReadStream } from 'node:fs'
 import { mkdir, readdir, rename, stat, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:http'
+import { Readable } from 'node:stream'
 import { dirname, extname, join, resolve, relative, sep, isAbsolute } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { chromium } from 'playwright'
+import { isVideoPath, videoResponse } from '../../worker/media.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const SITE = resolve(here, '../../site')
@@ -101,18 +103,35 @@ function parseArgs(argv) {
 export async function serveSite(port = 0) {
   const server = createServer((request, response) => {
     const url = new URL(request.url, 'http://127.0.0.1')
-    let path = decodeURIComponent(url.pathname)
+    let path
+    try { path = decodeURIComponent(url.pathname) }
+    catch { response.writeHead(400).end('invalid path'); return }
     if (path.endsWith('/')) path += 'index.html'
     const file = join(SITE, path)
     if (relative(SITE, file).split(sep).includes('..')) { response.writeHead(403).end(); return }
     stat(file)
       .then(info => {
         if (!info.isFile()) throw new Error('not a file')
-        response.writeHead(200, {
+        const headers = {
           'Content-Type': MIME[extname(file)] || 'application/octet-stream',
           'Cache-Control': 'no-store',
-        })
-        createReadStream(file).pipe(response)
+          'Content-Length': String(info.size),
+        }
+        const body = request.method === 'HEAD' ? null : Readable.toWeb(createReadStream(file))
+        const full = new Response(body, { headers })
+        const incoming = new Headers()
+        for (const [key, value] of Object.entries(request.headers)) {
+          if (value !== undefined) incoming.set(key, Array.isArray(value) ? value.join(', ') : value)
+        }
+        const reply = isVideoPath(url.pathname)
+          ? videoResponse(new Request(url, { method: request.method, headers: incoming }), full)
+          : full
+        response.writeHead(reply.status, Object.fromEntries(reply.headers))
+        if (!reply.body) { response.end(); return }
+        const stream = Readable.fromWeb(reply.body)
+        stream.on('error', error => response.destroy(error))
+        response.on('close', () => stream.destroy())
+        stream.pipe(response)
       })
       .catch(() => { response.writeHead(404, { 'Content-Type': 'text/plain' }).end('not found') })
   })
@@ -151,6 +170,12 @@ async function playOnce({ browser, origin, options, outDir, video }) {
     reducedMotion: 'no-preference',
     ...(video ? { recordVideo: { dir: outDir, size: { width: surface.width, height: surface.height } } } : {}),
   })
+  await context.addInitScript(() => {
+    window.__captureOverlaySeen = false
+    new MutationObserver(() => {
+      if (document.querySelector('.demo-director, .demo-show, .demo-bar, .tutorial-layer, .tutorial-overlay')) window.__captureOverlaySeen = true
+    }).observe(document, { childList: true, subtree: true })
+  })
   // Use the product's ordinary saved drawer-width preference for readable feature captures.
   if (options.surface === 'desktop' && ['land', 'landfailure', 'history', 'clipboard'].includes(options.scenario)) {
     await context.addInitScript(() => localStorage.setItem('mux.drawer.width.v1', '680'))
@@ -161,7 +186,6 @@ async function playOnce({ browser, origin, options, outDir, video }) {
     scenario: options.scenario,
     // Only the rig sets this: it draws a marker where a *real* press landed, which is
     // what makes a recorded interaction legible as one rather than as the UI twitching.
-    highlightInput: '1',
     capture: '1',
   })
   if (options.seed) query.set('seed', options.seed)
@@ -174,6 +198,14 @@ async function playOnce({ browser, origin, options, outDir, video }) {
   // rather than on a duration is what keeps this honest on a slow runner.
   await page.waitForSelector('.workspace', { timeout: 30_000 })
   await page.waitForFunction(() => window.__demoDirector?.snapshot().running === true, null, { timeout: 30_000 })
+  // The scenario engine still drives the UI; its tutorial controls must never be recorded.
+  const assertCleanFrame = async () => {
+    const overlays = await page.locator('.demo-director, .demo-show, .demo-bar, .tutorial-layer, .tutorial-overlay').count()
+    if (overlays || await page.evaluate(() => window.__captureOverlaySeen)) {
+      throw new Error('capture contains a tutorial overlay')
+    }
+  }
+  await assertCleanFrame()
 
   const stills = []
   let lastIndex = -1
@@ -189,6 +221,7 @@ async function playOnce({ browser, origin, options, outDir, video }) {
       // catches the screen *before* the thing the caption describes. This waits it out.
       await page.waitForFunction(() => !window.__demoDirector?.snapshot().acting, null, { timeout: 30_000 })
       await page.waitForTimeout(900)
+      await assertCleanFrame()
       await page.screenshot({ path: join(outDir, name) })
       stills.push({ beat: view.index, of: view.total, say: view.say, file: name })
     }
@@ -198,6 +231,7 @@ async function playOnce({ browser, origin, options, outDir, video }) {
   }
 
   const diagnostics = await page.evaluate(() => window.__demoDirector.diagnostics())
+  await assertCleanFrame()
   await writeFile(join(outDir, 'diagnostics.json'), JSON.stringify(diagnostics, null, 2))
   const fingerprint = await page.evaluate(() => window.__demoDirector.fingerprint())
   await page.close()
