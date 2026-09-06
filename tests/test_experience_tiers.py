@@ -8,6 +8,7 @@ the previous one), and nothing gates capability on the tier value itself.
 
 from __future__ import annotations
 
+import ast
 import dataclasses
 import json
 from pathlib import Path
@@ -165,6 +166,37 @@ def test_the_overridable_set_is_exactly_the_tier_inventory_booleans() -> None:
     assert "harness_mcp_enabled" not in OVERRIDABLE_KEYS
 
 
+def _mentions_tier_field(source: str) -> bool:
+    """Check the field, not a module name containing it or explanatory comments."""
+    return any(
+        (isinstance(node, ast.Attribute) and node.attr == "experience_tier")
+        or (isinstance(node, ast.Name) and node.id == "experience_tier")
+        or (isinstance(node, ast.Constant) and node.value == "experience_tier")
+        for node in ast.walk(ast.parse(source))
+    )
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "config.experience_tier == 'terminal'",
+        "config['experience_tier'] == 'terminal'",
+        "config.get('experience_tier') == 'terminal'",
+        "getattr(config, 'experience_tier') == 'terminal'",
+    ],
+)
+def test_tier_guard_recognizes_field_reads(source: str) -> None:
+    assert _mentions_tier_field(source)
+
+
+def test_tier_guard_allows_importing_policy_without_reading_the_tier() -> None:
+    assert not _mentions_tier_field(
+        "from .experience_tiers import autonomy_changes\n"
+        "# experience_tier is not a runtime gate\n"
+        "values = autonomy_changes('supervised')\n"
+    )
+
+
 def test_nothing_outside_the_tier_module_gates_on_the_tier() -> None:
     """ "Tiers set defaults; they do not lock capability" - enforced, not
     remembered: no backend module may read `experience_tier` to decide
@@ -175,7 +207,7 @@ def test_nothing_outside_the_tier_module_gates_on_the_tier() -> None:
     offenders = [
         str(path.relative_to(root))
         for path in root.rglob("*.py")
-        if path.name not in allowed and "experience_tier" in path.read_text(encoding="utf-8")
+        if path.name not in allowed and _mentions_tier_field(path.read_text(encoding="utf-8"))
     ]
     assert not offenders, offenders
 

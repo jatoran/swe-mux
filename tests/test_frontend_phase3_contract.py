@@ -587,6 +587,7 @@ def test_projects_manager_and_shared_directional_tab_actions_are_wired() -> None
     root = Path(__file__).parents[1]
     app = (root / "frontend" / "src" / "App.tsx").read_text(encoding="utf-8")
     manager = (root / "frontend" / "src" / "ProjectsManager.tsx").read_text(encoding="utf-8")
+    creator = (root / "frontend" / "src" / "ProjectCreateDialog.tsx").read_text(encoding="utf-8")
     layout = (root / "frontend" / "src" / "layout.ts").read_text(encoding="utf-8")
 
     assert "sidebar_visible" in manager
@@ -600,7 +601,10 @@ def test_projects_manager_and_shared_directional_tab_actions_are_wired() -> None
         "visibleProjects = orderedProjects.filter(project => project.sidebar_visible !== false)"
         in app
     )
-    assert app.count('class="modal-layer project-registry-dialog-layer"') == 2
+    # Project creation owns its dialog; Group creation still lives in App.
+    assert "projectCreateOpen&&<ProjectCreateDialog" in app
+    assert app.count('class="modal-layer project-registry-dialog-layer"') == 1
+    assert creator.count('class="modal-layer project-registry-dialog-layer"') == 1
     # Adding a Project is reachable in one step from the empty-sidebar menu, above
     # the registry entry, rather than only through the registry.
     assert "id: 'project.add'" in app

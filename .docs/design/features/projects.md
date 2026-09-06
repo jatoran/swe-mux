@@ -167,42 +167,19 @@ persisted ordering organize Project rows without acquiring behavioral ownership.
 - Add project has two modes of one form: register a folder that exists, or create a new folder
   inside an existing parent. Create mode makes exactly one directory, so a mistyped deep path is
   an error rather than a silently materialized tree, and the duplicate-root and group checks run
-  before anything is created. Two dialogs were rejected because each would need its own copy of
-  the setup-command list below.
+  before anything is created.
   The new folder's leaf is validated server-side under the shared Windows-safe leaf rules
   (`leaf_names.py`), because the dialog's folder field is free text and not every create path
   has a dialog; adopting an existing folder skips the leaf check.
-- **Add project inherits this install's automation defaults rather than choosing for the
-  Project** (2026-08-31). The form shows one summary line - what the new Project will run and
-  that it comes from the install - and expands to a per-automation panel where individual
-  rows can be changed *for this Project only*. Only a row that genuinely disagrees with the
-  inherited answer is written, through the ordinary revision-checked
-  `PUT /api/projects/{id}/automations`; a form nobody expanded writes nothing at all, so the
-  Project goes on following the install as the operator changes their mind. Ticking a row
-  back to the value it already inherits is likewise not a write - writing the agreeing value
-  would pin the Project to today's answer, which is the failure the whole change removes.
-  The panel enforces the same two DAG rules the policy matrix does: a ticked consumer brings
-  its substrate, an unticked substrate takes its readers.
-
-  It replaced three checkboxes that each wrote a fixed id set down. What was wrong with them
-  is recorded in `automation-enablement.md` § What it is; the short version is that a new
-  Project inherited nothing and an existing one could never be revised in one place.
-
-  **The free analysis set survives as a seed, not as a write.** When the install has no
-  opinion about an id at all, the form pre-ticks it, so a fresh install's first Project still
-  has working analysis panes on day one exactly as before. An id the operator defaulted *on*
-  is left to inherit; an id they defaulted *off* is left alone, because a create form does not
-  overrule an install-wide decision. The form therefore goes quiet as soon as a policy exists,
-  which is the point.
-
-  **Two sets stay explicit checkboxes**: the model-backed automations and agent acting
-  authority (spawn/land without per-request approval). One can bill and the other hands agents
-  real authority, so each is a decision about *this repository* rather than a posture to
-  inherit quietly. They are served by `GET /api/grants` (`project_starting_sets`) and applied
-  after registration as one ordinary `POST /api/grants`, dependency closure and audit record
-  included; a failure is reported and never unwinds the Project. Contents and the disclosures
-  each checkbox owes: `setting-links.md` § First use, `automation-enablement.md` § First-use
-  starting sets.
+- Create project contains only name, folder mode and path, and an optional Group when Groups exist.
+  It states **Global defaults selected** and leaves customization to Project settings and Automation Policy after creation.
+  Creation writes no automation, authority, backend, or launch-profile overrides and does not fetch provider readiness or the grants catalogue.
+  A newly initialized Project therefore follows later changes to global defaults, rather than copying the values in effect at creation time.
+  Existing repository configuration and restored Project records retain their explicit decisions.
+- Globally enabled setup commands use their configured defaults without a per-Project checklist.
+  A read-only disclosure names the commands that will run.
+  Commands execute after successful registration, in configured order, through the ordinary initialization endpoint.
+  Failure is reported in the workspace and never undoes the registered Project.
 - **A successful creation lands in the new Project's workspace** (operator decision 2026-08-22).
   It selects the Project, closes the create form, closes Manage projects, and closes the mobile
   sidebar. The sidebar's `+` opens Manage projects only as a backdrop for the form, so submitting
@@ -347,6 +324,7 @@ session and a second write path could only drift from it.
 - `src/swe_mux/project_files.py`
 - `src/swe_mux/project_init.py`
 - `frontend/src/ProjectsManager.tsx`
+- `frontend/src/ProjectCreateDialog.tsx`
 - `frontend/src/projectCreate.ts`
 - `frontend/src/projectSort.ts`
 - `frontend/src/App.tsx`

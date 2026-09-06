@@ -46,6 +46,18 @@ if(topbarRows>1)topbarConfig=placeSessionTopbarItem(topbarConfig,{kind:'metric',
 if(topbarRows>2)topbarConfig=placeSessionTopbarItem(topbarConfig,{kind:'metric',id:'branch',mode:'always'},2,'left')
 const topbarFacts=deriveRowFleetFacts([session],{[session.id]:0})
 
+// Held in state rather than passed as a constant: the composer is controlled by TerminalPane in
+// the app, so a harness that dropped its input could not be typed into, and the thing worth
+// pinning about a draft is what happens when it outgrows the box.
+const LONG_DRAFT = Array.from({ length: 40 }, (_, index) => `line ${index+1} of a draft that outgrows the composer`).join('\n')
+function DraftHarness() {
+  const [text,setText]=useState(parameters.get('draftlong')==='1'
+    ? LONG_DRAFT
+    : 'A persistent message that has not reached the terminal.')
+  return <MobileTerminalDraft sessionName="harness" text={text} busy={false} error=""
+    onInput={setText} onInsert={()=>{}} onClear={()=>setText('')}/>
+}
+
 const pane = <section class="terminal-pane focused">
   <SessionTopbar preview session={session} config={topbarConfig} rowConfig={defaultSessionRowConfig()} facts={topbarFacts}
     title={<div class="pane-identity"><span class="pane-title">{session.name}</span>{fault&&<span class="pane-fault" role="img" aria-label="Session fault: observation stale">⚠</span>}</div>}
@@ -53,7 +65,7 @@ const pane = <section class="terminal-pane focused">
     menu={<button aria-label="More actions">⋯</button>}/>
   <div class="terminal-surface">
     <div class="terminal-host" />
-    {draft&&<MobileTerminalDraft sessionName="harness" text="A persistent message that has not reached the terminal." busy={false} error="" onInput={()=>{}} onInsert={()=>{}} onClear={()=>{}} onClose={()=>{}}/>}
+    {draft&&<DraftHarness/>}
     <div class="terminal-action-rail"><div class="terminal-action-rows" /></div>
   </div>
 </section>

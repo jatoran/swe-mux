@@ -219,25 +219,14 @@ Three things address that without weakening the rule:
   wrote it down, and a Project deviates only where it needs to. It ships empty, so an existing
   install resolves exactly as before. The four layers and why a default may not silently widen
   anything: `automation-enablement.md` § The four layers.
-- **Named starting sets at Project creation, and as preset cards on the policy matrix.**
-  Two checkboxes on the creation form (greyed, with the reason, when the install-wide
-  ceiling blocks part of a set), and three sets as cards at the head of the
-  Automation Policy matrix - expanded as the welcome on a first run, behind a
-  "Choose preset" button after. Each is
-  served by `GET /api/grants` (`project_starting_sets`) and applied through the ordinary
-  `POST /api/grants` - the ticked sets go as **one** POST, so the daemon computes the
-  dependency closure, writes the Project file once, and leaves one audit record. Turning
-  a set *off* is the matrix's own editor write, never a grant.
-  Neither of the two the form still offers is an inherited default: each is written into that
-  Project's own `.swe-mux/config.toml`, because one can bill and the other hands agents
-  authority, and those are decisions about a repository rather than postures to inherit.
-  - `RECOMMENDED_PROJECT_AUTOMATIONS` is the model-free set - the four detectors and the code
-    graph. It stopped being a creation checkbox on 2026-08-31 and became the **seed** for the
-    form's inherited defaults: where the install has no opinion about one of its ids the form
-    pre-ticks it, so a fresh install's first Project is not empty; where the install has an
-    opinion either way, the form leaves it alone. It remains a preset card on the matrix.
-    `_validate_recommended` refuses at import to let a spending automation into it.
-  - `LLM_PROJECT_AUTOMATIONS` is the model tier - `scan_timeline`, `continuous_title`,
+- **Named starting sets are post-creation choices on the policy matrix.**
+  Create project always inherits and contains no feature or authority controls.
+  Three preset cards at the head of Automation Policy are served by `GET /api/grants` and applied through the ordinary `POST /api/grants`, with dependency closure and an audit record.
+  Turning a set off uses the matrix's editor write rather than a grant.
+  - `RECOMMENDED_PROJECT_AUTOMATIONS` is the model-free set of detectors and code structure.
+    It is available as a policy preset and is never seeded into a newly registered Project.
+    `_validate_recommended` refuses a spending automation in this set.
+  - `LLM_PROJECT_AUTOMATIONS` is the model tier - `scan_timeline`, `session_titler`, `attention_observers`, `continuous_title`,
     `model_narration`, with the closure (`attention_ranking` and the detectors under it)
     written alongside - plus `scan_timeline_auto_enable` (`grants.LLM_PROJECT_VALUES`) so the
     timeline arms per run instead of waiting for a grant nobody new knows to press.
@@ -246,8 +235,7 @@ Three things address that without weakening the rule:
     switch on the Automation dashboard that is gated by no Project opt-in at all. Both were
     described as "session titles" until 2026-08-31, which made declining this checkbox read
     as declining titles.
-    Off by default because it can bill; the checkbox discloses spend, points at the
-    install-wide budgets, and states the unproven provider when `llm.ready` is false.
+    The policy preset discloses spend and applies only when provider readiness and the install-wide ceiling permit it.
     `_validate_llm_set` holds every member to `needs_llm` and the closure to `implemented`.
   - `AUTONOMY_PROJECT_AUTOMATIONS` (`session_control`, `land_queue`, `observation_inbox`)
     plus `grants.AUTONOMY_PROJECT_VALUES` (`spawn_grant`/`land_grant` → `granted`).
@@ -295,8 +283,7 @@ POST /api/grants     {install?: {key: true}, project_id?, automations?: [id],
 
 `GET` is the contract both ends check; with the registry payload it carries each
 automation's `globally_allowed` (the resolved install-wide ceiling over the id and its
-closure), so a gate and the creation form grey a switch the daemon would refuse rather
-than offering it.
+closure), so grant gates and policy presets can explain a switch the daemon would refuse.
 `POST` refuses with `not_grantable`, `grant_is_additive`, `unknown_automation`,
 `automation_not_implemented`, `automation_globally_disabled` (the install ceiling turns
 the id or its closure off, and a grant reporting success against it would offer to turn

@@ -164,8 +164,8 @@ async def discover_projects(request: web.Request) -> web.Response:
         return json_response({"error": "Select at least one registered harness to scan."}, 422)
     started = time.monotonic()
     try:
-        async with asyncio.timeout(45):
-            items = await scan_external_transcripts_async(backends=backends, limit=2000)
+        async with asyncio.timeout(15):
+            items = await scan_external_transcripts_async(backends=backends, limit=300)
             candidates = await project_candidates(items)
     except TimeoutError:
         log.warning(
@@ -189,8 +189,93 @@ async def discover_projects(request: web.Request) -> web.Response:
         },
     )
     return json_response(
-        {"items": candidates, "limited": len(items) >= 2000 or len(candidates) >= 200}
+        {"items": candidates, "limited": len(items) >= 300 or len(candidates) >= 200}
     )
+
+
+async def configure_models(request: web.Request) -> web.Response:
+    """Save the two setup roles without replacing explicit feature-level model choices."""
+    config: Config = request.app[keys.CONFIG]
+    body = await request.json()
+    if not isinstance(body, dict) or set(body) - {"revision", "cheap", "regular"}:
+        return json_response({"error": "Expected cheap and regular model choices."}, 422)
+    if type(body.get("revision")) is not int or body["revision"] != config.revision:
+        return json_response(
+            {"error": "Settings changed. Reload the model choices and retry."}, 409
+        )
+    if any(
+        not isinstance(body.get(key), str) or not body[key].strip() for key in ("cheap", "regular")
+    ):
+        return json_response({"error": "Choose a cheap and a regular model."}, 422)
+    changes = model_setup.setup_model_changes(
+        config, body["cheap"].strip(), body["regular"].strip()
+    )
+    hot, _ = update_config(config, changes)
+    apply_runtime_config(request.app, hot)
+    log.info("onboarding model choices saved", extra={"fields": ",".join(sorted(changes))})
+    await request.app[keys.EVENTS].emit("configuration_changed", source="onboarding_models")
+    return json_response(config.public_dict())
+
+
+async def activate_model_features(request: web.Request) -> web.Response:
+    """Grant only the requested model-backed features, never an entire experience preset."""
+    from ..automation_registry import (
+        DEDICATED_INSTALL_SWITCHES,
+        LLM_PROJECT_AUTOMATIONS,
+        enabling_closure,
+    )
+    from . import automation
+
+    body = await request.json()
+    if not isinstance(body, dict) or set(body) - {"features", "overrides"}:
+        return json_response({"error": "Expected selected model features."}, 422)
+    features = body.get("features")
+    allowed = {"automations", "summaries", "assistant"}
+    if (
+        not isinstance(features, list)
+        or not features
+        or any(not isinstance(item, str) or item not in allowed for item in features)
+    ):
+        return json_response({"error": "Choose automations, summaries, or assistant."}, 422)
+    overrides = body.get("overrides", {})
+    if (
+        not isinstance(overrides, dict)
+        or set(overrides) - {"automation_enabled", "scan_timeline_enabled"}
+        or any(not isinstance(value, bool) for value in overrides.values())
+    ):
+        return json_response({"error": "Invalid model feature overrides."}, 422)
+    ready = await automation._activation_readiness(request)
+    if not ready.ready or ready.code == "unknown":
+        return json_response({"error": ready.reason, "llm": ready.as_dict()}, 409)
+    config: Config = request.app[keys.CONFIG]
+    changes: dict[str, Any] = {}
+    if "automations" in features:
+        closure = enabling_closure(LLM_PROJECT_AUTOMATIONS)
+        changes.update(
+            automation_enabled=True,
+            scan_timeline_enabled=True,
+            automation_project_defaults={
+                **config.automation_project_defaults,
+                **dict.fromkeys(closure, True),
+            },
+            automation_global_allow={
+                **config.automation_global_allow,
+                **dict.fromkeys(closure - DEDICATED_INSTALL_SWITCHES.keys(), True),
+            },
+        )
+        changes.update(overrides)
+    if "summaries" in features:
+        changes["tts_content"] = "summary"
+    if "assistant" in features:
+        changes["assistant_enabled"] = True
+    hot, restart = update_config(config, changes)
+    apply_runtime_config(request.app, hot)
+    log.info(
+        "onboarding model features enabled",
+        extra={"features": ",".join(sorted(features)), "fields": ",".join(sorted(changes))},
+    )
+    await request.app[keys.EVENTS].emit("configuration_changed", source="onboarding_features")
+    return json_response({"ok": True, "restart_required": sorted(restart)})
 
 
 async def verify_models(request: web.Request) -> web.Response:
@@ -290,4 +375,6 @@ ROUTES = (
     web.patch("/api/onboarding", patch_onboarding),
     web.get("/api/onboarding/projects", discover_projects),
     web.post("/api/onboarding/models/verify", verify_models),
+    web.post("/api/onboarding/models/configure", configure_models),
+    web.post("/api/onboarding/features/activate", activate_model_features),
 )

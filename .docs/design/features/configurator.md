@@ -280,7 +280,7 @@ The two refusals are separate codes because they are different problems: a missi
 ## Surfaces
 
 - **Sidebar footer**, beside the alert bell, with a twin in the collapsed rail. This is the primary entry point.
-- **Settings → Diagnostics**, above Export diagnostics - the same errand one step earlier.
+- **Settings → Maintenance**, above Export diagnostics - the same errand one step earlier.
 - **Command palette**, `configurator.open`.
 - **The guided tutorial's second-to-last step**, anchored on the footer control, so the tour ends by pointing at where help lives afterwards.
 - **A harness chooser** on right-click / shift-click / alt-click, and only when more than one agent is available. A plain press launches the default, because one press with no decision is the whole value of the control.

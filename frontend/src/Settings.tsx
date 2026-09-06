@@ -38,6 +38,7 @@ import { WslBridgePanel } from './WslBridgePanel'
 import { type WslBridgeStatus } from './wslBridge'
 import { ConnectPhone } from './ConnectPhone'
 import { UpdateDialog } from './UpdateDialog'
+import { FactoryResetDialog } from './FactoryResetDialog'
 import { VoiceLatencyReport } from './VoiceLatencyReport'
 import { WakeWordTester } from './WakeWordTester'
 import {
@@ -437,6 +438,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   const [wslBusy,setWslBusy]=useState('')
   const [wslProbing,setWslProbing]=useState(false)
   const [wslMessage,setWslMessage]=useState('')
+  const [factoryResetOpen,setFactoryResetOpen]=useState(false)
   const [diagnosticsBusy,setDiagnosticsBusy]=useState(false)
   const [diagnosticsMessage,setDiagnosticsMessage]=useState('')
   const [diagnosticsText,setDiagnosticsText]=useState('')
@@ -723,7 +725,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
       api<VoiceStatusInfo>('GET','/api/voice').then(setVoiceInfo).catch(()=>setVoiceInfo(null))
       api<LatencyReportPayload>('GET','/api/voice/stt-latency').then(setLatencyReport).catch(()=>setLatencyReport(null))
     }
-    if(activeTab==='diagnostics'&&first('diagnostics'))
+    if(activeTab==='maintenance'&&first('maintenance'))
       api<{prerequisites:Prerequisite[]}>('GET','/api/diagnostics/prerequisites')
         .then(p=>setPrerequisites(p.prerequisites)).catch(()=>setPrerequisites(null))
     if(activeTab==='terminals'&&first('terminals'))
@@ -2221,10 +2223,15 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <section><h3>Model provider</h3>
           <p>Choose OpenRouter or a self-hosted OpenAI-compatible <code>/chat/completions</code> endpoint. Speech recognition and synthesis remain local.</p>
             <ProviderConnectionFields draft={draft} onChange={(key,value)=>change(key,value)} apiKey={draft.llm_provider==='custom'?customKey:openRouterKey} onKeyChange={draft.llm_provider==='custom'?setCustomKey:setOpenRouterKey} configured={!!activeEndpoint?.secret.configured}/>
+            {/* Where to get the credential belongs beside the field that takes it, and
+                only while that endpoint is the one in play - a key link for an endpoint
+                nothing routes through is advice that cannot be acted on. Switching the
+                dropdown above brings it straight back, because the draft updates without
+                a save. */}
+            {draft.llm_provider==='openrouter'&&<p>Get an API key at <a href="https://openrouter.ai/keys" target="_blank" rel="noreferrer">OpenRouter</a>.</p>}
             <ProviderReadiness readiness={provider?.llm}/>
             <div class="theme-actions"><button disabled={!(draft.llm_provider==='custom'?customKey:openRouterKey)} onClick={()=>void providerKeyAction('test',draft.llm_provider==='custom'?'custom':'openrouter')}>Test entered key</button><button disabled={!(draft.llm_provider==='custom'?customKey:openRouterKey)} onClick={()=>void providerKeyAction('set',draft.llm_provider==='custom'?'custom':'openrouter')}>Test + set/replace key</button><button disabled={!activeEndpoint?.secret.configured} onClick={()=>void providerKeyAction('clear',draft.llm_provider==='custom'?'custom':'openrouter')}>Clear stored key</button></div>
             <p aria-live="polite">{providerMessage||'The key is write-only and stored in the platform credential store.'}</p>
-            <label data-setting="openrouter_request_timeout_seconds">Request timeout seconds<input type="number" min="1" max="120" step="1" value={draft.openrouter_request_timeout_seconds} onInput={event=>change('openrouter_request_timeout_seconds',Number(event.currentTarget.value))}/><small>Takes effect on the next daemon restart.</small></label>
             {/* One button per configured provider rather than one for the active one: an
                 operator setting up a local endpoint wants to prove it before switching
                 everything over to it, and a verify that only worked on the live provider
@@ -2255,14 +2262,11 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
                   </Fragment>
                 : <p><strong>{verifyResult.provider} did not answer.</strong> {verifyResult.error}</p>}
             </div>}
+            {/* Last, because it tunes an endpoint that already works. Sitting between the
+                key fields and Verification, it separated the credential from the thing
+                that proves it. */}
+            <label data-setting="openrouter_request_timeout_seconds">Request timeout seconds<input type="number" min="1" max="120" step="1" value={draft.openrouter_request_timeout_seconds} onInput={event=>change('openrouter_request_timeout_seconds',Number(event.currentTarget.value))}/><small>Takes effect on the next daemon restart.</small></label>
           </section>
-          {/* Only while it is the provider in play. A key section for an endpoint
-              nothing is routing through is a control that cannot do anything, and it
-              was the largest thing standing between the provider choice and the models
-              it decides. Switching the dropdown above brings it straight back - the
-              draft updates without a save - so nothing is unreachable, only hidden
-              while it would be inert. */}
-          {draft.llm_provider==='openrouter'&&<p>Get an API key at <a href="https://openrouter.ai/keys" target="_blank" rel="noreferrer">OpenRouter</a>.</p>}
 
           <section><h3>Models</h3>
           <p>All model routes are edited here. Routed defaults are inherited; overrides may fall back; pinned models do not.</p>
@@ -2656,7 +2660,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
         {/* Support tooling, not remote configuration: what the host is missing, how to
             push new code into the running app, and one bundle to hand over when
             something is wrong. */}
-        {activeTab==='diagnostics'&&<Fragment>
+        {activeTab==='maintenance'&&<Fragment>
           {/* First on the tab, because "which build am I on" is the question every
               other answer here is qualified by: a prerequisite report, a log level,
               and an exported bundle all describe a specific version, and the one a
@@ -2778,6 +2782,23 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           {diagnosticsMessage&&<p aria-live="polite">{diagnosticsMessage}</p>}
           {diagnosticsText&&<label>Diagnostics bundle<textarea readOnly rows={10} value={diagnosticsText} onClick={event=>event.currentTarget.select()} /></label>}
           </section>
+
+          {/* Last on the tab, and the only control here that destroys anything.
+              Everything above it is a way to understand or repair this install;
+              this is the way to stop having it. The dialog does the explaining -
+              this section is deliberately short, because a wall of warnings
+              beside the button is read as decoration. */}
+          <section data-section="factory-reset"><h3>Factory reset</h3>
+          <p>Returns swe-mux to a fresh install: configuration, Projects, history, the database,
+            notes, prompts, plugins and stored credentials are moved out of the data directory,
+            and the app comes back on the first-run setup with nothing carried over.</p>
+          <p class="profile-hint">Files inside your repositories are never touched, worktree
+            checkouts are left where they are, and nothing is deleted - the old install is moved
+            into the data directory's <code>.trash</code> folder. <strong>Every live session is
+            terminated</strong>, so stop anything mid-run first.</p>
+          <div class="theme-actions"><button class="danger" onClick={()=>setFactoryResetOpen(true)}>Factory reset…</button></div>
+          </section>
+          {factoryResetOpen&&<FactoryResetDialog onClose={()=>setFactoryResetOpen(false)}/>}
         </Fragment>}
 
         {activeTab==='appearance'&&<Fragment><section><h3>Theme</h3>

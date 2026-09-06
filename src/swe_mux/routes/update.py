@@ -116,7 +116,7 @@ async def post_update_check(request: web.Request) -> web.Response:
                 "error": "update_check_disabled",
                 "message": (
                     "the update check is turned off, so nothing was requested; "
-                    "enable it in Settings → Diagnostics → swe-mux version"
+                    "enable it in Settings → Maintenance → swe-mux version"
                 ),
                 **checker.snapshot(),
             },

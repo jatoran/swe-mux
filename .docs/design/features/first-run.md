@@ -2,150 +2,171 @@
 
 ## What it is
 
-One machine-owned setup sequence, followed by a UI tour and optional first steps.
+A four-page path to a working session, followed by optional setup and a UI tour.
 The browser, desktop WebView, and phone share progress through the daemon.
-Getting started remains above Usage in the sidebar until explicitly hidden, and Help restores it.
+Getting started remains above Usage in the sidebar until hidden, and Help restores it.
 
-## Sequence
+## Core sequence
 
-1. Existing preferences, when retained data or a different installation is detected.
-2. Experience tier, theme, keyboard preset, and optional granular refinements.
-3. Provider and model setup when the selected features need language models.
-4. Harness detection, default harness, fleet access, and optional account capture.
-5. Project folders, discovered from native history or selected manually.
-6. Desktop integration, using actual shortcut and startup registration state.
-7. A choice to start the UI tour, launch a session, or explore independently.
+1. Experience: Just terminals, Agent workspace, or Smart workspace.
+2. Agents: detected harnesses, optional login capture, and the default harness or Shell.
+3. Projects: background history suggestions, filtering, multi-selection, or a manual folder.
+4. Keymap: cards for the shipped presets, an optional shortcut-editor detour, and Start working.
 
-Only one setup or tour surface is active at a time.
-An unresolved startup request is unknown, never evidence that setup completed.
-Failed initial reads retry with bounded delays, and successful event reconnection refreshes config and progress.
-Continue later preserves the current page and non-secret experience and harness selections.
-The sidebar resumes the sequence without covering the workspace until selected.
-Opening a focused phone, voice, model, or desktop guide suppresses the tour.
+Retained installations first choose Keep settings, Review setup, or Back up and start fresh.
+A preset records ordinary settings; it never gates capabilities by its name.
+The stable configuration ids remain `terminal`, `deterministic`, and `automations`.
 
-## Experience presets
+Start working uses the selected Project and harness through the ordinary session-launch path.
+When no Project exists, the Project manager remains available to complete that prerequisite.
+A completed first-session task prevents finishing optional setup from launching another session.
+The fast path defers optional setup and leaves it available in Getting started.
+A user who selected Just terminals proceeds directly from Keymap to the workspace or optional extras.
 
-A tier assigns ordinary settings and never acts as a runtime capability gate.
-Every switch stays editable through its owning settings or automation surface.
+Only one setup, focused guide, or tour surface is active.
+Back and Continue later preserve non-secret draft selections.
+Unresolved startup requests remain unknown, and failed initial reads retry.
+The experience preset is applied only when the chosen tier changes, so returning through an unchanged page cannot erase later customization.
 
-- Pure terminal disables instrumentation, fleet surfaces, and the tier-managed automation defaults.
-- Deterministic enables the model-free fleet layer and the recommended project-memory defaults with their dependency closure.
-- Automations includes Deterministic and the model-backed starting set, with the corresponding master switches.
+## Agent detection and project discovery
 
-The presets also assign their managed global automation ceilings.
-`automation_project_defaults` is merged over existing entries, replacing only the preset's own inventory.
-Explicit Project decisions continue to outrank inherited defaults, subject to the global ceiling.
-Unrelated automation defaults are preserved.
-Setup and Settings render the daemon's preview of labels, resulting values, and differences before applying a preset.
-Reapplying the current tier is allowed because its individual settings may have changed.
+Harness detection starts when setup mounts.
+An unanswered detection and a deliberate empty selection remain distinct.
+The Agents page offers Check again, installation guidance, and an explicit Shell-only continuation even before detection finishes.
+The default harness must belong to the selected set; Shell is always a valid choice.
+Selecting no agents writes explicit disablement using the complete registry.
 
-Autonomy remains a separate axis: supervised, assisted, or autonomous.
-Selecting model-backed features does not itself select unattended agent authority.
-Instrumentation changes may require a daemon reload; setup reports this and never restarts live sessions itself.
+For account-capable harnesses, setup offers Save current login or Sign in and save.
+An in-progress login reports where to finish and polls until it settles.
+Capture and login use the ordinary provider-account operations.
+Model API credentials remain separate from agent account snapshots.
 
-## Model prerequisites
+Selected harnesses start background project discovery on the Agents page.
+Each harness has its own bounded request, allowing one result set to populate Projects before another finishes.
+Selection changes cancel unneeded requests; navigation between setup pages retains completed results.
+Discovery reads up to 300 recent transcripts per harness and resolves at most 200 candidate folders, with a 15-second deadline and cooperative cancellation.
+It does not import transcripts or register Projects.
 
-Selecting Automations records intent before enabling its masters.
-The provider page uses the same connection controls, credential operation, model routing table, and budget controls as Settings.
-API keys stay in the platform secret store and never enter the progress draft.
-An authenticated harness account is separate from the model API provider.
-A compatible local server may require no key.
+Projects offers a filter over names, paths, and harnesses.
+Filtering preserves selected folders outside the current result view.
+Select visible and Clear selection support bulk choices.
+Unavailable folders stay visible and cannot be selected.
+A manual folder remains usable while discovery runs or fails.
+Continuing registers selected folders explicitly; partial successes survive a later failure and retries do not duplicate them.
+POSIX path identity remains case-sensitive, independent of the browser's operating system.
+Existing Project files and explicit Project automation choices remain intact.
 
-Endpoint verification is followed by explicit approval of cheap, standard, scan timeline, and assistant model roles.
-OpenRouter suggestions use the existing scan and assistant defaults only when the catalog lists them.
-Other feature overrides remain available in a disclosure.
-A server with no model catalog resolves every role to its single configured model.
+## Keymap and optional permissions
 
-The role check sends at most six distinct structured-output probes and one tool-call probe.
-No returned tool call executes.
-A failed role check leaves model-backed activation unavailable.
-Successful verification is bound to the endpoint, credential fingerprint, and role model ids in `model-setup-verification.json`.
-Changing one invalidates that proof for a later tier application.
-Model settings changing during verification refuse approval rather than stamping a different configuration.
+Keymap cards carry short descriptions and preset-specific warnings.
+Customize applies the chosen preset and opens the existing Settings shortcut editor.
+Closing Settings resumes Keymap without reapplying the preset over customized bindings.
 
-Continue with Deterministic applies that preset explicitly and leaves model setup available in Getting started.
-The project creation form and grant gates offer guided model setup before permitting model-dependent activation.
-Per-project permission, current-run scan opt-ins, budgets, and authority checks still apply after setup.
+Automatic-delivery permissions have a separate optional page.
+Review first, Deliver when ready, and Extended runs map to the existing supervised, assisted, and autonomous assignments.
+Their numeric limits and individual feature switches are available in a disclosure.
+Preset assignments come from the daemon; submitted refinements pass through ordinary configuration validation.
+Changing delivery permissions is independent of connecting a provider.
 
-## Projects and accounts
+Instrumentation and per-harness integration settings retain their existing restart scope.
+Setup reports a required daemon reload and never restarts live sessions automatically.
 
-Detection checks the registry of supported harnesses.
-The user chooses a default harness for Run, with the first enabled harness suggested and the choice corrected when it is deselected.
-The suggestion names only a harness that is actually enabled, so the default never points at a harness this step turned off.
-An unresolved detection and a deliberate choice to enable nothing are distinct.
-The draft records the harness selection only once detection has resolved; an earlier page's Continue passes through whatever was already recorded rather than writing an empty selection.
-A recorded selection is therefore an answer, including an empty one, and is restored on resume instead of being re-seeded from detection.
-For harnesses whose account manager supports capture, an external system login offers Save current login.
-An already-saved account is identified, and an unreadable or absent login is stated without attempting capture.
+## Model prerequisites and activation
 
-Project discovery reads native harness history independently of swe-mux's Project registry.
-It aggregates working folders, resolves repository roots, groups linked worktrees under the common repository, and orders by recent activity.
-The scan is bounded to recent transcripts and at most 200 candidate working folders, with a 45-second request deadline and cooperative cancellation.
-Unavailable folders remain visible and cannot be selected.
-Registration is explicit, and successfully added folders remain registered if another selection fails.
-Project files and their explicit automation choices are not overwritten by discovery.
+Choosing Smart workspace first applies the model-free base and records pending model features.
+Explicitly disabling both model-backed masters removes the provider prerequisite.
+The provider page starts with connection controls and then shows two read-only model rows: Cheap and Regular.
+Each row names the actual model and input/output prices where the catalog reports them.
+Change opens a picker only for that role.
+The daily automation limit remains a summary until Adjust is opened.
+Unknown cost is stated as unknown.
 
-## First steps and tour
+Model choices carry default scan-timeline and assistant pins along with the Cheap and Regular pair.
+Explicit feature overrides remain unchanged and are edited in advanced Settings.
+A catalog-less local endpoint resolves every role to its configured single model.
+API keys stay in the platform secret store and never enter a setup draft.
 
-First steps include a Project, a first session, desktop integration, phone access, voice, and deferred model setup when relevant.
-Worktrees live under Explore more, alongside documentation and the live website demo.
-Tasks are not drawn in the central empty workspace or duplicated on setup's final page.
-Completion, dismissal, collapsing the section, and hiding the section are distinct operations.
-Dismissed tasks can be restored.
+Endpoint verification and model-role verification are distinct.
+The existing bounded capability probes prove structured output and assistant tool calls without executing a returned tool.
+Verification remains bound to the endpoint, credential fingerprint, and effective model ids.
+The model configuration operation requires the current config revision.
+A changed provider or a failed role check prevents activation.
 
-The UI tour follows setup and teaches navigation, Run, tabs, splits, resources, Settings, and Help.
-It omits the account configuration step after setup and uses an existing Project when available.
-Its current step and active, deferred, or completed status persist on the daemon.
-Browser-local tutorial storage is not the application authority.
-Phone connection is a focused guide with Tailscale state, private access enablement, HTTPS setup, a QR code, refresh, and explicit user confirmation that the workspace opened.
-Voice uses the existing guided voice setup.
+Finishing provider setup grants only requested model features.
+It never reapplies an experience preset or rewrites fleet access, automatic-delivery authority, or unrelated feature choices.
+Per-Project permissions, inherited dependencies, budgets, and current-run opt-ins still apply.
+Set up later preserves pending model intent without changing the current feature configuration.
 
-## Retained data and fresh preferences
+## Voice, desktop, phone, and tour
 
-The first use of the progress schema offers existing users a retained-preferences choice once.
-Subsequent upgrades in the same installation leave progress intact.
-A changed installation location offers the choice again.
-A reinstall into the identical location cannot always be distinguished from an upgrade by a wheel-installed application.
-Help and `swemux setup --restart` therefore provide the explicit route at any time.
+Optional extras are focused guides reached from one page or Getting started.
+Desktop offers actual shortcut and startup state.
+Phone uses the shared Tailscale state, private-access controls, HTTPS setup, QR code, and explicit confirmation that the workspace opened.
 
-Start fresh backs up global configuration, keyboard bindings, and progress into a uniquely named `setup-backups/` directory before resetting preferences.
-Projects, repository files, history, account snapshots, credential stores, and connection identity are retained.
-Keyboard bindings reset to the shipped preset.
-Restart-scoped preferences are reported and take effect at a later reload.
-The operation uses revision checks; a stale client cannot reset preferences after another client changes setup.
+Voice separates local reading, local dictation, and optional AI summaries or conversation.
+Users choose built-in speech where supported or install local neural speech and recognition models through the existing download panels.
+Each panel retains explicit download actions, progress, failure details, and retries.
 
-`swemuxd --new-user-profile NAME` selects a named profile under `~/.mux-test-profiles/`, separate from the ordinary data directory.
-It disables remote listeners and uses a separate local port, or the explicitly supplied `--port`.
-Names are restricted to letters, digits, underscores, and dashes and cannot be combined with `--config`.
-This supports manual new-user testing without removing `.mux`.
+AI voice controls require verified model readiness.
+A configured provider shows inherited models and prices.
+Add provider opens the shared connection flow and returns to the same voice choices.
+This detour never activates unrelated automations.
+
+Voice completion is an explicit tested outcome, not an enabled config switch.
+Read-aloud completion requires successful playback and user confirmation.
+Dictation requires an available recognition engine, a real microphone utterance transcribed through the ordinary endpoint, and confirmation of the returned text.
+The test sends nothing to an agent.
+Capture has bounded timeouts and releases the microphone when canceled or unmounted.
+Closing unfinished voice setup preserves choices without marking it complete.
+
+The UI tour is optional and follows real Projects, Run, tabs, splits, resources, Settings, and Help.
+It uses an existing Project where available and lets users skip any action step.
+Its current step and active, deferred, or completed state persist on the daemon.
+Completion, dismissal, collapse, and hiding Getting started remain separate operations.
+
+## Persistence and recovery
+
+`onboarding.json` stores version, revision, installation identity, current page, setup status, tour progress, task lists, section visibility, and a closed non-secret draft.
+Drafts include experience, harness choices, Project selections and filter, keymap, delivery refinements, pending model intent, provider form values, and voice choices.
+Keys, captured audio, and playback-test confirmation are excluded.
+Optimistic browser edits merge with serialized revision-checked saves instead of replacing unrelated progress.
+Writes replace the document atomically; malformed state is preserved before a recoverable preferences choice is offered.
+
+Start fresh backs up global configuration, keyboard bindings, and progress under `setup-backups/`.
+Projects, repository files, history, accounts, credential stores, and connection identity remain.
+Start fresh replays setup against the install that exists; the factory reset ends that install and re-enters this sequence with nothing to replay against (`factory-reset.md`).
+The two are not degrees of each other: everything Start fresh deliberately keeps is what a factory reset exists to remove.
+Installation-location changes offer retained preferences again.
+Help and `swemux setup --restart` provide an explicit restart at any time.
+
+`swemuxd --new-user-profile NAME` selects an isolated local test profile.
+It uses separate data and a separate port, disables remote listeners, and cannot be combined with `--config`.
 Do not run a daemon from a development worktree.
 
-## Persistence and diagnostics
-
-`onboarding.json` stores schema version, optimistic revision, installation identity, current page, setup status, tour status and step, section visibility, task lists, and a closed non-secret draft.
-Writes replace the document atomically.
-Unknown fields, malformed values, and stale revisions are refused.
-Unreadable progress is preserved before a recoverable existing-preferences page is offered.
-State transitions, backups, discovery outcomes, and model verification results enter the daemon's rotating logs with request correlation.
-Credential material is excluded.
+Progress transitions, backups, discovery outcomes, model choices, verification results, and feature grants enter rotating daemon logs with request correlation.
+Credentials are excluded.
 
 ## Key files
 
-- `src/swe_mux/onboarding.py`: progress persistence, validation, installation identity, and preference backups.
-- `src/swe_mux/routes/onboarding.py`: progress, reset, project discovery, and model-role verification routes.
-- `src/swe_mux/model_setup.py`: configuration-bound verification proof.
-- `src/swe_mux/experience_tiers.py`, `src/swe_mux/routes/settings.py`: preset policy, preview, prerequisites, and application.
-- `frontend/src/onboarding.ts`: client synchronization, retry, and revision handling.
-- `frontend/src/OnboardingFlow.tsx`, `frontend/src/HarnessSetup.tsx`: setup orchestration and experience/harness pages.
-- `frontend/src/ProviderSetup.tsx`, `frontend/src/ExperiencePreview.tsx`: controls shared with Settings.
-- `frontend/src/SetupAccounts.tsx`, `frontend/src/SetupProjects.tsx`, `frontend/src/DesktopSetup.tsx`: focused setup steps.
-- `frontend/src/GettingStarted.tsx`, `frontend/src/GuidedTutorial.tsx`, `frontend/src/ConnectPhone.tsx`: ongoing learning surfaces.
+- `src/swe_mux/onboarding.py`: persistence, closed draft schemas, revisions, and preference backups.
+- `src/swe_mux/routes/onboarding.py`: progress, discovery, model configuration, verification, and restricted activation.
+- `src/swe_mux/model_setup.py`: model-pair assignment and configuration-bound proof.
+- `src/swe_mux/experience_tiers.py`: experience and delivery preset policy.
+- `frontend/src/onboarding.ts`: synchronization, serialized saves, and optimistic draft merging.
+- `frontend/src/OnboardingFlow.tsx`: page transitions, fast-path completion, and focused guides.
+- `frontend/src/HarnessSetup.tsx`, `frontend/src/setupHarnesses.ts`: experience cards, detection, and agent choices.
+- `frontend/src/setupDiscovery.ts`, `frontend/src/SetupProjects.tsx`: incremental discovery, filtering, selection, and registration.
+- `frontend/src/SetupKeymap.tsx`, `frontend/src/SetupPermissions.tsx`: keymap and automatic-delivery pages.
+- `frontend/src/ProviderSetup.tsx`, `frontend/src/SetupModelSummary.tsx`, `frontend/src/setupActivation.ts`: connection, concise model choices, and narrow activation.
+- `frontend/src/VoiceSetup.tsx`: acquisition, provider detour, and functional voice checks.
+- `frontend/src/GettingStarted.tsx`, `frontend/src/GuidedTutorial.tsx`: ongoing setup and learning.
 - `tests/test_onboarding.py`, `frontend/test/renderer/onboarding.spec.ts`: persistence, prerequisites, and user-flow regressions.
 
 ## Relates to
 
-- `automation-enablement.md`: inherited defaults, dependency closure, and global ceilings.
-- `provider-accounts.md`: existing login capture and account snapshots.
-- `desktop-shell.md`: native shell, shortcut registration, and startup behavior.
-- `remote-access.md`: supported private phone connectivity.
-- `setting-links.md`: in-place grants and links to owning editors.
+- `automation-enablement.md`: inherited defaults, dependency closure, and ceilings.
+- `provider-accounts.md`: login capture and account snapshots.
+- `keybindings.md`: presets, host conflicts, and shortcut editing.
+- `voice.md`: speech engines, downloads, and transcription.
+- `desktop-shell.md`, `remote-access.md`: desktop integration and phone access.
+- `factory-reset.md`: ending the install and re-entering this sequence from nothing.

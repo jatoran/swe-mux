@@ -747,7 +747,7 @@ Its rules, and what each one is defending:
   - **Global project ignores** are on Projects, beside the per-Project list they compose with,
     rather than under process evidence. They filter the file tree and resource watchers, never Git.
   - **System prerequisites, the three session-preserving reload actions, and the diagnostics
-    bundle** are the Diagnostics tab. None of them is remote configuration.
+    bundle** are the Maintenance tab. None of them is remote configuration.
   - **Scrollback** is on Terminals, and it is three byte figures over one stream rather than one:
     what a session retains (`scrollback_bytes`), what a *fresh attach* is handed
     (`attach_replay_bytes`), and what survives losing the daemon and its PTY owner together
@@ -872,7 +872,7 @@ Its rules, and what each one is defending:
   (the `.ts.net` MagicDNS name, secure Serve address when up), a system-prerequisites checklist
   (Git, Node, npm, uv, Tailscale, each with a next step), and a security-posture line stating that
   any tailnet device reaches the daemon with no login.
-- The Diagnostics tab holds the standing system-prerequisites checklist, the three
+- The Maintenance tab holds the standing system-prerequisites checklist, the three
   session-preserving reload actions (`ui.reload`, `daemon.reload`, `app.redeploy`), and an Export
   diagnostics button that copies one bundle to the clipboard with a selectable textarea fallback.
   Each prerequisite row renders **three** states, not two. `present` (green), `off_path` (amber -
@@ -888,6 +888,12 @@ Its rules, and what each one is defending:
   The reload buttons dispatch the app's own command registry rather than re-implementing the
   paths, so a change to what "reload daemon" means reaches this panel for free, and a command the
   host does not offer disables its button instead of failing when pressed.
+  It ends with **Factory reset**, the only control on the tab that destroys anything; the tab is
+  named Maintenance rather than Diagnostics because it holds both halves of that - understanding
+  an install, and stopping having it (`design/features/factory-reset.md`).
+  The tab id `diagnostics` is retired to `maintenance` through `LEGACY_TAB_IDS`, and `diagnostics`
+  is a `SECTION_ALIASES` entry rather than a label match, because Voice still has a page of that
+  name and a deep link that matched it would land on the wrong tab.
 - Settings -> Harnesses renders two per-harness instrumentation toggles under each harness: the mux MCP
   server (offered only where the `mcp` capability is set) and "Instrument with mux hooks", whose
   off state shows an inline warning that a clean launch drops the harness to unobserved. Both note
@@ -1346,6 +1352,11 @@ The app-wide answer to "what is this", and the recovery path for the tour.
 
 ## Guided first-run tutorial
 
+- Core setup is Experience, Agents, Projects, and Keymap, followed by optional permissions, models, and focused extras.
+  The model page shows a Cheap/Regular summary until Change is selected.
+  Project suggestions populate from per-harness background discovery and support filtering and multi-selection.
+  Voice completion requires functional confirmation; a master switch is not completion.
+  `first-run.md` owns the complete flow and persistence contract.
 - Setup and tour progress are durable daemon state in `onboarding.json`.
   Finishing a tour records completion; exiting defers it and preserves its current step.
   Getting started resumes a deferred tour and replays a completed tour.

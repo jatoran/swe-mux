@@ -90,6 +90,10 @@ Text-to-speech is the same, except the explicitly experimental Edge TTS provider
 
 ## First run
 
+Setup walks through **Experience → Agents → Projects → Keymap**.
+Recent project folders appear in the background after selecting agents; filter and select any of them, or add a folder manually.
+**Start working** launches the chosen shell or agent, with optional permissions, models, voice, desktop, phone, and the UI tour available in Getting started.
+
 Create a Project and point it at an existing folder.
 `Ctrl+Shift+Enter` opens a terminal at its root, `Ctrl+Shift+P` (or `F1`) opens the command palette; nothing is spawned until you ask.
 

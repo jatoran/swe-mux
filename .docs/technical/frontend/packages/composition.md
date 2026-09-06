@@ -38,10 +38,26 @@ Index: `../packages.md`.
 - The poll is an hour and only re-reads an answer the daemon already holds (it checks once a day).
   A failed poll leaves the previous answer in place rather than blinking the banner away and back through a daemon restart.
 - Dismissal hides the strip immediately and persists in the background: the press is the decision, and it is recorded per version by the daemon, so it holds across a reload, a restart, and the phone.
-- The switch, the last-check status, a "Check now" button, and an "Install <version>" button opening the same dialog are in Settings → Diagnostics → **swe-mux version** (`update_check_enabled`), which is the tab's first section.
+- The switch, the last-check status, a "Check now" button, and an "Install <version>" button opening the same dialog are in Settings → Maintenance → **swe-mux version** (`update_check_enabled`), which is the tab's first section.
   It leads with the version the daemon is running (`runningVersionLabel`, over `current_version`) rather than only the check's verdict.
   "This is the latest release" answers a different question, says nothing while the check is off, and reads identically on a daemon whose check cannot reach the manifest - while the reader arriving here has just pressed Install or redeployed and is asking which build this is.
   Endpoint and reasoning: `../../design/interfaces.md`, `../../design/features/desktop-shell.md`, `../../design/features/remote-access.md`.
+
+## Factory reset
+
+`FactoryResetDialog.tsx`, `factoryReset.ts`
+
+- The confirmation for returning the install to its first-run state, and the wait that follows it (`../../design/features/factory-reset.md`, `../../design/interfaces.md`).
+  Every fact it shows is the daemon's answer from `GET /api/maintenance/factory-reset`, for the reason `updateCheck.ts` does not re-derive `banner`: a second implementation of "what will this destroy" would eventually disagree with the one that destroys it.
+- The order is the design.
+  Sessions end first - **named rather than counted**, with the ask to stop anything mid-run - because a count is a number and a name is a decision.
+  Then what survives: repositories, worktree checkouts, voice downloads, the PATH shims.
+  The fear a reset produces is about the work, and an unanswered fear is what stops someone pressing a button they wanted.
+  Then where it goes, since nothing is deleted and the trash is both the safety net and a real disk cost.
+- Consent is typed, and the phrase is the daemon's own (`confirmationMatches` compares the way the daemon does, so the button cannot arm on a request the daemon will refuse or refuse one it would accept).
+- **`clearClientStorage` is the part only a browser can do.** The daemon cannot reach localStorage, IndexedDB, the caches or the service worker, and a reset that left the last install's layouts, dismissed banners and remembered tab would look like one that did not work.
+  It runs after the daemon accepts, is best-effort per store, and returns the names of the stores it could not clear: the reset has already happened by then, so a thrown `SecurityError` that skipped the reload would strand the client on an install that no longer exists.
+- `waitForDaemon` settles before its first probe, because the old daemon still answers `/api/health` for a moment after accepting and reloading into it would show the install that is about to be moved aside.
 
 ## Frontend overlay
 
@@ -55,7 +71,7 @@ Index: `../packages.md`.
 - Three states that are *not* faults are kept apart from it and from each other: a deliberate `reverted`, the install-wide `disabled` switch, and an install that is simply waiting for the daemon restart that applies it.
   The last reads as pending rather than broken, because sending someone to hunt for a fault that does not exist is its own failure.
 - The section is hidden until an overlay exists. An empty panel explaining a mechanism nobody is using is noise on a page that already has a lot of it, and it appears at the moment there is something to revert.
-- Settings → Diagnostics → **Frontend overlay** carries the status, the revert/restore press, the `frontend_overlay_enabled` switch, and a "Reload daemon (keep sessions)" button beside them, because a revert only reaches the screen at the next daemon start.
+- Settings → Maintenance → **Frontend overlay** carries the status, the revert/restore press, the `frontend_overlay_enabled` switch, and a "Reload daemon (keep sessions)" button beside them, because a revert only reaches the screen at the next daemon start.
   `swemux ui-overlay revert` is the path that does not need this UI, and is the one to reach for when the overlay is why the UI will not load.
 
 ## Fleet refresh

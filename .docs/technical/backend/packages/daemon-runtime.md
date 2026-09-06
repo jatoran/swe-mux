@@ -36,6 +36,17 @@ The pre-compaction copy is a real copy rather than a rename, and it is refused w
 A compaction is minutes of unavailability and a rewrite of the operator's data; it is a thing a person types.
 **Not:** the trigram schema either - it drops the index and `history.py` recreates it, so the definition stays in one place.
 
+### `factory_reset.py`
+
+The durable factory-reset request, the sweep that returns the data directory to a fresh install, and the keep-list of what a reset must not take.
+Honoured by the next daemon start's `factory-reset` phase, ahead of `database-maintenance` and before any store opens a file, for the same reason and one more: that is the only moment the directory has no handles into it, which is what renaming its contents needs.
+Nothing is deleted - every entry is renamed into `.trash/factory-reset-<timestamp>/`, and a file the process holds open itself (its own logs, which Windows will not let it rename) is truncated in place and reported as such.
+`restore_defaults` rebuilds the live `Config` through `load_config`, so the process stops describing the install it just reset instead of writing it back at the next save.
+Design and the keep-list's reasons: `design/features/factory-reset.md`.
+
+**Not:** the decision to run one. That is `routes/maintenance.py`, which is also what reaps the sessions and stops the supervisor first.
+**Not:** anything inside a user's repository, and not `worktrees/` - both are reported in the result and left exactly as they were.
+
 ### `background_tasks.py`
 
 Supervision and health for the daemon's long-lived loops: the per-iteration fault guard, restart with capped backoff, and the per-loop health snapshot.

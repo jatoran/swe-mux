@@ -10,7 +10,14 @@ All JSON APIs are rooted at `/api`. PTY and event streams use `/pty/{session_id}
   A stale revision returns 409 with current state; invalid fields return 422.
   Fresh preferences are backed up before reset and preserve Projects, history, credentials, and connection identity.
 - `GET /api/onboarding/projects?harnesses=claude,codex`: bounded native-history project candidates, without registration or transcript import.
+  Setup starts one request per selected harness in the background and merges results as they arrive.
+  Each request reads up to 300 recent transcripts per harness, resolves at most 200 folders, and has a 15-second deadline.
+- `POST /api/onboarding/models/configure`: requires the current config `revision` plus `cheap` and `regular` model ids.
+  Updates the pair and default feature pins while preserving explicit feature overrides.
 - `POST /api/onboarding/models/verify`: explicitly tests the configured structured-output and tool-call roles, executes no tool, and records a configuration-bound proof only after success.
+- `POST /api/onboarding/features/activate`: accepts `features` from `automations`, `summaries`, and `assistant`, plus optional boolean `automation_enabled` and `scan_timeline_enabled` overrides.
+  Requires current model verification and changes only the requested feature settings and required inherited dependencies.
+  Fleet access, delivery authority, and unrelated configuration remain intact.
 - `onboarding_changed`: broadcasts progress revision and action; clients refetch the canonical record.
 
 Design and invariants: `features/first-run.md`.
@@ -114,7 +121,7 @@ Runtime verbosity toggle for the daemon's root logger (console + rotating
 config field is the startup default and is also applied live when the config
 file changes; this endpoint deliberately does not persist. The aiohttp request
 log is isolated in `<data_dir>/access.log` and unaffected by the level.
-Settings → Diagnostics → **Logging** edits the persisted `log_level` through the ordinary
+Settings → Maintenance → **Logging** edits the persisted `log_level` through the ordinary
 `PATCH /api/config` transaction rather than through this endpoint, so a level chosen there
 survives a restart; it sits beside the diagnostics bundle because that bundle carries the log
 it decides the contents of, which makes "set DEBUG, reproduce, export" one pass.
@@ -141,7 +148,7 @@ what keeps the README's no-telemetry claim true rather than approximately true:
 it is a plain `GET` of one file that is byte-identical for every install, with no
 query string, no custom header, no cookie jar (`DummyCookieJar`, so a
 `Set-Cookie` from the site cannot become an install id on the next day's
-request), and no body. `update_check_enabled` (Settings → Diagnostics →
+request), and no body. `update_check_enabled` (Settings → Maintenance →
 **swe-mux version**, on by default) gates it, and off means *no request is
 made*, under any caller including the explicit one below.
 
@@ -162,7 +169,7 @@ update_available, latest, dismissed[], banner, manifest_url}`. `latest` is
 `manifest` or `github`.
 `current_version` is carried on every answer including the `unavailable` one a
 daemon built without a checker returns, because which build this is does not
-depend on the update check existing and Settings → Diagnostics → **swe-mux
+depend on the update check existing and Settings → Maintenance → **swe-mux
 version** states it outright rather than leaving it to be inferred from the
 check's verdict.
 
@@ -465,6 +472,44 @@ reaps every session, `detach` leaves them for the successor to adopt.
 `sessions_preserved` in the 202 reports the same answer. This carries browser authority like the session
 APIs — it is not gated on the desktop control token because a preserved
 restart is no more destructive than the existing kill-session surface.
+
+## Factory reset
+
+```text
+GET  /api/maintenance/factory-reset
+POST /api/maintenance/factory-reset  {confirm: str, external?: bool}
+```
+
+Returns the install to its first-run state (`design/features/factory-reset.md`).
+The `GET` is what the confirmation dialog renders: the confirmation phrase, the
+live sessions the reset would end (named, not counted), the data-directory
+entries it would move, the entries it keeps, the worktree checkouts it leaves in
+place, the external items it cannot undo unattended, whether this daemon can
+relaunch, whether the caller is local, and the previous reset's result.
+Locality is answered here as well as enforced on the press, so a phone is told
+before it types the phrase rather than after. It walks nothing beyond one `iterdir`
+of the data directory: a confirmation that takes ten seconds to appear teaches
+people to click through it.
+
+The `POST` writes a durable request, reaps every session and stops the
+supervisor, spawns a successor, and returns
+`202 {status: "resetting", sessions_reaped, supervisor_stopped, external,
+clear_client_storage}`. The successor performs the reset in the `factory-reset`
+startup phase, before any store opens a file. `clear_client_storage` is the
+instruction the daemon cannot carry out itself: the browser empties its own
+origin before it reloads.
+
+Refusals: `403 not_local` (loopback only - every other destructive control is
+scoped to a session or a Project and reaches the phone; this one is scoped to
+the machine), `409 restart_unavailable` (a daemon that could reset the install
+and never come back), `409 redeploy_in_flight`, and `400 not_confirmed`. The
+phrase is stated by the daemon and echoed by the client, so there is one copy of
+it rather than two that can drift.
+
+`external: true` additionally removes the footprint outside the data directory
+that has an unattended removal path - marker-tagged agent skills and Windows
+shortcuts. It is off by default because each of those was a separate disclosed
+act. The firewall rule and Tailscale Serve are named in the result instead.
 
 ## Frozen-app redeploy
 

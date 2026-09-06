@@ -11,6 +11,20 @@ from .config import Config
 from .llm_endpoint import LlmEndpoint
 
 
+def setup_model_changes(config: Config, cheap: str, regular: str) -> dict[str, str]:
+    """The two setup roles carry default pins along; explicit feature overrides survive."""
+    changes = {"openrouter_cheap_model": cheap, "openrouter_standard_model": regular}
+    defaults = Config(data_dir=config.data_dir)
+    for pin, old_role, new_role in (
+        ("scan_timeline_model", config.openrouter_cheap_model, cheap),
+        ("assistant_model", config.openrouter_standard_model, regular),
+    ):
+        current = getattr(config, pin)
+        if new_role and current in (getattr(defaults, pin), old_role):
+            changes[pin] = new_role
+    return changes
+
+
 def role_models(config: Config, endpoint: LlmEndpoint) -> dict[str, str]:
     return {
         "cheap": endpoint.resolve_model(config.openrouter_cheap_model),

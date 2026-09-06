@@ -23,6 +23,7 @@
 // from a test.
 import { api } from './api.ts'
 import type { LlmReadiness } from './projectAutomations.ts'
+import type { ModelOption } from './modelFilter.ts'
 
 export type { LlmReadiness }
 
@@ -97,7 +98,7 @@ export function capabilitySummary(
 
 export type ProviderStatusPayload = {
   secret: LlmProviderEntry['secret']
-  models: { models: { id: string; name: string }[]; fetched_at?: number | null
+  models: { models: ModelOption[]; fetched_at?: number | null
     error?: string | null; stale?: boolean }
   origin: string
   cheap_model: string
@@ -157,7 +158,7 @@ export function fetchLlmProvider(): Promise<ProviderStatusPayload> {
 export async function verifyLlmProvider(provider?: string): Promise<VerifyResult> {
   try {
     const result = await api<VerifyResult>('POST', '/api/automation/provider/verify',
-      provider ? { provider } : {})
+      provider ? { provider } : {}, {timeoutMs:60000})
     forgetLlmProvider()
     window.dispatchEvent(new CustomEvent(LLM_PROVIDER_CHANGED, { detail: result }))
     return result

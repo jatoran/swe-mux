@@ -1028,7 +1028,7 @@ class UpdateInstaller:
             raise UpdateRefused(
                 REASON_DISABLED,
                 "Update checks are turned off, so nothing will be fetched; enable "
-                "them in Settings → Diagnostics → swe-mux version.",
+                "them in Settings → Maintenance → swe-mux version.",
             )
         if redeploy_lock_pid(self._config) is not None:
             raise UpdateRefused(

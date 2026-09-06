@@ -99,7 +99,7 @@ listener, with optional Tailscale Serve for browser-recognized HTTPS.
   First-step completion requires the user to confirm that the workspace opened on the phone.
 - `GET /api/diagnostics/prerequisites` reports the presence of Git, Node, npm, uv, and Tailscale,
   each with what it backs and a next step, so a feature that needs an absent tool reads as
-  unconfigured rather than broken. It is surfaced in Settings → Diagnostics.
+  unconfigured rather than broken. It is surfaced in Settings → Maintenance.
   Each row is in one of **three** states, and the middle one is why: `present`, `off_path`
   (found at a known install location, so the remedy is a PATH entry rather than an install), and
   `missing`.
@@ -125,7 +125,7 @@ listener, with optional Tailscale Serve for browser-recognized HTTPS.
   string, no custom header, no cookie jar, no body, and no identifier of this machine or
   install, so it is byte-identical for every copy of swe-mux on earth and the server
   learns nothing from it that an IP address does not already say.
-  It is gated by `update_check_enabled` (Settings → Diagnostics → **swe-mux version**,
+  It is gated by `update_check_enabled` (Settings → Maintenance → **swe-mux version**,
   on by default), and off means no request is made at all - not a reduced one, not a
   deferred one. Nothing downloads or installs.
   Installing an update **does** download, and it stays on the operator's side of that line:
