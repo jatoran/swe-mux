@@ -1095,17 +1095,42 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
     <h1>Changelog</h1>
     <div class="rel">
       <div class="relhead">
-        <h2><a href="https://github.com/jatoran/swe-mux/compare/v0.2.5...HEAD">Unreleased</a></h2>
+        <h2><a href="https://github.com/jatoran/swe-mux/compare/v0.2.6...HEAD">Unreleased</a></h2>
         <span class="fill"></span>
       </div>
+      <p class="prose">Nothing yet.</p>
+    </div>
+    <div class="rel">
+      <div class="relhead">
+        <h2><a href="https://github.com/jatoran/swe-mux/releases/tag/v0.2.6">0.2.6</a></h2>
+        <span class="when">2026-09-06</span>
+        <span class="fill"></span>
+        <a class="relnotes" href="https://github.com/jatoran/swe-mux/releases/tag/v0.2.6">release notes</a>
+      </div>
       <div class="relgroups">
-        <div><span class="k">Changed</span> <span class="sep">1 entry</span></div>
+        <div><span class="k">Added</span> <span class="sep">1 entry</span></div>
+        <div><span class="k">Changed</span> <span class="sep">7 entries</span></div>
+        <div><span class="k">Fixed</span> <span class="sep">1 entry</span></div>
       </div>
       <details class="relmore">
-        <summary>all 1 entry</summary>
+        <summary>all 9 entries</summary>
+        <div class="changetype">Added</div>
+        <ul class="bullets">
+          <li><span><b>A factory reset, in Settings → Maintenance.</b> It returns the install to its first-run state: configuration, Projects, history, the database, notes, prompts, plugins, stored credentials and logs stop describing this machine, and the next start comes up on onboarding with nothing carried over. Nothing is deleted - every entry is moved into <code>.trash/factory-reset-&lt;timestamp&gt;/</code> inside the data directory, so the old install stays recoverable until you remove it yourself. Your repositories are never touched: a Project's committed <code>.swe-mux/</code> folder and any worktree checkout are reported rather than removed, because a worktree may hold the only copy of uncommitted work. Running it ends every live session and restarts the daemon, which is the only moment the data directory has no open handles into it, so it asks for consent first and says so.</span></li>
+        </ul>
         <div class="changetype">Changed</div>
         <ul class="bullets">
+          <li><span><b>Settings' Diagnostics tab is now Maintenance</b>, because it holds both halves of the same errand: understanding an install, and stopping having it. Everything that was on the tab is still on it, and a link or a saved deep link to the old id still resolves.</span></li>
+          <li><span><b>First run is four short pages: Experience → Agents → Projects → Keymap.</b> Recent project folders are discovered in the background while you choose agents, and are added only when you ask for them; <b>Start working</b> then opens the shell or agent you picked. Permissions, model access, voice, desktop integration, phone access and the UI tour are optional follow-ups rather than steps to get through, and <b>Getting started</b> in the sidebar resumes whatever is unfinished. Back and Continue later preserve your non-secret choices.</span></li>
+          <li><span><b>Create project asks for a name, a folder and - if you have Groups - a group, and nothing else.</b> It states that global defaults are selected, and leaves automations, agent authority, backend and launch profiles to Project settings and Automation Policy after the Project exists. The practical difference is that a new Project now <em>follows</em> your install-wide defaults as you change your mind about them, instead of copying whatever was in effect the minute it was created. Globally enabled setup commands still run after registration, in their configured order, and the form names them; a failure is reported and never undoes the Project. Existing Projects and restored Project records keep the explicit decisions they already carry.</span></li>
+          <li><span><b>Verification sits directly under the key fields in Settings → Model provider</b>, where the thing being verified is.</span></li>
+          <li><span><b>The mobile Draft composer gives its height back to the draft.</b> The title bar that repeated the session name is gone, the footer is about two thirds of its old height, and Insert is joined by <b>Copy</b> - a draft written on a phone is often written to be taken somewhere else, and there was no way to get it out except through the terminal. Typing past the composer's height no longer jumps the view to the top on every keystroke, the text no longer reflows sideways as it grows, and flinging a long draft no longer scrolls the session behind it.</span></li>
+          <li><span><b>The install instructions name the commands a current install actually ships.</b> The published pages and the Windows installer still told new users to run <code>mux</code> and <code>muxd</code>, which have not existed since 0.1.x - the commands are <code>swemux</code> and <code>swemuxd</code>. The same sweep corrects three claims that had gone stale: an ordinary install has needed no <code>[desktop]</code> extra since 0.1.5, there is no one-time shortcut prompt, and the two chords worth learning are <code>Ctrl+Shift+Enter</code> and <code>Ctrl+Shift+P</code>, not the <code>Ctrl+Alt</code> pair the README named, which no shipped preset can bind.</span></li>
           <li><span><b>swemux.dev now counts requests for the update manifest, and the privacy page says so.</b> Nothing your install sends has changed: it is the same once-a-day <code>GET</code> of <code>version.json</code>, with no query string, no header, no cookie and no identifier, and <code>update_check_enabled</code> still turns it off entirely - which also removes you from the count, because the request is then never made. What is new is at the other end. The site adds 1 to a daily total when that file is asked for, and the counter stores two values and no others: the constant text <code>version-check</code>, and the HTTP status of the response. No address, no user agent, no country, no referer, and nothing derived from any of them - not "kept briefly", but never written, so there is no record of you to lose or to be asked for later. It is the only path on the site that is counted; pages you read are not. The reason it exists is that a project with no telemetry otherwise has no way to tell whether anyone still runs it a month after installing, and the reason it is this small is that guessing is a better trade than identifying anybody. The whole thing is nine lines in <code>worker/index.js</code>, the <a href="https://swemux.dev/privacy/">privacy page</a> describes it in the same terms, and a test fails the build if that data point ever grows a field taken from the request.</span></li>
+        </ul>
+        <div class="changetype">Fixed</div>
+        <ul class="bullets">
+          <li><span><b>Pressing Continue during setup before agent detection had finished disabled every CLI it then found.</b> An unresolved detection was recorded as a deliberate choice to enable nothing, so a fast first run could leave you with every installed harness switched off while <code>claude</code> was still being suggested as the default. An unfinished detection now records nothing and erases nothing, and a deliberate "none of these" survives leaving setup and coming back to it.</span></li>
         </ul>
       </details>
     </div>

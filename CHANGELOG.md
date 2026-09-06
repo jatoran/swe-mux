@@ -15,8 +15,36 @@ The release procedure that maintains this file is [`RELEASING.md`](RELEASING.md)
 
 ## [Unreleased]
 
+## [0.2.6] - 2026-09-06
+
+### Added
+
+- **A factory reset, in Settings → Maintenance.**
+  It returns the install to its first-run state: configuration, Projects, history, the database, notes, prompts, plugins, stored credentials and logs stop describing this machine, and the next start comes up on onboarding with nothing carried over.
+  Nothing is deleted - every entry is moved into `.trash/factory-reset-<timestamp>/` inside the data directory, so the old install stays recoverable until you remove it yourself.
+  Your repositories are never touched: a Project's committed `.swe-mux/` folder and any worktree checkout are reported rather than removed, because a worktree may hold the only copy of uncommitted work.
+  Running it ends every live session and restarts the daemon, which is the only moment the data directory has no open handles into it, so it asks for consent first and says so.
+
 ### Changed
 
+- **Settings' Diagnostics tab is now Maintenance**, because it holds both halves of the same errand: understanding an install, and stopping having it.
+  Everything that was on the tab is still on it, and a link or a saved deep link to the old id still resolves.
+- **First run is four short pages: Experience → Agents → Projects → Keymap.**
+  Recent project folders are discovered in the background while you choose agents, and are added only when you ask for them; **Start working** then opens the shell or agent you picked.
+  Permissions, model access, voice, desktop integration, phone access and the UI tour are optional follow-ups rather than steps to get through, and **Getting started** in the sidebar resumes whatever is unfinished.
+  Back and Continue later preserve your non-secret choices.
+- **Create project asks for a name, a folder and - if you have Groups - a group, and nothing else.**
+  It states that global defaults are selected, and leaves automations, agent authority, backend and launch profiles to Project settings and Automation Policy after the Project exists.
+  The practical difference is that a new Project now *follows* your install-wide defaults as you change your mind about them, instead of copying whatever was in effect the minute it was created.
+  Globally enabled setup commands still run after registration, in their configured order, and the form names them; a failure is reported and never undoes the Project.
+  Existing Projects and restored Project records keep the explicit decisions they already carry.
+- **Verification sits directly under the key fields in Settings → Model provider**, where the thing being verified is.
+- **The mobile Draft composer gives its height back to the draft.**
+  The title bar that repeated the session name is gone, the footer is about two thirds of its old height, and Insert is joined by **Copy** - a draft written on a phone is often written to be taken somewhere else, and there was no way to get it out except through the terminal.
+  Typing past the composer's height no longer jumps the view to the top on every keystroke, the text no longer reflows sideways as it grows, and flinging a long draft no longer scrolls the session behind it.
+- **The install instructions name the commands a current install actually ships.**
+  The published pages and the Windows installer still told new users to run `mux` and `muxd`, which have not existed since 0.1.x - the commands are `swemux` and `swemuxd`.
+  The same sweep corrects three claims that had gone stale: an ordinary install has needed no `[desktop]` extra since 0.1.5, there is no one-time shortcut prompt, and the two chords worth learning are `Ctrl+Shift+Enter` and `Ctrl+Shift+P`, not the `Ctrl+Alt` pair the README named, which no shipped preset can bind.
 - **swemux.dev now counts requests for the update manifest, and the privacy page says so.**
   Nothing your install sends has changed: it is the same once-a-day `GET` of `version.json`, with no query string, no header, no cookie and no identifier, and `update_check_enabled` still turns it off entirely - which also removes you from the count, because the request is then never made.
   What is new is at the other end. The site adds 1 to a daily total when that file is asked for, and the counter stores two values and no others: the constant text `version-check`, and the HTTP status of the response.
@@ -24,6 +52,12 @@ The release procedure that maintains this file is [`RELEASING.md`](RELEASING.md)
   It is the only path on the site that is counted; pages you read are not.
   The reason it exists is that a project with no telemetry otherwise has no way to tell whether anyone still runs it a month after installing, and the reason it is this small is that guessing is a better trade than identifying anybody.
   The whole thing is nine lines in `worker/index.js`, the [privacy page](https://swemux.dev/privacy/) describes it in the same terms, and a test fails the build if that data point ever grows a field taken from the request.
+
+### Fixed
+
+- **Pressing Continue during setup before agent detection had finished disabled every CLI it then found.**
+  An unresolved detection was recorded as a deliberate choice to enable nothing, so a fast first run could leave you with every installed harness switched off while `claude` was still being suggested as the default.
+  An unfinished detection now records nothing and erases nothing, and a deliberate "none of these" survives leaving setup and coming back to it.
 
 ## [0.2.5] - 2026-09-05
 
@@ -890,7 +924,8 @@ macOS is implemented and typechecked but has never been executed.
   resolved dependency closure that runs in the test suite, and a payload check over the built
   desktop bundle. No GPL or AGPL code ships; the two LGPL libraries ship as replaceable source.
 
-[Unreleased]: https://github.com/jatoran/swe-mux/compare/v0.2.5...HEAD
+[Unreleased]: https://github.com/jatoran/swe-mux/compare/v0.2.6...HEAD
+[0.2.6]: https://github.com/jatoran/swe-mux/releases/tag/v0.2.6
 [0.2.5]: https://github.com/jatoran/swe-mux/releases/tag/v0.2.5
 [0.2.4]: https://github.com/jatoran/swe-mux/releases/tag/v0.2.4
 [0.2.3]: https://github.com/jatoran/swe-mux/releases/tag/v0.2.3
