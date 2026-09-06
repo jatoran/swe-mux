@@ -380,6 +380,23 @@
   `development/ROADMAP.md` Phase 10.5 (the recorded decisions and why MIT, AGPL, and a CLA
   were each rejected). Contributions arrive under a DCO sign-off, not a CLA; that choice is
   what makes relicensing the core impossible later, and it is deliberate.
+- Changing what swemux.dev measures, or anything in the adoption-metrics path:
+  `site/content/privacy.html` (then rebuild `site/`), `worker/index.js`, `wrangler.jsonc`,
+  `tools/metrics_snapshot.py`, `marketing/GTM_ROADMAP.md` § Metrics, `SECURITY.md`.
+  The rule the split exists to enforce: **the privacy page is a promise the build keeps,
+  not prose beside the code.** The site counts exactly one path (`/version.json`, the daily
+  update check) and the data point's whole schema is a constant label plus an HTTP status -
+  no address, no user agent, no country, and nothing derived from any of them. That is an
+  absence of data rather than a retention policy, and it is what lets the project count
+  anything at all without contradicting its no-telemetry posture, because the *software*
+  still sends nothing new.
+  `tests/test_site_metrics_counter.py` fails the gate if the data point grows a
+  request-derived field, if `run_worker_first` stops naming the path the Worker counts (a
+  drift whose only symptom is a metric that reads zero forever while the site serves
+  perfectly), or if the reader's dataset and label drift from the writer's. So the order
+  for any change here is: **describe it on the privacy page, then change the test, then
+  change the Worker** - never the reverse, because a public repository plus a page inviting
+  readers to check it makes a stale page worse than no page.
 - Changing reusable prompt templates: `design/features/prompt-library.md`,
   `design/interfaces.md`, `design/data-model.md`
 - Changing the prompt queue (message model, states, head-of-line, send-next, stranding,

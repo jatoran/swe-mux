@@ -18,7 +18,13 @@
         should find it where it was volunteered.
      3. **Never claim the project cannot see something it merely does not look at.**
         Cloudflare serves swemux.dev and sees the requests to it; saying otherwise would
-        be false. What is true is that the project has no analytics and no access log.
+        be false. Since 2026-09-06 the project also *counts* one of those requests -
+        `worker/index.js` increments a total for `/version.json` - so the page says what
+        that counter records and, more usefully, states the schema it is limited to. The
+        earlier wording here was "no analytics and no access log", which was a broader
+        claim than the hosting arrangement ever supported and is now simply wrong. A
+        precise description of a small counter is worth more to a suspicious reader than
+        a sweeping denial they can disprove with one look at the repository.
      4. **No legal register.** No "we may", no "from time to time", no defined terms.
         This describes behaviour. What it is not is stated at the bottom.
 -->
@@ -28,12 +34,12 @@
     <h1>Privacy</h1>
     <div class="lede">
       <p>swe-mux is a program that runs on your own computer. <b>There is no swe-mux
-      account, no swe-mux server, and no service this project operates that your install
-      talks to.</b> Everything it records is written to a directory on your own disk and
-      stays there.</p>
+      account, no swe-mux backend, and nothing your install uploads anywhere.</b>
+      Everything it records is written to a directory on your own disk and stays there.
+      The one thing it fetches is a static file from this website, described below.</p>
       <p>That makes most of a privacy policy inapplicable, so this page says the two
       things that are actually true: exactly which requests the software makes, and what
-      this website sees. Last revised 2026-08-28.</p>
+      this website sees. Last revised 2026-09-06.</p>
     </div>
 
     <div class="rel">
@@ -59,10 +65,23 @@
         <li><span>The mechanism and every one of these constraints are in
         <code>src/swe_mux/update_check.py</code>, and the test suite proves the disabled
         case by counting requests rather than by reading the promise.</span></li>
+        <li><span><b>This end of it is counted, and here is exactly how.</b> Since
+        2026-09-06 the website adds 1 to a daily total when something asks for
+        <code>version.json</code>. The counter stores two values and no others: the
+        constant text <code>version-check</code>, and the HTTP status of the response.
+        <b>No address, no user agent, no country, no referer, and no identifier derived
+        from any of them</b> - not "kept briefly", but never written down, so there is no
+        record of you to lose or to be asked for later. It is nine lines in
+        <code>worker/index.js</code> and a test fails if that call ever grows a field
+        taken from the request. What it can tell the project is how many requests arrived
+        today; what it cannot tell the project is who, where, or whether two of them were
+        the same computer.</span></li>
       </ul>
-      <p class="note">There is no analytics, no crash reporting, no usage ping, no
-      licence check, and no first-run registration. That is the complete list of
-      unprompted outbound traffic: one file, once a day, or nothing.</p>
+      <p class="note">There is no crash reporting, no licence check, and no first-run
+      registration, and the software still sends nothing about you or your work. That is
+      the complete list of unprompted outbound traffic: one file, once a day, or nothing.
+      Turning the update check off removes you from the count above, because the request
+      that gets counted is never made.</p>
     </div>
 
     <div class="rel">
@@ -136,11 +155,18 @@
       <code>site/</code> directory of the public repository. GitHub Pages served it until
       2026-08-31; the files and the repository did not change, only the host.</p>
       <ul class="bullets">
-        <li><span><b>No analytics, no tracking pixels, no cookies set by this site, and
-        nothing the page itself requests from a third party.</b> No external fonts, no
-        tag manager, no embedded video. Every page is one HTML file with its CSS and its
-        handful of lines of JavaScript inline. You can read the whole thing with
-        view-source.</span></li>
+        <li><span><b>No analytics script, no tracking pixel, no cookie set by this site,
+        and nothing the page itself requests from a third party.</b> No external fonts,
+        no tag manager, no embedded video. Nothing the browser runs reports that you
+        visited, so pages you read here are not counted at all. Every page is one HTML
+        file with its CSS and its handful of lines of JavaScript inline. You can read the
+        whole thing with view-source.</span></li>
+        <li><span><b>One path is counted on the server, and only one:</b>
+        <code>/version.json</code>, the file installs poll for a new release. The
+        counter's whole schema is a fixed label and a status code - the section above
+        spells it out - and it is the only thing on this site the project measures. Pages
+        are not counted, downloads from here are not counted, and no other path
+        is.</span></li>
         <li><span>One exception, and it belongs to the host rather than the page:
         Cloudflare sends <code>NEL</code> and <code>Report-To</code> response headers,
         which ask your browser to report <i>failed</i> requests to
@@ -152,9 +178,13 @@
         <code>light</code>. It is what stops the colour scheme flashing on load, it is
         never read by anything else, and it never leaves your browser.</span></li>
         <li><span><b>Cloudflare serves these pages and therefore sees the requests</b>,
-        the way any web host does. That is covered by Cloudflare's own privacy policy.
-        This project has no access log for the site and collects nothing from
-        it.</span></li>
+        the way any web host does, including your address. That is covered by
+        Cloudflare's own privacy policy and it is true of every site you visit. What is
+        specific to this one is what the project takes out of it: the single counter
+        above, and nothing else. No request log is enabled, exported, or stored, so
+        outside that counter there is no per-visit record for the project to read -
+        which is a statement about a setting anyone can check in the repository, not a
+        claim that a web host is blind.</span></li>
         <li><span>Links from here to GitHub, PyPI, or another project's site are ordinary
         links. Following one is a request to that host, under that host's terms.</span></li>
       </ul>
