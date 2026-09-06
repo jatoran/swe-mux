@@ -1185,8 +1185,9 @@ def _check_console_scripts(tree: SourceTree, facts: WheelFacts) -> Check:
             "The wheel carries no `[console_scripts]` or `[gui_scripts]` in its "
             "dist-info `entry_points.txt`, so installing it puts nothing on PATH.",
             "Rebuild with `uv build --wheel` from the tagged revision. A wheel with no "
-            "entry points installs cleanly and leaves the user with no `mux` and no "
-            "`muxd`, which is only visible after the install has already succeeded.",
+            "entry points installs cleanly and leaves the user with no `swemux` and "
+            "no `swemuxd`, which is only visible after the install has already "
+            "succeeded.",
         )
     wrong = [
         f"{command} (declared {target}, wheel has {shipped.get(command, '(absent)')})"

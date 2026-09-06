@@ -260,7 +260,7 @@ Name: "{autodesktop}\swe-mux"; Filename: "{app}\swe-mux\swe-mux.exe"; IconFilena
 ; the login entry of a different one.
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "swe-mux"; ValueData: "{code:StartupCommand}"; Tasks: startupicon
 
-; The user PATH, so `swemux` and `mux` answer by name. Per-user because the whole
+; The user PATH, so `swemux` answers by name. Per-user because the whole
 ; install is (`PrivilegesRequired=lowest`), and a per-user PATH edit needs no
 ; elevation either.
 ;
@@ -310,7 +310,7 @@ const
   // to resolve, days later, with nothing pointing here.
   MaxPathLength = 32767;
 
-// The directory holding `swemux.exe` and `mux.exe`; the one thing put on PATH.
+// The directory holding `swemux.exe`; the one thing put on PATH.
 //
 // A function rather than a constant because `{app}` is not known until the user
 // has chosen it, and every caller here needs the resolved form to compare
@@ -539,7 +539,7 @@ begin
   if WizardIsTaskSelected('addtopath') then
     Result := Result + NewLine + NewLine
       + 'Command line:' + NewLine
-      + Space + 'swemux and mux are added to your PATH. Terminals that are' + NewLine
+      + Space + 'The swemux command is added to your PATH. Terminals that are' + NewLine
       + Space + 'already open keep the old PATH, so open a new one.';
   Previous := InstalledVersion();
   if Previous <> '' then

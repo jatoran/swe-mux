@@ -1133,7 +1133,7 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
         <div class="head"><span class="n">#</span><h2>Setting it up</h2><span class="fill"></span></div>
         <ol class="steps">
           <li><span>Install Tailscale on the host machine and on the phone, on the same tailnet.</span></li>
-          <li><span>Leave the daemon running. It listens on loopback and on the machine's detected Tailscale address; <code>muxd --local-only</code> is how you stop it doing the second one.</span></li>
+          <li><span>Leave the daemon running. It listens on loopback and on the machine's detected Tailscale address; <code>swemuxd --local-only</code> is how you stop it doing the second one.</span></li>
           <li><span>On the phone, open the machine's <code>.ts.net</code> hostname over HTTPS.</span></li>
           <li><span>Turn <b>Use Tailscale DNS</b> on, and leave Android's Private DNS off or automatic. The certificate is bound to the hostname, so the raw <code>100.x</code> address cannot serve HTTPS at all.</span></li>
           <li><span>Install it to the home screen when the browser offers. It is a progressive web app, so it gets its own window and can receive push notifications.</span></li>

@@ -91,7 +91,7 @@ Text-to-speech is the same, except the explicitly experimental Edge TTS provider
 ## First run
 
 Create a Project and point it at an existing folder.
-`Ctrl+Alt+T` opens a terminal at its root, `Ctrl+Alt+P` opens the command palette; nothing is spawned until you ask.
+`Ctrl+Shift+Enter` opens a terminal at its root, `Ctrl+Shift+P` (or `F1`) opens the command palette; nothing is spawned until you ask.
 
 Then type `claude`, `codex`, or another CLI normally.
 swe-mux puts its own launchers first on that terminal's PATH, so the usual command promotes the terminal you are standing in to an agent session in place: same pane, same scrollback, now carrying a transcript, a status, a queue, and a context meter.

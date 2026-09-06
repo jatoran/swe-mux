@@ -1139,7 +1139,7 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
           <li><span>What swe-mux is, and the three properties worth explaining before anything is installed.</span></li>
           <li><span>The prerequisites to check, and which failures should stop the install.</span></li>
           <li><span>Every install method, what each one leaves behind, and the two things none of them do.</span></li>
-          <li><span>First run, and <code>mux doctor</code> as the verification step.</span></li>
+          <li><span>First run, and <code>swemux doctor</code> as the verification step.</span></li>
           <li><span>The concepts to explain and the order to explain them in, which is deliberately not the order a feature list would use.</span></li>
           <li><span>Where configuration and data live on each host.</span></li>
           <li><span>The phone setup, and the access boundary stated plainly.</span></li>
@@ -1150,7 +1150,7 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
         <div class="head"><span class="n">#</span><h2>What it tells the agent about itself</h2><span class="fill"></span></div>
         <p class="prose">The last section of the guide is rules for the agent rather than for you, and they are the part worth holding it to:</p>
         <ul class="flat">
-          <li><b>Verify, do not assume</b><span>After each stage, run the command that proves it worked and read the real output. <code>mux doctor</code> is that command for the install as a whole.</span></li>
+          <li><b>Verify, do not assume</b><span>After each stage, run the command that proves it worked and read the real output. <code>swemux doctor</code> is that command for the install as a whole.</span></li>
           <li><b>Do not invent commands or flags</b><span>A command that does not exist costs a person whose install is already broken the one thing they came for.</span></li>
           <li><b>Do not run destructive commands</b><span>Nothing in a swe-mux install needs elevation, and nothing needs an existing directory removed.</span></li>
           <li><b>Say what was skipped</b><span>If it skipped the phone step or the desktop extra, it should say so and say what you gave up.</span></li>

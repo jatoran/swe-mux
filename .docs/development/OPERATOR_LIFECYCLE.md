@@ -11,13 +11,11 @@ The artifacts are `swe_mux-0.1.0-py3-none-any.whl` and `swe_mux-0.1.0.tar.gz`; `
 The `v0.1.0` GitHub Release carries exactly those two files and no desktop artifact of any kind, which is what the Windows installer below exists to fix from the next release onwards.
 The `uv tool`, `pipx`, and `pip` commands below were **executed** against that published wheel on 2026-08-28 rather than transcribed from `pyproject.toml`: each installed into a throwaway environment, put `mux`, `muxd`, and `swe-mux` on that environment's bin directory, and answered `--help` with exit 0.
 
-**Two launcher names were added after that measurement and are not in it.**
-Since 2026-08-29 `[project.scripts]` also declares `swemux` and `swemuxd`, which are the primary spelling of the same two programs; `mux` and `muxd` remain and are unchanged aliases.
-That was measured the same way, against a wheel built from the change rather than against a published one: installed into a throwaway environment, all five launchers present in `Scripts`, and each of `swemux`, `swemuxd`, `mux`, `muxd` answering `--help` with exit 0 and a usage line naming the command that was typed.
-What is **not** yet measured is a published artifact - the first release carrying these names is the one that ships them, and until it exists the sentence above is the one describing PyPI.
-The reason for the pair is that `mux` is not a name this project can rely on owning: the npm package `mux` installs a `mux` executable of its own from the same category of tool, and the repository behind it has since renamed itself.
-Why they renamed is not something this project knows, and no claim about it is made here.
-On a machine with both installed, PATH order decides which one runs.
+**The launcher names changed after that measurement, and what a current install writes is not what it wrote.**
+`[project.scripts]` declares `swemux` and `swemuxd`, and those are the only console launchers this project ships; `swe-mux` is the desktop window and tray, declared in `[project.gui-scripts]`.
+The short `mux` and `muxd` aliases existed for one day (2026-08-29 to 2026-08-30) and were removed.
+That was measured the same way, against a wheel built from the change rather than against a published one: installed into a throwaway environment, `swemux`, `swemuxd` and `swe-mux` present in `Scripts` and no `mux` or `muxd` beside them, and each answering `--help` with exit 0 and a usage line naming the command that was typed.
+The reason they went is that `mux` is not a name this project can rely on owning: the npm package `mux` installs a `mux` executable of its own from the same category of tool, and shipping a launcher under a contested name creates the collision rather than surviving it.
 An installed copy reports `0.1.0` and carries `swe_mux/static/index.html` with its 39 hashed JS assets, so it serves the interface without Node ever being present.
 A package install is now the primary path, and the source install is for people changing swe-mux rather than running it.
 
@@ -69,8 +67,8 @@ The `desktop` extra these commands used to name still resolves - it is declared 
 Why it went is worth one line, because the failure was quiet: `swe-mux` is a `[project.gui-scripts]` entry, so *every* install shipped that launcher, and an install without the extra shipped a launcher whose only behaviour was to fail with no console to fail into.
 
 **`uv tool install` is not `uv add`, and the difference is the whole point of this section.**
-`uv tool install` and `pipx install` give the package its own environment and put its console scripts on your PATH, so `mux` is a command you can run anywhere.
-`uv add swe-mux` and `pip install swe-mux` install it into an environment you already have, which makes `import swe_mux` work there and leaves `mux` reachable only from inside that environment.
+`uv tool install` and `pipx install` give the package its own environment and put its console scripts on your PATH, so `swemux` is a command you can run anywhere.
+`uv add swe-mux` and `pip install swe-mux` install it into an environment you already have, which makes `import swe_mux` work there and leaves `swemux` reachable only from inside that environment.
 Both are legitimate; they answer different questions, and reaching for the second while wanting the first is the confusion this paragraph exists to prevent.
 
 **There is no `--extra` flag on `uv tool install`.**
@@ -124,10 +122,10 @@ What it does, stated so an uninstall or a support question has something to chec
 
 - Installs **per-user with no elevation prompt**, into `%LOCALAPPDATA%\Programs\swe-mux` by default. There is no per-machine mode and no `/ALLUSERS`; see the note below for why that is deliberate.
 - Writes **three sibling bundles** under that directory - `swe-mux\swe-mux.exe`, `swe-mux-supervisor\swe-mux-supervisor.exe`, and `swe-mux-cli\swemux.exe` - which is the layout the daemon resolves the PTY supervisor through, and the layout each launcher reads to describe the whole install rather than its own directory. Do not move one without the others.
-- Creates a **Start Menu** entry always, and a **Desktop shortcut** and a **run-at-sign-in** registration only if you tick those boxes. Both are unticked by default.
+- Creates a **Start Menu** entry always, a **run-at-sign-in** registration on the `startupicon` task, which is **ticked by default** since 2026-08-30 (it starts hidden in the tray, and the tray menu turns it off in one click), and a **Desktop shortcut** on the `desktopicon` task, which is the one left **unticked**.
 - Registers in **Add/Remove Programs** as `swe-mux <version>` with a working uninstaller at `<install dir>\unins000.exe`.
-- Adds **one directory to your user `PATH`** - `<install dir>\swe-mux-cli`, which holds `swemux.exe` and `mux.exe`. This is the `addtopath` task, ticked by default and unticked if you would rather your `PATH` were not touched; the commands are installed either way and can be run by full path. Open a **new** terminal afterwards: Setup broadcasts the environment change, which reaches Explorer and anything started from it, and cannot reach a console window that is already open.
-- **Does not install `swemuxd`/`muxd`.** The daemon is the app: the frozen `swe-mux.exe` runs it as a child, and a separate daemon launcher would be a second copy of the whole application (measured 2026-08-29: 143 MiB against the client's 28, because `swe_mux.__main__` imports `swe_mux.server`). To start a daemon from a terminal, install the wheel alongside - or just launch the app, which starts one.
+- Adds **one directory to your user `PATH`** - `<install dir>\swe-mux-cli`, which holds `swemux.exe`. This is the `addtopath` task, ticked by default and unticked if you would rather your `PATH` were not touched; the commands are installed either way and can be run by full path. Open a **new** terminal afterwards: Setup broadcasts the environment change, which reaches Explorer and anything started from it, and cannot reach a console window that is already open.
+- **Does not install `swemuxd`.** The daemon is the app: the frozen `swe-mux.exe` runs it as a child, and a separate daemon launcher would be a second copy of the whole application (measured 2026-08-29: 143 MiB against the client's 28, because `swe_mux.__main__` imports `swe_mux.server`). To start a daemon from a terminal, install the wheel alongside - or just launch the app, which starts one.
 
 **Why it is a third bundle rather than `{app}` on `PATH`, measured 2026-08-29.**
 The first attempt at this was refused, and the refusal is worth keeping, because the obvious version would have been worse than the gap it closed.
@@ -191,7 +189,7 @@ It takes the version from the bundle's own `bundle.json` rather than from the pr
 
 | Extra | What it adds | Degraded without it |
 | --- | --- | --- |
-| `desktop` | **Nothing. Declared and empty since 2026-08-30**, kept only so `"swe-mux[desktop]"` in an existing script still resolves instead of warning. What it used to add - `pystray` and `pywebview`, both `sys_platform == 'win32'` - are base dependencies now. | Not applicable: there is no state where this extra is the difference. If the tray cannot start anyway, the environment is partially installed rather than minimal, and the `swe-mux` entry point says so with the reinstall command for *this* install shape (`install_location.reinstall_command`). `muxd` plus a browser is unaffected either way. |
+| `desktop` | **Nothing. Declared and empty since 2026-08-30**, kept only so `"swe-mux[desktop]"` in an existing script still resolves instead of warning. What it used to add - `pystray` and `pywebview`, both `sys_platform == 'win32'` - are base dependencies now. | Not applicable: there is no state where this extra is the difference. If the tray cannot start anyway, the environment is partially installed rather than minimal, and the `swe-mux` entry point says so with the reinstall command for *this* install shape (`install_location.reinstall_command`). `swemuxd` plus a browser is unaffected either way. |
 | `voice-local` | On-device speech: `faster-whisper` dictation, Kokoro TTS through `onnxruntime`, and the misaki/spaCy English G2P behind it. Roughly 400 MB of wheels and model machinery. | Read aloud falls back to `tts_engine = "sapi"`, the OS voice, which is already the shipped default. Dictation falls back to `stt_engine = "sapi"`, which is Windows Speech Recognition driven through `powershell.exe` and refuses on any other host. Every call site imports lazily and answers with a typed diagnostic naming the extra. |
 
 **`swe-mux[voice-local]` could not be installed at all before 2026-08-28, and that is worth knowing if you tried.**
@@ -426,7 +424,7 @@ The checks are the ones that stop a daemon starting, in the order a reader shoul
 
 1. `install.python` — the interpreter is at or above the 3.12 floor. A frozen build reports `ok` unconditionally, because it carries its own interpreter.
 2. `install.imports` — `swe_mux.server` and its dependency graph import, with the real exception attached when they do not.
-3. `install.config` — `config.toml` loads and validates. This is the fault the CLI otherwise hides: `resolve_base_url` swallows a config failure and falls back to the loopback default, so every `mux` command may be pointed at the wrong daemon.
+3. `install.config` — `config.toml` loads and validates. This is the fault the CLI otherwise hides: `resolve_base_url` swallows a config failure and falls back to the loopback default, so every `swemux` command may be pointed at the wrong daemon.
 4. `install.frontend` — the installed package carries a bundle. A source checkout with none is `warn` with a build command; an installed copy with none is `fail`, because that is a broken artifact.
 5. `install.data_dir` — the data directory exists and is writable, probed with a real temporary file rather than `os.access`, which on Windows reports the read-only attribute and effectively nothing else.
 6. `install.database` — `mux.db` opens. Opened `mode=rw` so the diagnostic never creates the file it is checking for, and probed with a schema read rather than `PRAGMA integrity_check`, which would cost minutes on a large store.
@@ -572,7 +570,7 @@ The join runs in one direction only; unreferenced assets are normal, because eve
 uv run python packaging/install_smoke.py dist/swe_mux-*.whl
 ```
 
-It installs into a throwaway virtualenv created outside the checkout, with `PYTHONPATH`, `PYTHONHOME`, and `VIRTUAL_ENV` stripped, then asks the installed copy whether `mux` and `muxd` run, whether `swe_mux` imports, and whether the packaged UI is reachable from `swe_mux.__file__`.
+It installs into a throwaway virtualenv created outside the checkout, with `PYTHONPATH`, `PYTHONHOME`, and `VIRTUAL_ENV` stripped, then asks the installed copy whether `swemux` and `swemuxd` run, whether `swe_mux` imports, and whether the packaged UI is reachable from `swe_mux.__file__`.
 The isolation is the point and is not trusted: `import-isolation` reads the imported package's `__file__` back out of the child and fails unless it resolves inside the virtualenv, because a checkout satisfies every other check by itself.
 It starts no daemon and binds no port.
 

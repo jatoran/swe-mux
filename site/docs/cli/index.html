@@ -5,7 +5,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <title>Command line reference · swe-mux docs</title>
-<meta name="description" content="Every mux subcommand, every muxd flag, the exit-code contract scripts branch on, and how the CLI resolves which daemon to talk to." />
+<meta name="description" content="Every swemux subcommand, every swemuxd flag, the exit-code contract scripts branch on, and how the CLI resolves which daemon to talk to." />
 <meta name="color-scheme" content="dark" />
 <meta name="darkreader-lock" />
 <script>
@@ -1121,16 +1121,16 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
     <article class="dsbody">
       <div class="kick">reference</div>
       <h1>Command line reference</h1>
-      <div class="lede"><p>Three commands are installed: <code>mux</code> talks to a running daemon, <code>muxd</code> <em>is</em> the daemon, and <code>swe-mux</code> is the Windows desktop window and tray.</p></div>
+      <div class="lede"><p>Three commands are installed: <code>swemux</code> talks to a running daemon, <code>swemuxd</code> <em>is</em> the daemon, and <code>swe-mux</code> is the Windows desktop window and tray.</p></div>
       <nav class="toc" aria-label="On this page">
-        <a href="#muxd-the-daemon">muxd, the daemon</a>
-        <a href="#mux-the-client">mux, the client</a>
-        <a href="#which-daemon-mux-talks-to">which daemon mux talks to</a>
+        <a href="#swemuxd-the-daemon">swemuxd, the daemon</a>
+        <a href="#swemux-the-client">swemux, the client</a>
+        <a href="#which-daemon-swemux-talks-to">which daemon swemux talks to</a>
         <a href="#exit-codes">exit codes</a>
         <a href="#swemux-doctor-has-two-modes-and-picks-between-them-itself">swemux doctor has two modes, and picks between them itself</a>
       </nav>
-      <div class="docsec" id="muxd-the-daemon">
-        <div class="head"><span class="n">#</span><h2>muxd, the daemon</h2><span class="fill"></span></div>
+      <div class="docsec" id="swemuxd-the-daemon">
+        <div class="head"><span class="n">#</span><h2>swemuxd, the daemon</h2><span class="fill"></span></div>
         <div class="tablewrap"><table>
           <thead><tr><th>Flag</th><th>What it does</th></tr></thead>
           <tbody>
@@ -1145,8 +1145,8 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
         </table></div>
         <p class="note"><code>--host</code> takes a loopback address only, because the Tailscale listener is <em>detected</em> rather than configured. Binding a LAN interface is an unsupported configuration rather than a flag that is missing.</p>
       </div>
-      <div class="docsec" id="mux-the-client">
-        <div class="head"><span class="n">#</span><h2>mux, the client</h2><span class="fill"></span></div>
+      <div class="docsec" id="swemux-the-client">
+        <div class="head"><span class="n">#</span><h2>swemux, the client</h2><span class="fill"></span></div>
         <div class="tablewrap"><table>
           <thead><tr><th>Command</th><th>What it does</th></tr></thead>
           <tbody>
@@ -1169,8 +1169,8 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
         </table></div>
         <p class="prose">Every subcommand takes <code>--json</code> to print the raw daemon response instead of a table, and <code>--url</code> to point at a specific daemon.</p>
       </div>
-      <div class="docsec" id="which-daemon-mux-talks-to">
-        <div class="head"><span class="n">#</span><h2>Which daemon mux talks to</h2><span class="fill"></span></div>
+      <div class="docsec" id="which-daemon-swemux-talks-to">
+        <div class="head"><span class="n">#</span><h2>Which daemon swemux talks to</h2><span class="fill"></span></div>
         <p class="prose">Resolved in this order, and the order is the contract: <code>--url</code>, then the <code>MUX_URL</code> environment variable, then the configured host and port, then <code>http://127.0.0.1:8765</code>.</p>
       </div>
       <div class="docsec" id="exit-codes">
@@ -1187,7 +1187,7 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
             <tr><td>6</td><td>Not found.</td></tr>
           </tbody>
         </table></div>
-        <p class="note"><b>A degraded report never exits 0</b>, so a script gating on <code>mux doctor</code> keeps working whether or not a daemon is running. The doctor codes compose the two that already existed rather than adding a scheme of their own.</p>
+        <p class="note"><b>A degraded report never exits 0</b>, so a script gating on <code>swemux doctor</code> keeps working whether or not a daemon is running. The doctor codes compose the two that already existed rather than adding a scheme of their own.</p>
       </div>
       <div class="docsec" id="swemux-doctor-has-two-modes-and-picks-between-them-itself">
         <div class="head"><span class="n">#</span><h2>swemux doctor has two modes, and picks between them itself</h2><span class="fill"></span></div>

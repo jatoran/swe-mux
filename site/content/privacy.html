@@ -53,7 +53,7 @@
         updates, or <code>update_check_enabled</code> in your config file. Off means no
         request is made at all, rather than a request that is ignored.</span></li>
         <li><span><b>Installing an update is a separate act you take.</b> Nothing
-        downloads automatically. <code>mux update --install &lt;version&gt;</code>
+        downloads automatically. <code>swemux update --install &lt;version&gt;</code>
         fetches that release from GitHub and verifies its SHA-256 against the published
         manifest before anything is staged.</span></li>
         <li><span>The mechanism and every one of these constraints are in
@@ -121,7 +121,7 @@
         is no second copy and nothing to request from anyone.</span></li>
       </ul>
       <p class="note">Two things worth knowing rather than discovering. The diagnostics
-      bundle (<code>mux doctor --export</code>) is built for sharing and deliberately
+      bundle (<code>swemux doctor --export</code>) is built for sharing and deliberately
       contains no terminal bytes and no message content, but it does contain a sanitized
       configuration, so read it before attaching it to anything. And anyone your tailnet
       admits to the daemon's listener has terminal and code-execution authority on the

@@ -1089,7 +1089,7 @@ footer .social svg { width: 15px; height: 15px; fill: currentColor; display: blo
       <li><b>Agent context</b><span>Which instruction files the agent actually loads, with reversible, revision-guarded sync across harnesses so your instruction files stop disagreeing with each other.</span></li>
       <li><b>Remote access</b><span>Your tailnet only. No swe-mux login, no port forwarding, no Funnel, no relay. Optional HTTPS for the microphone and clipboard APIs that demand a secure context.</span></li>
       <li><b>Usage analytics</b><span>Cost and token history by source, model, and tool, with quota windows and reset tracking per saved account.</span></li>
-      <li><b>Diagnostics</b><span>Supervised background loops with per-loop cost accounting, event-loop lag sampling, a durable state log, and <code>mux doctor</code> to export the whole picture.</span></li>
+      <li><b>Diagnostics</b><span>Supervised background loops with per-loop cost accounting, event-loop lag sampling, a durable state log, and <code>swemux doctor</code> to export the whole picture.</span></li>
       <li><b>Small things</b><span>Themes, per-device UI scale, configurable session rows, command palette, network accounting, device presence, guided onboarding, QR pairing for a phone.</span></li>
     </ul>
   </div>
@@ -1119,7 +1119,7 @@ footer .social svg { width: 15px; height: 15px; fill: currentColor; display: blo
       <p>This section is drawn from the same release manifest the app's own update check reads, so
       it fills itself in on the first release that carries a Windows installer.</p>
       <p class="dl-alt">Until then the Python install below is the whole product, and on Windows
-      <code>swe-mux[desktop]</code> is the same native window and tray icon the installer will set
+      <code>swe-mux</code> is the same native window and tray icon the installer will set
       up for you.</p>
     </div>
 
@@ -1127,28 +1127,32 @@ footer .social svg { width: 15px; height: 15px; fill: currentColor; display: blo
     <p class="note">Python 3.12 or newer.</p>
     <div class="code">
       <button class="copy" type="button" data-copy="#c1">copy</button>
-      <pre id="c1"><span class="p">$</span> uv tool install swe-mux   <span class="c"># isolated env; mux, muxd, swe-mux on PATH</span>
-<span class="p">$</span> mux doctor                <span class="c"># read-only health report</span>
-<span class="p">$</span> muxd                      <span class="c"># daemon on 127.0.0.1:8765</span></pre>
+      <pre id="c1"><span class="p">$</span> uv tool install swe-mux   <span class="c"># isolated env; swemux, swemuxd, swe-mux on PATH</span>
+<span class="p">$</span> swemux doctor             <span class="c"># read-only health report</span>
+<span class="p">$</span> swemuxd                   <span class="c"># daemon on 127.0.0.1:8765</span></pre>
     </div>
     <p class="note">Open <code>127.0.0.1:8765</code> and register a Project folder. Nothing spawns
     until you ask. <code>pipx install swe-mux</code> is the same isolated, on-PATH install without
     <a href="https://docs.astral.sh/uv/">uv</a>.</p>
     <p class="note"><b>No Python install of any kind creates a desktop shortcut or a Start Menu
     entry.</b> Wheels have no post-install hook and pip runs no install-time code, so that is
-    structural rather than a step somebody forgot: start swe-mux from a terminal.</p>
-    <p class="note"><b>On Windows, take the desktop extra</b> - <code>uv tool install
-    "swe-mux[desktop]"</code> - for the native window and the tray icon, which want the WebView2
-    Runtime. Without it, <code>swe-mux</code> still exists and fails on a missing import. The extra
-    is declared Windows-only, so on Linux and macOS it resolves to nothing and the daemon plus a
-    browser is the whole product.</p>
+    structural rather than a step somebody forgot: start swe-mux from a terminal. The
+    <b>Desktop and tray</b> step of the first-run flow creates them when you ask, and
+    <code>swemux install-shortcut</code> does the same from a terminal.</p>
+    <p class="note"><b>On Windows the window and the tray need nothing extra.</b>
+    <code>pystray</code> and <code>pywebview</code> are ordinary dependencies carrying a
+    <code>win32</code> marker, so the command above already gives a Windows machine a working
+    <code>swe-mux</code> and gives every other machine nothing to download. They want the WebView2
+    Runtime, which recent Windows builds already have. The <code>[desktop]</code> extra that used
+    to carry them is declared and empty since 0.1.5, so an old script still resolves; on Linux and
+    macOS the daemon plus a browser is the whole product.</p>
     <p class="note"><b><code>pip install swe-mux</code> is a different act.</b> It installs into
-    whichever environment is active and puts nothing on PATH globally, so <code>mux</code> works
+    whichever environment is active and puts nothing on PATH globally, so <code>swemux</code> works
     only inside that environment. pip says so in a <code>WARNING: The scripts ... are installed in
     '...' which is not on PATH</code> that scrolls past unread. If that is where you are:</p>
     <div class="code">
       <button class="copy" type="button" data-copy="#c3">copy</button>
-      <pre id="c3"><span class="p">$</span> python -m swe_mux   <span class="c"># the daemon, no PATH setup at all: this is muxd</span>
+      <pre id="c3"><span class="p">$</span> python -m swe_mux   <span class="c"># the daemon, no PATH setup at all: this is swemuxd</span>
 <span class="p">$</span> python -c "import sysconfig; print(sysconfig.get_path('scripts'))"
                       <span class="c"># where the three executables went</span>
 <span class="p">$</span> pip show -f swe-mux <span class="c"># every file this install wrote</span></pre>
@@ -1158,10 +1162,10 @@ footer .social svg { width: 15px; height: 15px; fill: currentColor; display: blo
       <button class="copy" type="button" data-copy="#c2">copy</button>
       <pre id="c2"><span class="p">$</span> git clone https://github.com/jatoran/swe-mux
 <span class="p">$</span> cd swe-mux
-<span class="p">$</span> uv sync --extra desktop
+<span class="p">$</span> uv sync
 <span class="p">$</span> npm --prefix frontend ci &amp;&amp; npm --prefix frontend run build
                       <span class="c"># only the source flow needs Node</span>
-<span class="p">$</span> uv run --extra desktop swe-mux</pre>
+<span class="p">$</span> uv run swe-mux</pre>
     </div>
     <p class="note">The frontend build output is gitignored, so a fresh clone serves the API and no
     interface until that build runs once. A published wheel carries the built frontend already.</p>

@@ -198,8 +198,16 @@ export function HarnessSetup({page,workflow}:{
       installHarnessRegistry(payload)
       const initial: Record<string, boolean> = {}
       for (const harness of payload.harnesses) initial[harness.name] = !!harness.installed
-      setChoices(workflow?.draft.harnesses||initial)
-      if(!workflow?.draft.default_harness)setDefaultHarness(payload.harnesses.find(harness=>harness.installed)?.name||'')
+      // `in` rather than a truthiness test: an *answered* draft may legitimately
+      // enable nothing, and `{}` read as truthy is what made "detection has not
+      // resolved" and "the user chose none" the same value. `draftSnapshot` never
+      // writes the key while `ready` is false, so a present key is always an answer.
+      const seeded=workflow&&'harnesses' in workflow.draft?workflow.draft.harnesses as Record<string,boolean>:initial
+      setChoices(seeded)
+      // The default has to name something that is actually enabled, or Run points
+      // at a harness this very step just turned off.
+      const chosen=workflow?.draft.default_harness||''
+      if(!chosen||!seeded[chosen])setDefaultHarness(payload.harnesses.find(harness=>seeded[harness.name])?.name||'')
       setReady(true)
     }).catch(cause => { if (live) setError(`Harness detection failed: ${cause.message}. Close setup and resume to retry.`) })
     api<{ presets: KeymapPreset[] }>('GET', `/api/keybindings?${hostQuery()}`)
@@ -220,7 +228,12 @@ export function HarnessSetup({page,workflow}:{
   }, [])
 
   const detected = allHarnessesIncludingDisabled()
-  const draftSnapshot=():SetupDraft=>({tier,autonomy,overrides,theme,keymap,fleet_access:fleetAccess,harnesses:choices,default_harness:defaultHarness,scan_history:scanHistory,rail_desktop:railDesktop,rail_mobile:railMobile})
+  // Until detection resolves, `choices` and `defaultHarness` are placeholders and
+  // not answers. The daemon replaces the whole draft on save, so the unresolved
+  // state passes through whatever an earlier step already recorded rather than
+  // either overwriting it with `{}` or erasing it. Continue on the experience page
+  // stays live throughout: nothing it asks about depends on detection.
+  const draftSnapshot=():SetupDraft=>({tier,autonomy,overrides,theme,keymap,fleet_access:fleetAccess,harnesses:ready?choices:workflow?.draft.harnesses,default_harness:ready?defaultHarness:workflow?.draft.default_harness,scan_history:scanHistory,rail_desktop:railDesktop,rail_mobile:railMobile})
   useEffect(()=>{
     if(!workflow||!ready)return
     const timer=setTimeout(()=>void workflow.onDraft(draftSnapshot()).catch(cause=>setError(cause.message)),400)

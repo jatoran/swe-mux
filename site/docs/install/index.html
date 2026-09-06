@@ -1144,7 +1144,7 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
       </div>
       <div class="docsec" id="install-it">
         <div class="head"><span class="n">#</span><h2>Install it</h2><span class="fill"></span></div>
-        <p class="prose">Every method below writes the same three commands: <code>mux</code> (the CLI), <code>muxd</code> (the daemon), and <code>swe-mux</code> (the desktop window and tray). Run exactly one.</p>
+        <p class="prose">Every method below writes the same three commands: <code>swemux</code> (the CLI), <code>swemuxd</code> (the daemon), and <code>swe-mux</code> (the desktop window and tray). Run exactly one. There are no short aliases: <code>mux</code> and <code>muxd</code> existed for one day in 0.1.x and were removed, because <code>mux</code> is a name shared with unrelated tools.</p>
         <div class="code"><pre># Recommended. Isolated environment, all three commands on PATH globally.
 uv tool install swe-mux
 
@@ -1152,13 +1152,13 @@ uv tool install swe-mux
 pipx install swe-mux
 
 # NOT the same act. Installs into whichever environment is currently active and
-# puts nothing on PATH globally, so `mux` works only inside that environment.
+# puts nothing on PATH globally, so `swemux` works only inside that environment.
 pip install swe-mux</pre></div>
       </div>
       <div class="docsec" id="two-things-no-install-does">
         <div class="head"><span class="n">#</span><h2>Two things no install does</h2><span class="fill"></span></div>
         <ul class="flat">
-          <li><b>No shortcut, no Start Menu entry - until you are asked</b><span>Wheels have no post-install hook and pip runs no install-time code, so this is structural rather than a step somebody forgot. What swe-mux does about it is ask once: the first time the Windows desktop shell starts, it offers to add a Start Menu entry and to start with Windows, and never asks again either way. <code>mux install-shortcut</code> does the same thing on demand, is idempotent, and has a <code>--remove</code> that takes back all three - the login entry included.</span></li>
+          <li><b>No shortcut, no Start Menu entry - until you ask for one</b><span>Wheels have no post-install hook and pip runs no install-time code, so this is structural rather than a step somebody forgot. What swe-mux does about it is offer it during setup: the <b>Desktop and tray</b> step of the first-run flow, in the interface itself, creates the Start Menu entry, the Desktop shortcut, and the run-at-sign-in registration you tick. <code>swemux install-shortcut</code> does the same thing on demand, is idempotent, and has a <code>--remove</code> that takes back all three - the login entry included.</span></li>
           <li><b>No agent CLI is installed or logged in</b><span>That stays your own arrangement with each vendor. swe-mux finds the CLIs already on your machine and runs them under your own subscription.</span></li>
         </ul>
       </div>
@@ -1169,7 +1169,7 @@ pip install swe-mux</pre></div>
       </div>
       <div class="docsec" id="start-it">
         <div class="head"><span class="n">#</span><h2>Start it</h2><span class="fill"></span></div>
-        <p class="prose"><code>mux start</code> returns once the daemon is answering and leaves it running: closing the terminal does not stop it. It is idempotent, so a daemon that is already serving is reported and left alone, and nothing else in the CLI starts one implicitly.</p>
+        <p class="prose"><code>swemux start</code> returns once the daemon is answering and leaves it running: closing the terminal does not stop it. It is idempotent, so a daemon that is already serving is reported and left alone, and nothing else in the CLI starts one implicitly.</p>
         <div class="code"><pre>swemux start                     # the daemon, in the background
 # then open http://127.0.0.1:8765
 
@@ -1177,12 +1177,12 @@ swemuxd                          # the same daemon, in the foreground
 swemuxd --shutdown               # stops it, the supervisor, and every session
 
 swe-mux                       # Windows: the same thing in a window, with a tray icon</pre></div>
-        <p class="proof"><b>It worked when</b> <code>mux doctor</code> exits 0. It is read-only and reports on the daemon, the supervisor, the frontend build, the agent CLIs it can detect, the tailnet listener, and the background loops. It is the command that tells installed from working.</p>
+        <p class="proof"><b>It worked when</b> <code>swemux doctor</code> exits 0. It is read-only and reports on the daemon, the supervisor, the frontend build, the agent CLIs it can detect, the tailnet listener, and the background loops. It is the command that tells installed from working.</p>
       </div>
       <div class="docsec" id="if-nothing-is-on-your-path-afterwards">
         <div class="head"><span class="n">#</span><h2>If nothing is on your PATH afterwards</h2><span class="fill"></span></div>
         <p class="prose">This is the ordinary outcome of <code>pip install</code>, and its <code>WARNING: The scripts ... are installed in '...' which is not on PATH</code> scrolls past unread.</p>
-        <div class="code"><pre># The daemon, needing no PATH setup at all: `python -m swe_mux` is exactly `muxd`.
+        <div class="code"><pre># The daemon, needing no PATH setup at all: `python -m swe_mux` is exactly `swemuxd`.
 python -m swe_mux
 
 # Where the three executables went (a `Scripts` directory on Windows).

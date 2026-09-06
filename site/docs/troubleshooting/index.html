@@ -1121,7 +1121,7 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
     <article class="dsbody">
       <div class="kick">help</div>
       <h1>Troubleshooting</h1>
-      <div class="lede"><p>Start with <code>mux doctor</code>. It is read-only, it works whether or not a daemon is running, and every failing row carries a remedy line, so the next step is not a documentation hunt.</p></div>
+      <div class="lede"><p>Start with <code>swemux doctor</code>. It is read-only, it works whether or not a daemon is running, and every failing row carries a remedy line, so the next step is not a documentation hunt.</p></div>
       <nav class="toc" aria-label="On this page">
         <a href="#nothing-is-on-my-path-after-installing">nothing is on my path after installing</a>
         <a href="#there-is-no-desktop-shortcut-or-start-menu-entry">there is no desktop shortcut or start menu entry</a>
@@ -1138,7 +1138,7 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
       <div class="docsec" id="nothing-is-on-my-path-after-installing">
         <div class="head"><span class="n">#</span><h2>Nothing is on my PATH after installing</h2><span class="fill"></span></div>
         <p class="prose">This is the ordinary outcome of <code>pip install</code>, whose <code>WARNING: The scripts ... are installed in '...' which is not on PATH</code> scrolls past unread. <code>pip</code> installs into whichever environment is currently active and puts nothing on PATH globally.</p>
-        <div class="code"><pre># The daemon, needing no PATH setup at all: `python -m swe_mux` is exactly `muxd`.
+        <div class="code"><pre># The daemon, needing no PATH setup at all: `python -m swe_mux` is exactly `swemuxd`.
 python -m swe_mux
 
 # Where the three executables actually went.
@@ -1150,25 +1150,25 @@ swemuxd --where</pre></div>
       </div>
       <div class="docsec" id="there-is-no-desktop-shortcut-or-start-menu-entry">
         <div class="head"><span class="n">#</span><h2>There is no desktop shortcut or Start Menu entry</h2><span class="fill"></span></div>
-        <p class="prose">There never will be from a Python install. Wheels have no post-install hook and pip runs no install-time code, so this is structural rather than a step somebody forgot. On Windows, <code>mux install-shortcut</code> creates them afterwards, and <code>--remove</code> takes them away again.</p>
+        <p class="prose">There never will be from a Python install. Wheels have no post-install hook and pip runs no install-time code, so this is structural rather than a step somebody forgot. On Windows, <code>swemux install-shortcut</code> creates them afterwards, and <code>--remove</code> takes them away again.</p>
       </div>
       <div class="docsec" id="the-page-loads-but-there-is-no-interface">
         <div class="head"><span class="n">#</span><h2>The page loads but there is no interface</h2><span class="fill"></span></div>
         <p class="prose">Not a bug. The frontend bundle is build output and is not carried in the repository, so a fresh clone, a fresh worktree, and a CI checkout all have none: the daemon answers the API perfectly and serves no interface.</p>
         <div class="code"><pre>npm --prefix frontend ci
 npm --prefix frontend run build</pre></div>
-        <p class="note"><code>mux doctor</code> distinguishes the two cases that look identical from the browser. In a source checkout the missing bundle is a <em>warning</em> carrying exactly that command. In an installed copy it is a <em>failure</em>, because a wheel that shipped without an interface is a broken artifact, and reinstalling from a complete one is the fix.</p>
+        <p class="note"><code>swemux doctor</code> distinguishes the two cases that look identical from the browser. In a source checkout the missing bundle is a <em>warning</em> carrying exactly that command. In an installed copy it is a <em>failure</em>, because a wheel that shipped without an interface is a broken artifact, and reinstalling from a complete one is the fix.</p>
       </div>
       <div class="docsec" id="the-daemon-will-not-start">
         <div class="head"><span class="n">#</span><h2>The daemon will not start</h2><span class="fill"></span></div>
-        <p class="prose">Run <code>mux doctor</code>. With nothing listening it produces the local report, and the first <code>FAIL</code> is the one to fix. Four causes account for most of them:</p>
+        <p class="prose">Run <code>swemux doctor</code>. With nothing listening it produces the local report, and the first <code>FAIL</code> is the one to fix. Four causes account for most of them:</p>
         <ul class="flat">
-          <li><b>A config that does not validate</b><span>The config check fails with the real parse or validation error. Fix <code>config.toml</code>, or move it aside - a removed config is rewritten with defaults on the next start. This is the fault the CLI otherwise hides, because a config failure makes every <code>mux</code> command fall back to the loopback default and possibly point at the wrong daemon.</span></li>
+          <li><b>A config that does not validate</b><span>The config check fails with the real parse or validation error. Fix <code>config.toml</code>, or move it aside - a removed config is rewritten with defaults on the next start. This is the fault the CLI otherwise hides, because a config failure makes every <code>swemux</code> command fall back to the loopback default and possibly point at the wrong daemon.</span></li>
           <li><b>The port is already held</b><span>The port check fails and names the owner-finding command for your host (<code>netstat -ano | findstr :&lt;port&gt;</code> on Windows, <code>ss -ltnp</code> on Linux). Stop the owner, or set a different port.</span></li>
           <li><b>A broken install</b><span>The import check fails with the real exception attached. On Windows the specific risk is the one compiled dependency in the runtime closure, where a wheel mismatch or a missing Visual C++ runtime surfaces as an import error.</span></li>
           <li><b>An unwritable or missing data directory</b><span>The check distinguishes "exists and cannot be written" from "does not exist and cannot be created", and points at <code>MUX_DATA_DIR</code>.</span></li>
         </ul>
-        <p class="note"><b>A bound listener is not a ready daemon.</b> Health answers 503 with the startup phase still in flight until the runtime exists, so "it is listening but everything 503s" is the daemon still starting rather than a fault. <code>muxd --local-only</code> takes tailnet detection out of the startup path when you are isolating a network problem.</p>
+        <p class="note"><b>A bound listener is not a ready daemon.</b> Health answers 503 with the startup phase still in flight until the runtime exists, so "it is listening but everything 503s" is the daemon still starting rather than a fault. <code>swemuxd --local-only</code> takes tailnet detection out of the startup path when you are isolating a network problem.</p>
       </div>
       <div class="docsec" id="my-sessions-look-lost-after-a-restart">
         <div class="head"><span class="n">#</span><h2>My sessions look lost after a restart</h2><span class="fill"></span></div>
@@ -1177,7 +1177,7 @@ npm --prefix frontend run build</pre></div>
           <li><b>The PTY supervisor, and it ships off</b><span>With it on, terminals are held by a separate process and survive a daemon restart, an app rebuild, and a redeploy. With it off, a restart reaps every session - which is why the restart endpoint refuses outright unless it is forced. Turn it on in Settings, Terminals.</span></li>
           <li><b>Cold recovery, which ships on</b><span>Independent of the supervisor, and it covers what the supervisor cannot: sessions whose daemon and terminal owner both died. They come back as visible, dead, resumable rows rather than vanishing.</span></li>
         </ul>
-        <p class="prose">Check the state before concluding anything. <code>mux doctor</code> against a running daemon reports supervisor attachment, and <code>mux doctor --export</code> lists cold sessions with their reason and capture state.</p>
+        <p class="prose">Check the state before concluding anything. <code>swemux doctor</code> against a running daemon reports supervisor attachment, and <code>swemux doctor --export</code> lists cold sessions with their reason and capture state.</p>
       </div>
       <div class="docsec" id="swe-mux-cannot-see-an-agent-cli-i-have-installed">
         <div class="head"><span class="n">#</span><h2>swe-mux cannot see an agent CLI I have installed</h2><span class="fill"></span></div>

@@ -48,7 +48,8 @@ Node 22.6 or newer is only needed if the user is building swe-mux from a checkou
 
 ## 3. Install
 
-Every method below installs the same three commands: `mux` (the CLI), `muxd` (the daemon), and `swe-mux` (the desktop window and tray).
+Every method below installs the same three commands: `swemux` (the CLI), `swemuxd` (the daemon), and `swe-mux` (the desktop window and tray).
+There are no short aliases: `mux` and `muxd` existed for one day in 0.1.x and were removed.
 
 Ask which one the user wants, then run exactly one.
 
@@ -56,31 +57,29 @@ Ask which one the user wants, then run exactly one.
 # Recommended. Isolated environment, all three commands on PATH globally.
 uv tool install swe-mux
 
-# On Windows, take the desktop extra: it is what adds the native window and the tray icon.
-uv tool install "swe-mux[desktop]"
-
 # The same isolated, on-PATH install, without uv.
 pipx install swe-mux
 
 # NOT the same act. Installs into whichever environment is currently active and puts
-# nothing on PATH globally, so `mux` works only inside that environment.
+# nothing on PATH globally, so `swemux` works only inside that environment.
 pip install swe-mux
 ```
 
 Two things no install of any kind does, which you should say out loud before the user waits for them:
 
-- **No desktop shortcut and no Start Menu entry.** Wheels have no post-install hook and pip runs no install-time code, so this is structural rather than a step somebody forgot. swe-mux starts from a terminal.
+- **No desktop shortcut and no Start Menu entry.** Wheels have no post-install hook and pip runs no install-time code, so this is structural rather than a step somebody forgot. swe-mux starts from a terminal, and the **Desktop and tray** step of the first-run flow - or `swemux install-shortcut` - creates them when the user asks.
 - **No agent CLI is installed, updated, or logged in.** That stays the user's own arrangement with each vendor.
 
-The `desktop` extra is Windows-only by declaration: `pystray` and `pywebview` both carry a `win32` platform marker, so on Linux and macOS the extra resolves to nothing and the daemon plus a browser is the whole product.
-On Windows it wants the WebView2 Runtime, which recent Windows builds already have.
+The window and the tray need no extra: `pystray` and `pywebview` are ordinary dependencies carrying a `win32` platform marker, so a Windows machine gets a working `swe-mux` and every other machine downloads nothing, and on Linux and macOS the daemon plus a browser is the whole product.
+The `[desktop]` extra that used to carry them has been declared and empty since 0.1.5, so an old script still resolves.
+On Windows they want the WebView2 Runtime, which recent Windows builds already have.
 
 ### If nothing is on PATH afterwards
 
 This is the ordinary outcome of `pip install`, and its warning scrolls past unread.
 
 ```
-# The daemon, needing no PATH setup at all: `python -m swe_mux` is exactly `muxd`.
+# The daemon, needing no PATH setup at all: `python -m swe_mux` is exactly `swemuxd`.
 python -m swe_mux
 
 # Where the three executables went (a `Scripts` directory on Windows).
@@ -138,7 +137,7 @@ A user who has just installed something wants a working session, not a vocabular
 
 **Session.** One pseudoterminal with a process in it. A session is either a plain shell or an agent session; the difference is whether swe-mux recognises the harness running inside and can add its layer.
 
-**The promotion trick, which is the part people miss.** Open a terminal in a Project (`Ctrl+Alt+T`) and type `claude` or `codex` the way they always have. swe-mux puts its own launchers first on that terminal's PATH, so the ordinary command promotes the terminal in place: same pane, same scrollback, now carrying a transcript, a status, a prompt queue, and a context meter. There is no special "start an agent" ritual to learn.
+**The promotion trick, which is the part people miss.** Open a terminal in a Project (`Ctrl+Shift+Enter`) and type `claude` or `codex` the way they always have. swe-mux puts its own launchers first on that terminal's PATH, so the ordinary command promotes the terminal in place: same pane, same scrollback, now carrying a transcript, a status, a prompt queue, and a context meter. There is no special "start an agent" ritual to learn.
 
 **Status.** Every session carries one of a small set of states, and they mean the same thing regardless of which vendor's CLI produced them. `awaiting` is the one that matters: it means the agent is waiting on the human.
 
@@ -148,7 +147,7 @@ A user who has just installed something wants a working session, not a vocabular
 
 **The control plane.** The evidence layer: deterministic facts captured at the tool boundary, detectors for loops and stalls and unverified claims, attention ranking with an interrupt budget, and commit-level provenance. It is **off by default, per Project**. Do not describe it as something the user already has; describe it as something they can turn on once the basics work.
 
-Two keyboard entry points cover almost everything: `Ctrl+Alt+T` for a terminal at the Project root, `Ctrl+Alt+P` for the command palette.
+Two keyboard entry points cover almost everything: `Ctrl+Shift+Enter` for a terminal at the Project root, `Ctrl+Shift+P` for the command palette.
 
 ## 6. Where things live
 

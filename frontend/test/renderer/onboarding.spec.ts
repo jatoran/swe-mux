@@ -3,7 +3,8 @@ import { SETTINGS_CONFIG_FIXTURE } from './settingsConfigFixture'
 import { HARNESS_REGISTRY_SEED } from '../../src/harnessRegistrySeed'
 import type { OnboardingState } from '../../src/onboarding'
 
-async function daemon(page:Page,options:{existing?:boolean;startupFailure?:boolean;badModels?:boolean;desktop?:boolean}={}){
+async function daemon(page:Page,options:{existing?:boolean;startupFailure?:boolean;badModels?:boolean;desktop?:boolean;harnessDelayMs?:number}={}){
+  let harnessRequests=0
   let state:OnboardingState={version:1,revision:0,step:options.existing?'existing':'experience',status:'active',hidden:false,tour_status:'pending',tour_step:'welcome',dismissed:[],completed:[],draft:{}}
   const config:Record<string,unknown>={...SETTINGS_CONFIG_FIXTURE,experience_tier:'',harness_setup_complete:false,openrouter_cheap_model:'',openrouter_standard_model:''}
   const writes:{path:string;body:Record<string,unknown>}[]=[]
@@ -33,7 +34,13 @@ async function daemon(page:Page,options:{existing?:boolean;startupFailure?:boole
     }else if(path==='/api/config'){
       if(request.method()==='PATCH')Object.assign(config,body)
       result=config
-    }else if(path==='/api/harnesses')result={...HARNESS_REGISTRY_SEED,harnesses:HARNESS_REGISTRY_SEED.harnesses.map(harness=>({...harness,installed:['claude','codex'].includes(harness.name)}))}
+    }else if(path==='/api/harnesses'){
+      // Only the first detection is delayed, which is the shape of the race: the
+      // experience page's copy has not answered while its Continue is already live.
+      harnessRequests+=1
+      if(options.harnessDelayMs&&harnessRequests===1)await new Promise(resolve=>setTimeout(resolve,options.harnessDelayMs))
+      result={...HARNESS_REGISTRY_SEED,harnesses:HARNESS_REGISTRY_SEED.harnesses.map(harness=>({...harness,installed:['claude','codex'].includes(harness.name)}))}
+    }
     else if(path==='/api/keybindings')result={presets:[{id:'swemux',title:'swe-mux',description:'Standard shortcuts',warning:''}]}
     else if(path==='/api/experience-tiers')result={tiers:{terminal:{automation_enabled:false},deterministic:{automation_enabled:false},automations:{automation_enabled:true}},autonomy:{supervised:{}},overridable:['automation_enabled']}
     else if(path==='/api/experience-tier'){config.experience_tier=body.tier;config.automation_enabled=body.tier==='automations';result={restart_required:[]}}
@@ -132,6 +139,65 @@ test('keyless local endpoint completes setup and mobile controls stay inside the
   await expect(page.getByText('SET UP::AGENTS')).toBeVisible()
   expect(app.writes.filter(write=>write.path==='/api/automation/provider/key')).toHaveLength(0)
   expect(app.config.automation_enabled).toBe(true)
+})
+
+/*
+ * The race this covers: `/api/harnesses` had not answered when the experience
+ * page's Continue was pressed, so the draft carried an *unresolved* detection.
+ * A draft that records `harnesses: {}` there is indistinguishable from a user
+ * who deliberately enabled nothing, and the harness page - a fresh mount, keyed
+ * on the step - used to read it as the second and disable every installed CLI.
+ */
+test('a Continue pressed before detection answers does not disable the installed CLIs',async({page})=>{
+  const errors:string[]=[];page.on('pageerror',error=>errors.push(error.message))
+  const app=await daemon(page,{harnessDelayMs:1800})
+  await page.goto('/onboarding-harness.html')
+  await page.getByRole('button',{name:'Continue',exact:true}).click()
+  await expect(page.getByText('SET UP::AGENTS')).toBeVisible()
+  // The unresolved detection must not have been recorded as an answer.
+  expect(app.state().draft.harnesses).toBeUndefined()
+  // Once the second detection resolves, the installed CLIs are the seeded choice.
+  await expect(page.getByRole('checkbox',{name:/Claude Code/})).toBeChecked()
+  await expect(page.getByRole('checkbox',{name:/Codex/})).toBeChecked()
+  await page.getByRole('button',{name:'Enable selected'}).click()
+  await expect(page.getByRole('button',{name:'Find recent project folders'})).toBeVisible()
+  expect(app.state().draft.harnesses).toEqual({claude:true,codex:true,omp:false,pi:false,opencode:false})
+  expect(app.config.harness_enabled).toEqual({})
+  expect(app.config.default_backend).toBe('claude')
+  expect(app.config.default_harness).toBe('claude')
+  expect(errors).toEqual([])
+})
+
+test('deliberately enabling no harness is kept, and leaves no default harness behind',async({page})=>{
+  const app=await daemon(page)
+  await page.goto('/onboarding-harness.html')
+  await page.getByRole('button',{name:'Continue',exact:true}).click()
+  await expect(page.getByText('SET UP::AGENTS')).toBeVisible()
+  await page.getByRole('checkbox',{name:/Claude Code/}).uncheck()
+  await page.getByRole('checkbox',{name:/Codex/}).uncheck()
+  await page.getByRole('button',{name:'Enable selected'}).click()
+  await expect(page.getByRole('button',{name:'Find recent project folders'})).toBeVisible()
+  expect(app.config.harness_enabled).toEqual({claude:false,codex:false})
+  expect(app.config.default_backend).toBe('shell')
+  expect(app.state().draft.default_harness).toBe('')
+})
+
+test('an all-disabled choice survives leaving setup and resuming into the harness page',async({page})=>{
+  const app=await daemon(page)
+  await page.goto('/onboarding-harness.html')
+  await page.getByRole('button',{name:'Continue',exact:true}).click()
+  await expect(page.getByText('SET UP::AGENTS')).toBeVisible()
+  await page.getByRole('checkbox',{name:/Claude Code/}).uncheck()
+  await page.getByRole('checkbox',{name:/Codex/}).uncheck()
+  await page.getByRole('button',{name:'Continue later',exact:true}).click()
+  await expect(page.getByRole('dialog')).toHaveCount(0)
+  expect(app.state().draft.harnesses).toEqual({claude:false,codex:false,omp:false,pi:false,opencode:false})
+  await page.reload()
+  await page.getByRole('button',{name:/Getting started/}).first().click()
+  await page.getByRole('button',{name:'Continue setup',exact:true}).click()
+  await expect(page.getByText('SET UP::AGENTS')).toBeVisible()
+  await expect(page.getByRole('checkbox',{name:/Claude Code/})).not.toBeChecked()
+  await expect(page.getByRole('checkbox',{name:/Codex/})).not.toBeChecked()
 })
 
 test('retained settings can be reused and dismissed learning tasks restored',async({page})=>{

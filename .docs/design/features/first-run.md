@@ -70,7 +70,11 @@ Per-project permission, current-run scan opt-ins, budgets, and authority checks 
 ## Projects and accounts
 
 Detection checks the registry of supported harnesses.
-The user chooses a default harness for Run, with the first detected harness suggested and the choice corrected when it is deselected.
+The user chooses a default harness for Run, with the first enabled harness suggested and the choice corrected when it is deselected.
+The suggestion names only a harness that is actually enabled, so the default never points at a harness this step turned off.
+An unresolved detection and a deliberate choice to enable nothing are distinct.
+The draft records the harness selection only once detection has resolved; an earlier page's Continue passes through whatever was already recorded rather than writing an empty selection.
+A recorded selection is therefore an answer, including an empty one, and is restored on resume instead of being re-seeded from detection.
 For harnesses whose account manager supports capture, an external system login offers Save current login.
 An already-saved account is identified, and an unreadable or absent login is stated without attempting capture.
 

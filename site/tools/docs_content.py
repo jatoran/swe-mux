@@ -131,9 +131,11 @@ INSTALL = Page(
         ("h2", "Install it"),
         (
             "p",
-            "Every method below writes the same three commands: <code>mux</code> (the CLI), "
-            "<code>muxd</code> (the daemon), and <code>swe-mux</code> (the desktop window and "
-            "tray). Run exactly one.",
+            "Every method below writes the same three commands: <code>swemux</code> (the CLI), "
+            "<code>swemuxd</code> (the daemon), and <code>swe-mux</code> (the desktop window and "
+            "tray). Run exactly one. There are no short aliases: <code>mux</code> and "
+            "<code>muxd</code> existed for one day in 0.1.x and were removed, because "
+            "<code>mux</code> is a name shared with unrelated tools.",
         ),
         (
             "code",
@@ -144,7 +146,7 @@ INSTALL = Page(
             "pipx install swe-mux\n"
             "\n"
             "# NOT the same act. Installs into whichever environment is currently active and\n"
-            "# puts nothing on PATH globally, so `mux` works only inside that environment.\n"
+            "# puts nothing on PATH globally, so `swemux` works only inside that environment.\n"
             "pip install swe-mux",
         ),
         ("h2", "Two things no install does"),
@@ -152,12 +154,13 @@ INSTALL = Page(
             "flat",
             [
                 (
-                    "No shortcut, no Start Menu entry - until you are asked",
+                    "No shortcut, no Start Menu entry - until you ask for one",
                     "Wheels have no post-install hook and pip runs no install-time code, so this "
                     "is structural rather than a step somebody forgot. What swe-mux does about "
-                    "it is ask once: the first time the Windows desktop shell starts, it offers "
-                    "to add a Start Menu entry and to start with Windows, and never asks again "
-                    "either way. <code>mux install-shortcut</code> does the same thing on "
+                    "it is offer it during setup: the <b>Desktop and tray</b> step of the "
+                    "first-run flow, in the interface itself, creates the Start Menu entry, the "
+                    "Desktop shortcut, and the run-at-sign-in registration you tick. "
+                    "<code>swemux install-shortcut</code> does the same thing on "
                     "demand, is idempotent, and has a <code>--remove</code> that takes back all "
                     "three - the login entry included.",
                 ),
@@ -187,7 +190,7 @@ INSTALL = Page(
         ("h2", "Start it"),
         (
             "p",
-            "<code>mux start</code> returns once the daemon is answering and leaves it "
+            "<code>swemux start</code> returns once the daemon is answering and leaves it "
             "running: closing the terminal does not stop it. It is idempotent, so a daemon "
             "that is already serving is reported and left alone, and nothing else in the CLI "
             "starts one implicitly.",
@@ -204,7 +207,7 @@ INSTALL = Page(
         ),
         (
             "proof",
-            "<code>mux doctor</code> exits 0. It is read-only and reports on the daemon, the "
+            "<code>swemux doctor</code> exits 0. It is read-only and reports on the daemon, the "
             "supervisor, the frontend build, the agent CLIs it can detect, the tailnet listener, "
             "and the background loops. It is the command that tells installed from working.",
         ),
@@ -217,7 +220,7 @@ INSTALL = Page(
         ),
         (
             "code",
-            "# The daemon, needing no PATH setup at all: `python -m swe_mux` is exactly `muxd`.\n"
+            "# The daemon, needing no PATH setup at all: `python -m swe_mux` is exactly `swemuxd`.\n"
             "python -m swe_mux\n"
             "\n"
             "# Where the three executables went (a `Scripts` directory on Windows).\n"
@@ -373,8 +376,8 @@ FIRST_SESSION = Page(
             (
                 ["Chord", "What it does"],
                 [
-                    ["Ctrl+Alt+T", "A terminal at the current Project's root"],
-                    ["Ctrl+Alt+P", "The command palette, which reaches everything else"],
+                    ["Ctrl+Shift+Enter", "A terminal at the current Project's root"],
+                    ["Ctrl+Shift+P", "The command palette, which reaches everything else"],
                 ],
             ),
         ),
@@ -405,7 +408,7 @@ PHONE = Page(
             [
                 "Install Tailscale on the host machine and on the phone, on the same tailnet.",
                 "Leave the daemon running. It listens on loopback and on the machine's detected "
-                "Tailscale address; <code>muxd --local-only</code> is how you stop it doing the "
+                "Tailscale address; <code>swemuxd --local-only</code> is how you stop it doing the "
                 "second one.",
                 "On the phone, open the machine's <code>.ts.net</code> hostname over HTTPS.",
                 "Turn <b>Use Tailscale DNS</b> on, and leave Android's Private DNS off or "
@@ -500,7 +503,7 @@ AGENT_SETUP = Page(
                 "The prerequisites to check, and which failures should stop the install.",
                 "Every install method, what each one leaves behind, and the two things none of "
                 "them do.",
-                "First run, and <code>mux doctor</code> as the verification step.",
+                "First run, and <code>swemux doctor</code> as the verification step.",
                 "The concepts to explain and the order to explain them in, which is deliberately "
                 "not the order a feature list would use.",
                 "Where configuration and data live on each host.",
@@ -521,7 +524,7 @@ AGENT_SETUP = Page(
                 (
                     "Verify, do not assume",
                     "After each stage, run the command that proves it worked and read the real "
-                    "output. <code>mux doctor</code> is that command for the install as a whole.",
+                    "output. <code>swemux doctor</code> is that command for the install as a whole.",
                 ),
                 (
                     "Do not invent commands or flags",
@@ -741,7 +744,7 @@ SESSIONS = Page(
             "p",
             "A named shell or agent launch: which executable, which arguments, which working "
             "directory. A WSL distro shell is a profile like any other. Profiles are edited in "
-            "Settings, Harnesses and listed by <code>mux profiles</code>.",
+            "Settings, Harnesses and listed by <code>swemux profiles</code>.",
         ),
         (
             "note",
@@ -874,8 +877,8 @@ STATUS = Page(
         ("h2", "When status looks wrong"),
         (
             "p",
-            "<code>mux doctor</code> carries a fleet status-health check, and "
-            "<code>mux doctor --export</code> includes the status timeline's sink statistics. A "
+            "<code>swemux doctor</code> carries a fleet status-health check, and "
+            "<code>swemux doctor --export</code> includes the status timeline's sink statistics. A "
             "status that is wrong for one session is a bug worth reporting with that export "
             "attached; a status that is wrong for every session usually means a harness updated "
             "underneath swe-mux and moved something it reads.",
@@ -2206,7 +2209,7 @@ SETTINGS = Page(
             "schema-versioned with a pre-migration backup written beside it. Settings is the "
             "better route because it validates. A config that does not validate is one of the "
             "four common causes of a daemon that will not start, and it is the first check "
-            "<code>mux doctor</code> reports on.",
+            "<code>swemux doctor</code> reports on.",
         ),
     ],
 )
@@ -2215,15 +2218,16 @@ CLI = Page(
     slug="cli",
     title="Command line reference",
     description=(
-        "Every mux subcommand, every muxd flag, the exit-code contract scripts branch on, and how "
+        "Every swemux subcommand, every swemuxd flag, the exit-code contract scripts branch on, "
+        "and how "
         "the CLI resolves which daemon to talk to."
     ),
     lede=(
-        "Three commands are installed: <code>mux</code> talks to a running daemon, <code>muxd</code> "
+        "Three commands are installed: <code>swemux</code> talks to a running daemon, <code>swemuxd</code> "
         "<em>is</em> the daemon, and <code>swe-mux</code> is the Windows desktop window and tray."
     ),
     blocks=[
-        ("h2", "muxd, the daemon"),
+        ("h2", "swemuxd, the daemon"),
         (
             "table",
             (
@@ -2259,7 +2263,7 @@ CLI = Page(
             "<em>detected</em> rather than configured. Binding a LAN interface is an unsupported "
             "configuration rather than a flag that is missing.",
         ),
-        ("h2", "mux, the client"),
+        ("h2", "swemux, the client"),
         (
             "table",
             (
@@ -2330,7 +2334,7 @@ CLI = Page(
             "Every subcommand takes <code>--json</code> to print the raw daemon response instead "
             "of a table, and <code>--url</code> to point at a specific daemon.",
         ),
-        ("h2", "Which daemon mux talks to"),
+        ("h2", "Which daemon swemux talks to"),
         (
             "p",
             "Resolved in this order, and the order is the contract: <code>--url</code>, then the "
@@ -2358,7 +2362,7 @@ CLI = Page(
         ),
         (
             "note",
-            "<b>A degraded report never exits 0</b>, so a script gating on <code>mux doctor</code> "
+            "<b>A degraded report never exits 0</b>, so a script gating on <code>swemux doctor</code> "
             "keeps working whether or not a daemon is running. The doctor codes compose the two "
             "that already existed rather than adding a scheme of their own.",
         ),
@@ -2756,7 +2760,7 @@ TROUBLESHOOTING = Page(
         "start, sessions that look lost, a phone that cannot use the microphone."
     ),
     lede=(
-        "Start with <code>mux doctor</code>. It is read-only, it works whether or not a daemon is "
+        "Start with <code>swemux doctor</code>. It is read-only, it works whether or not a daemon is "
         "running, and every failing row carries a remedy line, so the next step is not a "
         "documentation hunt."
     ),
@@ -2771,7 +2775,7 @@ TROUBLESHOOTING = Page(
         ),
         (
             "code",
-            "# The daemon, needing no PATH setup at all: `python -m swe_mux` is exactly `muxd`.\n"
+            "# The daemon, needing no PATH setup at all: `python -m swe_mux` is exactly `swemuxd`.\n"
             "python -m swe_mux\n"
             "\n"
             "# Where the three executables actually went.\n"
@@ -2790,7 +2794,7 @@ TROUBLESHOOTING = Page(
             "p",
             "There never will be from a Python install. Wheels have no post-install hook and pip "
             "runs no install-time code, so this is structural rather than a step somebody forgot. "
-            "On Windows, <code>mux install-shortcut</code> creates them afterwards, and "
+            "On Windows, <code>swemux install-shortcut</code> creates them afterwards, and "
             "<code>--remove</code> takes them away again.",
         ),
         ("h2", "The page loads but there is no interface"),
@@ -2806,7 +2810,7 @@ TROUBLESHOOTING = Page(
         ),
         (
             "note",
-            "<code>mux doctor</code> distinguishes the two cases that look identical from the "
+            "<code>swemux doctor</code> distinguishes the two cases that look identical from the "
             "browser. In a source checkout the missing bundle is a <em>warning</em> carrying "
             "exactly that command. In an installed copy it is a <em>failure</em>, because a wheel "
             "that shipped without an interface is a broken artifact, and reinstalling from a "
@@ -2815,7 +2819,7 @@ TROUBLESHOOTING = Page(
         ("h2", "The daemon will not start"),
         (
             "p",
-            "Run <code>mux doctor</code>. With nothing listening it produces the local report, and "
+            "Run <code>swemux doctor</code>. With nothing listening it produces the local report, and "
             "the first <code>FAIL</code> is the one to fix. Four causes account for most of them:",
         ),
         (
@@ -2826,7 +2830,7 @@ TROUBLESHOOTING = Page(
                     "The config check fails with the real parse or validation error. Fix "
                     "<code>config.toml</code>, or move it aside - a removed config is rewritten "
                     "with defaults on the next start. This is the fault the CLI otherwise hides, "
-                    "because a config failure makes every <code>mux</code> command fall back to "
+                    "because a config failure makes every <code>swemux</code> command fall back to "
                     "the loopback default and possibly point at the wrong daemon.",
                 ),
                 (
@@ -2853,7 +2857,7 @@ TROUBLESHOOTING = Page(
             "<b>A bound listener is not a ready daemon.</b> Health answers 503 with the startup "
             "phase still in flight until the runtime exists, so \"it is listening but everything "
             "503s\" is the daemon still starting rather than a fault. "
-            "<code>muxd --local-only</code> takes tailnet detection out of the startup path when "
+            "<code>swemuxd --local-only</code> takes tailnet detection out of the startup path when "
             "you are isolating a network problem.",
         ),
         ("h2", "My sessions look lost after a restart"),
@@ -2881,8 +2885,8 @@ TROUBLESHOOTING = Page(
         ),
         (
             "p",
-            "Check the state before concluding anything. <code>mux doctor</code> against a running "
-            "daemon reports supervisor attachment, and <code>mux doctor --export</code> lists cold "
+            "Check the state before concluding anything. <code>swemux doctor</code> against a running "
+            "daemon reports supervisor attachment, and <code>swemux doctor --export</code> lists cold "
             "sessions with their reason and capture state.",
         ),
         ("h2", "swe-mux cannot see an agent CLI I have installed"),
