@@ -128,8 +128,14 @@ Data keys, comparisons, filters, configuration controls, and API values never us
 `ProjectsManager.tsx`, `projectConfig.ts`, `projectConfigState.ts`
 
 The configured catalog UI plus the single per-Project settings editor: missing-folder state, removal preflight with live and history counts, preserved-history disclosure, the committed Git/worktree setup command, and both default storage layers.
-It does not own workspace placement.
-It is also the one editor for every per-Project switch, which is what makes a `GrantGate` elsewhere additive-only (`settings-and-gates.md`).
+
+`ProjectCreateDialog.tsx` owns the separate creation form, folder browser, submission guard, and initialization-command results.
+It submits only identity and folder fields from `projectCreate.ts`, writes no settings or grants, and displays a fixed global-defaults notice.
+Globally enabled initialization commands run after registration; their read-only summary replaces per-Project selections.
+`App.tsx` only places the successful Project in the workspace and reports initialization results.
+Automation preset types live with the shared policy contract in `projectAutomations.ts` rather than with creation drafts.
+`ProjectsManager.tsx` does not own workspace placement.
+It is the one editor for per-Project settings, which is what makes a `GrantGate` elsewhere additive-only (`settings-and-gates.md`).
 
 `projectConfigState.ts` holds **one** copy of `.swe-mux/config.toml` for the whole panel and every section reads and writes through it.
 Three sections drew over that one file - the defaults and repository options form, the automation opt-ins, the agent authority table - and each of them used to fetch and cache its own revision, so the first successful edit anywhere in the panel invalidated the other two and the second edit answered "project config changed externally".
