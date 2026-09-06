@@ -16,7 +16,7 @@ import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { placeTutorialCard } from '../tutorial.ts'
 import { DemoShow } from './DemoShow.tsx'
 import {
-  advanceBeat, directorSnapshot, dismissResume, resume, stop, subscribeDirector,
+  start, togglePlayback, advanceBeat, directorSnapshot, dismissResume, resume, stop, subscribeDirector,
   type DirectorSnapshot,
 } from './director.ts'
 import { firstVisible } from './drive.ts'
@@ -28,7 +28,7 @@ import { firstVisible } from './drive.ts'
  * the app and would otherwise clip the card's header and its stop button. In the embed
  * there is no bar and this is simply an inset.
  */
-const TOP_DODGE = 44
+const TOP_DODGE = 78
 
 const sameRect = (left: DOMRect | null, right: DOMRect | null): boolean =>
   left === right || Boolean(left && right
@@ -136,9 +136,12 @@ export function DemoDirector() {
     }
   })()
 
+  const terminalSubject = view.spotlight?.some(selector => selector.includes('terminal-pane'))
   const cardStyle = anchored
     ? { left: position.left, top: position.top }
-    : { bottom: 18, top: 'auto' as const }
+    : terminalSubject
+      ? { top: innerWidth <= 760 ? 128 : TOP_DODGE, bottom: 'auto' as const }
+      : { bottom: 18, top: 'auto' as const }
 
   return <div class={`demo-director ${rect ? 'targeted' : 'centered'}`} role="dialog" aria-label="Demo walkthrough">
     {/* The beat's own show layer. Keyed by the sequence number so a new beat mounts a
@@ -187,7 +190,7 @@ export function DemoDirector() {
         {view.say && <h2>{view.say}</h2>}
         {view.body.map(paragraph => <p key={paragraph}>{paragraph}</p>)}
       </div>
-      {anchored && <footer>
+      <footer>
         <span class="demo-director-count">{view.index} / {view.total}</span>
         <div class="demo-director-progress" aria-hidden="true">
           <i style={{ width: `${(view.index / Math.max(1, view.total)) * 100}%` }} />
@@ -197,10 +200,12 @@ export function DemoDirector() {
             for a gated beat ("skip step", beside the instruction it was waiting on); the
             walkthrough drives itself now, so there is one button and it always means the
             same thing. */}
+        <button onClick={togglePlayback} aria-label={view.held ? "Play walkthrough" : "Pause walkthrough"}>{view.held ? "Play" : "Pause"}</button>
+        <button onClick={() => void start(view.scenarioId)} aria-label="Replay walkthrough">Replay</button>
         <button class="demo-director-next" onClick={() => (last ? stop('dismissed') : advanceBeat())}>
           {last ? 'Start playing' : 'Next'}
         </button>
-      </footer>}
+      </footer>
     </section>
   </div>
 }

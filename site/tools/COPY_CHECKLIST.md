@@ -167,7 +167,7 @@ Examples that stayed long on purpose, and why:
 The four cuts in section 1 all applied, but a marketing page has three failure modes the
 reference documentation does not, and each of these was worth more here than any of them.
 
-**A caption is a confession.**
+**Feature captions identify the action and result.**
 Fourteen images carried one, and ten were narration of what the picture already showed.
 The rule that replaced them is absolute and is now in `site/README.md` section 8: the claim goes in
 the section's prose, the image goes directly under the claim it is evidence for, and the frame holds
@@ -211,3 +211,11 @@ python site/tools/check_changelog.py
 
 A stale generated page beside a changed template has broken this gate more than once.
 `build.py` also fails on an em dash and on an `/OWNER/` placeholder reaching a page.
+
+## Current feature-media rules
+
+The homepage leads with live status, desktop/mobile work and voice.
+Feature examples use the real demo interface with simulated activity.
+Captions and anchored highlights should identify the action, then leave time to inspect the result.
+Do not repeat a nearby paragraph inside the frame or describe simulated behavior as measured execution.
+The language and scope matrix in `../README.md` and `../../.docs/marketing/README.md` govern the current copy.

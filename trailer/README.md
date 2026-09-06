@@ -1,5 +1,10 @@
 # swe-mux trailers
 
+The current website uses the interactive browser demo and feature captures from `frontend/scripts/export-showcase.mjs`.
+Read `site/DEMO.md` and `.docs/marketing/MEDIA.md` for the current workflow.
+It is headless, uses an ephemeral static server, and never touches the live daemon.
+The recording methods documented in this file are historical; their live footage is not cleared for publication.
+
 This folder contains the complete source, live captures, original score, intermediate assets, and final renders for the swe-mux trailers.
 
 **The 2:11 feature cut described below is superseded as the site's hero video.**

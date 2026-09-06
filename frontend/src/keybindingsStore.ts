@@ -16,6 +16,8 @@ import { bindingFor, type ResolvedBindings } from './keymap.ts'
 import { displayChord } from './keys.ts'
 
 export const KEYBINDINGS_EVENT = 'mux:keybindings'
+/** Request a fresh host-resolved map after a preset or rule edit. */
+export const KEYBINDINGS_REFRESH_EVENT = 'mux:keybindings-refresh'
 
 export type KeymapSnapshot = {
   bindings: Readonly<ResolvedBindings>

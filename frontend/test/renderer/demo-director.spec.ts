@@ -20,6 +20,8 @@ const START_TIMEOUT = 30_000
 type DirectorHandle = {
   snapshot: () => {
     running: boolean
+    held: boolean
+    acting: boolean
     index: number
     total: number
     scenarioId: string
@@ -67,12 +69,62 @@ test('the scenario menu leads with the walkthrough', async ({ page }) => {
   const menu = await page.evaluate(() => window.__demoDirector!.scenarios())
   expect(menu[0].id).toBe('tour')
   expect(menu.map(item => item.id)).toEqual([
-    'tour', 'queue', 'orchestrate', 'preview', 'land', 'palette', 'keymap', 'voice',
+    'tour', 'status', 'input', 'attachment', 'clipboard', 'history', 'queue', 'orchestrate', 'preview', 'land', 'landfailure', 'palette', 'keymap', 'voice',
   ])
   // Every entry has a label a dropdown can show; an id is not a label. The wording itself
   // is checked in `tests/test_demo_scenario_menu.py`, which also holds the landing page's
   // hand-written copy of this list to the same one.
   for (const entry of menu) expect(entry.label.length).toBeGreaterThan(3)
+})
+
+test('a toolbar preset immediately controls physical keyboard input', async ({ page }) => {
+  const failures = await open(page, 'deterministic=1')
+  const keys = page.locator('.demo-keymaps')
+  await keys.getByRole('button', { name: 'tmux', exact: true }).click()
+  await expect(keys.locator('.demo-keymap-hint')).toContainText('Ctrl+B')
+  const before = await page.locator('.pane-stack').count()
+  await page.keyboard.press('Control+b')
+  await page.keyboard.press('Shift+5')
+  await expect(page.locator('.pane-stack')).toHaveCount(before + 1)
+  await keys.getByRole('button', { name: 'swe-mux', exact: true }).click()
+  await expect(keys.getByRole('button', { name: 'swe-mux', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  expect(failures).toEqual([])
+})
+
+test('image paste reaches the attachment UI without uploading to a server', async ({ page }) => {
+  const requests: string[] = []
+  page.on('request', request => { if (request.url().includes('/api/')) requests.push(request.url()) })
+  const failures = await open(page, 'deterministic=1&scenario=attachment')
+  await expect(page.locator('.terminal-pane.focused')).toContainText('[image: cart.png]', { timeout: 25_000 })
+  expect(requests).toEqual([])
+  expect(failures).toEqual([])
+})
+
+test('paused playback steps once and a failed landing queues the failure', async ({ page }) => {
+  const failures = await open(page, 'deterministic=1&scenario=landfailure')
+  await page.waitForFunction(() => window.__demoDirector?.snapshot().running === true)
+  await page.getByRole('button', { name: 'Pause walkthrough', exact: true }).click()
+  const held = await page.evaluate(() => window.__demoDirector!.snapshot().index)
+  // This is a negative quiet window: a paused director must not advance by time.
+  await page.waitForTimeout(1_000)
+  expect(await page.evaluate(() => window.__demoDirector!.snapshot().index)).toBe(held)
+  for (let index = held; index < 5; index++) {
+    await page.waitForFunction(() => !window.__demoDirector!.snapshot().acting)
+    await page.getByRole('button', { name: 'Next', exact: true }).click()
+    await page.waitForFunction(previous => window.__demoDirector!.snapshot().index === previous + 1, index)
+    expect(await page.evaluate(() => window.__demoDirector!.snapshot().held)).toBe(true)
+  }
+  const result = await page.evaluate(async () => {
+    const landing = await (await fetch('/api/land?project_id=p-rocket')).json()
+    const queue = await (await fetch('/api/queue/messages?target_session_id=s-working')).json()
+    return { landing, queue }
+  })
+  expect(result.landing.requests.some((row: { id: string; state: string }) => row.id === 'land-demo-failed' && row.state === 'failed')).toBe(true)
+  expect(JSON.stringify(result.queue)).toContain('Landing stopped: the coupon expiry test failed')
+  await page.getByRole('button', { name: 'Replay walkthrough', exact: true }).click()
+  await page.waitForFunction(() => window.__demoDirector!.snapshot().index === 1)
+  expect(await page.evaluate(() => window.__demoDirector!.snapshot().held)).toBe(false)
+  expect(failures).toEqual([])
 })
 
 test('the walkthrough labels the parts of a session row', async ({ page }) => {

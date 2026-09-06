@@ -271,6 +271,10 @@ export const HELP_DOC_CONTENT: HelpDocContent[] = [
           {
             "kind": "p",
             "text": "Plus the AltGr hazard, which is any chord holding both Ctrl and Alt without Meta."
+          },
+          {
+            "kind": "p",
+            "text": "Preset or rule changes refresh the active keyboard map immediately. The periodic refresh remains a fallback."
           }
         ]
       }

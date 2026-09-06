@@ -1,5 +1,29 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { consumeInput, type LineState } from '../src/demo/terminalSim.ts'
+
+test('demo editing keeps multiline paste and Shift+Enter unsent', () => {
+  const line: LineState = { buffer: '' }
+  consumeInput(line, '\x1b[20')
+  assert.equal(consumeInput(line, '0~first\rsecond\x1b[201~').submitted, null)
+  assert.equal(line.buffer, 'first\nsecond')
+  assert.equal(consumeInput(line, '\x1b\rthird').submitted, null)
+  assert.equal(line.buffer, 'first\nsecond\nthird')
+  assert.equal(consumeInput(line, '\r').submitted, 'first\nsecond\nthird')
+})
+
+test('demo word deletion and cursor movement edit the draft instead of submitting', () => {
+  const line: LineState = { buffer: 'review the code' }
+  consumeInput(line, '\x17')
+  assert.equal(line.buffer, 'review the ')
+  consumeInput(line, 'flow\x1b[D\x1b[DXX')
+  assert.equal(line.buffer, 'review the flXXow')
+  consumeInput(line, '\x7f')
+  assert.equal(line.buffer, 'review the flXow')
+  const unicode: LineState = { buffer: 'a🙂' }
+  consumeInput(unicode, '\x7f')
+  assert.equal(unicode.buffer, 'a')
+})
 import {
   fixtureSeconds, mulberry32, nextOrdinal, resetOrdinals, DEMO_EPOCH_MS,
 } from '../src/demo/determinism.ts'

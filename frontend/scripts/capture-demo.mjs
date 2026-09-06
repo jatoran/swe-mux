@@ -26,9 +26,9 @@
  * same demo twice.
  */
 import { createReadStream } from 'node:fs'
-import { mkdir, rm, readdir, rename, stat, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, rename, stat, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:http'
-import { dirname, extname, join, resolve } from 'node:path'
+import { dirname, extname, join, resolve, relative, sep, isAbsolute } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { chromium } from 'playwright'
 
@@ -50,12 +50,15 @@ const MIME = {
   '.ico': 'image/x-icon',
   '.woff2': 'font/woff2',
   '.wasm': 'application/wasm',
+  '.mp3': 'audio/mpeg',
+  '.mp4': 'video/mp4',
+  '.webm': 'video/webm',
   '.map': 'application/json; charset=utf-8',
   '.txt': 'text/plain; charset=utf-8',
 }
 
 const SURFACES = {
-  desktop: { width: 1440, height: 900, deviceScaleFactor: 2 },
+  desktop: { width: 1280, height: 720, deviceScaleFactor: 2 },
   phone: { width: 390, height: 844, deviceScaleFactor: 3, isMobile: true, hasTouch: true },
 }
 
@@ -95,13 +98,13 @@ function parseArgs(argv) {
  * silently drive each other's build. Nothing here may collide with the operator's daemon
  * on 8765 either, which a hardcoded alternate would only postpone.
  */
-async function serveSite(port) {
+export async function serveSite(port = 0) {
   const server = createServer((request, response) => {
     const url = new URL(request.url, 'http://127.0.0.1')
     let path = decodeURIComponent(url.pathname)
     if (path.endsWith('/')) path += 'index.html'
     const file = join(SITE, path)
-    if (!file.startsWith(SITE)) { response.writeHead(403).end(); return }
+    if (relative(SITE, file).split(sep).includes('..')) { response.writeHead(403).end(); return }
     stat(file)
       .then(info => {
         if (!info.isFile()) throw new Error('not a file')
@@ -148,6 +151,10 @@ async function playOnce({ browser, origin, options, outDir, video }) {
     reducedMotion: 'no-preference',
     ...(video ? { recordVideo: { dir: outDir, size: { width: surface.width, height: surface.height } } } : {}),
   })
+  // Use the product's ordinary saved drawer-width preference for readable feature captures.
+  if (options.surface === 'desktop' && ['land', 'landfailure', 'history', 'clipboard'].includes(options.scenario)) {
+    await context.addInitScript(() => localStorage.setItem('mux.drawer.width.v1', '680'))
+  }
   const page = await context.newPage()
   const query = new URLSearchParams({
     deterministic: '1',
@@ -155,6 +162,7 @@ async function playOnce({ browser, origin, options, outDir, video }) {
     // Only the rig sets this: it draws a marker where a *real* press landed, which is
     // what makes a recorded interaction legible as one rather than as the UI twitching.
     highlightInput: '1',
+    capture: '1',
   })
   if (options.seed) query.set('seed', options.seed)
 
@@ -179,6 +187,7 @@ async function playOnce({ browser, origin, options, outDir, video }) {
       // A beat's act is performed after its caption is published, and the ghost cursor
       // takes ~0.6s to travel and press, so a still shot the instant the counter moves
       // catches the screen *before* the thing the caption describes. This waits it out.
+      await page.waitForFunction(() => !window.__demoDirector?.snapshot().acting, null, { timeout: 30_000 })
       await page.waitForTimeout(900)
       await page.screenshot({ path: join(outDir, name) })
       stills.push({ beat: view.index, of: view.total, say: view.say, file: name })
@@ -188,6 +197,8 @@ async function playOnce({ browser, origin, options, outDir, video }) {
     await page.waitForTimeout(120)
   }
 
+  const diagnostics = await page.evaluate(() => window.__demoDirector.diagnostics())
+  await writeFile(join(outDir, 'diagnostics.json'), JSON.stringify(diagnostics, null, 2))
   const fingerprint = await page.evaluate(() => window.__demoDirector.fingerprint())
   await page.close()
   await context.close()
@@ -205,12 +216,24 @@ async function playOnce({ browser, origin, options, outDir, video }) {
   return { fingerprint, stills, videoFile, failures }
 }
 
+async function archiveOutput(path) {
+  const project = resolve(here, '../..')
+  const local = relative(project, resolve(path))
+  if (!local || isAbsolute(local) || local.split(sep).includes('..')) {
+    throw new Error('Capture output must be a subdirectory of the project')
+  }
+  try { await stat(path) } catch (error) { if (error.code === 'ENOENT') return; throw error }
+  const trash = join(project, '.trash')
+  await mkdir(trash, { recursive: true })
+  await rename(path, join(trash, `capture-${Date.now()}-${Math.random().toString(36).slice(2)}`))
+}
+
 async function main() {
   const options = parseArgs(process.argv.slice(2))
   const { server, port } = await serveSite(options.port)
   const origin = `http://127.0.0.1:${port}`
   const outDir = join(options.out, `${options.scenario}-${options.surface}`)
-  await rm(outDir, { recursive: true, force: true })
+  await archiveOutput(outDir)
   await mkdir(outDir, { recursive: true })
 
   const browser = await chromium.launch({
@@ -239,7 +262,7 @@ async function main() {
           + `"${options.scenario}" produced different stores. See fingerprint-a/b.json.`,
         )
       }
-      await rm(secondDir, { recursive: true, force: true })
+      await archiveOutput(secondDir)
     }
 
     await writeFile(join(outDir, 'manifest.json'), `${JSON.stringify({
@@ -266,7 +289,7 @@ async function main() {
   }
 }
 
-main().catch(error => {
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main().catch(error => {
   process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`)
   process.exitCode = 1
 })

@@ -175,7 +175,7 @@ class FakePtySocket extends FakeSocketBase {
     if (!this.hasComposer) return
     const info = this.composerInfoNow(working)
     if (!info) return
-    this.deliverBytes(composerFrame(info, lineStateFor(this.sessionId).buffer))
+    this.deliverBytes(composerFrame(info, lineStateFor(this.sessionId).buffer, lineStateFor(this.sessionId).cursor))
   }
 
   /** Repaint after a keystroke or a state change, in place. */
@@ -183,7 +183,7 @@ class FakePtySocket extends FakeSocketBase {
     if (!this.replayed || !this.hasComposer) return
     const info = this.composerInfoNow(working)
     if (!info) return
-    this.deliverBytes(redrawComposer(info, lineStateFor(this.sessionId).buffer))
+    this.deliverBytes(redrawComposer(info, lineStateFor(this.sessionId).buffer, lineStateFor(this.sessionId).cursor))
   }
 
   protected override opened(): void {
@@ -574,6 +574,7 @@ onMutation((mutation, local) => {
   // too: the transcript reader refreshes on `transcript_message` by name, and a
   // mirrored mutation that only produced `demo_state_changed` would leave the second
   // frame's reader a turn behind the pane it is sitting next to.
+  if (mutation.kind === 'keymap-preset') broadcastEvent('configuration_changed', '')
   if (mutation.kind === 'transcript-append') {
     broadcastEvent('transcript_message', mutation.id)
     if (mutation.message.role === 'assistant') broadcastEvent('turn_ended', mutation.id)

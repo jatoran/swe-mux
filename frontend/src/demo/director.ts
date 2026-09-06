@@ -38,6 +38,8 @@
  * their own cursor - so real input draws nothing, except under `?highlightInput=1`, which
  * only the capture rig sets.
  */
+import { pasteExampleImage } from './imagePaste.ts'
+import { demoLog, demoDiagnostics } from './diagnostics.ts'
 import { apply, state } from './store.ts'
 import type { Show } from './callouts.ts'
 import { DEMO_EPOCH_MS, DEMO_SEED, DETERMINISTIC } from './determinism.ts'
@@ -102,6 +104,8 @@ function onBeatSubject(target: Element): boolean {
 
 export type DirectorSnapshot = {
   running: boolean
+  held: boolean
+  acting: boolean
   scenarioId: string
   blurb: string
   /** 1-based, for the card's counter. */
@@ -145,7 +149,7 @@ export type DirectorSnapshot = {
 }
 
 const EMPTY: DirectorSnapshot = {
-  running: false, scenarioId: '', blurb: '', index: 0, total: 0,
+  running: false, held: false, acting: false, scenarioId: '', blurb: '', index: 0, total: 0,
   eyebrow: '', say: '', body: [], card: 'caption', gesture: null, spotlight: null,
   pointer: null, press: 0, echo: null, show: null, showSeq: 0, paused: null,
 }
@@ -182,6 +186,7 @@ let cutWait: (() => void) | null = null
 /** Where the run currently is, so an interruption knows what to offer back. */
 type Playing = { scenarioId: string; label: string; beats: Beat[]; index: number }
 let playing: Playing | null = null
+let changeDwell: (() => void) | null = null
 /** The run a visitor's own press ended, held until they resume it or dismiss it. */
 let resumable: Playing | null = null
 /** Set once the nudge has played or been refused, for the life of this page. */
@@ -218,18 +223,40 @@ async function pause(ms: number): Promise<boolean> {
  */
 async function dwell(ms: number): Promise<boolean> {
   const mine = token
-  if (ms > 0) {
+  if (ms > 0 || snapshot.held) {
     await new Promise<void>(resolve => {
+      let remaining = ms
+      let started = 0
+      let timer: number | undefined
       const done = (): void => {
         window.clearTimeout(timer)
+        changeDwell = null
         cutWait = null
         resolve()
       }
-      const timer = window.setTimeout(done, ms)
+      const schedule = (): void => {
+        window.clearTimeout(timer)
+        if (started) remaining = Math.max(0, remaining - (Date.now() - started))
+        started = 0
+        if (!snapshot.held) {
+          started = Date.now()
+          timer = window.setTimeout(done, remaining)
+        }
+      }
       cutWait = done
+      changeDwell = schedule
+      schedule()
     })
   }
   return mine === token
+}
+
+/** Pause between complete actions. Next advances one beat while remaining paused. */
+export function togglePlayback(): void {
+  if (!snapshot.running) return
+  publish({ held: !snapshot.held })
+  demoLog(snapshot.held ? 'scenario_paused' : 'scenario_resumed', snapshot.scenarioId)
+  changeDwell?.()
 }
 
 /** Move the ghost cursor onto a control and press it, so a scripted act is legible as
@@ -285,9 +312,14 @@ async function typeIntoField(
 }
 
 async function perform(beat: Beat): Promise<boolean> {
+  const mine = token
   // The daemon's half first: a beat that both mutates and presses is describing an act
   // whose consequence the press then reveals, never the other way round.
   beat.mutate?.()
+  if (beat.pasteImage) {
+    await pasteExampleImage(() => mine === token)
+    if (mine !== token) return false
+  }
   if (beat.type && !(await typeInto(beat.type))) return false
   if (beat.command) {
     const ok = await pressAt(firstVisible(beat.spotlight), () => runCommand(beat.command!))
@@ -338,11 +370,13 @@ async function play(
       gesture: beat.gesture ?? null,
       spotlight: beat.spotlight ?? null,
       pointer: null,
-      show: show ?? null,
+      show: show ? { ...show, reveal: show.reveal === 'walk' ? 'walk' : 'blueprint', shimmer: undefined, sweep: undefined, crt: false } : null,
       showSeq: show ? snapshot.showSeq + 1 : snapshot.showSeq,
     })
     if (index === from && !actOnFirst) continue
+    publish({ acting: true })
     if (!(await perform(beat))) return
+    publish({ acting: false })
   }
   // The last beat needs a dwell of its own, because the loop's dwell belongs to the beat
   // *after* it. Without this the closing card is published and the run stops in the same
@@ -367,6 +401,7 @@ async function play(
  */
 export function stop(reason: 'finished' | 'interrupted' | 'dismissed' | 'replaced'): void {
   if (!snapshot.running && reason !== 'dismissed') return
+  demoLog('scenario_stopped', snapshot.scenarioId, reason)
   token += 1
   cutWait?.()
   cutWait = null
@@ -430,7 +465,8 @@ export function dismissResume(): void {
  */
 export async function start(scenarioId: string): Promise<boolean> {
   const scenario = scenarioById(scenarioId)
-  if (!scenario) return false
+  if (!scenario) { demoLog('scenario_unknown', scenarioId, undefined, true); return false }
+  demoLog('scenario_started', scenarioId)
   stop('replaced')
   const mobile = narrow()
   if (!(await requestDirectorLead(mobile))) return false
@@ -508,7 +544,7 @@ export function installDirector(): void {
    * the machine is busy and gives no way to say which beat a still belongs to.
    */
   ;(window as unknown as Record<string, unknown>).__demoDirector = {
-    start, stop, scenarios: scenarioMenu, snapshot: directorSnapshot,
+    start, stop, advance: advanceBeat, togglePlayback, replay: () => start(snapshot.scenarioId), diagnostics: demoDiagnostics, scenarios: scenarioMenu, snapshot: directorSnapshot,
     fingerprint: demoFingerprint,
   }
 
@@ -523,7 +559,7 @@ export function installDirector(): void {
     // exact bug the walkthrough's `interruptible: false` used to hide. `stop` needs no
     // exception here because it stops the run either way.
     const target = event.target instanceof Element ? event.target : null
-    if (target?.closest('.demo-director')) return
+    if (target?.closest('.demo-director, .demo-bar')) return
     lastRealInput = Date.now()
     if (HIGHLIGHT_INPUT && event instanceof PointerEvent) {
       publish({ echo: { x: event.clientX, y: event.clientY, seq: (snapshot.echo?.seq ?? 0) + 1 } })

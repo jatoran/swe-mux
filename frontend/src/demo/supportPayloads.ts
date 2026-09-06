@@ -410,7 +410,7 @@ const ACCOUNTS: DemoAccount[][] = [
       fable: null, verified: true,
     },
     {
-      suffix: 'team', label: 'meme-garden team', email: 'bots@meme-garden.invalid',
+      suffix: 'team', label: 'content-garden team', email: 'bots@content-garden.invalid',
       organization: 'Meme Garden', plan: 'Business',
       session: 88, weekly: 53, resetsIn: 17, weeklyResetsIn: 24 * 60 + 15 * 60,
       fable: null, verified: false,

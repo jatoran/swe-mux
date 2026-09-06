@@ -19,7 +19,7 @@ import type { DemoLandRequest, DemoNote, DemoState } from './store.ts'
 import { initialTimelines, initialTranscripts } from './conversation.ts'
 import {
   claudeScrollback, codexScrollback, composerInfo, rageScrollback,
-  shellScrollback, spawnScrollback, vibeScrollback, workingScrollback,
+  shellScrollback, spawnScrollback, vibeScrollback, workingScrollback, awaitingScrollback,
   type ComposerInfo,
 } from './terminalSim.ts'
 
@@ -37,7 +37,7 @@ export const DEMO_PROJECT_ID = 'p-rocket'
 export const DEMO_PROJECT2_ID = 'p-garden'
 export const DEMO_PREVIEW_ID = 'demo-preview'
 export const DEMO_ROOT = '/code/rocket-shop'
-export const DEMO_ROOT2 = '/code/meme-garden'
+export const DEMO_ROOT2 = '/code/content-garden'
 /** Linked checkouts of the first Project, so the Git tab's Map has more than one
  *  row and a couple of them have a live session standing in them. */
 export const DEMO_WORKTREE_COUPON = '/code/.worktrees/coupon-table'
@@ -184,7 +184,7 @@ const SESSIONS: Session[] = [
     ageSeconds: 2 * 3600,
   }),
   makeSession({
-    id: 's-rage', name: 'prod is down (4h)', project: DEMO_PROJECT_ID,
+    id: 's-rage', name: 'review checkout flow', project: DEMO_PROJECT_ID,
     backend: 'claude', state: 'idle', model: 'claude-opus-4-8',
     tokens: 187400, cost: 6.42, contextPct: 0.86, turnSeq: 31, workedMs: 71 * 60_000,
     ageSeconds: 4 * 3600 + 12 * 60,
@@ -211,20 +211,20 @@ const SESSIONS: Session[] = [
     backend: 'shell', state: 'running', ageSeconds: 40 * 60,
   }),
   makeSession({
-    id: 's-garden', name: 'water the memes', project: DEMO_PROJECT2_ID,
+    id: 's-garden', name: 'refresh content indexes', project: DEMO_PROJECT2_ID,
     backend: 'claude', state: 'idle', model: 'claude-opus-4-8',
     tokens: 9800, cost: 0.31, contextPct: 0.09, turnSeq: 1, ageSeconds: 20 * 60,
     cwd: DEMO_ROOT2, git: GARDEN_GIT,
   }),
   makeSession({
-    id: 's-vibe', name: 'make it work', project: DEMO_PROJECT2_ID,
+    id: 's-vibe', name: 'review search results', project: DEMO_PROJECT2_ID,
     backend: 'codex', state: 'idle', model: 'gpt-demo',
     tokens: 64300, cost: 1.97, contextPct: 0.67, turnSeq: 9, workedMs: 23 * 60_000,
     ageSeconds: 70 * 60, cwd: DEMO_ROOT2, git: GARDEN_GIT,
   }),
   makeSession({
-    id: 's-migrate', name: 'migrate the meme schema', project: DEMO_PROJECT2_ID,
-    backend: 'codex', state: 'working', model: 'gpt-demo',
+    id: 's-migrate', name: 'migrate the cache schema', project: DEMO_PROJECT2_ID,
+    backend: 'codex', state: 'awaiting', model: 'gpt-demo',
     tokens: 12750, cost: 0.38, contextPct: 0.44, turnSeq: 2, workedMs: 4 * 60_000,
     ageSeconds: 18 * 60, workingForSeconds: 402, cwd: DEMO_ROOT2, git: GARDEN_GIT,
   }),
@@ -297,7 +297,7 @@ const PROJECTS: Project[] = [
     },
   },
   {
-    id: DEMO_PROJECT2_ID, name: 'meme-garden', root: DEMO_ROOT2,
+    id: DEMO_PROJECT2_ID, name: 'content-garden', root: DEMO_ROOT2,
     position: 1, group_id: null, layout: P2_LAYOUT, layout_revision: 1,
     sidebar_visible: true, created_at: now - 9 * 86400, last_used_at: now - 7200,
     last_activity: now - 1200, history_count: 3, root_available: true,
@@ -338,7 +338,7 @@ const NOTES: DemoNote[] = [
   {
     note_id: 'n-ideas', project_id: DEMO_PROJECT2_ID, title: 'ideas',
     revision: 1, updated_at: now - 86400,
-    content: '# ideas\n\n- a garden, but memes\n- that is the whole idea\n',
+    content: '# ideas\n\n- improve empty search results\n- preserve IDs in the cache migration\n',
   },
 ]
 
@@ -695,7 +695,7 @@ function demoDeviceSettings(): Record<string, Record<string, unknown>> {
 export const DEMO_DIALOG_ID = 'dlg-demo'
 
 /** Bump when the seed shape changes so persisted visitor state is discarded. */
-export const DEMO_STATE_VERSION = 18
+export const DEMO_STATE_VERSION = 19
 
 export function initialDemoState(): DemoState {
   return {
@@ -726,7 +726,7 @@ export function initialDemoState(): DemoState {
       's-shell': shellScrollback(),
       's-garden': spawnScrollback(composerFor('s-garden')),
       's-vibe': vibeScrollback(),
-      's-migrate': workingScrollback(composerFor('s-migrate'), 'migrate the meme schema to v3, keep the old ids'),
+      's-migrate': awaitingScrollback(),
     },
     transcripts: initialTranscripts(now),
     timelines: initialTimelines(now),

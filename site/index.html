@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <title>swe-mux</title>
-<meta name="description" content="A multiplexer for coding agents. Real terminals, persistent sessions, Tailscale-native, and the same interface on your phone. Runs on your own machine: no vendor backend, no relay, no account." />
+<meta name="description" content="Run coding agents together. See which ones need you, use familiar shortcuts, and keep working from desktop or phone with voice, shared history and approved branch landing." />
 <meta name="color-scheme" content="dark" />
 <!-- Dark Reader's documented opt-out. This page ships its own dark theme, defaults to the
      visitor's `prefers-color-scheme`, and gates every text token on tools/contrast.py - so an
@@ -649,6 +649,37 @@ footer .social svg { width: 15px; height: 15px; fill: currentColor; display: blo
 
 @media (max-width: 700px) { body { font-size: 15px; }
                             .flat span, .half p, .shotpair .claims li { font-size: 14px; } }
+
+/* Feature examples share the demo's handset proportions and keep UI text readable. */
+.hero .sub { max-width: 850px; }
+.hero-facts { color: var(--fg-2); margin: 0 0 20px; }
+.demo-disclosure { padding: 8px 12px; margin: 0; color: var(--fg-2); font: 13px/1.5 var(--sans); border-top: 1px solid var(--line); }
+.demo-keymap-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 8px 12px; border-top: 1px solid var(--line); font-size: 12px; }
+.demo-keymap-bar[hidden] { display: none; }
+.demo-keymap-buttons { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+.demo-keymap-bar button, .sound-examples button { font: inherit; color: var(--fg-2); background: var(--panel); border: 1px solid var(--line-2); padding: 5px 9px; cursor: pointer; }
+.demo-keymap-bar button[aria-pressed="true"] { color: var(--green); border-color: var(--green); }
+#demokeymaphint { color: var(--fg-2); }
+.showcase { margin: 24px 0; border: 1px solid var(--line-2); background: var(--panel); overflow: hidden; }
+.showcase img, .showcase video { width: 100%; height: auto; display: block; }
+.showcase-pair { display: grid; grid-template-columns: minmax(0, 360px) minmax(0, 1fr); gap: 40px; align-items: center; }
+.handset { position: relative; padding: 22px 8px 17px; border: 2px solid var(--line-2); border-radius: 34px; background: var(--panel-2); max-width: 360px; justify-self: center; }
+.handset::before { content: ''; position: absolute; width: 48px; height: 5px; background: var(--fg-3); top: 8px; left: calc(50% - 24px); border-radius: 4px; }
+.handset::after { content: ''; position: absolute; width: 75px; height: 4px; background: var(--fg-3); bottom: 6px; left: calc(50% - 37px); border-radius: 4px; }
+.handset img, .handset video { border-radius: 22px; }
+.voice-example { padding: 20px; border: 1px solid var(--line-2); margin-bottom: 22px; }
+.voice-example h3 { margin: 0 0 8px; }
+.voice-example p { font-family: var(--sans); color: var(--fg-2); }
+.voice-example audio { display: block; width: min(100%, 460px); margin: 12px 0; }
+.voice-example summary { cursor: pointer; }
+.sound-examples { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; font: 13px/1.5 var(--sans); }
+@media(max-width:760px) {
+  .demo-keymap-bar { display: none; }
+  .showcase-pair { grid-template-columns: minmax(0,1fr); gap: 8px; }
+  .handset { max-width: 100%; padding: 0; border-radius: 0; border-width: 1px; }
+  .handset::before, .handset::after { display: none; }
+  .handset img, .handset video { border-radius: 0; }
+}
 </style>
 </head>
 <body>
@@ -707,15 +738,12 @@ footer .social svg { width: 15px; height: 15px; fill: currentColor; display: blo
 <!-- ================================================================== HERO -->
 <section class="hero">
   <div class="wrap">
-    <!-- The two claims that are not commodity in this category: a record read from the
-         work, and landing behind an approved check. The portability claim lives in the kick
-         line above the headline, so the H1 is the claim and nothing else. "Mission control
-         for your coding-agent fleet" survives as a brand tagline in the footer and is
-         deliberately not the explanatory claim here. -->
-    <div class="kick">Use your same workflow across every harness</div>
-    <h1>A multiplexer for coding agents.<span class="cur"></span></h1>
-    <p class="sub"><b>Real terminals, persistent sessions, Tailscale-native.</b><br />
-      Optimized for mobile: <span class="go">ship from anywhere.</span></p>
+    <div class="kick">A local workspace for the coding agents you already run</div>
+    <h1>Run your coding agents together.<br />Know which ones need you.<span class="cur"></span></h1>
+    <p class="sub">Keep Claude Code, Codex and other coding agents side by side, with live status,
+    flexible panes and messages between sessions. Work from your <b>desktop or phone</b>.
+    Dictate prompts, hear replies, and ask the assistant what needs attention.</p>
+    <p class="hero-facts">Real terminals. Persistent sessions. Your own machine and subscriptions.</p>
     <div class="ic">
       <div class="ic-head">
         <div class="ic-tabs" role="tablist" aria-label="Install method">
@@ -756,24 +784,30 @@ footer .social svg { width: 15px; height: 15px; fill: currentColor; display: blo
           <button class="demo-tab" type="button" role="tab" data-view="both" aria-selected="false">both</button>
         </div>
         <label class="demo-pick" for="demoscenario"><span class="demo-pick-label">scenarios</span>
-          <select id="demoscenario" title="Play a scripted run inside the demo. It drives itself; touch anything to take over.">
-            <!-- These have to match `SCENARIOS` in frontend/src/demo/scenarios.ts by id;
-                 the labels are duplicated here because this page is static and does not
-                 load the demo's bundle. Each one names a thing a developer wants rather
-                 than the mechanism behind it: nobody clicks "one field finds everything". -->
-            <option value="">scenarios</option>
-            <option value="tour">Take the tour of the whole interface</option>
-            <option value="queue">Queue a prompt behind a running turn</option>
-            <option value="orchestrate">Let an agent ask for two more, and approve it</option>
-            <option value="preview">Open your dev server as a pane</option>
-            <option value="land">Land a worktree branch on the trunk</option>
-            <option value="palette">Find any command or session by name</option>
-            <option value="keymap">Bring your tmux keybindings with you</option>
-            <option value="voice">Ask the fleet what is blocked</option>
-          </select></label>
-        <a class="demo-full" href="demo/" title="Open the demo as its own page. On a phone that is the only place the keyboard behaves, because an embedded frame cannot measure one.">full screen ⤢</a>
+          <select id="demoscenario" title="Play a scripted run inside the demo. It drives itself; touch anything to take over."><option value="">Choose a walkthrough</option>
+<option value="tour">Take a tour of the workspace</option>
+<option value="status">See which agent needs you</option>
+<option value="input">See familiar editing keys in an agent prompt</option>
+<option value="attachment">See an image pasted into an agent prompt</option>
+<option value="clipboard">Open your shared clipboard history</option>
+<option value="history">Find earlier sessions and inspect their work</option>
+<option value="queue">Queue a prompt behind a running turn</option>
+<option value="orchestrate">Let agents request help and report back</option>
+<option value="preview">Open your dev server as a pane</option>
+<option value="land">Land a branch behind your approved checks</option>
+<option value="landfailure">See what happens when a check fails</option>
+<option value="palette">Find any command or session by name</option>
+<option value="keymap">Switch to familiar keyboard shortcuts</option>
+<option value="voice">Ask the assistant what needs you</option></select></label>
+        <a class="demo-full" href="demo/" title="Open the demo as its own page. Use this view to try the terminal keyboard on a phone.">open demo ⤢</a>
         <button class="demo-reset" type="button" id="demoreset" title="Discard everything you changed in the demo and start it fresh">reset</button>
       </div>
+      <div class="demo-keymap-bar" id="demokeymaps" role="group" aria-label="Try a keyboard preset">
+        <span>Try your keys</span><span class="demo-keymap-buttons"></span>
+        <span id="demokeymaphint" role="status">Click a pane to try the keyboard. Browser shortcuts still apply.</span>
+      </div>
+      <p class="demo-disclosure">The real interface with simulated agent activity. No install, account or provider connection.
+      <a href="demo/">Open demo</a> to try the terminal keyboard on a phone.</p>
       <div class="demo-stage" id="demostage" data-view="desktop">
         <div class="demo-frame demo-desktop"><iframe title="Interactive swe-mux demo, desktop layout. Simulated sessions; nothing connects to a real daemon." data-src="demo/" loading="lazy"></iframe></div>
         <div class="demo-frame demo-phone"><div class="demo-phone-screen"><iframe title="Interactive swe-mux demo, phone layout. The same simulated fleet as the desktop frame." data-src="demo/" loading="lazy"></iframe></div></div>
@@ -781,325 +815,118 @@ footer .social svg { width: 15px; height: 15px; fill: currentColor; display: blo
     </div>
   </div>
 
-  <div class="wrap">
-
-    <!-- The desktop-plus-phone composite that used to stand here is gone, and for the same
-         reason the hero film went before it: the interactive demo sits a few hundred pixels
-         above, running the real interface in the visitor's own browser, with a view toggle
-         that puts the phone layout on screen for real. A still of the thing you can already
-         drive is not evidence, it is a second copy - and this one was two large images
-         arguing a case the demo has already made on the way past. -->
-    <div class="halves shotgap">
-      <div class="half ade">
-        <h3>The workbench</h3>
-        <p>Sessions, panes, tabs, notes, files, git, previews, a Run menu you define. Everything
-        you look at.</p>
-      </div>
-      <div class="half acp">
-        <h3>The control plane</h3>
-        <p>Deterministic evidence, model-free detectors, ranked incidents, an interrupt budget, a
-        return path agents can read. Decides <em>what</em> you look at.</p>
-      </div>
-    </div>
-    <p class="halves-note"><b>The second is only buildable on top of the first.</b> You cannot
-    measure a fleet whose terminals, shells, and input telemetry you do not own.</p>
-  </div>
 </section>
-
-
-<!-- ================================================================ MOBILE -->
-<section class="sec" id="mobile">
-  <div class="wrap">
-    <div class="head"><span class="n">01</span><h2>The whole workspace, on your phone</h2><span class="fill"></span></div>
-    <p class="intro">Live terminals, git review, the Markdown editor, files, the queue, previews,
-    the Run menu, lock-screen push. <b>No feature exists on the desktop and not on the phone.</b>
-    What is desktop-only is hidden terminal pre-warming, the collapsed sidebar rail, and keyboard
-    chords a phone cannot produce. Other orchestrators' phone clients watch; their own pages call
-    them companions.</p>
-
-    <div class="shotpair">
-      <figure class="shot">
-        <video src="img/loop-mobile.mp4" width="402" height="874"
-               autoplay muted loop playsinline preload="metadata"
-               aria-label="On a phone, silent: an alert naming the session and the reason it was
-                           raised, with the held-back digest beneath it, then the agent session
-                           behind it."></video>
-      </figure>
-      <ul class="claims">
-        <li><span><b>The actual terminal.</b> Not a rendered chat log. The real TUI, with the diff
-        colours, the picker, and the approval prompt as the CLI drew them.</span></li>
-        <li><span><b>One session, several devices, exactly one writer.</b> Input ownership is arbitrated
-        and the size negotiated, so the desktop does not fight the phone over the same
-        PTY.</span></li>
-        <li><span><b>A projection, not a second layout.</b> The phone flattens the same workspace
-        tree into one rail. There is no separate mobile build to drift.</span></li>
-        <li><span><b>Your dev server, on your phone.</b> A listener a session owns is proxied
-        through swe-mux's own URL, so <code>127.0.0.1:5173</code> opens from the couch with no
-        port exposed anywhere.</span></li>
-        <li><span><b>No relay.</b> It reaches your machine over your own tailnet. No swe-mux
-        login, and no backend this project operates.</span></li>
-      </ul>
-    </div>
-  </div>
-</section>
-
-<!-- ============================================================= NORMALIZE -->
-<section class="sec" id="normalize">
-  <div class="wrap">
-    <div class="head"><span class="n">02</span><h2>Every harness, and every shell</h2><span class="fill"></span></div>
-    <p class="intro"><b>Anything that runs in a terminal runs here, unchanged.</b> PowerShell, CMD,
-    Git Bash, WSL, bash, zsh, vim, lazygit, an agent CLI that shipped this morning and has never
-    heard of swe-mux. Real pseudoterminals, real signals, real Unicode widths, real bracketed paste.
-    A harness swe-mux does not recognize still works; you just do not get the layer on top, and
-    adding one is a descriptor and an adapter rather than a branch through every feature.</p>
+<section class="sec" id="fleet"><div class="wrap">
+    <div class="head"><span class="n">01</span><h2>Know which agent needs you</h2><span class="fill"></span></div>
+    <p class="intro">See who is working, waiting for approval, or blocked. Notifications name the session and the reason, so you can respond without watching every pane.</p>
+    <figure class="showcase "><video width="1440" height="810" poster="img/showcase-status.webp"
+      controls muted loop playsinline preload="none" data-autoplay aria-label="Simulated agent status and an alert naming the session that needs a decision.">
+      <source src="img/showcase-status.webm" type="video/webm" /><source src="img/showcase-status.mp4" type="video/mp4" />
+      <p>Simulated agent status and an alert naming the session that needs a decision.</p></video></figure>
+    <p class="note">Choose a sound and push notification for each event. Set quiet hours and separate Desktop and Mobile preferences.
+    The alert history stays readable when delivery is muted. <a href="docs/status/">Status and alerts</a></p>
+    <div class="sound-examples"><span>Preview a notification sound</span>
+    <button type="button" data-sound="two-tone">Two Tone</button><button type="button" data-sound="gentle">Ding</button>
+    <span role="status" id="soundstatus"></span><a href="img/LICENSE.notification-sounds.txt">Sound credits</a></div>
+  </div></section>
+<section class="sec" id="mobile"><div class="wrap">
+    <div class="head"><span class="n">02</span><h2>Keep working from your phone</h2><span class="fill"></span></div>
+    <p class="intro">Use the terminal, review changes, edit files and respond to agents from the same workspace. Mobile has its own touch controls and layout, with your desktop arrangement kept intact.</p>
+    <div class="showcase-pair"><figure class="showcase handset"><video width="390" height="844" poster="img/showcase-phone.webp"
+      controls muted loop playsinline preload="none" data-autoplay aria-label="The phone demo opens a waiting session and its tools.">
+      <source src="img/showcase-phone.webm" type="video/webm" /><source src="img/showcase-phone.mp4" type="video/mp4" />
+      <p>The phone demo opens a waiting session and its tools.</p></video></figure>
+    <ul class="claims">
+      <li><span><b>The same sessions.</b> Continue a conversation from either device. Input ownership keeps two devices from typing over each other.</span></li>
+      <li><span><b>The tools you use at your desk.</b> Terminals, Git review, notes, files, prompt queues and previews.</span></li>
+      <li><span><b>Your preview travels with you.</b> Open a local dev server through swe-mux without exposing another port.</span></li>
+      <li><span><b>Your own connection.</b> Reach your machine over Tailscale. No swe-mux account or vendor-operated relay.</span></li>
+    </ul></div><p class="note"><a href="docs/phone/">Connect your phone</a>. HTTPS enables microphone and clipboard APIs; push also needs browser permission.</p>
+  </div></section>
+<section class="sec" id="voice"><div class="wrap">
+    <div class="head"><span class="n">03</span><h2>Talk to your agents. Ask the assistant.</h2><span class="fill"></span></div>
+    <p class="intro">Dictate a prompt, hear an agent reply, or ask which sessions need your attention. Voice works from desktop and phone, with separate controls for listening and playback.</p>
+    <figure class="showcase "><video width="1440" height="810" poster="img/showcase-voice.webp"
+      controls muted loop playsinline preload="none" aria-label="A scripted assistant conversation identifies a waiting session and proposes a queued message.">
+      <source src="img/showcase-voice.webm" type="video/webm" /><source src="img/showcase-voice.mp4" type="video/mp4" />
+      <p>A scripted assistant conversation identifies a waiting session and proposes a queued message.</p></video></figure>
+    <div class="voice-example"><h3>Hear an assistant example</h3>
+    <p>A recorded exchange using local Windows speech synthesis. The interactive example uses scripted messages.</p>
+    <audio controls preload="none" aria-label="Recorded assistant example"><source src="img/assistant-example.mp3" type="audio/mpeg" /></audio>
+    <details><summary>Read the audio transcript</summary><p>You: Mux, what needs my attention?</p>
+    <p>Assistant: One session is waiting for your decision about cache invalidation. Two other agents are working. Open the waiting session to read the question.</p></details></div>
     <ul class="flat">
-      <li><b>Input</b><span>Newline, submit, paste, copy, and caret placement behave the same in every CLI. Each harness's measured composer quirks live in one resolver.</span></li>
-      <li><b>Status</b><span>One vocabulary across vendors: working, ready, awaiting approval, blocked. Derived from hooks, then transcript, then PTY, then the CLI's own state.</span></li>
-      <li><b>Transcripts</b><span>One reader over every conversation format, including the store-backed ones that are not files at all.</span></li>
-      <li><b>History</b><span>One search box over every conversation any supported harness has written on this machine, and resume back into any of them.</span></li>
-      <li><b>Accounts</b><span>One switcher and one quota view across providers. Saved accounts, login swap, per-account reset windows, usage that survives the switch.</span></li>
-    </ul>
-    <p class="note">Native transcripts are never moved, rewritten, or deleted. The searchable copy
-    is a local derivative you can throw away and rebuild.</p>
-  </div>
-</section>
-
-<!-- ================================================================= FLEET -->
-<section class="sec" id="fleet">
-  <div class="wrap">
-    <div class="head"><span class="n">03</span><h2>Know which agent needs you</h2><span class="fill"></span></div>
-    <p class="intro">Every session carries a state you can trust: working, ready, awaiting approval,
-    or blocked, derived from provider hooks first, then the transcript, then the PTY, then the CLI's
-    own reported state. <b>Every transition is written to a durable ledger with the layer readings
-    that produced it</b>, so when a status looks wrong you can read exactly why it changed, hours
-    later. A watchdog catches sessions that stopped reporting.</p>
-    <div class="crops">
-      <figure class="shot d">
-        <video src="img/loop-fleet.mp4" width="1280" height="666"
-               autoplay muted loop playsinline preload="metadata"
-               aria-label="Silent, and nobody typing: three agents starting in three worktrees,
-                           their status marks changing on their own."></video>
-      </figure>
-      <figure class="shot m">
-        <img src="img/mobile-nav.webp" width="1206" height="2622" loading="lazy" decoding="async"
-             alt="The same rows on a phone: two projects expanded with their session rows, each
-                  carrying a status dot, an elapsed time, and a model name." />
-      </figure>
-    </div>
-  </div>
-</section>
-
-<!-- =========================================================== PERSISTENCE -->
-<section class="sec" id="persistence">
-  <div class="wrap">
-    <div class="head"><span class="n">04</span><h2>Sessions that outlive the app itself</h2><span class="fill"></span></div>
-    <p class="intro">Every terminal is a pseudoterminal held by a supervisor process separate from
-    the daemon and from the UI. Close the browser, restart the daemon, <b>rebuild and redeploy the
-    whole desktop application</b>, and the agents keep working. The next daemon rediscovers the
-    supervisor and reattaches every live session from mirrored metadata plus a scrollback snapshot.
-    Reconnecting replays only the bytes you missed, so a phone that slept through a long turn comes
-    back to an intact buffer.</p>
-    <p class="intro">A supervisor cannot survive its own death: a crash, a force close, or a power
-    loss takes the processes with it. <b>Cold session recovery covers that</b>, bringing those
-    sessions back as readable, resumable rows carrying what they last printed.</p>
-    <div class="crops solo">
-      <figure class="shot d">
-        <video src="img/loop-restart.mp4" width="1280" height="720"
-               autoplay muted loop playsinline preload="metadata"
-               aria-label="Silent and uncut: a counter printing into a terminal runs straight
-                           through a daemon reload, the sequence numbers continuing on the far
-                           side of the restart rather than starting again."></video>
-      </figure>
-    </div>
-  </div>
-</section>
-
-<!-- ============================================================== WORKBENCH -->
-<section class="sec" id="workbench">
-  <div class="wrap">
-    <div class="head"><span class="n">05</span><h2>The workbench</h2><span class="fill"></span></div>
-    <p class="intro">One Project is one folder you register. It owns its sessions, layout, notes,
-    files, and history for their whole lifetime, and a terminal that wanders elsewhere with
-    <code>cd</code> never changes who owns it.</p>
+      <li><b>Dictation</b><span>Speak into a draft and send it to an agent or text surface. Speech recognition runs on your host machine.</span></li>
+      <li><b>Read aloud</b><span>Listen to replies or spoken summaries. Choose which sessions generate speech and which device plays it.</span></li>
+      <li><b>The assistant</b><span>Ask about your sessions and navigate by name. Actions follow the trust settings you choose; consequential actions require confirmation.</span></li>
+    </ul><p class="note">Voice is optional. Speech models download when requested. The assistant uses a configured model endpoint and your budget;
+    experimental Edge speech is a separate opt-in. <a href="docs/voice/">Voice setup</a></p>
+  </div></section>
+<section class="sec" id="normalize"><div class="wrap">
+    <div class="head"><span class="n">04</span><h2>Keep the same editing habits across agents</h2><span class="fill"></span></div>
+    <p class="intro">Use familiar shortcuts across supported agent inputs. Shift+Enter inserts a new line, Ctrl+Backspace deletes a word, and clicking positions the cursor in recognized composers.</p>
+    <figure class="showcase "><video width="1440" height="810" poster="img/showcase-input.webp"
+      controls muted loop playsinline preload="none" data-autoplay aria-label="Editing a simulated agent prompt, with the shortcut and input area highlighted.">
+      <source src="img/showcase-input.webm" type="video/webm" /><source src="img/showcase-input.mp4" type="video/mp4" />
+      <p>Editing a simulated agent prompt, with the shortcut and input area highlighted.</p></video></figure>
     <ul class="flat">
-      <li><b>Mixed workspace</b><span>A recursive split tree where every leaf holds its own tab stack: terminals, notes, files, dev-server previews, transcripts, history, queues. Panes and tabs are viewports, so closing one kills nothing.</span></li>
-      <li><b>Promotion in place</b><span>No backend picker. Type <code>claude</code> in a plain shell and the session promotes where it stands: same pane, same scrollback, now carrying a transcript, a status, a queue, and a context meter.</span></li>
-      <li><b>A Run menu you define</b><span>Imports your <code>tasks.json</code>, root <code>package.json</code> scripts, and its own <code>actions.toml</code>. Nothing runs until you approve that file's exact bytes, and any edit revokes the approval.</span></li>
-      <li><b>Prompt queue</b><span>Stage ordered messages against a conversation mid-turn. Durable across restarts, strict head-of-line, and bound to the first run so a cleared conversation strands the queue visibly instead of firing into a stranger.</span></li>
-      <li><b>Previews without exposed ports</b><span>A loopback listener a session owns becomes a Preview tab, proxied through swe-mux's own URL. HTTP and websocket both, so hot reload works from a phone.</span></li>
-      <li><b>Worktrees, atomically</b><span>Create the worktree, run your setup command, and start a session in its exact root as one operation. Worktrees stay git artifacts and never become sidebar rows.</span></li>
-    </ul>
-  </div>
-</section>
-
-<!-- =================================================================== GIT -->
-<section class="sec" id="git">
-  <div class="wrap">
-    <div class="head"><span class="n">06</span><h2>Git that knows which agent did it</h2><span class="fill"></span></div>
-    <p class="intro">Branch, HEAD, dirty count, upstream divergence, and lines changed against a
-    comparison ref you choose per Project, polled read-only so a status check never takes a lock in
-    a repository your agents are working in. Review changed files, annotate a diff line by line, and
-    send the comments back to the agent that wrote them. <b>Every commit carries durable
-    provenance</b>: which session and which conversation produced it, split into committer and
-    contributor, with a confidence level and the files each contributor's writes account for.</p>
-    <!-- Each capture sits under the claim it is evidence for rather than both being stacked at
-         the foot of the section: the map under provenance, the landing loop under the queue.
-         Both want the full measure - side by side they are 535px each, at which the branch rows
-         and the landing strip are decoration rather than evidence. -->
-    <div class="crops solo">
-      <figure class="shot d">
-        <img src="img/desktop-git.webp" width="2100" height="1275" loading="lazy" decoding="async"
-             alt="The Git drawer's worktree map: branch rows carrying ahead and behind counts and
-                  a commit provenance column." />
-      </figure>
-    </div>
-    <p class="intro" style="margin-top:26px">Finished branches land through a queue, one at a time.
-    It reconciles the branch with the trunk, runs the verification command whose exact bytes you
-    approved, and fast-forwards. <b>It decides nothing</b> - a conflict or a failed gate comes back
-    to the session that asked.</p>
-    <div class="crops solo">
-      <figure class="shot d">
-        <video src="img/loop-land.mp4" width="1280" height="720"
-               autoplay muted loop playsinline preload="metadata"
-               aria-label="Silent: the landing strip at the head of the worktree map, with the
-                           verification command named and marked approved, a branch queued behind
-                           it, and the row then turning to landed."></video>
-      </figure>
-    </div>
-  </div>
-</section>
-
-<!-- ================================================================= NOTES -->
-<section class="sec" id="notes">
-  <div class="wrap">
-    <div class="head"><span class="n">07</span><h2>Notes that are a real editor</h2><span class="fill"></span></div>
-    <p class="intro">A WYSIWYG Markdown editor built in house, not a textarea with a preview pane
-    bolted to it. Headings, lists, tables, code blocks, outline navigation, find, and a formatting
-    rail that works with a soft keyboard up. <b>Every note is an ordinary Markdown file in your
-    Project</b>, written with revision checks so two devices cannot clobber each other, and
-    gitignored by default. Send a selection straight to an agent, or have an agent write into the
-    same file and watch it update.</p>
-    <div class="crops">
-      <figure class="shot d">
-        <img src="img/desktop-notes.webp" width="2100" height="1275" loading="lazy" decoding="async"
-             alt="The note editor body cropped out of the drawer, showing rendered headings,
-                  nested lists, and a checkbox row." />
-      </figure>
-      <figure class="shot m">
-        <img src="img/mobile-notes.webp" width="1206" height="2622" loading="lazy" decoding="async"
-             alt="The same Markdown editor on a phone, with rendered document structure." />
-      </figure>
-    </div>
-  </div>
-</section>
-
-<!-- ================================================================= VOICE -->
-<section class="sec" id="voice">
-  <div class="wrap">
-    <div class="head"><span class="n">08</span><h2>Drive it without touching it</h2><span class="fill"></span></div>
-    <p class="intro"><b>Speech-to-text decodes on your own machine</b> in both shipped
-    configurations: faster-whisper by default (the <code>voice-local</code> extra, whose models
-    download once from Hugging Face and then run offline), or Windows Speech Recognition. There is
-    no cloud speech path and no browser fallback - without an engine, transcription returns a typed
-    error rather than sending audio anywhere. Dictate across natural pauses, navigate by spoken
-    coordinate, ask the fleet for status, approve a prompt, interrupt a run. Read aloud and
-    hands-free conversation are off until you turn them on.</p>
-    <p class="intro"><b>Push notifications reach your lock screen</b>, raised from normalized
-    lifecycle events - a turn completing, a session going ready, an approval or question, a failure,
-    a confirmed unexpected quota reset - rather than from terminal activity, with three rules holding
-    back the ones not worth interrupting for. The detector reads several layers, has explicit unknown
-    states, and resolves ambiguity to the conservative prior rather than to a guess.</p>
-  </div>
-</section>
-
-<!-- ========================================================= CONTROL PLANE -->
-<section class="sec" id="control">
-  <div class="wrap">
-    <div class="head"><span class="n">09</span><h2>The control plane</h2><span class="fill"></span></div>
-    <p class="intro">The agent CLIs are the data plane; they do the work. This layer observes,
-    records, and routes attention without ever sitting in an agent's execution path. <b>It never
-    types, approves, spawns, or edits anything</b>, and every write path ends at a human pressing
-    something. Capture and detection are deterministic and spend nothing; a model is reached for
-    only at the last mile, under a hard cap.</p>
-    <p class="intro"><b>Nothing here runs until you switch it on, per Project.</b> Every automation
-    below ships off, with one exception: a permission gate that reads nothing and spends nothing.
-    Before an agent can trigger a land, four separate things have to be true - the install-wide
-    switch, the Project's opt-in, an authority level raised from its default of "a human approves
-    the request", and a verification command whose exact bytes you approved.</p>
-
-    <div class="grouplabel">What it records <span>deterministic, no model, no tokens</span></div>
+      <li><b>Your keymap</b><span>Choose swe-mux, tmux, VS Code, Vim or Emacs shortcuts for workspace navigation. Try a preset in the desktop demo toolbar.</span></li>
+      <li><b>Image paste</b><span>Paste a screenshot from your clipboard into an agent that supports image attachments. You can also attach a file.</span></li>
+      <li><b>Shared clipboard history</b><span>Reuse text copied inside swe-mux from desktop or phone. Pin entries and optionally retain history across restarts.</span></li>
+    </ul><p class="note">Workspace keymaps and agent text editing are separate features. Browser-reserved shortcuts and individual CLI capabilities still apply.
+    Clipboard history records in-app text copies; it does not synchronize the system clipboard. <a href="docs/keyboard/">Keyboard reference</a></p><details><summary>Watch an image attachment</summary><figure class="showcase"><video controls muted playsinline preload="none" width="1440" height="810" poster="img/showcase-attachment.webp" aria-label="An invented image pasted through the real attachment UI, with no upload."><source src="img/showcase-attachment.webm" type="video/webm" /><source src="img/showcase-attachment.mp4" type="video/mp4" /></video></figure></details><details><summary>See shared clipboard history</summary><figure class="showcase"><video controls muted loop playsinline preload="none" width="1440" height="810" poster="img/showcase-clipboard.webp" aria-label="Open and read a shared clipboard entry in the demo."><source src="img/showcase-clipboard.webm" type="video/webm" /><source src="img/showcase-clipboard.mp4" type="video/mp4" /></video></figure></details>
+  </div></section>
+<section class="sec" id="workbench"><div class="wrap">
+    <div class="head"><span class="n">05</span><h2>Arrange the work around you</h2><span class="fill"></span></div>
+    <p class="intro">Split agents, notes, files and previews into panes, with tabs inside each. Keep the code, conversation and running result in view together.</p>
+    <figure class="showcase "><video width="1440" height="810" poster="img/showcase-panes.webp"
+      controls muted loop playsinline preload="none" data-autoplay aria-label="A demo workspace with an agent beside its local preview.">
+      <source src="img/showcase-panes.webm" type="video/webm" /><source src="img/showcase-panes.mp4" type="video/mp4" />
+      <p>A demo workspace with an agent beside its local preview.</p></video></figure>
+    <p class="note">Run any shell, TUI or CLI in a real terminal. Recognized agents add status, transcripts and input support.
+    The Markdown editor supports tables, code blocks and sending a selection to an agent. <a href="docs/workspace/">Workspace guide</a></p>
+  </div></section>
+<section class="sec" id="communication"><div class="wrap">
+    <div class="head"><span class="n">06</span><h2>Let agents coordinate</h2><span class="fill"></span></div>
+    <p class="intro">Sessions can exchange messages, read each other's progress and request help within the permissions you set. See who asked, what they requested and where the response went.</p>
+    <figure class="showcase "><video width="1440" height="810" poster="img/showcase-communication.webp"
+      controls muted loop playsinline preload="none" aria-label="A simulated agent requests two sessions; approval starts them and their replies enter the requesting session queue.">
+      <source src="img/showcase-communication.webm" type="video/webm" /><source src="img/showcase-communication.mp4" type="video/mp4" />
+      <p>A simulated agent requests two sessions; approval starts them and their replies enter the requesting session queue.</p></video></figure>
+    <p class="note">Messages can wait in a session's queue until it is ready. Spawn and control requests require approval by default.
+    Project permissions govern what agents can read and do. <a href="docs/queue/">Queues and communication</a></p>
+  </div></section>
+<section class="sec" id="git"><div class="wrap">
+    <div class="head"><span class="n">07</span><h2>Land finished branches behind your checks</h2><span class="fill"></span></div>
+    <p class="intro">A branch takes its turn in the queue, updates from master, and runs the checks you approved. Passed checks allow a fast-forward; a conflict or failed check stops the request.</p>
+    <figure class="showcase "><video width="1440" height="810" poster="img/showcase-land.webp"
+      controls muted loop playsinline preload="none" aria-label="A simulated branch advances through queued, reconciling, verifying and landed states.">
+      <source src="img/showcase-land.webm" type="video/webm" /><source src="img/showcase-land.mp4" type="video/mp4" />
+      <p>A simulated branch advances through queued, reconciling, verifying and landed states.</p></video></figure>
+    <p class="note">A failed request returns to the agent that owns the branch. An agent cannot approve its own verification command.
+    Enable the required Project permissions before allowing agents to request landing. <a href="demo/?scenario=landfailure">Try the failed-check walkthrough</a> · <a href="docs/git/">Git and landing</a></p><details><summary>Watch a failed check</summary><figure class="showcase"><video controls muted loop playsinline preload="none" width="1440" height="810" poster="img/showcase-landfailure.webp" aria-label="A simulated failed check stops a branch landing and returns the result to the agent."><source src="img/showcase-landfailure.webm" type="video/webm" /><source src="img/showcase-landfailure.mp4" type="video/mp4" /></video></figure></details>
+  </div></section>
+<section class="sec" id="history"><div class="wrap">
+    <div class="head"><span class="n">08</span><h2>Find the session. Inspect the work.</h2><span class="fill"></span></div>
+    <p class="intro">Search conversations across agent CLIs, reopen the transcript, and inspect the commands, changes and test results that were recorded. Resume earlier work with its context close at hand.</p>
+    <figure class="showcase"><video controls muted loop playsinline preload="none" width="1440" height="810" poster="img/showcase-history.webp" aria-label="Search and inspect example conversations in the demo."><source src="img/showcase-history.webm" type="video/webm" /><source src="img/showcase-history.mp4" type="video/mp4" /></video></figure>
+    <p class="note">Optional evidence capture records observed tool activity and attributes commits to contributing sessions.
+    It reports missing evidence rather than treating it as proof of success. <a href="docs/history/">History and auditing</a></p>
+  </div></section>
+<section class="sec" id="persistence"><div class="wrap">
+    <div class="head"><span class="n">09</span><h2>Keep your sessions through an app restart</h2><span class="fill"></span></div>
+    <p class="intro">A separate supervisor holds the terminals while the daemon restarts or the app updates. Reconnect to the working sessions and their scrollback.</p>
+    <p class="note">The supervisor cannot survive its own death or a power loss. Cold recovery restores affected sessions as readable, resumable records.
+    <a href="docs/sessions/">Session recovery</a></p>
     <ul class="flat">
-      <li><b>Tier 0 facts</b><span>Every file write hashed on the exact bytes written, every command with its exit class, test output parsed down to the failing set, git operations, tool calls. Each fact points back to the moment it happened.</span></li>
-      <li><b>Operational telemetry</b><span>Durable process, quota, reset, compaction, and tool evidence, plus a status timeline you can query by time range long after the incident.</span></li>
-    </ul>
-
-    <div class="grouplabel">What it notices <span>still deterministic, still free</span></div>
-    <ul class="flat">
-      <li><b>Model-free detectors</b><span>Loops with a no-progress gate, work declared done that never ran a test, documentation debt, provenance edges. Annotations only, with the facts each finding rests on attached.</span></li>
-      <li><b>Code graph</b><span>Blast radius, test gaps, dead code, import cycles, and a per-session change map. Tree-sitter parsing, not a language model.</span></li>
-      <li><b>Fleet faults</b><span>Sessions that stopped reporting, conversations two sessions both claim, transcripts that went stale underneath a running agent.</span></li>
-    </ul>
-
-    <div class="grouplabel">What it makes of it <span>budgeted model, hard caps, off by default</span></div>
-    <ul class="flat">
-      <li><b>Behaviour timeline</b><span>A cheap model reads the conversation forward and extracts structured records, including the dead ends. Daily, hourly, and per-run budgets, and it writes nothing rather than guess when a response fails validation.</span></li>
-      <li><b>Attention ranking</b><span>Findings merge into incidents and route to one of four channels by what they cost you to resolve, under a default budget of four interrupts a day and two an hour. Held-back items stay counted and visible with the reason, because a hidden item is indistinguishable from a broken detector.</span></li>
-    </ul>
-
-    <div class="grouplabel">What your agents can read <span>the return path</span></div>
-    <ul class="flat">
-      <li><b>An MCP endpoint per session</b><span>Registered at spawn. Agents read sibling status, run briefs, transcripts, history, Project notes, and Agent Context sources, scoped to their own Project unless asked to widen.</span></li>
-      <li><b>Cross-session memory</b><span>What a previous session already resolved, what it verified, and what it tried and abandoned. A new agent can find the dead end instead of walking into it.</span></li>
-      <li><b>Bounded writes</b><span>Message another session, request a spawn, interrupt, or end a run. Every one waits for a human by default, and refusals are typed rather than silent.</span></li>
-    </ul>
-
-    <div class="crops" style="margin-top:26px">
-      <figure class="shot d">
-        <img src="img/desktop-alerts.webp" width="2100" height="1275" loading="lazy" decoding="async"
-             alt="The ranked attention inbox with its interrupt budget line and a suppressed item
-                  showing the reason it was held back." />
-      </figure>
-      <figure class="shot m">
-        <img src="img/mobile-alerts.webp" width="1206" height="2622" loading="lazy" decoding="async"
-             alt="The same attention inbox on a phone, with ranked items and the budget line." />
-      </figure>
-    </div>
-
-    <div class="crops solo" style="margin-top:14px">
-      <figure class="shot d">
-        <video src="img/loop-evidence.mp4" width="1280" height="666"
-               poster="img/desktop-insight.webp"
-               autoplay muted loop playsinline preload="metadata"
-               aria-label="Silent: the behaviour timeline filling in with phase-labelled records
-                           extracted from a conversation, including a dead end the agent walked
-                           into and abandoned and a blocked badge, with the run's budget line
-                           above them."></video>
-      </figure>
-    </div>
-  </div>
-</section>
-
-<!-- ================================================================== REST -->
-<section class="sec" id="rest">
-  <div class="wrap">
-    <div class="head"><span class="n">10</span><h2>Also in the box</h2><span class="fill"></span></div>
-    <ul class="flat">
-      <li><b>Process ownership</b><span>Attribution by PID plus creation time, unioned with job-object membership, so a detached grandchild is still yours. Find the dev server from Tuesday still holding the port, and the headless browser windows nothing else can see.</span></li>
-      <li><b>Agent environment</b><span>What skills, MCP servers, hooks, plugins, and policies this CLI is running right now, and whether any of it has drifted since it started. Read-only, and it never prints a hook's command line.</span></li>
-      <li><b>Agent context</b><span>Which instruction files the agent actually loads, with reversible, revision-guarded sync across harnesses so your instruction files stop disagreeing with each other.</span></li>
-      <li><b>Remote access</b><span>Your tailnet only. No swe-mux login, no port forwarding, no Funnel, no relay. Optional HTTPS for the microphone and clipboard APIs that demand a secure context.</span></li>
-      <li><b>Usage analytics</b><span>Cost and token history by source, model, and tool, with quota windows and reset tracking per saved account.</span></li>
-      <li><b>Diagnostics</b><span>Supervised background loops with per-loop cost accounting, event-loop lag sampling, a durable state log, and <code>swemux doctor</code> to export the whole picture.</span></li>
-      <li><b>Small things</b><span>Themes, per-device UI scale, configurable session rows, command palette, network accounting, device presence, guided onboarding, QR pairing for a phone.</span></li>
-    </ul>
-  </div>
-</section>
-
-
-<!-- =============================================================== INSTALL -->
+      <li><b>Local data</b><span>Projects, history and settings live on your machine. No swe-mux account or usage telemetry.</span></li>
+      <li><b>Your providers</b><span>Agent CLIs use your existing subscriptions. Optional model features use your endpoint and budget.</span></li>
+      <li><b>Optional automation</b><span>Evidence capture, attention analysis and agent control have explicit Project permissions. Start with the workspace and enable what you use.</span></li>
+    </ul><p class="note">The update check fetches a static version manifest and can be disabled. See <a href="privacy/">what crosses the network</a>.</p>
+  </div></section>
 <section class="sec" id="install">
   <div class="wrap">
-    <div class="head"><span class="n">11</span><h2>Install</h2><span class="fill"></span></div>
+    <div class="head"><span class="n">10</span><h2>Install</h2><span class="fill"></span></div>
     <p class="intro">You need at least one agent CLI already installed and logged in. swe-mux does
     not install, manage, or proxy them. It runs the ones you already have, on the subscription you
     already pay for.</p>
@@ -1113,67 +940,27 @@ footer .social svg { width: 15px; height: 15px; fill: currentColor; display: blo
          No dead link and no disabled control: there is nothing to press yet. -->
     <div class="dl" id="download" data-dl="none">
       <div class="dl-head">
-        <span class="dl-label">Desktop download</span>
-        <span class="dl-state">not published yet</span>
+        <span class="dl-label">Windows desktop app</span>
+        <span class="dl-state">GitHub Releases</span>
       </div>
-      <p>This section is drawn from the same release manifest the app's own update check reads, so
-      it fills itself in on the first release that carries a Windows installer.</p>
-      <p class="dl-alt">Until then the Python install below is the whole product, and on Windows
-      <code>swe-mux</code> is the same native window and tray icon the installer will set
-      up for you.</p>
+      <p><a href="https://github.com/jatoran/swe-mux/releases">Get the installer or portable archive from GitHub Releases.</a>
+      Direct download details appear here when release metadata is available.</p>
+      <p class="dl-alt">You can also use the Python install below for the same Windows window and tray.</p>
     </div>
 
-    <h3 class="sub-h">From PyPI</h3>
-    <p class="note">Python 3.12 or newer.</p>
-    <div class="code">
-      <button class="copy" type="button" data-copy="#c1">copy</button>
-      <pre id="c1"><span class="p">$</span> uv tool install swe-mux   <span class="c"># isolated env; swemux, swemuxd, swe-mux on PATH</span>
-<span class="p">$</span> swemux doctor             <span class="c"># read-only health report</span>
-<span class="p">$</span> swemuxd                   <span class="c"># daemon on 127.0.0.1:8765</span></pre>
-    </div>
-    <p class="note">Open <code>127.0.0.1:8765</code> and register a Project folder. Nothing spawns
-    until you ask. <code>pipx install swe-mux</code> is the same isolated, on-PATH install without
-    <a href="https://docs.astral.sh/uv/">uv</a>.</p>
-    <p class="note"><b>No Python install of any kind creates a desktop shortcut or a Start Menu
-    entry.</b> Wheels have no post-install hook and pip runs no install-time code, so that is
-    structural rather than a step somebody forgot: start swe-mux from a terminal. The
-    <b>Desktop and tray</b> step of the first-run flow creates them when you ask, and
-    <code>swemux install-shortcut</code> does the same from a terminal.</p>
-    <p class="note"><b>On Windows the window and the tray need nothing extra.</b>
-    <code>pystray</code> and <code>pywebview</code> are ordinary dependencies carrying a
-    <code>win32</code> marker, so the command above already gives a Windows machine a working
-    <code>swe-mux</code> and gives every other machine nothing to download. They want the WebView2
-    Runtime, which recent Windows builds already have. The <code>[desktop]</code> extra that used
-    to carry them is declared and empty since 0.1.5, so an old script still resolves; on Linux and
-    macOS the daemon plus a browser is the whole product.</p>
-    <p class="note"><b><code>pip install swe-mux</code> is a different act.</b> It installs into
-    whichever environment is active and puts nothing on PATH globally, so <code>swemux</code> works
-    only inside that environment. pip says so in a <code>WARNING: The scripts ... are installed in
-    '...' which is not on PATH</code> that scrolls past unread. If that is where you are:</p>
-    <div class="code">
-      <button class="copy" type="button" data-copy="#c3">copy</button>
-      <pre id="c3"><span class="p">$</span> python -m swe_mux   <span class="c"># the daemon, no PATH setup at all: this is swemuxd</span>
-<span class="p">$</span> python -c "import sysconfig; print(sysconfig.get_path('scripts'))"
-                      <span class="c"># where the three executables went</span>
-<span class="p">$</span> pip show -f swe-mux <span class="c"># every file this install wrote</span></pre>
-    </div>
-    <h3 class="sub-h">From source</h3>
-    <div class="code">
-      <button class="copy" type="button" data-copy="#c2">copy</button>
-      <pre id="c2"><span class="p">$</span> git clone https://github.com/jatoran/swe-mux
-<span class="p">$</span> cd swe-mux
-<span class="p">$</span> uv sync
-<span class="p">$</span> npm --prefix frontend ci &amp;&amp; npm --prefix frontend run build
-                      <span class="c"># only the source flow needs Node</span>
-<span class="p">$</span> uv run swe-mux</pre>
-    </div>
-    <p class="note">The frontend build output is gitignored, so a fresh clone serves the API and no
-    interface until that build runs once. A published wheel carries the built frontend already.</p>
-    <p class="note">The wheel is pure Python, and CI builds and install-smokes it on Windows, Linux,
-    and macOS on every push. What no CI job does anywhere is <i>start the daemon</i> - Windows is the
-    platform that proves this thing running, and the macOS leg is not yet required to pass.</p>
-    <p class="note">Upgrading, uninstalling, and what to do when the daemon will not start: <a
-    href="https://github.com/jatoran/swe-mux/blob/master/.docs/development/OPERATOR_LIFECYCLE.md">OPERATOR_LIFECYCLE.md</a>.</p>
+    <h3 class="sub-h">Install with Python</h3>
+    <p class="note">Requires Python 3.12 or newer. The package includes the built interface; Node is not needed.</p>
+    <div class="code"><button class="copy" type="button" data-copy="#c1">copy</button>
+      <pre id="c1"><span class="p">$</span> uv tool install swe-mux
+<span class="p">$</span> swe-mux <span class="c"># Windows desktop app</span></pre></div>
+    <p class="note"><code>pipx install swe-mux</code> is the alternative isolated install.
+    For a browser on Windows, Linux or macOS, run <code>swemux start</code>, then open <code>127.0.0.1:8765</code>.
+    <code>swemux doctor</code> reports installation and runtime health.</p>
+    <p class="note">The Windows app includes its tray and native window. First-run setup offers shortcuts.
+    Linux and macOS use the daemon with a browser. All three platforms have required CI checks, including a source-daemon smoke test;
+    that does not replace testing a published release on a clean machine.</p>
+    <p class="note"><a href="docs/install/">Installation, source builds and upgrades</a> ·
+    <a href="docs/first-session/">Start your first session</a> · <a href="docs/troubleshooting/">Troubleshooting</a></p>
   </div>
 </section>
 
@@ -1184,7 +971,7 @@ footer .social svg { width: 15px; height: 15px; fill: currentColor; display: blo
     <div class="fbrand">
       <img class="brandmark dark" src="img/logo.png" width="640" height="73" alt="swe-mux" />
       <img class="brandmark lite" src="img/logo-light.png" width="640" height="73" alt="swe-mux" />
-      <p>Mission control for your coding-agent fleet.<br />
+      <p>Your coding agents, together. Desktop and phone.<br />
       Windows-first. Runs on your machine. No account, no relay.</p>
     </div>
     <div class="fcols">
@@ -1231,8 +1018,6 @@ footer .social svg { width: 15px; height: 15px; fill: currentColor; display: blo
         </ul>
       </div>
     </div>
-    <p class="colophon"><span class="h">#</span> A multiplexer. For software engineers.
-    The name is not doing anything clever.</p>
     <p class="colophon"><span class="h">#</span> swe-mux is not affiliated with, endorsed
     by, or sponsored by Anthropic, OpenAI, or any other vendor whose CLI it launches.
     Product names and trademarks belong to their respective owners. You run those tools
@@ -1502,7 +1287,7 @@ footer .social svg { width: 15px; height: 15px; fill: currentColor; display: blo
 
   function render(manifest) {
     /* No manifest at all - a fresh clone, a local build, or a site deployed
-       before any release - leaves the empty state in the markup untouched. */
+       before any release - leaves the release-list fallback in the markup untouched. */
     if (!manifest || typeof manifest !== 'object') return 'none';
 
     /* The same gate `update_check.py` applies, for the same reason: a schema
@@ -1673,6 +1458,7 @@ footer .social svg { width: 15px; height: 15px; fill: currentColor; display: blo
     });
   }
   function setView(view) {
+    if (keysHost) keysHost.hidden = view === 'phone';
     stage.setAttribute('data-view', view);
     tabs.forEach(function (tab) { tab.setAttribute('aria-selected', String(tab.getAttribute('data-view') === view)); });
     promote();
@@ -1739,6 +1525,35 @@ footer .social svg { width: 15px; height: 15px; fill: currentColor; display: blo
      because an event dispatched into a frame whose modules have not evaluated has nobody
      listening and is simply lost - which is what "choose a scenario from a cold stage"
      always is. A loaded frame is same-origin, so it can be asked directly. */
+
+  var keysHost = document.getElementById('demokeymaps');
+  var keysButtons = keysHost.querySelector('.demo-keymap-buttons');
+  var keysHint = document.getElementById('demokeymaphint');
+  function attachKeys(frame) {
+    if (!frame.closest('.demo-desktop')) return;
+    var win;
+    try { win = frame.contentWindow; if (!win.__demoControls) return; } catch (_) { return; }
+    function drawKeys() {
+      var current = win.__demoControls.keymap();
+      if (!keysButtons.children.length) current.presets.forEach(function (preset) {
+        var button = document.createElement('button');
+        button.type = 'button'; button.dataset.preset = preset.id;
+        button.textContent = preset.title === 'Vim-flavoured' ? 'Vim' : preset.title;
+        button.addEventListener('click', async function () {
+          Array.from(keysButtons.children).forEach(function (b) { b.disabled = true; });
+          try { await frame.contentWindow.__demoControls.selectKeymap(preset.id); }
+          catch (error) { keysHint.textContent = 'Could not change the keymap. Reload the demo and try again.'; console.warn('demo keymap', error); }
+          finally { Array.from(keysButtons.children).forEach(function (b) { b.disabled = false; }); }
+        });
+        keysButtons.appendChild(button);
+      });
+      Array.from(keysButtons.children).forEach(function (b) { b.setAttribute('aria-pressed', String(b.dataset.preset === current.preset)); });
+      keysHint.textContent = current.hint || 'Click a pane to try the keyboard. Browser shortcuts still apply.';
+    }
+    drawKeys(); win.addEventListener('swemux-demo:keymap-changed', drawKeys);
+  }
+  stage.querySelectorAll('iframe').forEach(function (frame) { frame.addEventListener('load', function () { attachKeys(frame); }); });
+
   var picker = document.getElementById('demoscenario');
   picker.addEventListener('change', function () {
     var chosen = picker.value;
@@ -1797,5 +1612,34 @@ document.querySelectorAll('.copy').forEach(function (b) {
 });
 </script>
 
+<script>
+// Only visible, short examples autoplay. User-paused clips stay paused.
+(function () {
+  var reduced = matchMedia('(prefers-reduced-motion: reduce)');
+  document.querySelectorAll('video[data-autoplay]').forEach(function (video) {
+    var userPaused = false;
+    video.addEventListener('pointerdown', function () { userPaused = true; });
+    video.addEventListener('keydown', function () { userPaused = true; });
+    function update(visible) {
+      if (visible && !reduced.matches && !userPaused) video.play().catch(function () {});
+      else video.pause();
+    }
+    var visible = false;
+    new IntersectionObserver(function (entries) { visible = entries[0].isIntersecting; update(visible); }, { threshold: .3 }).observe(video);
+    reduced.addEventListener('change', function () { update(visible); });
+  });
+  var sound = null;
+  document.querySelectorAll('[data-sound]').forEach(function (button) {
+    button.addEventListener('click', function () {
+      if (sound) sound.pause();
+      sound = new Audio('img/sound-' + button.dataset.sound + '.mp3');
+      var status = document.getElementById('soundstatus');
+      sound.play().then(function () { status.textContent = 'Playing ' + button.textContent; })
+        .catch(function () { status.textContent = 'Sound could not play. Try again.'; });
+      sound.addEventListener('ended', function () { status.textContent = ''; });
+    });
+  });
+})();
+</script>
 </body>
 </html>

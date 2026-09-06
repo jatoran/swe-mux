@@ -1,0 +1,115 @@
+{
+  "version": 1,
+  "assets": [
+    {
+      "name": "attachment",
+      "scenario": "attachment",
+      "surface": "desktop",
+      "beat": 3,
+      "caption": "The image reference is attached. Add your question.",
+      "bundle": "c234ea95039427c9d70f89723b408565e9f4fab4b7797394004ea710b994c2a5",
+      "seed": "default",
+      "simulated": true
+    },
+    {
+      "name": "clipboard",
+      "scenario": "clipboard",
+      "surface": "desktop",
+      "beat": 2,
+      "caption": "Read an entry before inserting it.",
+      "bundle": "cb6894b07e3285f9f9b5da741daddc82ec85652a052caced101d202eb058aa4b",
+      "seed": "default",
+      "simulated": true
+    },
+    {
+      "name": "communication",
+      "scenario": "orchestrate",
+      "surface": "desktop",
+      "beat": 7,
+      "caption": "Two panes, in the same Project, standing in the same repository.",
+      "bundle": "cb6894b07e3285f9f9b5da741daddc82ec85652a052caced101d202eb058aa4b",
+      "seed": "default",
+      "simulated": true
+    },
+    {
+      "name": "history",
+      "scenario": "history",
+      "surface": "desktop",
+      "beat": 2,
+      "caption": "Open a transcript to read the messages and tool activity.",
+      "bundle": "cb6894b07e3285f9f9b5da741daddc82ec85652a052caced101d202eb058aa4b",
+      "seed": "default",
+      "simulated": true
+    },
+    {
+      "name": "input",
+      "scenario": "input",
+      "surface": "desktop",
+      "beat": 5,
+      "caption": "The draft is still yours to edit.",
+      "bundle": "cb6894b07e3285f9f9b5da741daddc82ec85652a052caced101d202eb058aa4b",
+      "seed": "default",
+      "simulated": true
+    },
+    {
+      "name": "land",
+      "scenario": "land",
+      "surface": "desktop",
+      "beat": 5,
+      "caption": "Checks passed. The branch lands on master.",
+      "bundle": "cb6894b07e3285f9f9b5da741daddc82ec85652a052caced101d202eb058aa4b",
+      "seed": "default",
+      "simulated": true
+    },
+    {
+      "name": "landfailure",
+      "scenario": "landfailure",
+      "surface": "desktop",
+      "beat": 5,
+      "caption": "A test failed. The branch stays out of master.",
+      "bundle": "cb6894b07e3285f9f9b5da741daddc82ec85652a052caced101d202eb058aa4b",
+      "seed": "default",
+      "simulated": true
+    },
+    {
+      "name": "panes",
+      "scenario": "preview",
+      "surface": "desktop",
+      "beat": 7,
+      "caption": "The same preview is available from your phone.",
+      "bundle": "c234ea95039427c9d70f89723b408565e9f4fab4b7797394004ea710b994c2a5",
+      "seed": "default",
+      "simulated": true
+    },
+    {
+      "name": "phone",
+      "scenario": "status",
+      "surface": "phone",
+      "beat": 3,
+      "caption": "Open the waiting session and read the question.",
+      "bundle": "cb6894b07e3285f9f9b5da741daddc82ec85652a052caced101d202eb058aa4b",
+      "seed": "default",
+      "simulated": true
+    },
+    {
+      "name": "status",
+      "scenario": "status",
+      "surface": "desktop",
+      "beat": 3,
+      "caption": "Open the waiting session and read the question.",
+      "bundle": "cb6894b07e3285f9f9b5da741daddc82ec85652a052caced101d202eb058aa4b",
+      "seed": "default",
+      "simulated": true
+    },
+    {
+      "name": "voice",
+      "scenario": "voice",
+      "surface": "desktop",
+      "beat": 5,
+      "caption": "Review the proposed message before it runs.",
+      "bundle": "cb6894b07e3285f9f9b5da741daddc82ec85652a052caced101d202eb058aa4b",
+      "seed": "default",
+      "simulated": true
+    }
+  ]
+}

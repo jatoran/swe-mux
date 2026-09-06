@@ -17,6 +17,7 @@ import { installFakeFetch } from './fakeApi.ts'
 import { installFakeWebSocket } from './fakeSocket.ts'
 import { installViewMirror } from './mirror.ts'
 import { installDirector } from './director.ts'
+import { installKeymapControls } from './keymapControls.ts'
 import { DemoBar } from './DemoBar.tsx'
 import { DemoDirector } from './DemoDirector.tsx'
 import '../style.css'
@@ -26,6 +27,7 @@ import './demoBar.css'
 
 installFakeFetch()
 installFakeWebSocket()
+installKeymapControls()
 // The fleet already mirrors across frames through the demo store; this mirrors what the
 // store cannot see - which modal is open, which panel and tab, which session is focused
 // - so the desktop and phone shown side by side behave as one app rather than two.
@@ -188,7 +190,9 @@ async function boot(): Promise<void> {
   // Full screen the demo is the whole page, so it has to carry the way back, the scenarios
   // menu and the reset that the landing page carries above the embed. Inside the frame
   // that page already has them, and a second copy would be chrome over chrome.
-  const framed = window.top === window.self
+  const capture = new URLSearchParams(location.search).get('capture') === '1'
+  if (capture) document.body.classList.add('demo-capture')
+  const framed = window.top === window.self && !capture
   if (framed) document.body.classList.add('demo-framed')
   render(
     <DemoBoundary>

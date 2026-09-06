@@ -1,5 +1,8 @@
 # The hero video, and the loops cut from it
 
+Historical brief.
+Current website feature media come from the browser demo; see `site/DEMO.md` and `.docs/marketing/MEDIA.md`.
+
 One workflow, sixty to seventy-five seconds, no voiceover and no music, assumed to autoplay
 muted.
 `trailer/capture_hero.py` records it and `trailer/encode_hero.py` cuts it, so a UI change means

@@ -198,7 +198,7 @@
 .demo-show-cutout {
   position: fixed;
   border-radius: 5px;
-  box-shadow: 0 0 0 9999px color-mix(in srgb, var(--bg, #0b0d10) 72%, transparent);
+  box-shadow: 0 0 0 9999px color-mix(in srgb, var(--bg, #0b0d10) 18%, transparent);
   transition:
     left .42s cubic-bezier(.33, .68, .35, 1),
     top .42s cubic-bezier(.33, .68, .35, 1),

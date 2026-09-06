@@ -15,6 +15,7 @@
  * bar's height. The app computes `--app-height` from the visual viewport and rewrites it
  * on every keyboard open, so subtracting in CSS is the only place the arithmetic survives.
  */
+import { DemoKeymaps } from './DemoKeymaps.tsx'
 import { useEffect, useState } from 'preact/hooks'
 import { scenarioMenu, start, stop, subscribeDirector } from './director.ts'
 
@@ -45,6 +46,7 @@ export function DemoBar() {
         link that always goes somewhere. */}
     <a class="demo-bar-exit" href="/" title="Leave the demo and go back to swemux.dev">← swemux.dev</a>
     <span class="demo-bar-kick">DEMO</span>
+    <DemoKeymaps />
     <label class="demo-bar-pick">
       <span>scenarios</span>
       <select

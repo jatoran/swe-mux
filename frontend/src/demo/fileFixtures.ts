@@ -173,7 +173,7 @@ const ROCKET_SHOP: FileSet = {
 
 const MEME_GARDEN: FileSet = {
   'README.md': [
-    '# meme-garden',
+    '# content-garden',
     '',
     'Memes, on a schedule. Nobody asked for this and it has never gone down.',
     '',
@@ -184,7 +184,7 @@ const MEME_GARDEN: FileSet = {
   ].join('\n'),
   'package.json': [
     '{',
-    '  "name": "meme-garden",',
+    '  "name": "content-garden",',
     '  "version": "0.9.0",',
     '  "private": true,',
     '  "scripts": { "water": "node src/water.js" }',

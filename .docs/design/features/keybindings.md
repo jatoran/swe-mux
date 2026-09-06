@@ -83,6 +83,9 @@ Four tables say what a chord costs, and only the first is a refusal:
 
 Plus the AltGr hazard, which is any chord holding both Ctrl and Alt without Meta.
 
+Preset or rule changes refresh the active keyboard map immediately.
+The periodic refresh remains a fallback.
+
 ## Delivery is measured, not decreed
 
 The tables above are a claim about somebody else's software and are wrong somewhere by

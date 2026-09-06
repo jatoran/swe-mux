@@ -49,6 +49,7 @@ import { loadSessionRowConfig, saveSessionRowConfig } from '../sessionRowPrefs.t
 // --------------------------------------------------------------------- the shapes
 
 export type Beat = {
+  pasteImage?: boolean
   /**
    * Milliseconds from the start of the scenario's clock.
    *
@@ -210,7 +211,7 @@ function tourDesktop(): Beat[] {
     {
       at: 0,
       eyebrow: 'THE REAL INTERFACE',
-      say: 'The real app. Nothing here is a mock-up.',
+      say: 'The real interface. Simulated agents.',
       body: ['Invented sessions, shipped frontend.'],
     },
     {
@@ -460,7 +461,7 @@ function tourDesktop(): Beat[] {
     },
     {
       at: 106_700,
-      say: 'It answers badly, on purpose.',
+      say: 'Try a prompt in this simulated conversation.',
       mutate: () => {
         scriptedTurn({
           id: talker,
@@ -693,14 +694,14 @@ function tourMobile(): Beat[] {
     {
       at: 29_400,
       eyebrow: 'TALK TO IT',
-      say: 'A real turn, in a real process.',
+      say: 'A simulated turn in the agent pane.',
       type: { session: talker, text: 'is the checkout test still flaky?', pace: 42 },
       spotlight: ['.terminal-pane.focused', '.terminal-pane'],
       body: ['This frame refuses the soft keyboard; open it full screen.'],
     },
     {
       at: 32_600,
-      say: 'It answers badly, on purpose.',
+      say: 'Try a prompt in this simulated conversation.',
       mutate: () => {
         scriptedTurn({
           id: talker,
@@ -998,51 +999,24 @@ function orchestrateBeats(): Beat[] {
  * and a preview pane that loads a real static page. What is added is the join between
  * them - the daemon noticing a listener and offering it as a pane.
  */
-function previewBeats(): Beat[] {
+function previewBeats(mobile = false): Beat[] {
   const shell = 's-shell'
   return [
-    {
-      at: 0,
-      eyebrow: 'A SHELL IS A SHELL',
-      say: 'The pane beside the agents is an ordinary terminal.',
-      click: sessionRow(shell),
-      spotlight: sessionRow(shell),
-    },
-    {
-      at: 1_400,
-      type: { session: shell, text: 'npm run dev', submit: true, pace: 70 },
-      spotlight: ['.terminal-pane.focused', '.terminal-pane'],
-    },
-    {
-      at: 4_200,
-      say: 'swe-mux watches what the session actually opened, rather than parsing what it printed.',
-      command: 'drawer.show:processes',
-      spotlight: DRAWER_TAB('Processes'),
-    },
-    {
-      at: 7_000,
-      say: 'A listener on the process tree is offered as a pane.',
-      mutate: () => {
-        createPreview({ session_id: shell })
-      },
-    },
-    {
-      at: 10_000,
-      say: 'It is a pane like any other: split it, move it to a tab, send it to the phone.',
-      command: 'drawer.close',
-      // A walk rather than a diagram: there are two things to say and they are at
-      // opposite ends of the screen, so holding the eye on each in turn beats drawing a
-      // leader line the width of the frame.
-      show: {
-        reveal: 'walk',
-        crt: true,
-        notes: [
-          { at: ['.preview-row'], label: 'the listener, as a row' },
-          { at: ['.preview-frame'], label: 'and the page itself, as a pane' },
-        ],
-      },
-    },
-    { at: 13_800, say: 'The page is the one the session is serving. Nothing is proxied and nothing leaves the machine.' },
+    { at: 0, eyebrow: mobile ? 'PREVIEWS ON YOUR PHONE' : 'AGENT AND PREVIEW, SIDE BY SIDE',
+      say: 'Start with a shell tab.', click: sessionRow(shell), spotlight: sessionRow(shell) },
+    { at: 3_000, say: mobile ? 'The shell uses the full phone screen.' : 'Give the server its own pane.',
+      ...(mobile ? {} : { command: 'pane.detach' }), spotlight: ['.terminal-pane.focused'] },
+    { at: 7_000, say: 'Start the dev server.', type: { session: shell, text: 'npm run dev', submit: true, pace: 70 },
+      spotlight: ['.terminal-pane.focused'] },
+    { at: 12_000, say: 'Open the preview from the detected listener.',
+      mutate: () => { createPreview({ session_id: shell }) } },
+    { at: 17_000, say: mobile ? 'The preview opens as a full-width tab.' : 'The agent and preview are now side by side.',
+      spotlight: ['.preview-frame'] },
+    { at: 22_000, say: 'The server keeps running in its terminal tab.',
+      body: ['The preview and terminal share the pane. Switching tabs does not stop either.'] },
+    { at: 28_000, say: 'The same preview is available from your phone.',
+      body: ['This example page is static. The installed app can proxy your local dev server.'],
+      show: { notes: [{ at: ['.preview-frame'], label: 'your running preview' }] } },
   ]
 }
 
@@ -1053,100 +1027,152 @@ function previewBeats(): Beat[] {
  * fixtures already invent the repository this acts on, and worth having because reconcile
  * then verify then fast-forward is the whole argument for the surface.
  */
-function landBeats(): Beat[] {
-  const requester = 's-working'
-  const id = 'land-demo-live'
+function landBeats(failure = false): Beat[] {
+  const id = failure ? 'land-demo-failed' : 'land-demo-live'
+  const branch = 'agent/coupon-table'
   return [
     {
-      at: 0,
-      eyebrow: 'LANDING, QUEUED',
-      say: 'One trunk, several checkouts, and one branch landing at a time.',
-      command: 'drawer.show:git',
-      spotlight: DRAWER_TAB('Git'),
+      at: 0, eyebrow: 'LAND A FINISHED BRANCH',
+      say: 'This agent finished its branch.',
+      body: ['Watch a simulated request move through the same landing interface.'],
+      command: 'drawer.show:git', spotlight: DRAWER_TAB('Git'),
     },
     {
-      at: 2_000,
-      say: 'The session standing in this checkout asks to land it. It never merges anything itself.',
+      at: 5_000, say: 'It requests a place in the landing queue.',
       mutate: () => {
         if (state.lands.some(item => item.id === id)) apply({ kind: 'land-remove', id })
-        apply({
-          kind: 'land-add',
-          request: makeLandRequest({
-            id,
-            projectId: DEMO_PROJECT_ID,
-            branch: 'agent/coupon-table',
-            worktreeRoot: DEMO_WORKTREE_COUPON,
-            requestedBy: requester,
-          }),
-        })
+        apply({ kind: 'land-add', request: makeLandRequest({
+          id, projectId: DEMO_PROJECT_ID, branch, worktreeRoot: DEMO_WORKTREE_COUPON,
+          requestedBy: 's-working',
+        }) })
       },
+      show: { notes: [{ at: ['.git-land-pipeline-step.queue'], label: 'one branch at a time' }] },
     },
     {
-      at: 5_000,
-      say: 'Reconcile first: trunk is merged into the branch, in the branch’s own worktree.',
-      mutate: () => {
-        apply({
-          kind: 'land-patch', id,
-          patch: { state: 'reconciling' },
-          event: { state: 'reconciling', note: 'Merged master into agent/coupon-table cleanly.' },
-        })
-      },
+      at: 11_000, say: 'First, bring the branch up to date with master.',
+      body: ["This happens in the agent's worktree."],
+      mutate: () => { apply({ kind: 'land-patch', id, patch: { state: 'reconciling' },
+        event: { state: 'reconciling', note: 'Merged master into agent/coupon-table cleanly.' } }) },
+      show: { notes: [{ at: ['.git-land-pipeline-step.run'], label: 'updating the branch' }] },
     },
     {
-      at: 8_000,
-      say: 'Then the gate, on the reconciled tree rather than on what was pushed.',
-      // The landing strip's three steps, which are drawn whether or not the section is
-      // expanded - the expanded body is a scroll away and a callout must point at
-      // something a visitor can see without one.
-      show: {
-        reveal: 'glitch',
-        notes: [
-          { at: ['.git-land-pipeline-step.gate'], label: 'the gate', sub: 'and who approved its bytes' },
-          { at: ['.git-land-pipeline-step.run'], label: 'what is landing now' },
-          { at: ['.git-land-pipeline-step.queue'], label: 'and what is behind it' },
-        ],
-      },
-      mutate: () => {
-        apply({
-          kind: 'land-patch', id,
-          patch: { state: 'verifying', verification: { kind: 'running', step: '.worktree-verify' } },
-          event: { state: 'verifying', note: 'Running .worktree-verify against the reconciled tree.' },
-        })
-      },
+      at: 17_000, say: 'Run the checks you approved.',
+      body: ['The checks run against the updated branch.'],
+      mutate: () => { apply({ kind: 'land-patch', id,
+        patch: { state: 'verifying', verification: { kind: 'running', step: '.worktree-verify' } },
+        event: { state: 'verifying', note: 'Running the approved verification command.' } }) },
+      show: { notes: [{ at: ['.git-land-pipeline-step.gate'], label: 'your approved checks' }] },
     },
     {
-      at: 12_500,
-      say: 'Green, so the fast-forward is allowed. Red would have come back to the session that asked.',
-      show: {
-        reveal: 'blueprint',
-        notes: [{ at: ['.git-landing-headline'], label: 'the branch, and where it got to' }],
-        shimmer: [['.git-land-pipeline-step.run']],
-      },
+      at: 24_000,
+      say: failure ? 'A test failed. The branch stays out of master.' : 'Checks passed. The branch lands on master.',
       mutate: () => {
-        apply({
-          kind: 'land-patch', id,
-          patch: {
-            state: 'landed',
-            landed_at: nowSeconds(),
-            verification: { kind: 'passed', reason: '4214 tests', duration_s: 47 },
-          },
-          event: { state: 'landed', note: 'Fast-forwarded master to agent/coupon-table.' },
+        apply({ kind: 'land-patch', id,
+          patch: failure
+            ? { state: 'failed', error: 'Coupon expiry test failed.', verification: { kind: 'failed', reason: 'Coupon expiry test failed.' } }
+            : { state: 'landed', landed_at: nowSeconds(), verification: { kind: 'passed', reason: 'Example checks passed' } },
+          event: { state: failure ? 'failed' : 'landed', note: failure ? 'Returned the failure to the requesting session.' : 'Fast-forwarded master to agent/coupon-table.' },
         })
-        apply({
-          kind: 'notification-add',
-          notification: {
-            id: demoId('note'),
-            session_id: requester,
-            kind: 'land_completed',
-            title: 'agent/coupon-table landed',
-            message: 'Reconciled with master, verified in 47 seconds, fast-forwarded.',
-            severity: 'info',
-            created_at: nowSeconds(),
-          },
-        })
+        if (failure) apply({ kind: 'queue-add', message: makeQueueMessage({
+          targetSessionId: 's-working', body: 'Landing stopped: the coupon expiry test failed. Fix the branch and request landing again.',
+          senderKind: 'rule', senderLabel: 'Land queue',
+        }) })
+        else apply({ kind: 'notification-add', notification: {
+          id: demoId('note'), session_id: 's-working', kind: 'land_completed',
+          title: 'agent/coupon-table landed', message: 'Checks passed. Master fast-forwarded.',
+          severity: 'info', created_at: nowSeconds(),
+        } })
       },
+      show: { notes: [{ at: ['.git-landing-headline', '.git-land-pipeline-step.run'], label: failure ? 'stopped at the failed check' : 'landed' }] },
     },
-    { at: 16_000, say: 'A fast-forward is the only merge allowed outside a worktree, because it cannot lose work.' },
+    {
+      at: 31_000,
+      say: failure ? 'The failure goes back to the agent that requested the landing.' : 'The next branch can take its turn.',
+      body: [failure ? 'You keep the result and the reason. The branch can be fixed and submitted again.' : 'Only a fast-forward updates master. Conflicts and failed checks stop the request.'],
+      ...(failure ? { command: 'drawer.show:queue', spotlight: DRAWER_TAB('Queue') } : {}),
+    },
+  ]
+}
+
+function statusBeats(): Beat[] {
+  return [
+    { at: 0, mutate: () => apply({ kind: 'session-patch', id: 's-migrate', patch: { state: 'awaiting', awaiting_reason: 'question' } }), eyebrow: 'KNOW WHICH AGENT NEEDS YOU', say: 'See which agents are working and which are waiting.',
+      spotlight: ['.sidebar'], show: { reveal: 'walk', notes: [
+        { at: rowPart('s-working', '.ind-core'), label: 'working' },
+        { at: rowPart('s-migrate', '.ind-core'), label: 'needs your decision' },
+      ] } },
+    { at: 7_000, say: 'An alert names the session and the reason.',
+      mutate: () => apply({ kind: 'notification-add', notification: {
+        id: demoId('note'), session_id: 's-migrate', kind: 'awaiting',
+        title: 'A decision is waiting', message: 'Choose who owns cache invalidation before the migration continues.',
+        severity: 'warning', created_at: nowSeconds(),
+      } }), spotlight: ['.sidebar'] },
+    { at: 13_000, say: 'Open the waiting session and read the question.', click: sessionRow('s-migrate'),
+      spotlight: ['.terminal-pane.focused'] },
+    { at: 19_000, say: 'Choose which events notify you and which sounds they use.',
+      body: ['Desktop and mobile have separate alert profiles, with quiet hours.'],
+      command: 'settings.open', field: { at: ['.settings-search input'], text: 'alerts' } },
+  ]
+}
+
+function inputBeats(): Beat[] {
+  const target = 's-rage'
+  return [
+    { at: 0, eyebrow: 'FAMILIAR INPUT', say: 'Edit a prompt in the active agent pane.',
+      click: sessionRow(target), spotlight: sessionRow(target),
+      mutate: () => apply({ kind: 'term-input', id: target, data: '\x03' }) },
+    { at: 4_000, say: 'Type your request.', type: { session: target, text: 'Review the checkout code', pace: 85 },
+      spotlight: ['.terminal-pane.focused'] },
+    { at: 10_000, say: 'Ctrl+Backspace deletes the previous word.',
+      show: { keys: ['ctrl', 'backspace'] },
+      mutate: () => apply({ kind: 'term-input', id: target, data: '\x17' }) },
+    { at: 15_000, say: 'Shift+Enter adds a line without sending the prompt.',
+      show: { keys: ['shift', 'enter'] },
+      mutate: () => apply({ kind: 'term-input', id: target, data: 'flow\x1b\r' }),
+      type: { session: target, text: 'Check expiry handling.', pace: 85 } },
+    { at: 22_000, say: 'The draft is still yours to edit.',
+      body: ['The demo marks line breaks with an arrow. Installed agent composers keep their native layout.'],
+      spotlight: ['.terminal-pane.focused'] },
+  ]
+}
+
+function attachmentBeats(): Beat[] {
+  return [
+    { at: 0, eyebrow: 'PASTE AN IMAGE', say: 'Add an image to an agent prompt.',
+      click: sessionRow('s-rage'), spotlight: sessionRow('s-rage'),
+      mutate: () => apply({ kind: 'term-input', id: 's-rage', data: '\x03' }) },
+    { at: 4_000, say: 'Paste the example checkout image.', pasteImage: true,
+      show: { keys: ['ctrl', 'v'] }, spotlight: ['.terminal-pane.focused'] },
+    { at: 8_000, say: 'The image reference is attached. Add your question.',
+      type: { session: 's-rage', text: ' Explain.', pace: 95 },
+      spotlight: ['.terminal-pane.focused'] },
+    { at: 14_000, say: 'Ready to send to an image-capable agent.',
+      body: ['This example stays in the browser. No image is uploaded to a server or provider.'] },
+  ]
+}
+
+function clipboardBeats(): Beat[] {
+  return [
+    { at: 0, eyebrow: 'YOUR COPIED TEXT, ACROSS DEVICES', say: 'Open text copied inside swe-mux.',
+      click: railItem('clipboardHistory'), spotlight: ['.clipboard-panel', '.utility-drawer'] },
+    { at: 6_000, say: 'Read an entry before inserting it.',
+      body: ['The history is shared by devices connected to the same swe-mux install.'],
+      spotlight: ['.clipboard-panel', '.utility-drawer'] },
+    { at: 12_000, say: 'Keep useful entries pinned. Turn on persistence to retain history across restarts.',
+      body: ['Only in-app text copies are recorded. This is separate from pasting an image attachment.'] },
+  ]
+}
+
+function historyBeats(): Beat[] {
+  return [
+    { at: 0, eyebrow: 'FIND THE SESSION. INSPECT THE WORK.', say: 'Search earlier conversations across agent CLIs.',
+      command: 'history.open', spotlight: ['.history-browser', '.history-panel'] },
+    { at: 7_000, say: 'Open a transcript to read the messages and tool activity.',
+      body: ['History remains available after the terminal session ends.'],
+      command: 'drawer.show:transcript', key: 'Escape', spotlight: DRAWER_TAB('Transcript') },
+    { at: 14_000, say: 'Inspect the changes and the recorded evidence behind them.',
+      command: 'drawer.show:git', spotlight: DRAWER_TAB('Git'),
+      body: ['Evidence capture is a separate Project opt-in.'] },
   ]
 }
 
@@ -1305,7 +1331,7 @@ function voiceBeats(): Beat[] {
     {
       at: 0,
       eyebrow: 'TALKING TO THE MULTIPLEXER',
-      say: 'Ask the fleet something, out loud.',
+      say: 'Ask the assistant what needs your attention.',
       command: 'assistant.toggle',
       spotlight: ['.assistant-panel', '.voice-dock-anchor'],
       show: { keys: ['ctrl', 'shift', 'space', 'x', 'a'], crt: true },
@@ -1313,7 +1339,7 @@ function voiceBeats(): Beat[] {
     {
       at: 1_800,
       say: 'The question is a sentence, not a command it had to be taught.',
-      mutate: () => { assistantHeard('what is blocked right now?') },
+      mutate: () => { assistantHeard('what needs my attention?') },
     },
     {
       at: 3_400,
@@ -1324,7 +1350,7 @@ function voiceBeats(): Beat[] {
     },
     {
       at: 6_000,
-      say: 'It answers from the fleet in front of you, not from a script it was given.',
+      say: 'The example answer names the waiting session.',
       mutate: () => {
         assistantSays('Everything else is moving: two turns running, one branch already'
           + ' landed, nothing else waiting on you.')
@@ -1332,7 +1358,7 @@ function voiceBeats(): Beat[] {
     },
     {
       at: 8_600,
-      say: 'And anything it wants to do about that becomes a card, with a window to stop it.',
+      say: 'Review the proposed message before it runs.',
       mutate: () => {
         proposed = assistantProposes({
           kind: 'queue_message',
@@ -1343,15 +1369,15 @@ function voiceBeats(): Beat[] {
       show: {
         reveal: 'blueprint',
         notes: [
-          { at: ['.assistant-action p strong'], label: 'about to, not doing' },
-          { at: ['.assistant-countdown'], label: 'the window', sub: 'it runs when this ends' },
-          { at: ['.assistant-action .cancel'], label: 'and the way out of it' },
+          { at: ['.assistant-action p strong'], label: 'proposed message' },
+          { at: ['.assistant-countdown'], label: 'cancel window' },
+          { at: ['.assistant-action .cancel'], label: 'cancel this action' },
         ],
       },
     },
     {
       at: 13_000,
-      say: 'Left alone, it runs - and what it does is put a prompt in a queue, not keystrokes in a pane.',
+      say: 'The approved action queues a prompt for that session.',
       mutate: () => {
         if (proposed) assistantResolved(proposed, `Queued one prompt for "${nameOf(target)}".`)
         assistantDone()
@@ -1371,7 +1397,7 @@ function voiceBeats(): Beat[] {
     },
     {
       at: 17_000,
-      say: 'The listening half needs a microphone, so this page does not ask for one. Everything above it is real.',
+      say: 'This example is scripted. The installed app can listen and speak when you enable voice.',
     },
   ]
 }
@@ -1391,7 +1417,7 @@ function voiceBeats(): Beat[] {
 export const SCENARIOS: Scenario[] = [
   {
     id: 'tour',
-    label: 'Take the tour of the whole interface',
+    label: 'Take a tour of the workspace',
     blurb: 'A hands-off walk around the whole app. Touch anything to take over.',
     // The one run whose card follows the chrome and counts its stops. Every other entry
     // is a caption at the foot of the frame: they narrate a thing happening rather than
@@ -1401,15 +1427,45 @@ export const SCENARIOS: Scenario[] = [
     mobileBeats: tourMobile(),
   },
   {
+    id: 'status',
+    label: 'See which agent needs you',
+    blurb: 'Live state, an alert, and the session behind it.',
+    beats: statusBeats(),
+  },
+  {
+    id: 'input',
+    label: 'See familiar editing keys in an agent prompt',
+    blurb: 'Newlines and word deletion in the simulated composer.',
+    beats: inputBeats(),
+  },
+  {
+    id: 'attachment',
+    label: 'See an image pasted into an agent prompt',
+    blurb: 'An invented image goes through the real attachment UI, with no upload.',
+    beats: attachmentBeats(),
+  },
+  {
+    id: 'clipboard',
+    label: 'Open your shared clipboard history',
+    blurb: 'In-app text copies, available on desktop and phone.',
+    beats: clipboardBeats(),
+  },
+  {
+    id: 'history',
+    label: 'Find earlier sessions and inspect their work',
+    blurb: 'Search, transcripts, and the changes behind a session.',
+    beats: historyBeats(),
+  },
+  {
     id: 'queue',
     label: 'Queue a prompt behind a running turn',
-    blurb: 'A turn ends, a waiting prompt is sent, and swe-mux says so.',
+    blurb: 'An example of enabled auto-delivery: the turn ends, then the next prompt is sent.',
     prepare: () => { reopenTurn('s-working') },
     beats: queueBeats(),
   },
   {
     id: 'orchestrate',
-    label: 'Let an agent ask for two more, and approve it',
+    label: 'Let agents request help and report back',
     blurb: 'One session drafts the requests, a human decides, and they report back.',
     beats: orchestrateBeats(),
   },
@@ -1418,12 +1474,19 @@ export const SCENARIOS: Scenario[] = [
     label: 'Open your dev server as a pane',
     blurb: 'A shell starts one and its listener becomes a preview beside the terminal.',
     beats: previewBeats(),
+    mobileBeats: previewBeats(true),
   },
   {
     id: 'land',
-    label: 'Land a worktree branch on the trunk',
+    label: 'Land a branch behind your approved checks',
     blurb: 'Reconcile, verify, fast-forward - one branch at a time.',
     beats: landBeats(),
+  },
+  {
+    id: 'landfailure',
+    label: 'See what happens when a check fails',
+    blurb: 'The branch stays out of master and the result returns to its agent.',
+    beats: landBeats(true),
   },
   {
     id: 'palette',
@@ -1433,14 +1496,14 @@ export const SCENARIOS: Scenario[] = [
   },
   {
     id: 'keymap',
-    label: 'Bring your tmux keybindings with you',
+    label: 'Switch to familiar keyboard shortcuts',
     blurb: 'Five presets, applied live, and which chords a browser tab keeps.',
     beats: keymapBeats(),
   },
   {
     id: 'voice',
-    label: 'Ask the fleet what is blocked',
-    blurb: 'A spoken question, answered from the live fleet, ending in a card you resolve.',
+    label: 'Ask the assistant what needs you',
+    blurb: 'A scripted assistant example with a proposed action you can confirm or cancel.',
     beats: voiceBeats(),
   },
 ]

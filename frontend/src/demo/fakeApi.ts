@@ -778,6 +778,13 @@ const ROUTES: Route[] = [
   },
   { method: 'GET', pattern: /^\/api\/grants$/, handler: () => grantsPayload() },
   { method: 'GET', pattern: /^\/api\/clipboard$/, handler: () => clipboardPayload() },
+  { method: 'GET', pattern: /^\/api\/clipboard\/([^/]+)$/, handler: match => {
+    const payload = clipboardPayload() as { entries: Array<{ id: string; preview: string }> }
+    const item = payload.entries.find(entry => entry.id === decodeURIComponent(match[1]))
+    return item ? { ...item, text: item.preview } : error(404, 'No such demo clipboard entry')
+  } },
+  { method: 'POST', pattern: /^\/api\/clipboard$/, handler: () => ({ stored: false, reason: 'The demo uses example clipboard entries.', entry: null }) },
+
   { method: 'GET', pattern: /^\/api\/prompts$/, handler: () => promptsPayload() },
   // Three routes the app asks for on its own schedule rather than on a visitor's press,
   // which is why they were the ones still falling through to `{}` in a live console.
@@ -1143,6 +1150,19 @@ const ROUTES: Route[] = [
   { method: 'GET', pattern: /^\/api\/projects\/([^/]+)\/observations$/, handler: () => ({ items: [] }) },
   // The stall banner probes this every few seconds for the life of the page; the
   // unmatched-GET fallback would answer it correctly and log each one.
+  {
+    method: 'POST', pattern: /^\/api\/sessions\/([^/]+)\/attachments$/,
+    handler: (match, body) => {
+      if (!session(match[1])) return error(404, 'Unknown demo session.')
+      const file = body instanceof FormData ? body.get('file') : null
+      if (!(file instanceof File) || !file.size) return error(400, 'Choose a file to attach.')
+      if (file.size > 16 * 1024 * 1024) return error(413, 'The demo accepts files up to 16 MiB.')
+      const name = file.name.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 128) || 'attachment'
+      return { id: demoId('attachment'), name, path: `/demo/attachments/${name}`,
+        relative_path: `attachments/${name}`, reference: `[image: ${name}]`,
+        kind: file.type.startsWith('image/') ? 'image' : 'file', media_type: file.type, bytes: file.size }
+    },
+  },
   { method: 'GET', pattern: /^\/api\/health$/, handler: () => ({ ok: true, ready: true }) },
 ]
 
@@ -1159,6 +1179,7 @@ export function installFakeFetch(): void {
     if (!url.pathname.startsWith('/api/')) return realFetch(input as RequestInfo, init)
     let body: unknown
     const rawBody = init?.body
+    if (rawBody instanceof FormData) body = rawBody
     if (typeof rawBody === 'string') {
       try { body = JSON.parse(rawBody) } catch { body = undefined }
     }

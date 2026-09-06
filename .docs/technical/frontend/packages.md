@@ -108,3 +108,10 @@ Three rules the existing boundaries follow, each of which has a failure mode:
 - `../../design/features/project-resources.md`
 - `../../design/features/project-actions.md`
 - `../../design/features/plugins.md`
+
+## Public website demo
+
+The production frontend also builds against the isolated simulated daemon under `frontend/src/demo/`.
+`site/DEMO.md` describes its preset controls, scenario playback, attachment simulation, diagnostics and headless capture contracts.
+`frontend/scripts/export-showcase.mjs` produces the feature media and provenance manifest.
+`site/tools/check-demo.mjs` checks the committed demo through the homepage embed.

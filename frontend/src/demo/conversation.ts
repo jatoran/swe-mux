@@ -132,7 +132,7 @@ const CONVERSATIONS: Record<string, Turn[]> = {
   's-migrate': [
     {
       at: 402,
-      user: 'migrate the meme schema to v3, keep the old ids',
+      user: 'migrate the cache schema to v3, keep the old ids',
       agent: 'On it. Let me establish a baseline before I change anything. This is more load-bearing than it first appears. Continuing.',
       tools: [{ name: 'Read', input: 'src/' }, { name: 'Grep', input: 'schema' }, { name: 'shell', input: 'npm test' }],
     },
@@ -305,9 +305,9 @@ const TIMELINES: Record<string, SeedRecord[]> = {
     {
       at: 390, span: 150, lifecycle_state: 'orienting', behavior: ['read', 'search'],
       work_phase: 'investigation', target: ['src/', 'schema'],
-      intent: 'Map every reader of the meme schema before changing it.',
+      intent: 'Map every reader of the cache schema before changing it.',
       claim: 'Nothing yet; the survey is still running.',
-      user_ask: 'migrate the meme schema to v3, keep the old ids', blocked_on: 'none',
+      user_ask: 'migrate the cache schema to v3, keep the old ids', blocked_on: 'none',
       summary: 'Surveying schema readers ahead of the migration.',
       novelty: 0.58, confidence: 0.6, trigger: 'tool_use', observer_model: 'demo-observer',
       coverage: { messages_seen: 2, facts_seen: 3, truncated: false },

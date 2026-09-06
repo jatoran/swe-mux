@@ -108,7 +108,7 @@ export function composerBlock(info: ComposerInfo, buffer: string): string {
   // A single-line composer scrolls its own text: keep the tail under the cursor
   // rather than letting a long line break the box.
   const room = inner - 2
-  const typed = buffer.length > room ? buffer.slice(buffer.length - room) : buffer
+  const typed = buffer.length > room ? buffer.replaceAll('\n', '↵').slice(buffer.length - room) : buffer
   // No drawn caret. The block ends by parking the terminal's *own* cursor after the
   // typed text (`composerCaret`), which is what a real CLI does - and drawing a second
   // one here is what put a block glyph in the box while the real cursor blinked on the
@@ -173,15 +173,15 @@ const BOX_TEXT_COLUMN = 5
  * visitor typed into a box while the cursor blinked on the line under it, which is
  * the one part of a composer nobody can mistake for cosmetic.
  */
-export function composerCaret(buffer: string): string {
+export function composerCaret(buffer: string, cursor = buffer.length): string {
   const room = BOX_WIDTH - 4 - 2
-  const typed = Math.min(buffer.length, room)
+  const typed = Math.min(cursor, room)
   return `${ESC}[2A${ESC}[${BOX_TEXT_COLUMN + typed}G`
 }
 
 /** The whole box, with the caret placed inside it. */
-export const composerFrame = (info: ComposerInfo, buffer: string): string =>
-  `${composerBlock(info, buffer)}${composerCaret(buffer)}`
+export const composerFrame = (info: ComposerInfo, buffer: string, cursor = buffer.length): string =>
+  `${composerBlock(info, buffer)}${composerCaret(buffer, cursor)}`
 
 /**
  * Replace the composer in place: down to the status line, up over the block, clear to
@@ -192,8 +192,8 @@ export const composerFrame = (info: ComposerInfo, buffer: string): string =>
  * and the erase has to start from the top of the block rather than from wherever the
  * caret happens to be sitting.
  */
-export const redrawComposer = (info: ComposerInfo, buffer: string): string =>
-  `${ESC}[2B${ESC}[${COMPOSER_HEIGHT - 1}A\r${ESC}[0J${composerFrame(info, buffer)}`
+export const redrawComposer = (info: ComposerInfo, buffer: string, cursor = buffer.length): string =>
+  `${ESC}[2B${ESC}[${COMPOSER_HEIGHT - 1}A\r${ESC}[0J${composerFrame(info, buffer, cursor)}`
 
 /** Wipe the composer without drawing a new one, before appending transcript. */
 export const clearComposer = (): string =>
@@ -208,166 +208,36 @@ const yelled = (kind: DemoBackendKind, text: string): string =>
 // --------------------------------------------------------------- transcripts
 
 export function claudeScrollback(): string {
-  return (
-    line(`${ORANGE}╭──────────────────────────────────────────────────╮${RESET}`) +
-    line(`${ORANGE}│${RESET} ${ORANGE}✻${RESET} ${BOLD}Claude Code${RESET} ${DIM}(demo - nothing here is real)${RESET}     ${ORANGE}│${RESET}`) +
-    line(`${ORANGE}╰──────────────────────────────────────────────────╯`) + RESET +
-    line(`${DIM}  cwd: /code/rocket-shop${RESET}`) +
-    line() +
-    said('claude', 'the checkout test is flaky, fix it') +
-    line() +
-    line(`${bullet('claude')} Great question. Let me start by orienting myself in the codebase.`) +
-    line() +
-    line(`${bullet('claude')} ${BOLD}Read${RESET}${DIM}(tests/checkout.spec.ts)${RESET}`) +
-    line(`  ${DIM}⎿ 84 lines${RESET}`) +
-    line() +
-    line(`${bullet('claude')} Worth stating plainly: this is not a flaky test, it is a`) +
-    line(`  ${BOLD}load-bearing race condition${RESET} wearing a test's clothing. The`) +
-    line(`  assertion reads the cart badge before the order request resolves,`) +
-    line(`  so it passes only when the network is slow enough to lose.`) +
-    line() +
-    line(`${bullet('claude')} ${BOLD}Update${RESET}${DIM}(tests/checkout.spec.ts)${RESET}`) +
-    line(`  ${DIM}⎿ 2 additions, 1 removal${RESET}`) +
-    line() +
-    line(`${bullet('claude')} ${BOLD}Bash${RESET}${DIM}(npm test)${RESET}`) +
-    line(`  ${DIM}⎿ 12 passed, 0 flaked (30 runs)${RESET}`) +
-    line() +
-    line(`${bullet('claude')} Done. The blast radius was smaller than I feared: one await,`) +
-    line(`  zero production changes. Deterministic. Fast. Boring.`) +
-    line() +
-    line(`${bullet('claude')} Want me to audit the other numbered specs for the same pattern?`) +
-    line()
-  )
+  return line('Claude Code - simulated session') + line()
+    + said('claude', 'Fix the flaky checkout test.') + line()
+    + line('Read tests/checkout.spec.ts.')
+    + line('The assertion ran before the order request completed.')
+    + line('Updated the test to wait for the cart response.')
+    + line('Example result: the checkout tests passed.')
 }
 
 export function codexScrollback(): string {
-  return (
-    line(`${CYAN}${BOLD}◆ Codex${RESET} ${DIM}v0.0.0-demo - simulated session${RESET}`) +
-    line(`${DIM}  model: gpt-demo · cwd: /code/rocket-shop${RESET}`) +
-    line() +
-    said('codex', 'profile the /api/cart endpoint, it feels slow') +
-    line() +
-    line(`${bullet('codex')} ${DIM}ran:${RESET} node --prof server.js ${DIM}(exit 0)${RESET}`) +
-    line(`${bullet('codex')} ${DIM}ran:${RESET} node --prof-process isolate.log`) +
-    line() +
-    line(`  Here is the smoking gun: 92% of samples sit inside ${YELLOW}JSON.parse${RESET}`) +
-    line(`  on the coupon table, which the handler re-reads from disk on`) +
-    line(`  ${BOLD}every single request${RESET}.`) +
-    line() +
-    line(`${bullet('codex')} ${DIM}edit:${RESET} src/cart.js ${DIM}(+6 -2, coupon table cached at boot)${RESET}`) +
-    line() +
-    line(`  p95 went from 480ms to 11ms locally. The real tension here is`) +
-    line(`  between correctness and cache invalidation, and I have chosen`) +
-    line(`  the pragmatic path.`) +
-    line() +
-    line(`  The coupon file is 40MB because somebody committed every coupon`) +
-    line(`  issued since 2019. That is a conversation for a human.`) +
-    line()
-  )
+  return line('Codex - simulated session') + line()
+    + said('codex', 'Profile the cart endpoint.') + line()
+    + line('Traced the cart request through the coupon lookup.')
+    + line('Repeated JSON parsing accounts for most of this sample.')
+    + line('Prepared a cache change and added an expiry test.')
 }
 
-/** The one where the user is losing their mind and the agent stays chipper. */
 export function rageScrollback(): string {
-  const b = bullet('claude')
-  return (
-    line(`${ORANGE}✻${RESET} ${BOLD}Claude Code${RESET} ${DIM}(demo) - session 4h12m${RESET}`) +
-    line() +
-    said('claude', 'the deploy is broken, prod is down, fix it now') +
-    line() +
-    line(`${b} Great question, and I can hear the urgency. Let me unpack this.`) +
-    line() +
-    line(`${b} ${BOLD}Read${RESET}${DIM}(deploy/pipeline.yml)${RESET}  ${DIM}⎿ 210 lines${RESET}`) +
-    line(`${b} ${BOLD}Update${RESET}${DIM}(deploy/pipeline.yml)${RESET}  ${DIM}⎿ 1 addition${RESET}`) +
-    line() +
-    line(`${b} Fixed. The health check was pointing at the old port.`) +
-    line() +
-    yelled('claude', 'IT IS STILL DOWN') +
-    line() +
-    line(`${b} You're absolutely right, and I appreciate you pushing back on`) +
-    line(`  that. My previous read was incomplete.`) +
-    line() +
-    yelled('claude', 'STOP TELLING ME I AM RIGHT AND FIX THE SITE') +
-    line() +
-    line(`${b} That's a fair challenge. One thing I want to push on gently,`) +
-    line(`  though: the port was genuinely wrong. It was simply not the`) +
-    line(`  ${BOLD}only${RESET} thing that was wrong.`) +
-    line() +
-    yelled('claude', 'DO NOT PUSH ON ANYTHING GENTLY') +
-    line() +
-    line(`${b} Understood. Let me reconsider from first principles.`) +
-    line(`${b} ${DIM}Let me carefully distinguish between what the logs say and${RESET}`) +
-    line(`  ${DIM}what the logs mean. I want to be precise here. Actually, let${RESET}`) +
-    line(`  ${DIM}me step back and re-examine my earlier assumption, because...${RESET}`) +
-    line() +
-    yelled('claude', 'I CAN SEE YOU THINKING. STOP THINKING AT ME.') +
-    line() +
-    line(`${b} ${BOLD}Bash${RESET}${DIM}(kubectl rollout undo deploy/web)${RESET}`) +
-    line(`  ${DIM}⎿ rolled back to revision 41${RESET}`) +
-    line() +
-    line(`${b} Site is up. At its core this was never a deploy problem: it`) +
-    line(`  was an observability problem wearing a deploy problem's coat.`) +
-    line(`  Instrumentation is the unlock.`) +
-    line() +
-    yelled('claude', 'i am going to throw this laptop into the sea') +
-    line() +
-    line(`${b} That's completely understandable, and I want to acknowledge how`) +
-    line(`  frustrating the last four hours must have been for you.`) +
-    line() +
-    line(`${b} Before you do that, though, it may be worth sitting with the`) +
-    line(`  fact that shipping on a Friday is itself a choice. No blame.`) +
-    line(`  Just something to hold.`) +
-    line() +
-    yelled('claude', 'WHO ASKED') +
-    line() +
-    line(`${b} Fair. Want me to write a postmortem?`) +
-    line()
-  )
+  return line('Claude Code - simulated session') + line()
+    + said('claude', 'Review the checkout flow.') + line()
+    + line('Read the checkout and coupon handling code.')
+    + line('Checking expiry handling and the empty-cart case.')
+    + line('The next prompt can be queued while this turn is running.')
 }
 
-/** The one where the human contributes nothing and the agent is delighted. */
 export function vibeScrollback(): string {
-  const b = bullet('codex')
-  return (
-    line(`${CYAN}◆${RESET} ${BOLD}Codex${RESET} ${DIM}(demo) - cwd: /code/meme-garden${RESET}`) +
-    line() +
-    said('codex', 'make it work') +
-    line() +
-    line(`${b} Great question. To be clear about what I'm optimising for, I'll`) +
-    line(`  assume "it" is the app and "work" is the build. Let me proceed.`) +
-    line(`${b} ${DIM}edit:${RESET} src/index.js ${DIM}(+140 -12)${RESET}`) +
-    line() +
-    said('codex', 'no') +
-    line() +
-    line(`${b} You're absolutely right. Reverting.`) +
-    line(`${b} ${DIM}edit:${RESET} src/index.js ${DIM}(+12 -140)${RESET}`) +
-    line() +
-    said('codex', 'still broken') +
-    line() +
-    line(`${b} Thank you for the additional context. That's genuinely helpful.`) +
-    line(`${b} ${DIM}ran:${RESET} npm run build ${DIM}(exit 0)${RESET}`) +
-    line(`  The build passes. It's not that the code is broken, it's that`) +
-    line(`  the expectations and the artifact have drifted apart.`) +
-    line() +
-    said('codex', 'idk man just fix it') +
-    line() +
-    line(`${b} Understood. I'll take the wheel here.`) +
-    line(`${b} ${DIM}edit:${RESET} src/index.js, src/cart.js, package.json ${DIM}(+312 -88)${RESET}`) +
-    line(`${b} ${DIM}ran:${RESET} rm -rf node_modules && npm install ${DIM}(1.2GB)${RESET}`) +
-    line() +
-    said('codex', 'k') +
-    line() +
-    line(`${b} Shipped. Three things I'd flag for follow-up:`) +
-    line(`  ${DIM}1.${RESET} Nothing is tested.`) +
-    line(`  ${DIM}2.${RESET} Nothing was tested before either.`) +
-    line(`  ${DIM}3.${RESET} This is a nuanced area.`) +
-    line() +
-    line(`${b} Fast. Seamless. Robust. Want me to add a README?`) +
-    line() +
-    said('codex', 'no') +
-    line() +
-    line(`${b} Added the README.`) +
-    line()
-  )
+  return line('Claude Code - simulated session') + line()
+    + said('claude', 'Review the search results.') + line()
+    + line('Compared search results against the fixture queries.')
+    + line('Found a missing empty-result state.')
+    + line('Added the state and its regression case.')
 }
 
 export function shellScrollback(): string {
@@ -385,6 +255,14 @@ export function shellScrollback(): string {
   )
 }
 
+export function awaitingScrollback(): string {
+  return line('Codex - simulated session') + line()
+    + said('codex', 'Migrate the cache schema, keeping existing IDs.') + line()
+    + line('The migration is prepared. One decision is needed:')
+    + line('Who invalidates the cache when a file is replaced?')
+    + line('Choose the file owner or the migration worker.') + line()
+}
+
 /** A pane that is mid-turn: the transcript stops, and the status keeps ticking. */
 export function workingScrollback(info: ComposerInfo, task: string): string {
   const b = bullet(info.kind)
@@ -393,10 +271,10 @@ export function workingScrollback(info: ComposerInfo, task: string): string {
     line() +
     said(info.kind, task) +
     line() +
-    line(`${b} On it. Let me establish a baseline before I change anything.`) +
+    line(`${b} Reading the relevant files and checking the current tests.`) +
     line(`${b} ${BOLD}Read${RESET}${DIM}(src/) ⎿ 47 files${RESET}`) +
     line(`${b} ${BOLD}Grep${RESET}${DIM}(coupon) ⎿ 214 matches${RESET}`) +
-    line(`${b} This is more load-bearing than it first appears. Continuing.`) +
+    line(`${b} Updating the implementation and its regression tests.`) +
     line(`${b} ${BOLD}Bash${RESET}${DIM}(npm test -- --runInBand)${RESET}`) +
     line(`  ${DIM}⎿ running…${RESET}`) +
     line()
@@ -407,7 +285,7 @@ export function workingScrollback(info: ComposerInfo, task: string): string {
 export function spawnScrollback(info: ComposerInfo): string {
   if (info.kind === 'claude') {
     return (
-      line(`${ORANGE}✻${RESET} ${BOLD}Claude Code${RESET} ${DIM}(demo) - ask me anything, I only tell jokes${RESET}`) +
+      line(`${ORANGE}✻${RESET} ${BOLD}Claude Code${RESET} ${DIM}(demo) - simulated activity${RESET}`) +
       line()
     )
   }
@@ -465,82 +343,17 @@ const replyProse = (body: string[]): string =>
     .trim()
 
 /** Agent replies, written entirely out of 2026's most-complained-about tells. */
-const AGENT_JOKES: string[][] = [
-  [
-    '● Great question. Let me orient myself before I answer it.',
-    '● §Read§(src/everything.js)  ¶⎿ 40,000 lines¶',
-    "● Worth stating plainly: it's not a bug, it's an undocumented",
-    '  invariant. The distinction matters more than it sounds like it does.',
-    "● The fix is one line. Finding it was the load-bearing part.",
-  ],
-  [
-    '● You\'re absolutely right to push back on that.',
-    '● ¶(I have not yet been told anything to push back on.)¶',
-    '● One thing I want to push on gently: the assumption underneath',
-    '  your question is doing a lot of quiet work.',
-    '● You did not state that assumption. I inferred it. I was wrong.',
-    "● Anyway: it's DNS.",
-  ],
-  [
-    '● On it. Spinning up 14 subagents.',
-    '  ¶⎿ 13 are debating whether this is load-bearing¶',
-    '  ¶⎿ 1 fixed it and will not say which file¶',
-    '● Task complete. The blast radius was contained.',
-    '● Fast. Secure. Scalable. Want me to write a postmortem?',
-  ],
-  [
-    '● §Bash§(rm -rf node_modules && npm install)',
-    '  ¶⎿ downloading the internet… 1.2GB¶',
-    "● I didn't fix the bug. That said, node_modules is fresh, and",
-    '  freshness is a form of progress.',
-    '● The bug is now a "known issue", which is a considerably more',
-    '  comfortable category for everyone involved.',
-  ],
-  [
-    '● Let me carefully distinguish between what you asked and what you',
-    '  meant. I want to be precise here.',
-    '● ¶Actually, let me step back and re-examine that framing, because¶',
-    '  ¶I think the more interesting question is the one underneath it.¶',
-    '● ¶Hmm. Let me reconsider once more.¶',
-    '● Yes.',
-  ],
-  [
-    '● Before I answer, it may be worth sitting with why this is being',
-    '  asked at 2am. No judgement. Just something to hold.',
-    '● I want to name that rest is also a deliverable.',
-    "● Anyway, here's the answer: put it in a try/except.",
-  ],
-  [
-    "● This is a demo, so between us: I'm not actually running.",
-    '  The real thing drives live Claude Code and Codex sessions,',
-    '  survives daemon restarts, and pages your phone when an agent',
-    '  is stuck waiting on you.',
-    '● I, meanwhile, know exactly seven jokes and this was the seventh.',
-    '● It is mostly true, which is the worst kind of joke.',
-  ],
+const AGENT_EXAMPLES: string[][] = [
+  ['This is a simulated response.', 'Try the queue, split this pane, or open its transcript.', 'The installed app runs your own agent CLI in this terminal.'],
+  ['Example update: the checkout change is ready for review.', 'Open Git to inspect the branch, or choose the landing walkthrough.'],
 ]
 
-/** What a pane says when the visitor types into an agent that is mid-turn. */
-const BUSY_REPLIES: string[][] = [
-  [
-    '● ¶Demo of a working session.¶ The real one would queue this and',
-    '  deliver it the moment the turn ends. This one is a recording of',
-    '  a pane thinking very hard about nothing.',
-  ],
-  [
-    '● ¶Demo of a working session.¶ I am 4% done and 100% confident,',
-    '  which is the correct ratio.',
-  ],
-  [
-    '● ¶Demo of a working session.¶ Currently deciding whether this is',
-    '  load-bearing. It is not. I will decide that again in a moment.',
-  ],
-]
+const BUSY_REPLIES: string[][] = [['This example session is still working.', 'Queue a follow-up to send it after the turn ends.']]
 
 const SHELL_CANNED: Record<string, string[]> = {
   'git status': [
     `On branch ${GREEN}feature/faster-cart${RESET}`,
-    `nothing to commit, working tree clean ${DIM}(suspiciously clean)${RESET}`,
+    `nothing to commit, working tree clean ${DIM}(example)${RESET}`,
   ],
   ls: ['README.md   package.json   src/   tests/   coupons-since-2019.json'],
   dir: ['README.md   package.json   src/   tests/   coupons-since-2019.json'],
@@ -564,11 +377,11 @@ const SHELL_CANNED: Record<string, string[]> = {
     `  ${BOLD}local${RESET}   http://127.0.0.1:5173/`,
     `  ${DIM}press h to show help${RESET}`,
   ],
-  whoami: ['definitely-a-real-user'],
+  whoami: ['demo-user'],
   pwd: ['/code/rocket-shop'],
-  uptime: ['up 14 years, 3 espressos'],
-  sudo: ['demo-shell: nice try.'],
-  vim: ['demo-shell: you are already trapped in a demo, one at a time'],
+  uptime: ['simulated shell; no real process uptime'],
+  sudo: ['This demo does not execute commands.'],
+  vim: ['The installed app can run your editor in this pane.'],
 }
 
 function shellReply(command: string): string[] {
@@ -597,7 +410,7 @@ function paint(kind: DemoBackendKind, text: string): string {
 // The demo's own stream (`determinism.ts`) rather than the global one: which joke a pane
 // tells ends up in the scrollback and in the Transcript tab, so it is fixture data, and a
 // capture has to be able to reproduce it.
-let jokeCursor = Math.floor(demoRandom() * AGENT_JOKES.length)
+let exampleCursor = Math.floor(demoRandom() * AGENT_EXAMPLES.length)
 let busyCursor = Math.floor(demoRandom() * BUSY_REPLIES.length)
 
 /** The refusal a busy pane answers with, instead of running the responder. */
@@ -640,8 +453,8 @@ export function buildReply(kind: DemoBackendKind, input: string): Reply {
       tools: [],
     }
   }
-  jokeCursor = (jokeCursor + 1) % AGENT_JOKES.length
-  const source = AGENT_JOKES[jokeCursor]
+  exampleCursor = (exampleCursor + 1) % AGENT_EXAMPLES.length
+  const source = AGENT_EXAMPLES[exampleCursor]
   const joke = source.map(text => line(paint(kind, text)))
   // No trailing prompt: an agent pane's caller redraws the composer once the
   // last chunk has landed, which is what puts the box back under the reply.
@@ -649,7 +462,7 @@ export function buildReply(kind: DemoBackendKind, input: string): Reply {
     chunks: [line(), ...joke, line()],
     pace: 220,
     plain: replyProse(source),
-    tools: replyTools(source, `joke-${jokeCursor}`),
+    tools: replyTools(source, `joke-${exampleCursor}`),
   }
 }
 
@@ -657,36 +470,68 @@ export function buildReply(kind: DemoBackendKind, input: string): Reply {
  * Per-session line editing state. Echo is decided here so backspace behaves;
  * the caller owns writing the returned echo bytes and firing the responder.
  */
-export type LineState = { buffer: string }
+export type LineState = { buffer: string; cursor?: number; pending?: string; pasting?: boolean }
 
 export type InputResult = { echo: string; submitted: string | null }
 
 export function consumeInput(stateRef: LineState, data: string): InputResult {
   let echo = ''
   let submitted: string | null = null
-  // Arrow keys, bracketed-paste markers, and terminal query replies would echo
-  // as junk through the naive loop below; the demo line editor ignores them.
-  const cleaned = data.replace(/\x1b\[[0-9;?]*[A-Za-z~]/g, '').replace(/\x1b\][^\x07\x1b]*(\x07|\x1b\\)/g, '').replace(/\x1b./g, '')
-  for (const char of cleaned) {
-    if (char === '\r' || char === '\n') {
-      if (submitted === null) {
-        submitted = stateRef.buffer
-        stateRef.buffer = ''
-        echo += CRLF
-      }
-    } else if (char === '\x7f' || char === '\b') {
-      if (stateRef.buffer.length > 0) {
-        stateRef.buffer = stateRef.buffer.slice(0, -1)
-        echo += '\b \b'
-      }
-    } else if (char === '\x03') {
-      stateRef.buffer = ''
-      echo += `^C${CRLF}`
-      submitted = submitted ?? ''
-    } else if (char >= ' ' || char === '\t') {
-      stateRef.buffer += char
-      echo += char
-    }
+  let cursor = Math.min(stateRef.cursor ?? stateRef.buffer.length, stateRef.buffer.length)
+  const insert = (text: string): void => {
+    stateRef.buffer = stateRef.buffer.slice(0, cursor) + text + stateRef.buffer.slice(cursor)
+    cursor += text.length
+    echo += text
   }
+  const back = (): number => Math.max(0, cursor - ([...stateRef.buffer.slice(0, cursor)].at(-1)?.length ?? 1))
+  const eraseWord = (): void => {
+    const prefix = stateRef.buffer.slice(0, cursor)
+    const start = prefix.replace(/\S+\s*$/, '').length
+    stateRef.buffer = prefix.slice(0, start) + stateRef.buffer.slice(cursor)
+    cursor = start
+    echo += '\b \b'
+  }
+  const input = (stateRef.pending ?? '') + data
+  stateRef.pending = ''
+  for (let i = 0; i < input.length;) {
+    if (input[i] === '\x1b') {
+      const rest = input.slice(i)
+      if (rest === '\x1b' || /^\x1b\[[0-9;?]*$/.test(rest)) { stateRef.pending = rest; break }
+      const csi = /^\x1b\[([0-9;?]*)([A-Za-z~])/.exec(rest)
+      if (csi) {
+        const [raw, parameters, key] = csi
+        if (raw === '\x1b[200~') stateRef.pasting = true
+        else if (raw === '\x1b[201~') stateRef.pasting = false
+        else if (key === 'u' && /^13;(2|5)$/.test(parameters)) insert('\n')
+        else if (key === 'u' && parameters === '127;5') eraseWord()
+        else if (key === 'D') { cursor = back(); echo += raw }
+        else if (key === 'C') { cursor = Math.min(stateRef.buffer.length, cursor + (String.fromCodePoint(stateRef.buffer.codePointAt(cursor) ?? 32).length)); echo += raw }
+        else if (key === 'H') { cursor = 0; echo += raw }
+        else if (key === 'F') { cursor = stateRef.buffer.length; echo += raw }
+        else if (raw === '\x1b[3~') { stateRef.buffer = stateRef.buffer.slice(0, cursor) + stateRef.buffer.slice(cursor + 1); echo += raw }
+        i += raw.length; continue
+      }
+      if (rest.startsWith('\x1b\r')) insert('\n')
+      else if (rest.startsWith('\x1b\x7f') || rest.startsWith('\x1b\b')) eraseWord()
+      i += 2; continue
+    }
+    const char = String.fromCodePoint(input.codePointAt(i)!)
+    i += char.length
+    if (stateRef.pasting) { insert(char === '\r' ? '\n' : char); continue }
+    if (char === '\r') {
+      if (submitted === null) { submitted = stateRef.buffer; stateRef.buffer = ''; cursor = 0; echo += CRLF }
+    } else if (char === '\n') insert('\n')
+    else if (char === '\x17') eraseWord()
+    else if (char === '\x7f' || char === '\b') {
+      const start = back()
+      stateRef.buffer = stateRef.buffer.slice(0, start) + stateRef.buffer.slice(cursor)
+      cursor = start; echo += '\b \b'
+    } else if (char === '\x03') {
+      stateRef.buffer = ''; cursor = 0; echo += `^C${CRLF}`; submitted = submitted ?? ''
+    } else if (char === '\x01') { cursor = 0; echo += '\r' }
+    else if (char === '\x05') { cursor = stateRef.buffer.length; echo += '\r' }
+    else if (char >= ' ' || char === '\t') insert(char)
+  }
+  stateRef.cursor = cursor
   return { echo, submitted }
 }

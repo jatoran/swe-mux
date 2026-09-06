@@ -1,38 +1,38 @@
 # swe-mux
 
-**A coding-agent multiplexer built for desktop and mobile.**
+**Run your coding agents together. Know which ones need you.**
 
-Run Claude Code, Codex, opencode and any other CLI side by side in real terminals, see which one needs you, and drive the whole thing from your phone.
-It runs on your own machine: no vendor backend, no relay, no account, no telemetry.
+Keep Claude Code, Codex and other coding agents side by side, with live status, flexible panes and messages between sessions.
+Work from your desktop or phone.
+Dictate prompts, hear replies, and ask the assistant what needs attention.
 
-[![A seventy second walkthrough: starting agents, watching the fleet, and landing a finished branch](site/img/desktop-workspace.webp)](https://swemux.dev)
+[![Agents and a preview arranged in the swe-mux workspace](site/img/showcase-panes.webp)](https://swemux.dev/demo/)
 
-<sub>A silent seventy-second walkthrough - **[play it on swemux.dev](https://swemux.dev)**. GitHub only plays video uploaded through its own web UI, so this is a still that links to the player rather than a video tag that would render as a dead frame here.</sub>
+[Try the interactive demo](https://swemux.dev/demo/) or [read the setup guide](https://swemux.dev/docs/install/).
+The demo runs the real interface with simulated agent activity and needs no provider connection.
 
-[![ci](https://github.com/jatoran/swe-mux/actions/workflows/ci.yml/badge.svg)](https://github.com/jatoran/swe-mux/actions/workflows/ci.yml)
-[![license](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+## What you can do
 
-## Why it is different
+- **See which agent needs you.** Live status, searchable alert history, per-event sounds and push notifications, quiet hours and separate Desktop/Mobile profiles.
+- **Keep working from your phone.** Terminals, Git review, notes, files, queues and local previews over your own Tailscale connection.
+- **Keep familiar input.** Shared editing behavior across supported agent composers, workspace keymaps for tmux, VS Code, Vim and Emacs, and clipboard image paste for image-capable agents.
+- **Reuse copied text.** Shared history of text copied inside swe-mux, with optional persistence and pinned entries.
+- **Use voice.** Local speech recognition, optional read-aloud, and an assistant that can inspect sessions and propose actions under your chosen trust settings.
+- **Let sessions coordinate.** Messages, progress reads and requests for help governed by Project permissions.
+- **Finish parallel work.** Reconcile a branch, run approved checks and fast-forward through the land queue; conflicts and failed checks return to the owning agent.
+- **Find and inspect earlier work.** Search cross-agent conversations, reopen transcripts, and enable recorded evidence and commit provenance when you need them.
 
-- **Real terminals, not a re-render.** swe-mux owns the pseudoterminals, so your CLIs behave exactly as they do outside it - including whatever shipped yesterday. There is no feature lag and nothing to wait for us to expose. Start a plain shell and promote it to an agent mid-session, because the terminal is the primitive.
-- **One status vocabulary across every vendor.** Working, ready, awaiting you, or blocked - read from provider hooks, the transcript, the terminal and the CLI's own state, with every transition in a durable ledger. Ambiguous evidence resolves to the conservative prior rather than to a guess. ([how](.docs/design/features/status-detection.md))
-- **Built for mobile, not shrunk onto it.** An installable PWA over your own Tailscale tailnet with nothing turned off: terminals, git review, the editor, previews, voice, push. A dev server on `127.0.0.1` is proxied through swe-mux's own URL, so your phone reaches it without exposing a port. ([how](.docs/design/features/remote-access.md))
-- **Sessions that outlive the app.** A supervisor process separate from the daemon holds every pseudoterminal, so a daemon restart or a full rebuild leaves the agents working - new builds of swe-mux ship from an agent session running inside swe-mux. Reconnecting replays only the bytes you missed. ([how](.docs/design/features/sessions.md))
-- **Your workflows stay yours.** Harness-neutral by construction: normalized input, status, transcripts, history and accounts across the CLIs in its registry, and anything else runs unchanged. Switch harness or model without rebuilding how you work. ([how](.docs/design/features/backends.md))
-- **Parallel worktrees, landed behind your gate.** One branch at a time: reconcile, run the verification command whose exact bytes you approved, fast-forward only. A conflict or a failed gate goes back to the branch's own agent, and an agent cannot approve the gate its own land runs. ([how](.docs/design/features/land-queue.md))
+## What runs where
 
-Underneath those, a record taken from the work rather than from the agent's account of it: every file write hashed on the bytes actually written, every command with its exit class, test output parsed to the failing set, and each commit attributed to the session and conversation that produced it. ([Tier 0 facts](.docs/design/features/tier0-facts.md))
+Your agent CLIs run in real terminals under your existing subscriptions.
+Data stays on your machine, with no swe-mux account, vendor-operated backend or usage telemetry.
+Agent providers, optional integrations and update checks still use the network.
+The assistant uses your configured model endpoint and budget; speech recognition running locally is a separate capability.
 
-The full feature list is at <https://swemux.dev>; this file is the short version.
-
-## Almost everything beyond the workbench is off until you ask
-
-Worth knowing before you install rather than after.
-Automations are per-Project opt-in and every one ships off. The model-backed capabilities - the behaviour timeline, the attention observers, and the assistant - ship off. Read aloud ships off. The land queue needs four separate things before an agent can trigger one.
-
-Nothing runs on a Project that did not opt in, and nothing reaches a model without a budget you set.
-
-**What crosses the network:** your data is SQLite on your disk, there is no swe-mux account, and nothing reports usage anywhere. Your CLIs talk to their own vendors under your own subscription. OpenRouter, web push, Hugging Face model downloads and Edge TTS are each optional and off until you turn them on. The one request swe-mux makes for itself is a daily static `version.json` fetch carrying no identifier, and it is disableable.
+A separate supervisor keeps sessions working through daemon restarts and app updates.
+Supervisor death and power loss end live processes; cold recovery restores readable, resumable records.
+Automation and agent control have explicit Project permissions.
+Clipboard history records in-app text copies and is memory-only unless persistence is enabled.
 
 ## Install
 
@@ -105,7 +105,7 @@ No CI job starts a daemon from a **published artifact**, which is exactly where 
 
 - **Windows 10/11 is the proving platform.** The full gate runs there, including real ConPTY integration and the Playwright renderer suite, and it is the only platform the desktop app ships on.
 - **Linux runs headless plus a browser**, on a required CI leg. There is no Linux desktop app, by design.
-- **macOS is implemented, typechecked and exercised**, but its leg is still `continue-on-error`; treat it as unproven.
+- **macOS runs the daemon and browser client**, with required CI checks including the source-daemon tier.
 
 What each claim rests on: [`.docs/development/CROSS_PLATFORM_FINDINGS.md`](.docs/development/CROSS_PLATFORM_FINDINGS.md).
 

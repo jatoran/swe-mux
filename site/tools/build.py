@@ -1222,7 +1222,20 @@ def _doc_blocks_html(page: docs_content.Page, out: list[str]) -> None:
         if not open_section:
             out.append('      <div class="docsec">')
             open_section = True
-        if kind == "p":
+        if kind == "example":
+            asset, scenario, alt = value
+            if not re.fullmatch(r"showcase-[a-z]+", asset) or not re.fullmatch(r"[a-z]+", scenario):
+                raise SystemExit(f"invalid demo example on {page.slug}")
+            if not (SITE / "img" / f"{asset}.webp").is_file():
+                raise SystemExit(f"missing demo example image: {asset}")
+            portrait = asset.endswith("-phone")
+            width, height = (390, 844) if portrait else (1440, 810)
+            out.append(
+                f'<figure class="showcase"><img src="../../img/{asset}.webp" '
+                f'width="{width}" height="{height}" loading="lazy" alt="{html.escape(alt, quote=True)}" /></figure>'
+            )
+            out.append(f'<p class="note">Real interface, simulated activity. <a href="../../demo/?scenario={scenario}">Try this walkthrough</a>.</p>')
+        elif kind == "p":
             out.append(f'        <p class="prose">{value}</p>')
         elif kind == "note":
             out.append(f'        <p class="note">{value}</p>')
@@ -1284,7 +1297,9 @@ def doc_search_text(page: docs_content.Page) -> str:
     """
     parts = [page.title, strip_markup(page.lede)]
     for kind, value in page.blocks:
-        if kind in {"h2", "code"}:
+        if kind == "example":
+            parts.append(str(value[2]))
+        elif kind in {"h2", "code"}:
             parts.append(strip_markup(str(value)))
         elif kind in {"p", "note", "proof"}:
             parts.append(strip_markup(str(value)))

@@ -67,7 +67,7 @@
       "id": "local",
       "label": "Runs entirely on hardware you control",
       "cells": {
-        "swemux": { "v": "yes", "t": "No server, no account, no relay. The project operates nothing.", "src": ["swemux-readme"] },
+        "swemux": { "v": "yes", "t": "Local app data, no swe-mux account and no vendor-operated backend or relay. Providers and optional integrations still use the network.", "src": ["swemux-readme"] },
         "herdr": { "v": "yes", "t": "A local binary. Remote means your own SSH or your own rented box.", "src": ["herdr-site"] },
         "tmux": { "v": "yes", "t": "A local process, and nothing else.", "src": ["tmux-repo"] },
         "orca": { "v": "yes", "t": "A desktop app on your own subscriptions, with SSH to your own VPS.", "src": ["orca-site"] },

@@ -333,3 +333,6 @@
   border: 1px solid #8bd450;
   color: #8bd450;
 }
+
+.demo-director-card footer button { font: inherit; font-size: 12px; color: var(--fg, #d9dde2); border: 1px solid var(--line, #2a2e34); background: var(--panel, #0d0f12); padding: 4px 9px; cursor: pointer; }
+.demo-director-card footer button:hover { border-color: var(--accent, #8bd450); }

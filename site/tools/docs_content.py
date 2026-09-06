@@ -402,6 +402,7 @@ PHONE = Page(
         "an account to live on."
     ),
     blocks=[
+        ("example", ("showcase-phone", "status", "The phone workspace with a waiting session.")),
         ("h2", "Setting it up"),
         (
             "steps",
@@ -775,6 +776,7 @@ STATUS = Page(
         "cannot rank what needs you if you cannot tell what each session is doing."
     ),
     blocks=[
+        ("example", ("showcase-status", "status", "An alert identifies the session and reason.")),
         ("h2", "The vocabulary"),
         (
             "table",
@@ -1018,6 +1020,7 @@ WORKSPACE = Page(
         "Project, or the whole application."
     ),
     blocks=[
+        ("example", ("showcase-panes", "preview", "An agent and a local preview share the workspace.")),
         ("h2", "Panes and splits"),
         (
             "table",
@@ -1179,6 +1182,7 @@ QUEUE = Page(
         "session being resumed."
     ),
     blocks=[
+        ("example", ("showcase-communication", "orchestrate", "A session requests help and receives replies.")),
         ("h2", "Staging a message"),
         (
             "p",
@@ -1309,6 +1313,7 @@ GIT = Page(
         "behind a verification gate."
     ),
     blocks=[
+        ("example", ("showcase-land", "land", "A branch progresses through the approved landing checks.")),
         ("h2", "What it reads, and how often"),
         (
             "p",
@@ -1474,6 +1479,7 @@ NOTES_FILES = Page(
         "the note collection, the file tree, and whatever your sessions are serving."
     ),
     blocks=[
+        ("example", ("showcase-clipboard", "clipboard", "Open the full text of a shared clipboard entry.")),
         ("h2", "Notes"),
         (
             "p",
@@ -1590,6 +1596,7 @@ HISTORY = Page(
         "deletes them</b>."
     ),
     blocks=[
+        ("example", ("showcase-history", "history", "Search and inspect earlier conversations.")),
         ("h2", "What it gives you"),
         (
             "ul",
@@ -1676,6 +1683,7 @@ VOICE = Page(
         "needs the other, and both are off until you turn them on."
     ),
     blocks=[
+        ("example", ("showcase-voice", "voice", "A scripted assistant example identifies a waiting session.")),
         ("h2", "Read aloud, in three ordered layers"),
         (
             "p",
@@ -2411,6 +2419,7 @@ KEYBOARD = Page(
         "commands behind one chord and tells you what to press next."
     ),
     blocks=[
+        ("example", ("showcase-input", "input", "Shared editing actions in a simulated agent composer.")),
         ("h2", "The flat defaults"),
         (
             "p",
@@ -2869,8 +2878,8 @@ TROUBLESHOOTING = Page(
             "flat",
             [
                 (
-                    "The PTY supervisor, and it ships off",
-                    "With it on, terminals are held by a separate process and survive a daemon "
+                    "The PTY supervisor, enabled by default",
+                    "Terminals normally run under a separate supervisor and survive a daemon "
                     "restart, an app rebuild, and a redeploy. With it off, a restart reaps every "
                     "session - which is why the restart endpoint refuses outright unless it is "
                     "forced. Turn it on in Settings, Terminals.",

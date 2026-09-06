@@ -208,7 +208,7 @@ import { applyRailDensity, watchRailDensityProfile } from './railDensity'
 import { DEFAULT_CLAUDE_MAX_COLUMNS, claudeMaxColumnsFrom } from './terminalViewport'
 import { bindingFor, displayChord, paletteResults, paletteScope, PALETTE_PREFIXES, runCommand, type Command, type VoiceCommandResult } from './commands'
 import { buildFleetCommands, displayOrderKey, type FleetCommandActions } from './fleetCommands.ts'
-import { setKeybindingsStore } from './keybindingsStore.ts'
+import { KEYBINDINGS_REFRESH_EVENT, setKeybindingsStore } from './keybindingsStore.ts'
 import type { ResolvedBindings, TrieOption } from './keymap.ts'
 import {
   advance as advanceKeymap, cancel as cancelKeymap, installKeymap,
@@ -2186,6 +2186,7 @@ export function App() {
       setKeymap(current => JSON.stringify(current) === JSON.stringify(next) ? current : next)
     })
     loadKeys()
+    window.addEventListener(KEYBINDINGS_REFRESH_EVENT, loadKeys)
     // The /events WebSocket already pushes a refresh on every change, so these intervals
     // are only a safety net. Skip them while the tab is hidden (no point re-fetching and
     // re-rendering a backgrounded tab) and refresh once on return to foreground.
@@ -2207,6 +2208,7 @@ export function App() {
     window.addEventListener('unhandledrejection', onUnhandled)
     return () => {
       clearInterval(timer); clearInterval(keyTimer)
+      window.removeEventListener(KEYBINDINGS_REFRESH_EVENT, loadKeys)
       document.removeEventListener('visibilitychange', onVisible)
       window.removeEventListener('unhandledrejection', onUnhandled)
     }
@@ -2656,6 +2658,7 @@ export function App() {
           // Another device (or another tab) changed the ring; an open picker refetches.
           if (event.type === 'clipboard_changed') window.dispatchEvent(new CustomEvent(CLIPBOARD_CHANGED_EVENT))
           if (!isReplay && event.type === 'configuration_changed') {
+            window.dispatchEvent(new Event(KEYBINDINGS_REFRESH_EVENT))
             void loadVoiceStatus()
             void assistantStatus().then(setAssistantInfo).catch(()=>{})
             // A change made from another device (or by editing the config file)

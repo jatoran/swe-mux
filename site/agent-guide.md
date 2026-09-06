@@ -12,7 +12,7 @@ If this file and one of these disagree, the source below wins and this file is s
 - `https://swemux.dev/docs/troubleshooting/` - what actually goes wrong, and what to do about it.
 - `https://swemux.dev/docs/` - the documentation home, with a page per topic and a search box.
 
-This file was last revised on 2026-08-28, against swe-mux 0.1.0.
+This file was last revised on 2026-09-06, against the swe-mux 0.2.5 source.
 
 ---
 
@@ -40,7 +40,7 @@ Check these with the user and stop if one fails.
 - **Python 3.12 or newer.** `python --version`.
 - **An installer.** `uv` is the recommended one (`uv --version`); `pipx` also works; `pip` works with a caveat covered below.
 - **At least one agent CLI already installed and logged in.** swe-mux does not install, manage, or authenticate them. If they have none, they should install Claude Code, Codex CLI, or opencode first and log into it, then come back.
-- **The operating system.** Windows 10 or 11 is the proving platform and the only one with a packaged desktop application. Linux runs the daemon plus a browser. macOS installs and the CLI runs, but no continuous-integration job on any host has ever started a daemon there, so treat macOS as unproven and expect to help debug.
+- **The operating system.** Windows 10 or 11 is the proving platform and the only one with a packaged desktop application. Linux runs the daemon plus a browser. Linux and macOS run the local daemon with a browser. All three platforms have required CI checks, including source-daemon tests; validate the published artifact separately.
 
 Node is **not** required.
 The published wheel already carries the built frontend.
@@ -96,10 +96,10 @@ Only if the user intends to change swe-mux itself.
 ```
 git clone https://github.com/jatoran/swe-mux
 cd swe-mux
-uv sync --extra desktop
+uv sync
 npm --prefix frontend ci        # only the source flow needs Node
 npm --prefix frontend run build # a fresh clone serves no UI until this runs once
-uv run --extra desktop swe-mux
+uv run swe-mux
 ```
 
 The frontend bundle is git-ignored build output.

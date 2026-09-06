@@ -638,9 +638,8 @@ console.log('desktop download')
   const d = await browser.newPage({ viewport: { width: 1280, height: 900 } })
   await d.goto(url(PAGES[0]), { waitUntil: 'networkidle' })
 
-  // Empty: a true sentence and nothing to press. No anchor at all, rather than
-  // one pointing at `#` or at a release that does not exist, and no disabled
-  // control - a greyed-out button reads as broken rather than as honest.
+  // Missing metadata is not evidence that no release exists. Keep the known release-list
+  // link, without inventing a version-specific artifact URL or a disabled download button.
   const empty = await d.evaluate(() => {
     const host = document.getElementById('download')
     if (!host) return null
@@ -656,13 +655,13 @@ console.log('desktop download')
   else {
     if (!empty.renderer) fail('download: the page exposes no renderer to drive with a manifest')
     if (empty.state !== 'none') fail(`download: with no manifest the state is "${empty.state}"`)
-    if (empty.links.length) fail(`download: the empty state offers links [${empty.links}]`)
+    if (empty.links.length !== 1 || empty.links[0] !== 'https://github.com/jatoran/swe-mux/releases') fail('download: missing metadata must retain the release-list fallback')
     if (empty.buttons) fail(`download: the empty state draws ${empty.buttons} control(s) to press`)
     // It has to say the thing is not published, and it has to send the reader
     // at the install that does work. A "coming soon" that does neither reads as
     // abandonment.
-    if (!/not published yet/i.test(empty.text)) {
-      fail('download: the empty state does not say the build is not published yet')
+    if (/not published yet/i.test(empty.text) || !/metadata/i.test(empty.text)) {
+      fail('download: missing metadata must not claim the installer is unpublished')
     }
     if (!/python/i.test(empty.text)) {
       fail('download: the empty state does not point at the Python install that works today')
