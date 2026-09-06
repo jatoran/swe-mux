@@ -1089,10 +1089,33 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
     <h1>Changelog</h1>
     <div class="rel">
       <div class="relhead">
-        <h2><a href="https://github.com/jatoran/swe-mux/compare/v0.2.6...HEAD">Unreleased</a></h2>
+        <h2><a href="https://github.com/jatoran/swe-mux/compare/v0.2.7...HEAD">Unreleased</a></h2>
         <span class="fill"></span>
       </div>
       <p class="prose">Nothing yet.</p>
+    </div>
+    <div class="rel">
+      <div class="relhead">
+        <h2><a href="https://github.com/jatoran/swe-mux/releases/tag/v0.2.7">0.2.7</a></h2>
+        <span class="when">2026-09-06</span>
+        <span class="fill"></span>
+        <a class="relnotes" href="https://github.com/jatoran/swe-mux/releases/tag/v0.2.7">release notes</a>
+      </div>
+      <div class="relgroups">
+        <div><span class="k">Changed</span> <span class="sep">6 entries</span></div>
+      </div>
+      <details class="relmore">
+        <summary>all 6 entries</summary>
+        <div class="changetype">Changed</div>
+        <ul class="bullets">
+          <li><span><b>Usage and Fleet activity are one dialog, Usage &amp; activity, and Resources is now System.</b> What an agent consumed and what it did were split across two dialogs that were opened for the same question, so Overview, Agent usage, Quota, Activity and Automation now sit together, and Processes, Network and Storage stay behind System, which is host inspection rather than agent behaviour. Every existing command id still resolves, so saved keybindings and voice navigation are unaffected: <code>usage.open</code> opens Overview, <code>usage.quota</code> opens Quota, <code>fleetActivity.open</code> opens Activity, and <code>resources.open</code> opens System. The three kinds of spend are still never summed - a transcript estimate is not a subscription bill, metered automation cost is not a token estimate, and a quota percentage is not money - and the observed-agent subset stays labelled and collapsed inside Automation rather than presented as a second agent total.</span></li>
+          <li><span><b>Both dialogs work at phone width.</b> Mobile gets a full-screen layout with a section selector and visible secondary tabs instead of a desktop dialog squeezed sideways; the date range stays on screen and the remaining filters move into a disclosure that says how many are active. Large counts read as compact <code>K</code>/<code>M</code>/<code>B</code> with one decimal, and the exact number is one tap, hover or keypress away. A section you are not looking at is unmounted and issues no background reads, so opening the dialog no longer fetches every endpoint to show one of them.</span></li>
+          <li><span><b>A run in Activity carries the name you gave it.</b> Historical runs were listed by identifier while the session they came from had a title, and the join is by exact run id rather than a session fallback, so a rolled-over session can no longer lend its name to an earlier run.</span></li>
+          <li><span><b>Trends, models and quota history are readable rather than dense.</b> Trends have a fixed height and place points by date, with a period selector as the keyboard and touch alternative to hitting a chart point; models are ranked across the selected period with the selected model's own history beside the breakdown; quota Attribution states that it is showing a bounded sample of the latest 500 movements rather than everything.</span></li>
+          <li><span><b>swemux.dev's feature videos are yours to control.</b> Every capture on the site plays, pauses and seeks, and the site now serves partial content, so dragging the scrubber fetches the part you asked for instead of the whole file. The captures were retaken without the tutorial cards, pointer effects and callouts that had crept into them, and the audio samples are gone. Nothing about the update check changed: it remains a once-a-day request for <code>version.json</code> with no identifier attached.</span></li>
+          <li><span><b>The public roadmap distinguishes what shipped from what is planned.</b> Native Linux and macOS desktop apps and their installers, and broader plugin capabilities, are listed as planned rather than implied to exist.</span></li>
+        </ul>
+      </details>
     </div>
     <div class="rel">
       <div class="relhead">

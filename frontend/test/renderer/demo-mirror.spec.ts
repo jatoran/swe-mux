@@ -135,7 +135,7 @@ test('everything that is not layout-local still mirrors across layouts', async (
   await expect.poll(
     () => phone.evaluate(() => document.querySelector('[role="dialog"][aria-modal="true"]')?.getAttribute('aria-label') || ''),
     { timeout: 10_000 },
-  ).toBe('Resources')
+  ).toBe('System')
 
   await command(desktop, 'drawer.show:git')
   await expect.poll(

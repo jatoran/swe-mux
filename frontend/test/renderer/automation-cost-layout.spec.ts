@@ -118,14 +118,17 @@ test('no figures table overflows its panel at desktop width', async ({ page }) =
 test('the panel frame holds every view', async ({ page }) => {
   await page.setViewportSize({ width: 1200, height: 900 })
   for (const tab of ['Policy', 'Usage', 'Activity'] as const) {
-    await openTab(page, tab)
+    // Usage fetches on mount, and its loading state is a single line: measured before the
+    // response lands this reads an unfilled frame as a layout regression.
+    if (tab === 'Usage') await openSpend(page)
+    else await openTab(page, tab)
     const [progress] = await boxes(page, '.usage-progress')
     const [main] = await boxes(page, '.automation-panel > main')
     const [panel] = await boxes(page, '.automation-panel')
     expect(main.y).toBeGreaterThanOrEqual(progress.bottom - 0.5)
     expect(main.bottom).toBeLessThanOrEqual(panel.bottom + 0.5)
     // And the body is the part that grew, so it is the part that scrolls.
-    expect(main.height).toBeGreaterThan(200)
+    expect(main.height, `${tab}: main is ${main.height}px inside a ${panel.height}px panel`).toBeGreaterThan(200)
   }
 })
 

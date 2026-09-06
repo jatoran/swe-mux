@@ -1,7 +1,8 @@
-// The words a telemetry caption is made of, kept apart from the component so a unit test
-// can exercise them without a renderer. Every displayed total names four things: its time
-// range, its cohort, its denominator, and how the window was answered (rolled-up days and
-// hours against raw entity reads).
+// The words a telemetry caption is made of, in one place so a unit test can exercise them
+// without a renderer and so no view spells a range or a cohort its own way. Every total
+// Usage & activity draws sits under a caption naming the window it was measured over and
+// whose runs it counted: "4,821 calls" means nothing until the reader knows over which days
+// and for whose runs.
 
 export type Coverage = { rolled_days: number; rolled_hours: number; raw_spans: number; raw_seconds: number }
 
@@ -15,25 +16,8 @@ export function cohortLabel(origin: string): string {
   return origin === 'all' ? 'mux-owned and imported runs' : origin === 'imported' ? 'imported runs' : 'mux-owned runs'
 }
 
-export function coverageLabel(coverage: Coverage | undefined): string {
-  if (!coverage) return 'coverage unavailable'
-  const parts: string[] = []
-  if (coverage.rolled_days) parts.push(`${coverage.rolled_days} rolled-up day${coverage.rolled_days === 1 ? '' : 's'}`)
-  if (coverage.rolled_hours) parts.push(`${coverage.rolled_hours} rolled-up hour${coverage.rolled_hours === 1 ? '' : 's'}`)
-  if (coverage.raw_seconds > 0) parts.push(`${Math.round(coverage.raw_seconds / 3600 * 10) / 10}h read from entities`)
-  return parts.length ? parts.join(' · ') : 'no data in range'
-}
-
-export function filtersLabel(filters: Record<string, string> | undefined): string {
-  const named = Object.entries(filters || {}).filter(([, value]) => value)
-  return named.length ? named.map(([key, value]) => `${key.replace(/_/g, ' ')} = ${value}`).join(', ') : ''
-}
-
 export function captionText(
-  { days, origin, denominator, coverage, filters }: {
-    days: number; origin: string; denominator: string; coverage?: Coverage; filters?: Record<string, string>
-  },
+  { days, origin, filters }: { days: number; origin: string; filters?: string[] },
 ): string {
-  const named = filtersLabel(filters)
-  return `${rangeLabel(days)} · ${cohortLabel(origin)}${named ? ` · ${named}` : ''} · ${denominator} · ${coverageLabel(coverage)}`
+  return [rangeLabel(days), cohortLabel(origin), ...(filters || []).filter(Boolean)].join(' · ')
 }

@@ -5,7 +5,7 @@ import { compactNumber } from './analyticsPresentation'
 import { formatDuration } from './automationCost'
 import { LegacyToolTelemetry } from './LegacyToolTelemetry'
 import { ModelName } from './ModelName'
-import type { Coverage } from './telemetryCaption'
+import { type Coverage, captionText } from './telemetryCaptionText'
 import { telemetryQuery, WorkloadTelemetry, type ActivityContext, type ActivityFilters } from './WorkloadTelemetry'
 
 type Domain = 'workloads' | 'tools' | 'skills' | 'context' | 'inefficiencies'
@@ -183,7 +183,10 @@ export function FleetActivityView(context:ActivityContext={}) {
       </div></details><button class="analytics-refresh" onClick={()=>setRevision(value=>value+1)}>Reload activity</button>
     </div>
     <main class="analytics-content">
-      <p class="analytics-caption">{filters.days?`Last ${filters.days} day${filters.days===1?'':'s'}`:'All retained time'} · {filters.origin==='all'?'Mux-owned and imported':filters.origin==='imported'?'Imported':'Mux-owned'}{filters.project?` · ${projectName(filters.project,context)}`:''}{filters.backend?` · ${filters.backend}`:''}{filters.model?` · ${filters.model}`:''}{toolTab?[filters.layer,filters.family,filters.status,filters.evidence].filter(Boolean).map(value=>` · ${value}`).join(''):''}</p>
+      {/* One caption for the section, because every view below it is windowed by the same
+          controls. The words come from `telemetryCaptionText` so no view spells a range or
+          a cohort its own way, and each view then states its own denominator. */}
+      <p class="analytics-caption">{captionText({days:filters.days,origin:filters.origin,filters:[filters.project?projectName(filters.project,context):'',filters.backend,filters.model,...(toolTab?[filters.layer,filters.family,filters.status,filters.evidence]:[])]})}</p>
       {error&&<div class="usage-error" role="alert">{error}</div>}
       {domain==='workloads'&&<WorkloadTelemetry key={query} {...context} query={query} filters={filters} initialRunId={selectedRun} onClearRun={()=>setSelectedRun('')}/>}
       {domain==='tools'&&(activity?<ToolsView key={toolQuery} data={activity} query={toolQuery} context={context} onRun={onRun}/>:!error&&<p>Loading tool activity…</p>)}

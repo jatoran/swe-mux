@@ -74,7 +74,7 @@ export const TUTORIAL_CHROME_CLAIMS: {
   settingsPaths: ['Settings → General', 'Settings → Accounts'],
   menuRows: [
     'Session history', 'Notes', 'Fleet queue', 'Prompt library', 'Clipboard history',
-    'Resources', 'Usage & spend', 'Notifications',
+    'Resources', 'Usage & activity', 'Notifications',
     'Projects', 'Plugins', 'Configure Actions', 'Automation Dashboard', 'Settings', 'Help',
   ],
   menuGroups: ['Maintenance'],

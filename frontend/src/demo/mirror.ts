@@ -86,8 +86,8 @@ type ViewState = {
  * and the section is mirrored by the generic tablist rule below.
  */
 const OVERLAY_COMMANDS: Record<string, string> = {
-  Resources: 'resources.open',
-  Usage: 'usage.open',
+  System: 'resources.open',
+  'Usage & activity': 'usage.open',
   'Fleet queue': 'queue.fleet',
   'Agent session history': 'history.open',
   'Manage projects': 'project.create',

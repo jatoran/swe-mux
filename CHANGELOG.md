@@ -15,6 +15,29 @@ The release procedure that maintains this file is [`RELEASING.md`](RELEASING.md)
 
 ## [Unreleased]
 
+## [0.2.7] - 2026-09-06
+
+### Changed
+
+- **Usage and Fleet activity are one dialog, Usage & activity, and Resources is now System.**
+  What an agent consumed and what it did were split across two dialogs that were opened for the same question, so Overview, Agent usage, Quota, Activity and Automation now sit together, and Processes, Network and Storage stay behind System, which is host inspection rather than agent behaviour.
+  Every existing command id still resolves, so saved keybindings and voice navigation are unaffected: `usage.open` opens Overview, `usage.quota` opens Quota, `fleetActivity.open` opens Activity, and `resources.open` opens System.
+  The three kinds of spend are still never summed - a transcript estimate is not a subscription bill, metered automation cost is not a token estimate, and a quota percentage is not money - and the observed-agent subset stays labelled and collapsed inside Automation rather than presented as a second agent total.
+- **Both dialogs work at phone width.**
+  Mobile gets a full-screen layout with a section selector and visible secondary tabs instead of a desktop dialog squeezed sideways; the date range stays on screen and the remaining filters move into a disclosure that says how many are active.
+  Large counts read as compact `K`/`M`/`B` with one decimal, and the exact number is one tap, hover or keypress away.
+  A section you are not looking at is unmounted and issues no background reads, so opening the dialog no longer fetches every endpoint to show one of them.
+- **A run in Activity carries the name you gave it.**
+  Historical runs were listed by identifier while the session they came from had a title, and the join is by exact run id rather than a session fallback, so a rolled-over session can no longer lend its name to an earlier run.
+- **Trends, models and quota history are readable rather than dense.**
+  Trends have a fixed height and place points by date, with a period selector as the keyboard and touch alternative to hitting a chart point; models are ranked across the selected period with the selected model's own history beside the breakdown; quota Attribution states that it is showing a bounded sample of the latest 500 movements rather than everything.
+- **swemux.dev's feature videos are yours to control.**
+  Every capture on the site plays, pauses and seeks, and the site now serves partial content, so dragging the scrubber fetches the part you asked for instead of the whole file.
+  The captures were retaken without the tutorial cards, pointer effects and callouts that had crept into them, and the audio samples are gone.
+  Nothing about the update check changed: it remains a once-a-day request for `version.json` with no identifier attached.
+- **The public roadmap distinguishes what shipped from what is planned.**
+  Native Linux and macOS desktop apps and their installers, and broader plugin capabilities, are listed as planned rather than implied to exist.
+
 ## [0.2.6] - 2026-09-06
 
 ### Added
@@ -924,7 +947,8 @@ macOS is implemented and typechecked but has never been executed.
   resolved dependency closure that runs in the test suite, and a payload check over the built
   desktop bundle. No GPL or AGPL code ships; the two LGPL libraries ship as replaceable source.
 
-[Unreleased]: https://github.com/jatoran/swe-mux/compare/v0.2.6...HEAD
+[Unreleased]: https://github.com/jatoran/swe-mux/compare/v0.2.7...HEAD
+[0.2.7]: https://github.com/jatoran/swe-mux/releases/tag/v0.2.7
 [0.2.6]: https://github.com/jatoran/swe-mux/releases/tag/v0.2.6
 [0.2.5]: https://github.com/jatoran/swe-mux/releases/tag/v0.2.5
 [0.2.4]: https://github.com/jatoran/swe-mux/releases/tag/v0.2.4

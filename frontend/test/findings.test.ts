@@ -93,15 +93,19 @@ test('the Automation dashboard mirrors the attention inbox as the same component
   assert.ok(dashboard.includes('<AutomationPolicyView'))
   // The away report stays with the drawer inbox it summarizes.
   assert.ok(source('Notifications.tsx').includes("api('GET','/api/attention/absence')"))
-  // The workload table moved to Resources, following the cost column that left before it.
-  assert.ok(source('WorkloadTelemetry.tsx').includes("api<Workloads>('GET', `/api/telemetry/v2/workload?${telemetryQuery("))
+  // The workload table left this view, following the cost column that left before it, and
+  // is now Activity's runs browser. The workload summary itself is no longer drawn as a
+  // table anywhere: it only supplies Activity's filter choices.
+  assert.ok(!dashboard.includes('/api/telemetry/v2/workload'), 'the dashboard must not draw the workload summary')
+  assert.ok(source('FleetActivityView.tsx').includes('/api/telemetry/v2/workload?'))
+  assert.ok(source('WorkloadTelemetry.tsx').includes('/api/telemetry/v2/runs?'))
 })
 
 test('the spend view is one component drawn in both places rather than two copies', () => {
   // "Fully mirrored" has to mean the same component: two views over one endpoint is
   // exactly the drift this consolidation removed everywhere else.
   assert.ok(source('AutomationDashboard.tsx').includes('<AutomationSpendView/>'))
-  assert.ok(source('UsageModal.tsx').includes('<AutomationSpendView />'))
+  assert.ok(source('UsageModal.tsx').includes('<AutomationSpendView/>'))
 })
 
 test('the agent figure in the spend view is labelled as a subset, not as the agent total', () => {
@@ -110,7 +114,10 @@ test('the agent figure in the spend view is labelled as a subset, not as the age
   // to one question, which is the exact failure the shared component above prevents
   // elsewhere. The denominator is therefore in the label, in the heading, and in the foot.
   const spend = source('AutomationSpendView.tsx')
-  assert.ok(spend.includes('agents · observed runs'))
+  // It is not a summary tile any more: the estimate is collapsed into a disclosure whose
+  // own summary, prose and table foot each name the denominator, so the number cannot be
+  // read at a glance as the agent total the way a tile beside the observer tiles was.
+  assert.ok(!spend.includes('<span>agents'), 'the agent estimate must not sit in the summary row beside metered spend')
   assert.ok(spend.includes('Agent model spend · observed runs only'))
   assert.ok(spend.includes('all observed runs'))
   // ...and it never claims to be the whole pot.

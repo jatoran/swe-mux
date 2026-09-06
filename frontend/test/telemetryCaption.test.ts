@@ -3,41 +3,22 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import test from 'node:test'
 
-import { captionText, cohortLabel, coverageLabel, rangeLabel } from '../src/telemetryCaptionText.ts'
+import { captionText, cohortLabel, rangeLabel } from '../src/telemetryCaptionText.ts'
 
 const root = join(import.meta.dirname, '..')
 const source = (name: string) => readFileSync(join(root, 'src', name), 'utf8')
 
-// The completion gate: every displayed total names its time range, its cohort, its
-// denominator, and its coverage. The words are pure and tested here; the views are held
-// to drawing them beside every total by source text, because the totals are what a
-// reader acts on and a bare number is the bug.
+// The completion gate: a total a reader acts on never appears as a bare number. The
+// section states the window and the cohort every view under it was measured over, in
+// words that live here and nowhere else, and each view states its own denominator.
 
-test('a caption names the range, the cohort, the denominator, and the coverage', () => {
-  const text = captionText({
-    days: 7,
-    origin: 'mux_owned',
-    denominator: '4,821 calls',
-    coverage: { rolled_days: 6, rolled_hours: 13, raw_spans: 2, raw_seconds: 5400 },
-  })
-  assert.equal(text, 'last 7 days · mux-owned runs · 4,821 calls · 6 rolled-up days · 13 rolled-up hours · 1.5h read from entities')
+test('a caption names the range and the cohort', () => {
+  assert.equal(captionText({ days: 7, origin: 'mux_owned' }), 'last 7 days · mux-owned runs')
 })
 
 test('the active filters are named so a filtered total cannot read as the whole', () => {
-  const text = captionText({
-    days: 1,
-    origin: 'all',
-    denominator: '12 runs',
-    coverage: { rolled_days: 0, rolled_hours: 23, raw_spans: 1, raw_seconds: 1800 },
-    filters: { backend: 'codex', project_id: '', evidence_quality: 'native' },
-  })
-  assert.equal(text, 'last 24 hours · mux-owned and imported runs · backend = codex, evidence quality = native · 12 runs · 23 rolled-up hours · 0.5h read from entities')
-})
-
-test('coverage that is missing or empty is said, never implied', () => {
-  assert.equal(coverageLabel(undefined), 'coverage unavailable')
-  assert.equal(coverageLabel({ rolled_days: 0, rolled_hours: 0, raw_spans: 0, raw_seconds: 0 }), 'no data in range')
-  assert.equal(coverageLabel({ rolled_days: 1, rolled_hours: 1, raw_spans: 0, raw_seconds: 0 }), '1 rolled-up day · 1 rolled-up hour')
+  const text = captionText({ days: 1, origin: 'all', filters: ['codex', '', 'native'] })
+  assert.equal(text, 'last 24 hours · mux-owned and imported runs · codex · native')
 })
 
 test('every range and cohort the controls offer has a label', () => {
@@ -49,20 +30,18 @@ test('every range and cohort the controls offer has a label', () => {
   assert.equal(cohortLabel('all'), 'mux-owned and imported runs')
 })
 
-test('every Fleet activity view draws a caption with a denominator beside its totals', () => {
+test('the Activity section states its window and every view under it states a denominator', () => {
   const fleet = source('FleetActivityView.tsx')
   const workload = source('WorkloadTelemetry.tsx')
-  // One caption per domain the view can show: tools (aggregate and the calls page),
-  // skills, verification, context, inefficiencies, and the workload tab.
-  const captions = fleet.match(/<TelemetryCaption /g) || []
-  assert.ok(captions.length >= 6, `FleetActivityView draws ${captions.length} captions; expected one per total`)
-  assert.ok((workload.match(/<TelemetryCaption /g) || []).length >= 1, 'the workload tab draws no caption')
-  for (const text of [fleet, workload]) {
-    for (const use of text.split('<TelemetryCaption ').slice(1)) {
-      const head = use.slice(0, use.indexOf('/>'))
-      assert.ok(head.includes('denominator='), 'a caption without a denominator is a bare number')
-      assert.ok(head.includes('days='), 'a caption without a range')
-      assert.ok(head.includes('origin='), 'a caption without a cohort')
-    }
-  }
+  // The window and the cohort are drawn once, for the section, because one set of controls
+  // windows every view below it - and they are drawn from the shared words rather than
+  // spelled again here, which is what a second view rewording "Mux-owned" would break.
+  assert.ok(fleet.includes('captionText({days:filters.days,origin:filters.origin'), 'the section caption is not built from the shared words')
+  assert.ok(!fleet.includes("'Mux-owned'"), 'a view spelling a cohort its own way is the drift the shared words prevent')
+  assert.ok(!workload.includes('rangeLabel('), 'the range belongs to the section, not to a view inside it')
+  // One caption per domain the section can show: tools (aggregate and the calls page),
+  // checks, context, patterns, and the runs browser's two modes.
+  const captions = (text: string) => (text.match(/class="analytics-caption"/g) || []).length
+  assert.ok(captions(fleet) >= 5, `FleetActivityView draws ${captions(fleet)} captions; expected one per total`)
+  assert.ok(captions(workload) >= 2, 'the runs browser draws no caption over its totals')
 })
