@@ -215,7 +215,7 @@ A stale generated page beside a changed template has broken this gate more than 
 ## Current feature-media rules
 
 The homepage leads with live status, desktop/mobile work and voice.
-Feature examples use the real demo interface with simulated activity.
-Captions and anchored highlights should identify the action, then leave time to inspect the result.
-Do not repeat a nearby paragraph inside the frame or describe simulated behavior as measured execution.
+Feature recordings show clean application UI without tutorial cards, controls, callouts or cursor effects.
+Keep captions in the surrounding page copy and identify simulated activity there.
+Videos use visitor-controlled playback and seeking; there are no audio samples.
 The language and scope matrix in `../README.md` and `../../.docs/marketing/README.md` govern the current copy.

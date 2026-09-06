@@ -7,9 +7,15 @@
       "surface": "desktop",
       "beat": 3,
       "caption": "The image reference is attached. Add your question.",
-      "bundle": "c234ea95039427c9d70f89723b408565e9f4fab4b7797394004ea710b994c2a5",
+      "bundle": "84d1b28121c5bf871968d4ac2b1946944fec0ff5bd4610bd367ae5258757c381",
       "seed": "default",
-      "simulated": true
+      "simulated": true,
+      "overlays": false,
+      "revisions": {
+        "webm": "f384ac2d3e0c",
+        "mp4": "5c8bec606e81",
+        "webp": "bd452ea1a931"
+      }
     },
     {
       "name": "clipboard",
@@ -17,9 +23,15 @@
       "surface": "desktop",
       "beat": 2,
       "caption": "Read an entry before inserting it.",
-      "bundle": "cb6894b07e3285f9f9b5da741daddc82ec85652a052caced101d202eb058aa4b",
+      "bundle": "84d1b28121c5bf871968d4ac2b1946944fec0ff5bd4610bd367ae5258757c381",
       "seed": "default",
-      "simulated": true
+      "simulated": true,
+      "overlays": false,
+      "revisions": {
+        "webm": "a010b3cb88c5",
+        "mp4": "b3fcb6d9628e",
+        "webp": "23e8e5fff199"
+      }
     },
     {
       "name": "communication",
@@ -27,9 +39,15 @@
       "surface": "desktop",
       "beat": 7,
       "caption": "Two panes, in the same Project, standing in the same repository.",
-      "bundle": "cb6894b07e3285f9f9b5da741daddc82ec85652a052caced101d202eb058aa4b",
+      "bundle": "84d1b28121c5bf871968d4ac2b1946944fec0ff5bd4610bd367ae5258757c381",
       "seed": "default",
-      "simulated": true
+      "simulated": true,
+      "overlays": false,
+      "revisions": {
+        "webm": "607df170ab25",
+        "mp4": "2a13899ab36c",
+        "webp": "057c5268310f"
+      }
     },
     {
       "name": "history",
@@ -37,9 +55,15 @@
       "surface": "desktop",
       "beat": 2,
       "caption": "Open a transcript to read the messages and tool activity.",
-      "bundle": "cb6894b07e3285f9f9b5da741daddc82ec85652a052caced101d202eb058aa4b",
+      "bundle": "84d1b28121c5bf871968d4ac2b1946944fec0ff5bd4610bd367ae5258757c381",
       "seed": "default",
-      "simulated": true
+      "simulated": true,
+      "overlays": false,
+      "revisions": {
+        "webm": "1077c6c58e31",
+        "mp4": "3c9772adfb30",
+        "webp": "1ab159b474ec"
+      }
     },
     {
       "name": "input",
@@ -47,9 +71,15 @@
       "surface": "desktop",
       "beat": 5,
       "caption": "The draft is still yours to edit.",
-      "bundle": "cb6894b07e3285f9f9b5da741daddc82ec85652a052caced101d202eb058aa4b",
+      "bundle": "84d1b28121c5bf871968d4ac2b1946944fec0ff5bd4610bd367ae5258757c381",
       "seed": "default",
-      "simulated": true
+      "simulated": true,
+      "overlays": false,
+      "revisions": {
+        "webm": "4d9bf83d47a8",
+        "mp4": "769e038e4b0e",
+        "webp": "f31ab089119b"
+      }
     },
     {
       "name": "land",
@@ -57,9 +87,15 @@
       "surface": "desktop",
       "beat": 5,
       "caption": "Checks passed. The branch lands on master.",
-      "bundle": "cb6894b07e3285f9f9b5da741daddc82ec85652a052caced101d202eb058aa4b",
+      "bundle": "84d1b28121c5bf871968d4ac2b1946944fec0ff5bd4610bd367ae5258757c381",
       "seed": "default",
-      "simulated": true
+      "simulated": true,
+      "overlays": false,
+      "revisions": {
+        "webm": "aad4a55cefb6",
+        "mp4": "d59afc44b6a9",
+        "webp": "cf30d5e50b03"
+      }
     },
     {
       "name": "landfailure",
@@ -67,9 +103,15 @@
       "surface": "desktop",
       "beat": 5,
       "caption": "A test failed. The branch stays out of master.",
-      "bundle": "cb6894b07e3285f9f9b5da741daddc82ec85652a052caced101d202eb058aa4b",
+      "bundle": "84d1b28121c5bf871968d4ac2b1946944fec0ff5bd4610bd367ae5258757c381",
       "seed": "default",
-      "simulated": true
+      "simulated": true,
+      "overlays": false,
+      "revisions": {
+        "webm": "b5984509f276",
+        "mp4": "9fb9b55fe486",
+        "webp": "afc5cf52b780"
+      }
     },
     {
       "name": "panes",
@@ -77,9 +119,15 @@
       "surface": "desktop",
       "beat": 7,
       "caption": "The same preview is available from your phone.",
-      "bundle": "c234ea95039427c9d70f89723b408565e9f4fab4b7797394004ea710b994c2a5",
+      "bundle": "84d1b28121c5bf871968d4ac2b1946944fec0ff5bd4610bd367ae5258757c381",
       "seed": "default",
-      "simulated": true
+      "simulated": true,
+      "overlays": false,
+      "revisions": {
+        "webm": "b3023fc08336",
+        "mp4": "5499aab023e3",
+        "webp": "e8ebca109a98"
+      }
     },
     {
       "name": "phone",
@@ -87,9 +135,15 @@
       "surface": "phone",
       "beat": 3,
       "caption": "Open the waiting session and read the question.",
-      "bundle": "cb6894b07e3285f9f9b5da741daddc82ec85652a052caced101d202eb058aa4b",
+      "bundle": "84d1b28121c5bf871968d4ac2b1946944fec0ff5bd4610bd367ae5258757c381",
       "seed": "default",
-      "simulated": true
+      "simulated": true,
+      "overlays": false,
+      "revisions": {
+        "webm": "ca588054a0a6",
+        "mp4": "e852a85bc283",
+        "webp": "5657da14fec1"
+      }
     },
     {
       "name": "status",
@@ -97,9 +151,15 @@
       "surface": "desktop",
       "beat": 3,
       "caption": "Open the waiting session and read the question.",
-      "bundle": "cb6894b07e3285f9f9b5da741daddc82ec85652a052caced101d202eb058aa4b",
+      "bundle": "84d1b28121c5bf871968d4ac2b1946944fec0ff5bd4610bd367ae5258757c381",
       "seed": "default",
-      "simulated": true
+      "simulated": true,
+      "overlays": false,
+      "revisions": {
+        "webm": "1d6d90d29400",
+        "mp4": "668d68f633da",
+        "webp": "dd423dfb5f6d"
+      }
     },
     {
       "name": "voice",
@@ -107,9 +167,15 @@
       "surface": "desktop",
       "beat": 5,
       "caption": "Review the proposed message before it runs.",
-      "bundle": "cb6894b07e3285f9f9b5da741daddc82ec85652a052caced101d202eb058aa4b",
+      "bundle": "84d1b28121c5bf871968d4ac2b1946944fec0ff5bd4610bd367ae5258757c381",
       "seed": "default",
-      "simulated": true
+      "simulated": true,
+      "overlays": false,
+      "revisions": {
+        "webm": "ecc8fa10ffd8",
+        "mp4": "5a16acb182f5",
+        "webp": "a102aad5b07e"
+      }
     }
   ]
 }

@@ -657,7 +657,7 @@ footer .social svg { width: 15px; height: 15px; fill: currentColor; display: blo
 .demo-keymap-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 8px 12px; border-top: 1px solid var(--line); font-size: 12px; }
 .demo-keymap-bar[hidden] { display: none; }
 .demo-keymap-buttons { display: inline-flex; flex-wrap: wrap; gap: 4px; }
-.demo-keymap-bar button, .sound-examples button { font: inherit; color: var(--fg-2); background: var(--panel); border: 1px solid var(--line-2); padding: 5px 9px; cursor: pointer; }
+.demo-keymap-bar button { font: inherit; color: var(--fg-2); background: var(--panel); border: 1px solid var(--line-2); padding: 5px 9px; cursor: pointer; }
 .demo-keymap-bar button[aria-pressed="true"] { color: var(--green); border-color: var(--green); }
 #demokeymaphint { color: var(--fg-2); }
 .showcase { margin: 24px 0; border: 1px solid var(--line-2); background: var(--panel); overflow: hidden; }
@@ -667,12 +667,6 @@ footer .social svg { width: 15px; height: 15px; fill: currentColor; display: blo
 .handset::before { content: ''; position: absolute; width: 48px; height: 5px; background: var(--fg-3); top: 8px; left: calc(50% - 24px); border-radius: 4px; }
 .handset::after { content: ''; position: absolute; width: 75px; height: 4px; background: var(--fg-3); bottom: 6px; left: calc(50% - 37px); border-radius: 4px; }
 .handset img, .handset video { border-radius: 22px; }
-.voice-example { padding: 20px; border: 1px solid var(--line-2); margin-bottom: 22px; }
-.voice-example h3 { margin: 0 0 8px; }
-.voice-example p { font-family: var(--sans); color: var(--fg-2); }
-.voice-example audio { display: block; width: min(100%, 460px); margin: 12px 0; }
-.voice-example summary { cursor: pointer; }
-.sound-examples { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; font: 13px/1.5 var(--sans); }
 @media(max-width:760px) {
   .demo-keymap-bar { display: none; }
   .showcase-pair { grid-template-columns: minmax(0,1fr); gap: 8px; }
@@ -819,22 +813,20 @@ footer .social svg { width: 15px; height: 15px; fill: currentColor; display: blo
 <section class="sec" id="fleet"><div class="wrap">
     <div class="head"><span class="n">01</span><h2>Know which agent needs you</h2><span class="fill"></span></div>
     <p class="intro">See who is working, waiting for approval, or blocked. Notifications name the session and the reason, so you can respond without watching every pane.</p>
-    <figure class="showcase "><video width="1440" height="810" poster="img/showcase-status.webp"
-      controls muted loop playsinline preload="none" data-autoplay aria-label="Simulated agent status and an alert naming the session that needs a decision.">
-      <source src="img/showcase-status.webm" type="video/webm" /><source src="img/showcase-status.mp4" type="video/mp4" />
+    <figure class="showcase "><video width="1440" height="810" poster="img/showcase-status.webp?v=dd423dfb5f6d"
+      controls muted playsinline preload="metadata" aria-label="Simulated agent status and an alert naming the session that needs a decision.">
+      <source src="img/showcase-status.mp4?v=668d68f633da" type="video/mp4" /><source src="img/showcase-status.webm?v=1d6d90d29400" type="video/webm" />
       <p>Simulated agent status and an alert naming the session that needs a decision.</p></video></figure>
     <p class="note">Choose a sound and push notification for each event. Set quiet hours and separate Desktop and Mobile preferences.
     The alert history stays readable when delivery is muted. <a href="docs/status/">Status and alerts</a></p>
-    <div class="sound-examples"><span>Preview a notification sound</span>
-    <button type="button" data-sound="two-tone">Two Tone</button><button type="button" data-sound="gentle">Ding</button>
-    <span role="status" id="soundstatus"></span><a href="img/LICENSE.notification-sounds.txt">Sound credits</a></div>
+
   </div></section>
 <section class="sec" id="mobile"><div class="wrap">
     <div class="head"><span class="n">02</span><h2>Keep working from your phone</h2><span class="fill"></span></div>
     <p class="intro">Use the terminal, review changes, edit files and respond to agents from the same workspace. Mobile has its own touch controls and layout, with your desktop arrangement kept intact.</p>
-    <div class="showcase-pair"><figure class="showcase handset"><video width="390" height="844" poster="img/showcase-phone.webp"
-      controls muted loop playsinline preload="none" data-autoplay aria-label="The phone demo opens a waiting session and its tools.">
-      <source src="img/showcase-phone.webm" type="video/webm" /><source src="img/showcase-phone.mp4" type="video/mp4" />
+    <div class="showcase-pair"><figure class="showcase handset"><video width="390" height="844" poster="img/showcase-phone.webp?v=5657da14fec1"
+      controls muted playsinline preload="metadata" aria-label="The phone demo opens a waiting session and its tools.">
+      <source src="img/showcase-phone.mp4?v=e852a85bc283" type="video/mp4" /><source src="img/showcase-phone.webm?v=ca588054a0a6" type="video/webm" />
       <p>The phone demo opens a waiting session and its tools.</p></video></figure>
     <ul class="claims">
       <li><span><b>The same sessions.</b> Continue a conversation from either device. Input ownership keeps two devices from typing over each other.</span></li>
@@ -846,15 +838,11 @@ footer .social svg { width: 15px; height: 15px; fill: currentColor; display: blo
 <section class="sec" id="voice"><div class="wrap">
     <div class="head"><span class="n">03</span><h2>Talk to your agents. Ask the assistant.</h2><span class="fill"></span></div>
     <p class="intro">Dictate a prompt, hear an agent reply, or ask which sessions need your attention. Voice works from desktop and phone, with separate controls for listening and playback.</p>
-    <figure class="showcase "><video width="1440" height="810" poster="img/showcase-voice.webp"
-      controls muted loop playsinline preload="none" aria-label="A scripted assistant conversation identifies a waiting session and proposes a queued message.">
-      <source src="img/showcase-voice.webm" type="video/webm" /><source src="img/showcase-voice.mp4" type="video/mp4" />
+    <figure class="showcase "><video width="1440" height="810" poster="img/showcase-voice.webp?v=a102aad5b07e"
+      controls muted playsinline preload="metadata" aria-label="A scripted assistant conversation identifies a waiting session and proposes a queued message.">
+      <source src="img/showcase-voice.mp4?v=5a16acb182f5" type="video/mp4" /><source src="img/showcase-voice.webm?v=ecc8fa10ffd8" type="video/webm" />
       <p>A scripted assistant conversation identifies a waiting session and proposes a queued message.</p></video></figure>
-    <div class="voice-example"><h3>Hear an assistant example</h3>
-    <p>A recorded exchange using local Windows speech synthesis. The interactive example uses scripted messages.</p>
-    <audio controls preload="none" aria-label="Recorded assistant example"><source src="img/assistant-example.mp3" type="audio/mpeg" /></audio>
-    <details><summary>Read the audio transcript</summary><p>You: Mux, what needs my attention?</p>
-    <p>Assistant: One session is waiting for your decision about cache invalidation. Two other agents are working. Open the waiting session to read the question.</p></details></div>
+
     <ul class="flat">
       <li><b>Dictation</b><span>Speak into a draft and send it to an agent or text surface. Speech recognition runs on your host machine.</span></li>
       <li><b>Read aloud</b><span>Listen to replies or spoken summaries. Choose which sessions generate speech and which device plays it.</span></li>
@@ -865,23 +853,23 @@ footer .social svg { width: 15px; height: 15px; fill: currentColor; display: blo
 <section class="sec" id="normalize"><div class="wrap">
     <div class="head"><span class="n">04</span><h2>Keep the same editing habits across agents</h2><span class="fill"></span></div>
     <p class="intro">Use familiar shortcuts across supported agent inputs. Shift+Enter inserts a new line, Ctrl+Backspace deletes a word, and clicking positions the cursor in recognized composers.</p>
-    <figure class="showcase "><video width="1440" height="810" poster="img/showcase-input.webp"
-      controls muted loop playsinline preload="none" data-autoplay aria-label="Editing a simulated agent prompt, with the shortcut and input area highlighted.">
-      <source src="img/showcase-input.webm" type="video/webm" /><source src="img/showcase-input.mp4" type="video/mp4" />
+    <figure class="showcase "><video width="1440" height="810" poster="img/showcase-input.webp?v=f31ab089119b"
+      controls muted playsinline preload="metadata" aria-label="Editing a simulated agent prompt, with the shortcut and input area highlighted.">
+      <source src="img/showcase-input.mp4?v=769e038e4b0e" type="video/mp4" /><source src="img/showcase-input.webm?v=4d9bf83d47a8" type="video/webm" />
       <p>Editing a simulated agent prompt, with the shortcut and input area highlighted.</p></video></figure>
     <ul class="flat">
       <li><b>Your keymap</b><span>Choose swe-mux, tmux, VS Code, Vim or Emacs shortcuts for workspace navigation. Try a preset in the desktop demo toolbar.</span></li>
       <li><b>Image paste</b><span>Paste a screenshot from your clipboard into an agent that supports image attachments. You can also attach a file.</span></li>
       <li><b>Shared clipboard history</b><span>Reuse text copied inside swe-mux from desktop or phone. Pin entries and optionally retain history across restarts.</span></li>
     </ul><p class="note">Workspace keymaps and agent text editing are separate features. Browser-reserved shortcuts and individual CLI capabilities still apply.
-    Clipboard history records in-app text copies; it does not synchronize the system clipboard. <a href="docs/keyboard/">Keyboard reference</a></p><details><summary>Watch an image attachment</summary><figure class="showcase"><video controls muted playsinline preload="none" width="1440" height="810" poster="img/showcase-attachment.webp" aria-label="An invented image pasted through the real attachment UI, with no upload."><source src="img/showcase-attachment.webm" type="video/webm" /><source src="img/showcase-attachment.mp4" type="video/mp4" /></video></figure></details><details><summary>See shared clipboard history</summary><figure class="showcase"><video controls muted loop playsinline preload="none" width="1440" height="810" poster="img/showcase-clipboard.webp" aria-label="Open and read a shared clipboard entry in the demo."><source src="img/showcase-clipboard.webm" type="video/webm" /><source src="img/showcase-clipboard.mp4" type="video/mp4" /></video></figure></details>
+    Clipboard history records in-app text copies; it does not synchronize the system clipboard. <a href="docs/keyboard/">Keyboard reference</a></p><details><summary>Watch an image attachment</summary><figure class="showcase"><video controls muted playsinline preload="metadata" width="1440" height="810" poster="img/showcase-attachment.webp?v=bd452ea1a931" aria-label="An invented image pasted through the real attachment UI, with no upload."><source src="img/showcase-attachment.mp4?v=5c8bec606e81" type="video/mp4" /><source src="img/showcase-attachment.webm?v=f384ac2d3e0c" type="video/webm" /></video></figure></details><details><summary>See shared clipboard history</summary><figure class="showcase"><video controls muted playsinline preload="metadata" width="1440" height="810" poster="img/showcase-clipboard.webp?v=23e8e5fff199" aria-label="Open and read a shared clipboard entry in the demo."><source src="img/showcase-clipboard.mp4?v=b3fcb6d9628e" type="video/mp4" /><source src="img/showcase-clipboard.webm?v=a010b3cb88c5" type="video/webm" /></video></figure></details>
   </div></section>
 <section class="sec" id="workbench"><div class="wrap">
     <div class="head"><span class="n">05</span><h2>Arrange the work around you</h2><span class="fill"></span></div>
     <p class="intro">Split agents, notes, files and previews into panes, with tabs inside each. Keep the code, conversation and running result in view together.</p>
-    <figure class="showcase "><video width="1440" height="810" poster="img/showcase-panes.webp"
-      controls muted loop playsinline preload="none" data-autoplay aria-label="A demo workspace with an agent beside its local preview.">
-      <source src="img/showcase-panes.webm" type="video/webm" /><source src="img/showcase-panes.mp4" type="video/mp4" />
+    <figure class="showcase "><video width="1440" height="810" poster="img/showcase-panes.webp?v=e8ebca109a98"
+      controls muted playsinline preload="metadata" aria-label="A demo workspace with an agent beside its local preview.">
+      <source src="img/showcase-panes.mp4?v=5499aab023e3" type="video/mp4" /><source src="img/showcase-panes.webm?v=b3023fc08336" type="video/webm" />
       <p>A demo workspace with an agent beside its local preview.</p></video></figure>
     <p class="note">Run any shell, TUI or CLI in a real terminal. Recognized agents add status, transcripts and input support.
     The Markdown editor supports tables, code blocks and sending a selection to an agent. <a href="docs/workspace/">Workspace guide</a></p>
@@ -889,9 +877,9 @@ footer .social svg { width: 15px; height: 15px; fill: currentColor; display: blo
 <section class="sec" id="communication"><div class="wrap">
     <div class="head"><span class="n">06</span><h2>Let agents coordinate</h2><span class="fill"></span></div>
     <p class="intro">Sessions can exchange messages, read each other's progress and request help within the permissions you set. See who asked, what they requested and where the response went.</p>
-    <figure class="showcase "><video width="1440" height="810" poster="img/showcase-communication.webp"
-      controls muted loop playsinline preload="none" aria-label="A simulated agent requests two sessions; approval starts them and their replies enter the requesting session queue.">
-      <source src="img/showcase-communication.webm" type="video/webm" /><source src="img/showcase-communication.mp4" type="video/mp4" />
+    <figure class="showcase "><video width="1440" height="810" poster="img/showcase-communication.webp?v=057c5268310f"
+      controls muted playsinline preload="metadata" aria-label="A simulated agent requests two sessions; approval starts them and their replies enter the requesting session queue.">
+      <source src="img/showcase-communication.mp4?v=2a13899ab36c" type="video/mp4" /><source src="img/showcase-communication.webm?v=607df170ab25" type="video/webm" />
       <p>A simulated agent requests two sessions; approval starts them and their replies enter the requesting session queue.</p></video></figure>
     <p class="note">Messages can wait in a session's queue until it is ready. Spawn and control requests require approval by default.
     Project permissions govern what agents can read and do. <a href="docs/queue/">Queues and communication</a></p>
@@ -899,17 +887,17 @@ footer .social svg { width: 15px; height: 15px; fill: currentColor; display: blo
 <section class="sec" id="git"><div class="wrap">
     <div class="head"><span class="n">07</span><h2>Land finished branches behind your checks</h2><span class="fill"></span></div>
     <p class="intro">A branch takes its turn in the queue, updates from master, and runs the checks you approved. Passed checks allow a fast-forward; a conflict or failed check stops the request.</p>
-    <figure class="showcase "><video width="1440" height="810" poster="img/showcase-land.webp"
-      controls muted loop playsinline preload="none" aria-label="A simulated branch advances through queued, reconciling, verifying and landed states.">
-      <source src="img/showcase-land.webm" type="video/webm" /><source src="img/showcase-land.mp4" type="video/mp4" />
+    <figure class="showcase "><video width="1440" height="810" poster="img/showcase-land.webp?v=cf30d5e50b03"
+      controls muted playsinline preload="metadata" aria-label="A simulated branch advances through queued, reconciling, verifying and landed states.">
+      <source src="img/showcase-land.mp4?v=d59afc44b6a9" type="video/mp4" /><source src="img/showcase-land.webm?v=aad4a55cefb6" type="video/webm" />
       <p>A simulated branch advances through queued, reconciling, verifying and landed states.</p></video></figure>
     <p class="note">A failed request returns to the agent that owns the branch. An agent cannot approve its own verification command.
-    Enable the required Project permissions before allowing agents to request landing. <a href="demo/?scenario=landfailure">Try the failed-check walkthrough</a> · <a href="docs/git/">Git and landing</a></p><details><summary>Watch a failed check</summary><figure class="showcase"><video controls muted loop playsinline preload="none" width="1440" height="810" poster="img/showcase-landfailure.webp" aria-label="A simulated failed check stops a branch landing and returns the result to the agent."><source src="img/showcase-landfailure.webm" type="video/webm" /><source src="img/showcase-landfailure.mp4" type="video/mp4" /></video></figure></details>
+    Enable the required Project permissions before allowing agents to request landing. <a href="demo/?scenario=landfailure">Try the failed-check walkthrough</a> · <a href="docs/git/">Git and landing</a></p><details><summary>Watch a failed check</summary><figure class="showcase"><video controls muted playsinline preload="metadata" width="1440" height="810" poster="img/showcase-landfailure.webp?v=afc5cf52b780" aria-label="A simulated failed check stops a branch landing and returns the result to the agent."><source src="img/showcase-landfailure.mp4?v=9fb9b55fe486" type="video/mp4" /><source src="img/showcase-landfailure.webm?v=b5984509f276" type="video/webm" /></video></figure></details>
   </div></section>
 <section class="sec" id="history"><div class="wrap">
     <div class="head"><span class="n">08</span><h2>Find the session. Inspect the work.</h2><span class="fill"></span></div>
     <p class="intro">Search conversations across agent CLIs, reopen the transcript, and inspect the commands, changes and test results that were recorded. Resume earlier work with its context close at hand.</p>
-    <figure class="showcase"><video controls muted loop playsinline preload="none" width="1440" height="810" poster="img/showcase-history.webp" aria-label="Search and inspect example conversations in the demo."><source src="img/showcase-history.webm" type="video/webm" /><source src="img/showcase-history.mp4" type="video/mp4" /></video></figure>
+    <figure class="showcase"><video controls muted playsinline preload="metadata" width="1440" height="810" poster="img/showcase-history.webp?v=1ab159b474ec" aria-label="Search and inspect example conversations in the demo."><source src="img/showcase-history.mp4?v=3c9772adfb30" type="video/mp4" /><source src="img/showcase-history.webm?v=1077c6c58e31" type="video/webm" /></video></figure>
     <p class="note">Optional evidence capture records observed tool activity and attributes commits to contributing sessions.
     It reports missing evidence rather than treating it as proof of success. <a href="docs/history/">History and auditing</a></p>
   </div></section>
@@ -1612,34 +1600,6 @@ document.querySelectorAll('.copy').forEach(function (b) {
 });
 </script>
 
-<script>
-// Only visible, short examples autoplay. User-paused clips stay paused.
-(function () {
-  var reduced = matchMedia('(prefers-reduced-motion: reduce)');
-  document.querySelectorAll('video[data-autoplay]').forEach(function (video) {
-    var userPaused = false;
-    video.addEventListener('pointerdown', function () { userPaused = true; });
-    video.addEventListener('keydown', function () { userPaused = true; });
-    function update(visible) {
-      if (visible && !reduced.matches && !userPaused) video.play().catch(function () {});
-      else video.pause();
-    }
-    var visible = false;
-    new IntersectionObserver(function (entries) { visible = entries[0].isIntersecting; update(visible); }, { threshold: .3 }).observe(video);
-    reduced.addEventListener('change', function () { update(visible); });
-  });
-  var sound = null;
-  document.querySelectorAll('[data-sound]').forEach(function (button) {
-    button.addEventListener('click', function () {
-      if (sound) sound.pause();
-      sound = new Audio('img/sound-' + button.dataset.sound + '.mp3');
-      var status = document.getElementById('soundstatus');
-      sound.play().then(function () { status.textContent = 'Playing ' + button.textContent; })
-        .catch(function () { status.textContent = 'Sound could not play. Try again.'; });
-      sound.addEventListener('ended', function () { status.textContent = ''; });
-    });
-  });
-})();
-</script>
+
 </body>
 </html>

@@ -60,8 +60,9 @@ node frontend/scripts/capture-demo.mjs --scenario queue --check
 
 The recorder is headless by default and serves only the worktree's static website on an ephemeral loopback port.
 `deterministic=1` fixes the fixture clock and random seed.
-`highlightInput=1` marks recorded pointer input.
-`capture=1` removes the standalone toolbar from the recording without changing product controls.
+`capture=1` omits the entire tutorial view and standalone toolbar before rendering.
+The scenario engine still performs the workflow, but its cards, controls, highlights and pointer effects are never mounted.
+The recorder watches for tutorial overlays throughout a capture and fails if any appear.
 Stills wait for the beat's action to complete before capture.
 The manifest records the scenario, surface, seed, captions and resulting fixture fingerprint.
 The local diagnostic file records lifecycle events without user input content.
@@ -85,4 +86,4 @@ Use separate ephemeral test ports and keep verification below normal process pri
 
 The attachment example creates an invented image and dispatches it through the native paste handler.
 The fake upload route returns metadata without retaining or transmitting the bytes.
-Terminal-focused captions appear above the terminal output so they do not cover the composer or question.
+Tutorial captions remain available in the interactive demo and are absent from captured media.

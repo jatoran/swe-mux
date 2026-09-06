@@ -69,12 +69,14 @@ async function exportEntry([name, scenario, surface, beat]) {
   const still = manifest.stills.find(item => item.beat === beat)
   if (!still) throw new Error(`${scenario}: missing still for beat ${beat}`)
   await run('ffmpeg', ['-hide_banner','-loglevel','error','-i',join(take,still.file),'-vf',`scale=${scale}:flags=lanczos`,'-c:v','libwebp','-quality','90',`${stem}.webp`])
+  const revisions = {}
   for (const ext of ['webm','mp4','webp']) {
     const destination = join(output, `showcase-${name}.${ext}`)
     await archive(destination)
     await rename(`${stem}.${ext}`, destination)
+    revisions[ext] = createHash('sha256').update(await readFile(destination)).digest('hex').slice(0, 12)
   }
-  completed.push({ name, scenario, surface, beat, caption: still.say, bundle, seed: manifest.seed, simulated: true })
+  completed.push({ name, scenario, surface, beat, caption: still.say, bundle, seed: manifest.seed, simulated: true, overlays: false, revisions })
   process.stdout.write(`showcase: exported ${name}\n`)
 }
 
@@ -91,3 +93,14 @@ await writeFile(join(output, 'showcase-manifest.json'), JSON.stringify({ version
 
 const errors = outcomes.filter(result => result.status === 'rejected')
 if (errors.length) throw new AggregateError(errors.map(result => result.reason), 'Showcase capture failed')
+
+// A content revision changes the URL so old recordings cannot linger in browser or GitHub caches.
+for (const file of ['site/index.html', 'README.md']) {
+  const path = join(root, file)
+  const source = await readFile(path, 'utf8')
+  const updated = source.replace(/img\/(showcase-([a-z]+))\.(webp|webm|mp4)(?:\?v=[a-f0-9]+)?/g, (url, stem, name, extension) => {
+    const item = completed.find(entry => entry.name === name)
+    return item?.revisions?.[extension] ? `img/${stem}.${extension}?v=${item.revisions[extension]}` : url
+  })
+  if (source !== updated) await writeFile(path, updated)
+}

@@ -649,7 +649,7 @@ footer .social svg { width: 15px; height: 15px; fill: currentColor; display: blo
 .demo-keymap-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 8px 12px; border-top: 1px solid var(--line); font-size: 12px; }
 .demo-keymap-bar[hidden] { display: none; }
 .demo-keymap-buttons { display: inline-flex; flex-wrap: wrap; gap: 4px; }
-.demo-keymap-bar button, .sound-examples button { font: inherit; color: var(--fg-2); background: var(--panel); border: 1px solid var(--line-2); padding: 5px 9px; cursor: pointer; }
+.demo-keymap-bar button { font: inherit; color: var(--fg-2); background: var(--panel); border: 1px solid var(--line-2); padding: 5px 9px; cursor: pointer; }
 .demo-keymap-bar button[aria-pressed="true"] { color: var(--green); border-color: var(--green); }
 #demokeymaphint { color: var(--fg-2); }
 .showcase { margin: 24px 0; border: 1px solid var(--line-2); background: var(--panel); overflow: hidden; }
@@ -659,12 +659,6 @@ footer .social svg { width: 15px; height: 15px; fill: currentColor; display: blo
 .handset::before { content: ''; position: absolute; width: 48px; height: 5px; background: var(--fg-3); top: 8px; left: calc(50% - 24px); border-radius: 4px; }
 .handset::after { content: ''; position: absolute; width: 75px; height: 4px; background: var(--fg-3); bottom: 6px; left: calc(50% - 37px); border-radius: 4px; }
 .handset img, .handset video { border-radius: 22px; }
-.voice-example { padding: 20px; border: 1px solid var(--line-2); margin-bottom: 22px; }
-.voice-example h3 { margin: 0 0 8px; }
-.voice-example p { font-family: var(--sans); color: var(--fg-2); }
-.voice-example audio { display: block; width: min(100%, 460px); margin: 12px 0; }
-.voice-example summary { cursor: pointer; }
-.sound-examples { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; font: 13px/1.5 var(--sans); }
 @media(max-width:760px) {
   .demo-keymap-bar { display: none; }
   .showcase-pair { grid-template-columns: minmax(0,1fr); gap: 8px; }
@@ -1161,7 +1155,7 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
         <a href="#development-servers-without-a-raw-port">development servers, without a raw port</a>
       </nav>
       <div class="docsec">
-<figure class="showcase"><img src="../../img/showcase-phone.webp" width="390" height="844" loading="lazy" alt="The phone workspace with a waiting session." /></figure>
+<figure class="showcase"><img src="../../img/showcase-phone.webp?v=5657da14fec1" width="390" height="844" loading="lazy" alt="The phone workspace with a waiting session." /></figure>
 <p class="note">Real interface, simulated activity. <a href="../../demo/?scenario=status">Try this walkthrough</a>.</p>
       </div>
       <div class="docsec" id="setting-it-up">
