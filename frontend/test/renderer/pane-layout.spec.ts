@@ -47,6 +47,89 @@ test('the mobile Draft composer overlays the host without resizing the terminal'
   expect(on.draft!.y + on.draft!.height).toBeLessThanOrEqual(on.rail!.y)
 })
 
+/**
+ * The composer's chrome is the tax it charges the terminal underneath it, and on a phone that
+ * tax is measured in readable lines. Both bars are asserted against the row they take rather
+ * than against a class name: a title bar growing back, or a footer button drifting up to the
+ * 44px default the rest of the mobile sheet uses, is exactly the change these numbers catch.
+ */
+test('the mobile Draft composer spends its height on the draft, not on chrome', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 780 })
+  await page.goto('/pane-harness.html?mobile=1&draft=1')
+  const composer = page.locator('.mobile-terminal-draft')
+  await expect(composer).toBeVisible()
+
+  // No title bar: nothing announcing "Draft", no session name, and no close button — the rail's
+  // keyboard toggle both opens and closes it, so a second exit here would be a second control.
+  await expect(composer.locator('header')).toHaveCount(1)
+  await expect(composer.locator('header *')).toHaveCount(0)
+  await expect(composer.getByRole('button')).toHaveCount(3)
+
+  const rows = await composer.evaluate(element => {
+    const height = (selector: string) =>
+      Math.round(element.querySelector<HTMLElement>(selector)!.getBoundingClientRect().height)
+    return { header: height('header'), footer: height('footer'), textarea: height('textarea') }
+  })
+  expect(rows.header).toBeLessThanOrEqual(12)
+  expect(rows.footer).toBeLessThanOrEqual(40)
+  expect(rows.textarea).toBeGreaterThan(rows.header + rows.footer)
+})
+
+test('the mobile Draft composer sends text out by icon and copies it out by icon', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 780 })
+  await page.goto('/pane-harness.html?mobile=1&draft=1')
+  // Both carry an accessible name over a bare glyph, because neither mark has a word beside it.
+  for (const [name, title] of [
+    ['Insert', 'Insert into the agent composer without submitting'],
+    ['Copy draft', 'Copy the whole draft to the clipboard'],
+  ]) {
+    const button = page.getByRole('button', { name })
+    await expect(button).toHaveAttribute('title', title)
+    await expect(button.locator('svg')).toHaveCount(1)
+    await expect(button).toHaveText('')
+  }
+})
+
+/**
+ * A draft longer than the box is the composer's normal state, not its edge case, so the
+ * autosizing must stop at the CSS cap and hand the overflow to a scrollbar. The height is
+ * written from JS on every keystroke, which is the one way this silently becomes an unbounded
+ * box that pushes the footer off the panel.
+ */
+test('a mobile Draft longer than the box caps and scrolls instead of growing', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 780 })
+  await page.goto('/pane-harness.html?mobile=1&draft=1&draftlong=1')
+  const composer = page.locator('.mobile-terminal-draft')
+  await expect(composer).toBeVisible()
+  const scroll = await composer.evaluate(element => {
+    const textarea = element.querySelector<HTMLTextAreaElement>('textarea')!
+    const style = getComputedStyle(textarea)
+    return {
+      overflowY: style.overflowY,
+      scrollable: textarea.scrollHeight - textarea.clientHeight,
+      capped: Math.round(textarea.getBoundingClientRect().height),
+      panel: Math.round(element.getBoundingClientRect().height),
+      footerBottom: Math.round(element.querySelector<HTMLElement>('footer')!.getBoundingClientRect().bottom),
+      panelBottom: Math.round(element.getBoundingClientRect().bottom),
+    }
+  })
+  expect(scroll.overflowY).toBe('scroll')
+  expect(scroll.scrollable).toBeGreaterThan(0)
+  expect(scroll.capped).toBeLessThan(scroll.panel)
+  // The footer is still on the panel: an uncapped textarea pushes it past the bottom edge.
+  expect(scroll.footerBottom).toBeLessThanOrEqual(scroll.panelBottom)
+
+  // Typing at the end keeps the caret's line in view rather than snapping back to the top,
+  // which is what re-measuring from a collapsed height does if the offset is not restored.
+  const textarea = composer.locator('textarea')
+  await textarea.click()
+  await textarea.press('End')
+  await textarea.pressSequentially('tail')
+  const atBottom = await textarea.evaluate((element: HTMLTextAreaElement) =>
+    element.scrollHeight - element.clientHeight - element.scrollTop)
+  expect(atBottom).toBeLessThanOrEqual(1)
+})
+
 for (const viewport of [{ name: 'desktop', width: 1200, height: 760, mobile: 0 }, { name: 'mobile', width: 390, height: 780, mobile: 1 }]) {
   test(`the surface owns the pane's whole second row on ${viewport.name}`, async ({ page }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height })

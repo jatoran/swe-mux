@@ -64,6 +64,17 @@ export const SendIcon = () => <svg {...stroke}>
   <polyline points="13 6 19 12 13 18" />
 </svg>
 
+/** An arrow meeting a composer's caret: put this text in the input, and stop there.
+ *
+ * Deliberately not `SendIcon`, which is the same arrow without the bar. The mobile Draft's
+ * whole contract is that Insert never submits, so the two buttons make opposite promises and
+ * must not wear one mark; the caret is what says the text lands somewhere and waits. */
+export const InsertArrowIcon = () => <svg {...stroke}>
+  <line x1="3" y1="12" x2="14" y2="12" />
+  <polyline points="9.5 7.5 14 12 9.5 16.5" />
+  <line x1="19" y1="5" x2="19" y2="19" />
+</svg>
+
 /** The git branch mark: a trunk, a fork, and the commit each ends at. */
 export const BranchIcon = () => <svg {...stroke}>
   <line x1="6" y1="3" x2="6" y2="15" />

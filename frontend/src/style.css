@@ -2755,15 +2755,28 @@ body {
 .terminal-action-rail .kbd-toggle.mode-draft{border-color:var(--green,#8bd450);background:color-mix(in srgb,var(--green) 12%,var(--panel2));color:var(--green,#8bd450)}
 .terminal-action-rail .kbd-toggle.has-draft::after{content:'';position:absolute;top:4px;right:4px;width:5px;height:5px;border-radius:50%;background:var(--green,#8bd450);box-shadow:0 0 0 2px var(--panel2)}
 .mobile-terminal-draft{z-index:15;grid-row:1;grid-column:1;align-self:end;justify-self:center;width:min(720px,calc(100% - 16px));max-height:min(48dvh,360px);margin:8px;display:grid;grid-template-rows:auto minmax(76px,auto) auto auto;overflow:hidden;border:1px solid color-mix(in srgb,var(--green) 55%,var(--line));background:color-mix(in srgb,var(--panel) 96%,transparent);box-shadow:0 8px 28px #000b}
-.mobile-terminal-draft>header{min-width:0;display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:8px;padding:6px 7px;border-bottom:1px solid var(--line);font:10px 'Cascadia Mono',Consolas,monospace}
-.mobile-terminal-draft>header strong{color:var(--green);letter-spacing:.06em;text-transform:uppercase}.mobile-terminal-draft>header span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted)}
-.mobile-terminal-draft>header button{width:30px;height:30px;border:0;background:transparent;color:var(--muted);font-size:18px;cursor:pointer}
-.mobile-terminal-draft>textarea{box-sizing:border-box;width:100%;min-height:76px;max-height:min(30dvh,220px);padding:10px;border:0;outline:0;resize:none;overflow:auto;background:var(--bg);color:var(--text);font:13px/1.45 'Cascadia Mono',Consolas,monospace;caret-color:var(--green)}
+/* The top bar carries nothing — no title, no close. It is a grab-handle-shaped cap that says
+   where the panel starts, and it is 8px because every row here is a row of the terminal the
+   user is reading underneath. */
+.mobile-terminal-draft>header{height:8px;display:grid;place-items:center;border-bottom:1px solid var(--line)}
+.mobile-terminal-draft>header::after{content:"";width:32px;height:2px;border-radius:2px;background:color-mix(in srgb,var(--green) 45%,var(--line))}
+/* `overflow-y:scroll` rather than `auto`: the gutter is reserved at every length, so growing
+   past the cap does not reflow the text sideways mid-keystroke, and the bar is there to drag on
+   a touch browser that would otherwise only reveal one while already scrolling. `pan-y` keeps
+   that drag from being claimed by the pane's own gesture handlers, and `contain` stops a
+   flung draft from scrolling the terminal behind it. */
+.mobile-terminal-draft>textarea{box-sizing:border-box;width:100%;min-height:76px;max-height:min(30dvh,220px);padding:10px;border:0;outline:0;resize:none;overflow-x:hidden;overflow-y:scroll;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;touch-action:pan-y;scrollbar-color:color-mix(in srgb,var(--green) 50%,transparent) transparent;background:var(--bg);color:var(--text);font:13px/1.45 'Cascadia Mono',Consolas,monospace;caret-color:var(--green)}
+.mobile-terminal-draft>textarea::-webkit-scrollbar{width:8px}
+.mobile-terminal-draft>textarea::-webkit-scrollbar-thumb{min-height:28px;border:2px solid transparent;border-radius:999px;background:color-mix(in srgb,var(--green) 50%,transparent);background-clip:content-box}
 .mobile-terminal-draft>textarea:focus{box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--green) 38%,transparent)}
 .mobile-terminal-draft-error{margin:0;padding:5px 8px;border-top:1px solid color-mix(in srgb,var(--red) 45%,var(--line));color:var(--red);font-size:9px}
-.mobile-terminal-draft>footer{min-width:0;display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:center;gap:6px;padding:6px 7px;border-top:1px solid var(--line)}
+.mobile-terminal-draft>footer{min-width:0;display:grid;grid-template-columns:minmax(0,1fr) auto auto auto;align-items:center;gap:6px;padding:4px 7px;border-top:1px solid var(--line)}
 .mobile-terminal-draft>footer span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font:8px 'Cascadia Mono',Consolas,monospace}
-.mobile-terminal-draft>footer button{min-width:68px;height:34px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:10px 'Cascadia Mono',Consolas,monospace;cursor:pointer}.mobile-terminal-draft>footer button:disabled{opacity:.4;cursor:not-allowed}
+.mobile-terminal-draft>footer button{min-width:56px;height:24px;display:inline-flex;align-items:center;justify-content:center;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:10px 'Cascadia Mono',Consolas,monospace;cursor:pointer}.mobile-terminal-draft>footer button:disabled{opacity:.4;cursor:not-allowed}
+.mobile-terminal-draft>footer button.icon{min-width:0;width:30px;padding:0}
+.mobile-terminal-draft>footer button.icon svg{width:15px;height:15px;display:block}
+.mobile-terminal-draft>footer button.primary{border-color:color-mix(in srgb,var(--green) 55%,var(--line));background:color-mix(in srgb,var(--green) 14%,var(--panel2));color:var(--green)}
+.mobile-terminal-draft>footer button.primary:disabled{border-color:var(--line);background:var(--panel2);color:var(--text)}
 /* A rail picker's drop-up. Positioned by `anchoredPopoverStyle` (the same math the
    account and resource popovers use), which sets left/bottom/width and a max-height
    against the space above the trigger.
@@ -3484,7 +3497,11 @@ body {
   .terminal-action-rail .terminal-mobile-send{min-height:44px}
   .mobile-terminal-draft{width:calc(100% - 14px);max-height:min(46dvh,320px);margin:7px}
   .mobile-terminal-draft>textarea{min-height:92px;max-height:28dvh;font-size:16px}
-  .mobile-terminal-draft>header button,.mobile-terminal-draft>footer button{min-height:44px}
+  /* Short of the 44px touch minimum on purpose: the bar sits directly above the soft keyboard,
+     it is the panel's only chrome now the title bar is gone, and its three targets are
+     reachable-and-forgiving rather than precise. Insert also answers to Ctrl/Cmd+Enter. */
+  .mobile-terminal-draft>footer button{min-height:30px}
+  .mobile-terminal-draft>footer button.icon{width:34px}
 }
 
 /* Every visible Project resource lives in the same recursive pane tree. */

@@ -2221,10 +2221,15 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <section><h3>Model provider</h3>
           <p>Choose OpenRouter or a self-hosted OpenAI-compatible <code>/chat/completions</code> endpoint. Speech recognition and synthesis remain local.</p>
             <ProviderConnectionFields draft={draft} onChange={(key,value)=>change(key,value)} apiKey={draft.llm_provider==='custom'?customKey:openRouterKey} onKeyChange={draft.llm_provider==='custom'?setCustomKey:setOpenRouterKey} configured={!!activeEndpoint?.secret.configured}/>
+            {/* Where to get the credential belongs beside the field that takes it, and
+                only while that endpoint is the one in play - a key link for an endpoint
+                nothing routes through is advice that cannot be acted on. Switching the
+                dropdown above brings it straight back, because the draft updates without
+                a save. */}
+            {draft.llm_provider==='openrouter'&&<p>Get an API key at <a href="https://openrouter.ai/keys" target="_blank" rel="noreferrer">OpenRouter</a>.</p>}
             <ProviderReadiness readiness={provider?.llm}/>
             <div class="theme-actions"><button disabled={!(draft.llm_provider==='custom'?customKey:openRouterKey)} onClick={()=>void providerKeyAction('test',draft.llm_provider==='custom'?'custom':'openrouter')}>Test entered key</button><button disabled={!(draft.llm_provider==='custom'?customKey:openRouterKey)} onClick={()=>void providerKeyAction('set',draft.llm_provider==='custom'?'custom':'openrouter')}>Test + set/replace key</button><button disabled={!activeEndpoint?.secret.configured} onClick={()=>void providerKeyAction('clear',draft.llm_provider==='custom'?'custom':'openrouter')}>Clear stored key</button></div>
             <p aria-live="polite">{providerMessage||'The key is write-only and stored in the platform credential store.'}</p>
-            <label data-setting="openrouter_request_timeout_seconds">Request timeout seconds<input type="number" min="1" max="120" step="1" value={draft.openrouter_request_timeout_seconds} onInput={event=>change('openrouter_request_timeout_seconds',Number(event.currentTarget.value))}/><small>Takes effect on the next daemon restart.</small></label>
             {/* One button per configured provider rather than one for the active one: an
                 operator setting up a local endpoint wants to prove it before switching
                 everything over to it, and a verify that only worked on the live provider
@@ -2255,14 +2260,11 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
                   </Fragment>
                 : <p><strong>{verifyResult.provider} did not answer.</strong> {verifyResult.error}</p>}
             </div>}
+            {/* Last, because it tunes an endpoint that already works. Sitting between the
+                key fields and Verification, it separated the credential from the thing
+                that proves it. */}
+            <label data-setting="openrouter_request_timeout_seconds">Request timeout seconds<input type="number" min="1" max="120" step="1" value={draft.openrouter_request_timeout_seconds} onInput={event=>change('openrouter_request_timeout_seconds',Number(event.currentTarget.value))}/><small>Takes effect on the next daemon restart.</small></label>
           </section>
-          {/* Only while it is the provider in play. A key section for an endpoint
-              nothing is routing through is a control that cannot do anything, and it
-              was the largest thing standing between the provider choice and the models
-              it decides. Switching the dropdown above brings it straight back - the
-              draft updates without a save - so nothing is unreachable, only hidden
-              while it would be inert. */}
-          {draft.llm_provider==='openrouter'&&<p>Get an API key at <a href="https://openrouter.ai/keys" target="_blank" rel="noreferrer">OpenRouter</a>.</p>}
 
           <section><h3>Models</h3>
           <p>All model routes are edited here. Routed defaults are inherited; overrides may fall back; pinned models do not.</p>
