@@ -1,11 +1,26 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { api, type ApiError } from './api.ts'
+import type { Budget } from './types'
 
-export type SetupStep = 'existing'|'experience'|'provider'|'harnesses'|'projects'|'desktop'|'finish'|'complete'
+export type ProviderSetupDraft = Partial<{
+  llm_provider:string;custom_llm_base_url:string;custom_llm_model:string;custom_llm_catalog_url:string
+  openrouter_cheap_model:string;openrouter_standard_model:string;automation_daily_budget:Budget
+}>
+
+export type SetupStep = 'existing'|'experience'|'provider'|'harnesses'|'projects'|'keymap'|'permissions'|'extras'|'voice'|'phone'|'desktop'|'finish'|'complete'
+export type VoiceSetupDraft = {
+  step?: 'choices'|'install'|'test'|'provider'; read_aloud?: boolean; dictation?: boolean
+  summaries?: boolean; assistant?: boolean; tts_engine?: 'sapi'|'kokoro'; stt_engine?: 'sapi'|'whisper'
+}
 export type SetupDraft = {
   tier?: 'terminal'|'deterministic'|'automations'; autonomy?: string; overrides?: Record<string,boolean>
-  theme?: string; keymap?: string; fleet_access?: string; harnesses?: Record<string,boolean>
+  theme?: string; keymap?: string; keymap_applied?: string; fleet_access?: string; harnesses?: Record<string,boolean>
   default_harness?: string; scan_history?: boolean; rail_desktop?: boolean; rail_mobile?: boolean
+  core_complete?: boolean; model_features_pending?: boolean
+  applied_experience?: 'terminal'|'deterministic'|'automations'
+  autonomy_overrides?: Record<string,number>; provider?:ProviderSetupDraft
+  project_id?: string; project_path?: string; project_name?: string; project_filter?: string; selected_projects?: string[]
+  provider_return?: 'permissions'|'extras'|'voice'; voice?: VoiceSetupDraft
 }
 export type OnboardingState = {
   version: number; revision: number; step: SetupStep; status: 'active'|'deferred'|'complete'
@@ -13,7 +28,7 @@ export type OnboardingState = {
   dismissed: string[]; completed: string[]; draft: SetupDraft; backup?: string|null; restart_required?: string[]
 }
 export type OnboardingPatch = Partial<Pick<OnboardingState,'step'|'status'|'hidden'|'tour_status'|'tour_step'|'dismissed'|'completed'|'draft'>> & {action?: 'restart'|'fresh'|'reuse'}
-export type SaveOnboarding = (patch: OnboardingPatch) => Promise<OnboardingState>
+export type SaveOnboarding = (patch: OnboardingPatch | ((state: OnboardingState) => OnboardingPatch)) => Promise<OnboardingState>
 export const ONBOARDING_CHANGED = 'mux:onboarding-changed'
 
 /** Failed startup reads stay unknown and retry. A failure is never completion. */
@@ -49,7 +64,8 @@ export function useOnboarding() {
     const next=queue.current.catch(()=>{}).then(async()=>{
       const previous=current.current||await reload()
       try {
-        const value=await api<OnboardingState>('PATCH','/api/onboarding',{...patch,revision:previous.revision},{timeoutMs:15000})
+        const changes=typeof patch==='function'?patch(previous):patch
+        const value=await api<OnboardingState>('PATCH','/api/onboarding',{...changes,revision:previous.revision},{timeoutMs:15000})
         accept(value);return value
       } catch(cause) {
         const conflict=(cause as ApiError).detail?.state as OnboardingState|undefined
@@ -62,4 +78,33 @@ export function useOnboarding() {
     return next
   }
   return {state,error,save,reload}
+}
+
+/** Optimistic fields stay visible during serialized writes and merge with other progress edits. */
+export function useSetupDraft(state: OnboardingState, save: SaveOnboarding) {
+  const [draft,setDraft]=useState(state.draft)
+  const edits=useRef<Partial<SetupDraft>>({})
+  const timer=useRef<ReturnType<typeof setTimeout>>()
+  const [error,setError]=useState('')
+  const flush=async()=>{
+    clearTimeout(timer.current)
+    const patch={...edits.current}
+    if(!Object.keys(patch).length)return
+    try {
+      const next=await save(current=>({draft:{...current.draft,...patch}}))
+      for(const key of Object.keys(patch) as (keyof SetupDraft)[]) {
+        if(edits.current[key]===patch[key])delete edits.current[key]
+      }
+      setDraft({...next.draft,...edits.current});setError('')
+    } catch(cause) {setError((cause as Error).message);throw cause}
+  }
+  const update=(patch:Partial<SetupDraft>)=>{
+    edits.current={...edits.current,...patch}
+    setDraft(current=>({...current,...patch}))
+    clearTimeout(timer.current)
+    timer.current=setTimeout(()=>void flush().catch(()=>{}),300)
+  }
+  useEffect(()=>{setDraft({...state.draft,...edits.current})},[state.revision])
+  useEffect(()=>()=>clearTimeout(timer.current),[])
+  return {draft,update,flush,error}
 }

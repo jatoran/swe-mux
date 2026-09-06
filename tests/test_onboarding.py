@@ -265,3 +265,176 @@ async def test_bad_tool_arguments_cannot_approve_automation_models(tmp_path: Pat
     response = await routes.verify_models(cast(Any, request))
     assert response.status == 422
     assert not (tmp_path / "model-setup-verification.json").exists()
+
+
+def test_setup_model_pair_carries_default_pins_but_preserves_explicit_overrides(
+    tmp_path: Path,
+) -> None:
+    config = config_at(tmp_path)
+    changes = model_setup.setup_model_changes(config, "new-cheap", "new-regular")
+    assert changes["scan_timeline_model"] == "new-cheap"
+    assert changes["assistant_model"] == "new-regular"
+    config.scan_timeline_model = "custom-timeline"
+    config.assistant_model = "custom-assistant"
+    config.tts_summary_model = "custom-voice"
+    changes = model_setup.setup_model_changes(config, "new-cheap", "new-regular")
+    assert set(changes) == {"openrouter_cheap_model", "openrouter_standard_model"}
+    assert config.tts_summary_model == "custom-voice"
+
+
+async def test_stale_model_configuration_cannot_replace_the_current_pair(tmp_path: Path) -> None:
+    config = config_at(tmp_path)
+    request = Request(
+        config, {"revision": config.revision + 1, "cheap": "cheap", "regular": "regular"}
+    )
+    response = await routes.configure_models(cast(Any, request))
+    assert response.status == 409
+    assert config.openrouter_cheap_model == ""
+
+
+async def test_verified_model_activation_preserves_fleet_authority_and_custom_features(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from swe_mux.routes import automation
+
+    config = config_at(tmp_path)
+    config.harness_mcp_enabled = {"claude": False}
+    config.harness_cli_enabled = {"claude": False}
+    config.auto_delivery_enabled = True
+    config.auto_delivery_max_consecutive = 7
+    config.agent_messaging_enabled = False
+    config.automation_project_defaults = {"land_queue": False}
+    monkeypatch.setattr(
+        automation,
+        "_activation_readiness",
+        AsyncMock(return_value=LlmReadiness(True, "custom", "ready", "Ready")),
+    )
+    request = Request(
+        config, {"features": ["automations"], "overrides": {"scan_timeline_enabled": False}}
+    )
+    response = await routes.activate_model_features(cast(Any, request))
+    assert response.status == 200
+    assert config.automation_enabled is True
+    assert config.scan_timeline_enabled is False
+    assert config.harness_mcp_enabled == {"claude": False}
+    assert config.harness_cli_enabled == {"claude": False}
+    assert config.auto_delivery_enabled is True
+    assert config.auto_delivery_max_consecutive == 7
+    assert config.agent_messaging_enabled is False
+    assert config.automation_project_defaults["land_queue"] is False
+
+
+async def test_voice_feature_activation_never_enables_automation_or_delivery(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from swe_mux.routes import automation
+
+    config = config_at(tmp_path)
+    monkeypatch.setattr(
+        automation,
+        "_activation_readiness",
+        AsyncMock(return_value=LlmReadiness(True, "custom", "ready", "Ready")),
+    )
+    request = Request(config, {"features": ["summaries", "assistant"]})
+    response = await routes.activate_model_features(cast(Any, request))
+    assert response.status == 200
+    assert config.assistant_enabled is True
+    assert config.tts_content == "summary"
+    assert config.automation_enabled is False
+    assert config.scan_timeline_enabled is False
+    assert config.auto_delivery_enabled is False
+    assert config.automation_project_defaults == {}
+
+
+async def test_model_features_require_current_verification_before_any_write(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from swe_mux.routes import automation
+
+    config = config_at(tmp_path)
+    monkeypatch.setattr(
+        automation,
+        "_activation_readiness",
+        AsyncMock(
+            return_value=LlmReadiness(False, "custom", "models_unverified", "Verify models first")
+        ),
+    )
+    response = await routes.activate_model_features(
+        cast(Any, Request(config, {"features": ["automations"]}))
+    )
+    assert response.status == 409
+    assert not config.automation_enabled
+    assert not config.config_path.exists() if config.config_path else True
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        [],
+        {"features": [{}]},
+        {"features": []},
+        {"features": ["unknown"]},
+        {"features": ["automations"], "overrides": {"auto_delivery_enabled": True}},
+    ],
+)
+async def test_feature_activation_refuses_malformed_or_unrelated_changes(
+    tmp_path: Path, body: Any
+) -> None:
+    request = SimpleNamespace(
+        app={keys.CONFIG: config_at(tmp_path)}, json=AsyncMock(return_value=body)
+    )
+    response = await routes.activate_model_features(cast(Any, request))
+    assert response.status == 422
+
+
+def test_setup_pages_and_non_secret_drafts_survive_a_new_client(tmp_path: Path) -> None:
+    config = config_at(tmp_path)
+    onboarding.read_state(config)
+    draft = {
+        "core_complete": True,
+        "project_filter": "work",
+        "selected_projects": ["D:/work"],
+        "keymap": "tmux",
+        "keymap_applied": "tmux",
+        "model_features_pending": True,
+        "voice": {"step": "provider", "read_aloud": True, "dictation": False},
+    }
+    state = onboarding.change_state(
+        config, {"step": "voice", "status": "deferred", "draft": draft}, 0
+    )
+    assert onboarding.read_state(config_at(tmp_path)) == state
+    assert state["completed"] == []
+    with pytest.raises(ValueError, match="voice setup"):
+        onboarding.change_state(config, {"draft": {"voice": {"api_key": "secret"}}}, 1)
+
+
+def test_provider_drafts_accept_only_non_secret_fields_and_valid_budgets() -> None:
+    onboarding.validate_patch(
+        {
+            "draft": {
+                "provider": {
+                    "llm_provider": "custom",
+                    "custom_llm_base_url": "http://127.0.0.1:1234/v1",
+                    "automation_daily_budget": {"tokens": 1000, "usd": 2, "mode": "either"},
+                }
+            }
+        }
+    )
+    for value in (
+        {"api_key": "secret"},
+        {"automation_daily_budget": {"tokens": 100, "usd": 1, "mode": "none"}},
+        {"automation_daily_budget": {"tokens": None, "usd": 1, "mode": "tokens"}},
+    ):
+        with pytest.raises(ValueError):
+            onboarding.validate_patch({"draft": {"provider": value}})
+
+
+def test_delivery_draft_cannot_smuggle_unrelated_config_fields() -> None:
+    onboarding.validate_patch(
+        {"draft": {"autonomy_overrides": {"auto_delivery_max_consecutive": 4}}}
+    )
+    with pytest.raises(ValueError, match="automatic-delivery"):
+        onboarding.validate_patch({"draft": {"autonomy_overrides": {"port": 1}}})

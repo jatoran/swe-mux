@@ -308,6 +308,22 @@ FIRST_SESSION = Page(
         "in place."
     ),
     blocks=[
+        ("h2", "Four short setup pages"),
+        (
+            "steps",
+            [
+                "Choose <b>Just terminals</b>, <b>Agent workspace</b>, or <b>Smart workspace</b>.",
+                "Select detected agents, or use Shell. Recent project folders are found in the background.",
+                "Filter and select any suggested folders, or browse to a folder manually. Suggestions are added only when you ask.",
+                "Choose a keyboard preset, then press <b>Start working</b>. Optional customization opens the shortcut editor and returns to setup.",
+            ],
+        ),
+        (
+            "p",
+            "Automatic-delivery permissions, model access, voice, desktop integration, and phone access are optional follow-ups. "
+            "<b>Getting started</b> in the sidebar resumes unfinished setup and opens the optional UI tour. "
+            "Back and Continue later preserve your non-secret choices.",
+        ),
         ("h2", "Create a Project first"),
         (
             "p",

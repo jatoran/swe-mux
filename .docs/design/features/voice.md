@@ -10,6 +10,18 @@ Two independent halves share one `VoiceService`, one `voice_clips` store, one ac
 
 ## Contract
 
+### Guided setup
+
+`VoiceSetup.tsx` separates local reading, local dictation, and model-backed summaries or conversation.
+Model-dependent controls require verified provider readiness and show the effective models and available prices.
+The shared provider guide returns to the same voice choices without enabling unrelated automations.
+Existing asset panels own explicit installation, progress, and retries.
+Completion requires confirmed playback for reading and a confirmed real transcription for dictation.
+An enabled master switch alone never completes the Getting started task.
+`first-run.md` owns navigation, drafts, and the complete setup sequence.
+
+### Runtime boundary
+
 Read aloud converts an agent session's completed replies into playable audio clips. It is
 not an automation observer: observers stay annotate/notify-only behind the fixed OpenRouter
 origin, while voice uses a separate synthesis-engine boundary and interactive per-session

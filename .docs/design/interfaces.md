@@ -10,7 +10,14 @@ All JSON APIs are rooted at `/api`. PTY and event streams use `/pty/{session_id}
   A stale revision returns 409 with current state; invalid fields return 422.
   Fresh preferences are backed up before reset and preserve Projects, history, credentials, and connection identity.
 - `GET /api/onboarding/projects?harnesses=claude,codex`: bounded native-history project candidates, without registration or transcript import.
+  Setup starts one request per selected harness in the background and merges results as they arrive.
+  Each request reads up to 300 recent transcripts per harness, resolves at most 200 folders, and has a 15-second deadline.
+- `POST /api/onboarding/models/configure`: requires the current config `revision` plus `cheap` and `regular` model ids.
+  Updates the pair and default feature pins while preserving explicit feature overrides.
 - `POST /api/onboarding/models/verify`: explicitly tests the configured structured-output and tool-call roles, executes no tool, and records a configuration-bound proof only after success.
+- `POST /api/onboarding/features/activate`: accepts `features` from `automations`, `summaries`, and `assistant`, plus optional boolean `automation_enabled` and `scan_timeline_enabled` overrides.
+  Requires current model verification and changes only the requested feature settings and required inherited dependencies.
+  Fleet access, delivery authority, and unrelated configuration remain intact.
 - `onboarding_changed`: broadcasts progress revision and action; clients refetch the canonical record.
 
 Design and invariants: `features/first-run.md`.

@@ -306,7 +306,9 @@ Also holds `PtyOutputFlow` credit accounting, terminal-input arbitration and its
 
 ## `onboarding.py`
 
-Progress reads and revision-checked changes, backed-up preference reset, bounded native-history project discovery, and explicit model-role verification.
+Progress reads and revision-checked changes, backed-up preference reset, bounded native-history project discovery, model-pair configuration, explicit model-role verification, and feature-scoped activation.
+Model-pair writes carry the config revision and preserve explicit feature overrides.
+Activation shares the ordinary model-readiness gate and never reapplies an experience preset.
 Persistence belongs to `src/swe_mux/onboarding.py`; endpoint/model verification identity belongs to `src/swe_mux/model_setup.py`.
 The route uses ordinary config, credential, project, and model services and never starts a daemon or executes a model-produced tool call.
 Design: `../../../design/features/first-run.md`.

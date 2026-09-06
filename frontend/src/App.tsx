@@ -185,6 +185,7 @@ import type { Settings as SettingsPanel } from './Settings'
 import { OnboardingFlow } from './OnboardingFlow'
 import { GettingStarted } from './GettingStarted'
 import { useOnboarding, ONBOARDING_CHANGED } from './onboarding'
+import { completeSetupModels, setupHasStartedSession } from './setupActivation'
 import { ConnectPhone } from './ConnectPhone'
 import { ProviderSetup } from './ProviderSetup'
 import { DesktopSetup } from './DesktopSetup'
@@ -4155,11 +4156,12 @@ export function App() {
 
   // Which of the two first-run surfaces may be on screen. One decision, one owner.
   const setupOverlay=voiceSetupOpen||phoneSetupOpen||providerSetupOpen||desktopSetupOpen
+  const setupSessionStarted=setupHasStartedSession(sessions)
   useEffect(()=>{
     if(!onboarding.state)return
-    const completed=[...new Set([...onboarding.state.completed,...(projects.length?['project']:[]),...(sessions.length?['session']:[])])]
-    if(completed.length!==onboarding.state.completed.length)void onboarding.save({completed}).catch(()=>{})
-  },[!!projects.length,!!sessions.length,onboarding.state?.revision])
+    const completed=[...new Set([...onboarding.state.completed,...(projects.length?['project']:[]),...(setupSessionStarted?['session']:[])])]
+    if(completed.length!==onboarding.state.completed.length)void onboarding.save(current=>({completed:[...new Set([...current.completed,...completed])]})).catch(()=>{})
+  },[!!projects.length,setupSessionStarted,onboarding.state?.revision])
   const firstRun=setupOverlay?'none':firstRunSurface({
     harnessSetupNeeded:onboarding.state?.status==='active',
     tutorialArmed:onboarding.state?.tour_status==='active',
@@ -4174,6 +4176,7 @@ export function App() {
   const setupAction=(id:string)=>{
     if(id==='tour'){startTutorial();return}
     if(id==='experience'){void onboarding.save({step:'experience',status:'active',hidden:false}).catch(()=>{});return}
+    if(id==='permissions'){void onboarding.save({step:'permissions',status:'active',hidden:false}).catch(()=>{});return}
     if(id==='project'){openProjectsManager();return}
     if(id==='session'){const button=document.querySelector<HTMLElement>('[data-tutorial="run"]');if(activeProject&&button)openRunMenu(activeProject,button);else openProjectsManager();return}
     if(id==='phone')setPhoneSetupOpen(true)
@@ -4181,6 +4184,14 @@ export function App() {
     if(id==='desktop')setDesktopSetupOpen(true)
     if(id==='provider')setProviderSetupOpen(true)
     if(id==='worktrees'){if(activeProject)showDrawerTab('git');else openProjectsManager()}
+  }
+  const launchSetupSession=async(requestedProject?:string,backend='shell')=>{
+    const available=await api<typeof projects>('GET','/api/projects',undefined,{timeoutMs:10000})
+    const target=available.find(item=>item.id===requestedProject)||available.find(item=>item.id===projectId)||available[0]
+    if(!target){openProjectsManager();return}
+    projectsRef.current=available;setProjects(available)
+    const session=await spawnTerminal(target.id,false,undefined,undefined,'after',backend)
+    if(!session)throw new Error('The session could not start. Check the selected agent or choose Shell.')
   }
   useEffect(()=>{
     const open=()=>setProviderSetupOpen(true)
@@ -8417,7 +8428,7 @@ export function App() {
             </section>})}
             </>}
         </div>
-        {onboarding.state&&<GettingStarted state={onboarding.state} save={onboarding.save} tier={experienceTier} completed={[...(projects.length?['project']:[]),...(sessions.length?['session']:[]),...(questSignals.tts_enabled||questSignals.stt_enabled?['voice']:[])]} onAction={setupAction}/>}
+        {onboarding.state&&<GettingStarted state={onboarding.state} save={onboarding.save} tier={experienceTier} completed={[...(projects.length?['project']:[]),...(setupSessionStarted?['session']:[])]} onAction={setupAction}/>}
         {onboarding.error&&<p class="setup-load-error" role="status">{onboarding.error}</p>}
         <div class="sidebar-status">
           {/* The one surface that carries the empty-state invitation. `firstRun` holds
@@ -9204,11 +9215,11 @@ export function App() {
         "exactly one of them, ever" is a property of the function rather than of two
         conditions that have to agree. The harness panel leads and the tour waits; the
         reasoning is on the function. */}
-    {firstRun==='harness'&&onboarding.state&&<OnboardingFlow state={onboarding.state} save={onboarding.save} onBrowse={()=>openProjectsManager()} onTour={()=>{}} onLaunch={()=>setupAction('session')} onDone={()=>{void loadConfig(false);void refresh()}}/>}
+    {firstRun==='harness'&&onboarding.state&&<OnboardingFlow state={onboarding.state} save={onboarding.save} onTour={()=>{}} onLaunch={launchSetupSession} onCustomizeKeymap={()=>openSettings('Input','keymap_preset')} onDone={()=>{void loadConfig(false);void refresh()}}/>}
     {phoneSetupOpen&&<ConnectPhone onClose={()=>setPhoneSetupOpen(false)} onComplete={()=>{void onboarding.save({completed:[...new Set([...(onboarding.state?.completed||[]),'phone'])]}).then(()=>setPhoneSetupOpen(false)).catch(()=>{})}}/>}
-    {providerSetupOpen&&<SetupGuide title="MODELS" label="Model provider setup" busy={providerSetupBusy} onClose={()=>setProviderSetupOpen(false)}><ProviderSetup onBusy={setProviderSetupBusy} onReady={async()=>{await api('POST','/api/experience-tier',{tier:'automations'});await onboarding.save({completed:[...new Set([...(onboarding.state?.completed||[]),'provider'])]});setProviderSetupOpen(false);void loadConfig(false)}} onLater={async()=>{await api('POST','/api/experience-tier',{tier:'deterministic'});setProviderSetupOpen(false);void loadConfig(false)}}/></SetupGuide>}
+    {providerSetupOpen&&<SetupGuide title="MODELS" label="Model provider setup" busy={providerSetupBusy} onClose={()=>setProviderSetupOpen(false)}><ProviderSetup savedDraft={onboarding.state?.draft.provider} onDraft={provider=>{void onboarding.save(current=>({draft:{...current.draft,provider}})).catch(()=>{})}} onBusy={setProviderSetupBusy} onReady={async()=>{const current=await onboarding.reload();await completeSetupModels(current,onboarding.save);setProviderSetupOpen(false);void loadConfig(false)}} onLater={async()=>{setProviderSetupOpen(false);void loadConfig(false)}}/></SetupGuide>}
     {desktopSetupOpen&&<SetupGuide title="DESKTOP" label="Desktop setup" onClose={()=>setDesktopSetupOpen(false)}><DesktopSetup onContinue={async(done)=>{if(done)await onboarding.save({completed:[...new Set([...(onboarding.state?.completed||[]),'desktop'])]});setDesktopSetupOpen(false)}}/></SetupGuide>}
-    {voiceSetupOpen && <VoiceSetup onClose={()=>setVoiceSetupOpen(false)}
+    {voiceSetupOpen && <VoiceSetup providerDraft={onboarding.state?.draft.provider} onProviderDraft={provider=>{void onboarding.save(current=>({draft:{...current.draft,provider}})).catch(()=>{})}} draft={onboarding.state?.draft.voice} onDraft={voice=>{void onboarding.save(current=>({draft:{...current.draft,voice}})).catch(()=>{})}} onComplete={async()=>{await onboarding.save(current=>({completed:[...new Set([...current.completed,'voice'])]}));setVoiceSetupOpen(false);void loadConfig(false)}} onClose={()=>setVoiceSetupOpen(false)}
     />}
 
     {/* Resolved from the live list each render, so a session that ends or is removed
