@@ -38,6 +38,7 @@ on:
     branches: [master]
     paths:
       - "site/**"
+      - "worker/**"
       - "wrangler.jsonc"
       - ".github/workflows/deploy-site.yml"
   # After a release, because a push-triggered run stages its bytes at checkout
