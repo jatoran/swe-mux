@@ -509,7 +509,10 @@ async def test_codex_parser_normalizes_turn_completion() -> None:
     )
     assert session.record.tokens_in == 900_000
     assert session.record.context_window == 300_000
-    assert session.record.context_pct == 0.25
+    # Codex's own footer arithmetic (`percent_of_context_window_remaining`): the
+    # last response's total tokens against the window, both less the 12k
+    # baseline the CLI treats as always present - not input over window.
+    assert session.record.context_pct == (75_010 - 12_000) / (300_000 - 12_000)
 
 
 async def test_codex_model_comes_from_turn_context() -> None:

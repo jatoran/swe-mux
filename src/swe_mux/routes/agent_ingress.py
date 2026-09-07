@@ -19,6 +19,7 @@ from ..harness import (
     HARNESSES,
     descriptor,
 )
+from ..harness_status import STATUS_EVENT
 from ..http_support import json_response
 from ..mcp import McpAuthError, McpService
 from ..observation import (
@@ -87,6 +88,13 @@ _HOOK_EVENT_TYPES = {event for harness in HARNESSES.values() for event in harnes
     "task_complete",
     "rate_limit",
     "rate_limited",
+    # The Claude status-line tee (`hook_client Status`). Accepted on the same
+    # authenticated route because it speaks for the same conversation, but it
+    # is a measurement rather than a lifecycle event: `apply_hook_observation`
+    # folds it into the record and returns before any state branch, and the
+    # generic fan-out below skips it so its per-message snapshot never lands on
+    # the EventBus whole.
+    STATUS_EVENT,
 }
 
 
@@ -396,7 +404,7 @@ async def hook_ingress(request: web.Request) -> web.Response:
         request.app[keys.SESSIONS].note_hook_cwd(session, payload)
         request.app[keys.SESSIONS].note_hook_transcript_path(session, payload)
         request.app[keys.AUTOMATION].note_native_hook(session.record.id)
-        if event_type not in _NORMALIZED_HOOK_EVENT_TYPES:
+        if event_type not in _NORMALIZED_HOOK_EVENT_TYPES and event_type != STATUS_EVENT:
             await request.app[keys.EVENTS].emit(
                 event_type,
                 session_id=session.record.id,

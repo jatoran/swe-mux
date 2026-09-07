@@ -3,7 +3,9 @@ import { RowTokenView } from './SessionRowBody.tsx'
 import { SEPARATORS, type SessionRowConfig } from './sessionRowConfig.ts'
 import { sessionFieldToken, type SessionRowFleetFacts } from './sessionRowFields.ts'
 import { useRowClock } from './sessionRowPrefs.ts'
-import type { SessionTopbarActionId, SessionTopbarConfig, SessionTopbarItem } from './sessionTopbarConfig.ts'
+import {
+  sessionTopbarRowConfig, type SessionTopbarActionId, type SessionTopbarConfig, type SessionTopbarItem,
+} from './sessionTopbarConfig.ts'
 import type { Session } from './types.ts'
 
 type Props={
@@ -25,8 +27,12 @@ export function SessionTopbar({session,config,rowConfig,facts,title,renderAction
   const renderItem=(item:SessionTopbarItem):ComponentChildren=>{
     if(item.kind==='action')return renderAction(item.id)
     if(item.id==='title'&&title!==undefined)return title
-    const token=sessionFieldToken(item.id,item.mode,session,rowConfig,context)
-    return token?<span class="session-topbar-metric"><RowTokenView token={token} session={session} config={rowConfig}/></span>:null
+    // Per item, not per bar: `context` is the one field whose sidebar setting
+    // names a surface this bar lacks, so it is resolved to an in-row rendering
+    // here and every other field renders under the sidebar's own configuration.
+    const itemConfig=sessionTopbarRowConfig(item,rowConfig)
+    const token=sessionFieldToken(item.id,item.mode,session,itemConfig,context)
+    return token?<span class="session-topbar-metric"><RowTokenView token={token} session={session} config={itemConfig}/></span>:null
   }
   return <div class="pane-bar session-topbar" data-density={config.density} onContextMenu={onContextMenu} onDblClick={onDblClick}>
     {config.rows.map((row,rowIndex)=>{

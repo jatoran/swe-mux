@@ -31,6 +31,8 @@ export interface SessionRowContext {
   defaultBranch: Record<string, string | undefined>
   /** Most common model per project id. */
   defaultModel: Record<string, string | undefined>
+  /** Most common reported effort level per project id, on the same rule as the model. */
+  defaultEffort: Record<string, string | undefined>
   /** True when more than one provider account is live across the fleet. */
   multiAccount: boolean
   /** Pending queue depth by target session id. */
@@ -89,7 +91,7 @@ export const EMPTY_ROW_BUDGET: RowBudget = { top: 0, bottom: 0 }
 
 export function emptyRowContext(now = Date.now() / 1000): SessionRowContext {
   return {
-    now, defaultBranch: {}, defaultModel: {}, multiAccount: false,
+    now, defaultBranch: {}, defaultModel: {}, defaultEffort: {}, multiAccount: false,
     queueDepth: {}, checkoutSessions: {}, localDrafts: {},
     voice: VOICE_MODE_OFF, budget: EMPTY_ROW_BUDGET,
   }
@@ -181,6 +183,16 @@ const AWAITING_NOTABLE_SECONDS = 20
 const LAST_TURN_NOTABLE_SECONDS = 10
 const IDLE_FOR_NOTABLE_SECONDS = 30 * 60
 const COST_NOTABLE_USD = 1
+/**
+ * Share of a provider rate-limit window worth a token, in percent.
+ *
+ * Half, because a limit is acted on well before it binds: at 50% of a five-hour
+ * window the question "will this session finish inside it" has an answer worth
+ * reading, and the colour ramp above it says how urgently.
+ */
+const LIMIT_NOTABLE_PCT = 50
+const LIMIT_HIGH_PCT = 75
+const LIMIT_CRIT_PCT = 90
 /**
  * Working time worth reporting, in seconds.
  *
@@ -574,6 +586,48 @@ function checkoutShare(session: Session, context: SessionRowContext): number {
 const sharedNote = (share: number): string =>
   share > 1 ? ` — shared checkout, ${share} live sessions report it` : ''
 
+/**
+ * The hook vocabulary both Claude and Codex emit, in row-sized words. An
+ * unlisted mode prints as the harness spelled it, because a new mode is a
+ * fact worth showing and not a reason to go quiet.
+ */
+const PERMISSION_MODE_LABELS: Record<string, string> = {
+  default: 'default',
+  acceptEdits: 'accept edits',
+  plan: 'plan',
+  dontAsk: 'don’t ask',
+  bypassPermissions: 'bypass',
+  auto: 'auto',
+}
+
+/** Modes under which the harness acts without asking: the ones worth amber. */
+const UNATTENDED_PERMISSION_MODES = new Set(['bypassPermissions', 'dontAsk', 'auto'])
+
+function limitTone(pct: number): RowTone {
+  if (pct >= LIMIT_CRIT_PCT) return 'crit'
+  if (pct >= LIMIT_HIGH_PCT) return 'high'
+  if (pct >= LIMIT_NOTABLE_PCT) return 'warn'
+  return 'muted'
+}
+
+/** A `limit*` token, or null when the harness reported no such window. */
+function limitCandidate(
+  session: Session, key: 'five_hour' | 'seven_day', mark: string, name: string, now: number,
+): { text: string; title: string; tone: RowTone; notable: boolean } | null {
+  const window = session.harness_status?.rate_limits?.[key]
+  if (!window || typeof window.used_pct !== 'number' || !Number.isFinite(window.used_pct)) return null
+  const pct = Math.max(0, Math.round(window.used_pct))
+  const resets = typeof window.resets_at === 'number' && window.resets_at > now
+    ? `, resets in ${formatRowDuration(window.resets_at - now)}`
+    : ''
+  return {
+    text: `${mark} ${pct}%`,
+    title: `${name} limit ${pct}% used${resets}`,
+    tone: limitTone(pct),
+    notable: pct >= LIMIT_NOTABLE_PCT,
+  }
+}
+
 interface Candidate { token: RowToken; notable: boolean }
 
 /**
@@ -739,7 +793,8 @@ function candidateFor(
     }
     case 'context': {
       // `arc` and `off` draw nothing here; the indicator owns the fact instead.
-      if (config.context !== 'gauge' && config.context !== 'percent') return null
+      // `both` is the gauge token with its label drawn beside the cells.
+      if (config.context !== 'gauge' && config.context !== 'percent' && config.context !== 'both') return null
       const gauge = contextGauge(session, config)
       if (!gauge) return null
       const label = `${Math.round(gauge.pct * 100)}%`
@@ -858,8 +913,46 @@ function candidateFor(
       return make({ kind: 'text', text: `×${count}`, tone: 'muted', title: `compacted ${count} time${count === 1 ? '' : 's'}` }, count > 0)
     }
     case 'cost': {
+      // Nothing rather than `$0.00`: only a harness that reports its own cost
+      // fills the figure (Claude's status line does; Codex reports none), and a
+      // zero from a harness that reports nothing is the absence of a measurement
+      // wearing the shape of one - the same rule the duration states at length.
       const cost = session.cost_usd || 0
+      if (!(cost > 0)) return null
       return make({ kind: 'text', text: `$${cost < 10 ? cost.toFixed(2) : Math.round(cost)}`, tone: 'muted', title: `spent $${cost.toFixed(4)}` }, cost >= COST_NOTABLE_USD)
+    }
+    case 'effort': {
+      const effort = session.harness_status?.effort
+      if (!effort) return null
+      return make(
+        { kind: 'text', text: effort, tone: 'muted', title: `reasoning effort ${effort}` },
+        effort !== context.defaultEffort[session.project_id],
+      )
+    }
+    case 'mode': {
+      const mode = session.harness_status?.permission_mode
+      if (!mode) return null
+      const label = PERMISSION_MODE_LABELS[mode] ?? mode
+      const unattended = UNATTENDED_PERMISSION_MODES.has(mode)
+      return make(
+        {
+          kind: 'text',
+          text: label,
+          tone: unattended ? 'warn' : mode === 'default' ? 'muted' : 'default',
+          title: unattended
+            ? `permission mode ${label} (${mode}): the agent acts without asking`
+            : `permission mode ${label} (${mode})`,
+        },
+        mode !== 'default',
+      )
+    }
+    case 'limit5h': {
+      const limit = limitCandidate(session, 'five_hour', '5h', '5-hour', context.now)
+      return limit ? make({ kind: 'text', text: limit.text, tone: limit.tone, title: limit.title }, limit.notable) : null
+    }
+    case 'limit7d': {
+      const limit = limitCandidate(session, 'seven_day', '7d', 'weekly', context.now)
+      return limit ? make({ kind: 'text', text: limit.text, tone: limit.tone, title: limit.title }, limit.notable) : null
     }
     case 'cwd': {
       const cwd = workingCwd(session)
@@ -928,7 +1021,8 @@ function tokenCost(token: RowToken, config: SessionRowConfig): number {
     case 'badges':
       return Math.max(1, token.badges?.length ?? 1) * MARK_COST
     case 'gauge':
-      return GAUGE_COST
+      // `both` draws the label beside the cells, and the label is monospace text.
+      return config.context === 'both' ? GAUGE_COST + 1 + token.text.length : GAUGE_COST
     case 'diff':
       return prefix + (config.diffStyle === 'bar' ? DIFF_BAR_COST : token.text.length)
     case 'count':
@@ -1154,9 +1248,11 @@ export function deriveRowFleetFacts(
   }
   const defaultBranch: Record<string, string | undefined> = {}
   const defaultModel: Record<string, string | undefined> = {}
+  const defaultEffort: Record<string, string | undefined> = {}
   for (const [projectId, list] of byProject) {
     defaultBranch[projectId] = mostCommon(list.map(session => session.git?.branch))
     defaultModel[projectId] = mostCommon(list.map(session => session.model))
+    defaultEffort[projectId] = mostCommon(list.map(session => session.harness_status?.effort))
   }
   const accounts = new Set<string>()
   // Ended sessions are excluded: the question a shared-checkout mark answers is
@@ -1170,7 +1266,7 @@ export function deriveRowFleetFacts(
     if (root && !isEnded(session)) checkoutSessions[root] = (checkoutSessions[root] || 0) + 1
   }
   return {
-    defaultBranch, defaultModel,
+    defaultBranch, defaultModel, defaultEffort,
     multiAccount: accounts.size > 1, queueDepth, checkoutSessions, localDrafts, voice, budget,
   }
 }

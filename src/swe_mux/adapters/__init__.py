@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import assert_never
 
 from ..bundle_swap import hook_delivery_executable
+from ..claude_status_line import StatusLineDelegate, resolve_status_line_delegate
 from ..harness import HARNESSES, HarnessDescriptor
 from .base import BackendAdapter, SpawnOptions, SpawnSpec
 from .claude import ClaudeAdapter
@@ -45,6 +46,15 @@ def build_agent_adapter(
     of the shared project skill root for every other family.
     """
     if harness.adapter_family == "claude":
+        # The status-line tee reproduces Claude Code's own `statusLine` contract,
+        # which a merely compatible CLI in this family is not known to share.
+        status_line_resolver: Callable[[Path], StatusLineDelegate | None] | None = None
+        if harness.name == "claude":
+            data_home = harness.data_home
+
+            def status_line_resolver(cwd: Path) -> StatusLineDelegate | None:
+                return resolve_status_line_delegate(cwd, data_home())
+
         return ClaudeAdapter(
             executable,
             data_dir,
@@ -57,6 +67,7 @@ def build_agent_adapter(
             instrument=instrument,
             approval_hook_timeout=approval_hook_timeout,
             skill=skill,
+            status_line_resolver=status_line_resolver,
         )
     if harness.adapter_family == "codex":
         return CodexAdapter(

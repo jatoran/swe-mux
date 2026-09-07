@@ -114,6 +114,13 @@
   supervisor snapshot through a session-preserving restart, which is routine here; restored
   `allowlisted` with no rules drops to `wait` rather than becoming an empty allowlist. Full
   contract: `features/approvals.md`.
+- `SessionRecord.harness_status`: what the harness reports about its own session -
+  `HarnessStatus {effort, permission_mode, output_style, fast_mode, thinking, rate_limits,
+  context_window_size, sources, updated_at}`, with `rate_limits` keyed `five_hour` /
+  `seven_day` / `spend_limit` onto `RateLimitWindow {used_pct, resets_at, window_minutes}`.
+  Every field is optional and an unreported one stays absent rather than guessed. Run-scoped
+  like the token measurements, and carried on the record so it rides the supervisor snapshot
+  through a session-preserving restart. Full contract: `features/harness-status.md`.
 - Git `repository_id`, project scope, root, and repository group fields are derived metadata,
   separate from canonical Project ownership.
 

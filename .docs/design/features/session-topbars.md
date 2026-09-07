@@ -27,6 +27,12 @@ Metrics reuse `ROW_FIELDS` and `sessionFieldToken` from the sidebar session-row 
 The two surfaces therefore share field vocabulary, notability, duration semantics, Git attribution, model labels, and token styles.
 Each placed metric is `when notable` or `always`.
 
+A placed `context` metric additionally carries its own rendering (`style`: `percent`, `gauge`, or `both`).
+The sidebar draws context on its state indicator by default, and a top bar has no indicator, so a placed `context` used to inherit `arc` and draw nothing.
+`sessionTopbarRowConfig` resolves the item to an in-row rendering: its own `style`, else the sidebar's setting when that already draws in the row, else a percentage.
+Every other metric renders under the sidebar's configuration untouched, so the two surfaces cannot disagree about a diff, a count, or a ramp.
+A stored `style` on any other field, or one this build does not draw, is dropped by normalization.
+
 Shortcuts are approvals plus every entry in `DRAWER_TABS`.
 Drawer shortcuts retain their registered label and scope.
 Queue and Transcript remain visible but disabled when the named session cannot use them, so configured placement does not silently collapse.
@@ -51,7 +57,7 @@ The same row from sidebar, tab, and mobile session menus continues to target App
 
 ## Key files
 
-- Model and catalog: `frontend/src/sessionTopbarConfig.ts`
+- Model, catalog, and the per-item context rendering: `frontend/src/sessionTopbarConfig.ts`
 - Persistence: `frontend/src/sessionTopbarPrefs.ts`, `src/swe_mux/settings_store.py`
 - Live renderer: `frontend/src/SessionTopbar.tsx`, `frontend/src/App.tsx`
 - Editor and preview: `frontend/src/SessionTopbarSettings.tsx`

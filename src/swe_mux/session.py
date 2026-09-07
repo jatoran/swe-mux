@@ -56,6 +56,7 @@ from .models import (
     ApprovalMode,
     ApprovalPolicy,
     GitState,
+    HarnessStatus,
     SessionRecord,
     SessionState,
     StandingActivity,
@@ -4038,6 +4039,7 @@ class SessionManager:
         record.provider_account_hashes = {}
         record.model = None
         record.measurement_source = None
+        record.harness_status = HarnessStatus()
         record.parser_status = "waiting"
         record.parser_diagnostic = None
         record.parser_events_seen = 0
@@ -5189,6 +5191,10 @@ class SessionManager:
         record.compaction_confidence = None
         record.model = None
         record.measurement_source = None
+        # The next hook refills the permission mode within the turn and the next
+        # status report refills the rest; what must not survive is the retired
+        # conversation's effort and limits standing in for the new one's.
+        record.harness_status = HarnessStatus()
         record.parser_status = "waiting"
         record.parser_diagnostic = None
         record.parser_events_seen = 0
@@ -7571,6 +7577,7 @@ class SessionManager:
         session.record.context_peak_pct = 0
         session.record.model = None
         session.record.measurement_source = None
+        session.record.harness_status = HarnessStatus()
         # A new run means a new CLI generation (a promotion, or a launcher-driven
         # relaunch), so the old snapshot describes a process that is gone. The
         # replacement is taken at the end of this method, once `run_cwd` and the

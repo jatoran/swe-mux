@@ -146,6 +146,36 @@ export interface ConsoleContention {
   }
 }
 
+/** One provider rate-limit window as the harness itself reports it. */
+export interface RateLimitWindow {
+  /** Share of the window consumed, 0-100; above 100 is possible on a spend limit. */
+  used_pct: number
+  /** Epoch seconds at which the window resets; absent when the harness did not say. */
+  resets_at?: number | null
+  /** Length of the window in minutes, when the harness names it. */
+  window_minutes?: number | null
+}
+
+/**
+ * The harness's own report of its session settings and account limits
+ * (`models.HarnessStatus`). Keys of `rate_limits` are shared across harnesses:
+ * `five_hour`, `seven_day`, `spend_limit`, plus any window that mapped to
+ * none of those under the name the harness gave it.
+ */
+export interface HarnessStatus {
+  effort?: string | null
+  /** `default`, `acceptEdits`, `plan`, `dontAsk`, `bypassPermissions`, `auto`. */
+  permission_mode?: string | null
+  output_style?: string | null
+  fast_mode?: boolean | null
+  thinking?: boolean | null
+  rate_limits?: Record<string, RateLimitWindow>
+  context_window_size?: number
+  /** Field name -> the channel that last wrote it. */
+  sources?: Record<string, string>
+  updated_at?: number | null
+}
+
 export interface Session {
   id: string; name: string; project_id: string; backend: string
   native_session_id: string; cwd: string; exe: string; args: string[]; pid: number
@@ -242,6 +272,14 @@ export interface Session {
   client_startup_timing_ms?: Record<string, number>
   shell_profile_id?: string
   context_peak_pct:number;model?:string;measurement_source?:string
+  /**
+   * What the harness reports about its own session that no transcript carries:
+   * the reasoning effort in force, the permission mode, the provider rate-limit
+   * windows. Every field is optional because every harness reports a different
+   * subset, and an absent field renders nothing rather than a guess. Absent
+   * altogether from a daemon predating it.
+   */
+  harness_status?: HarnessStatus | null
   compaction_count:number;last_compaction_at?:number;compaction_capability?:string;compaction_confidence?:string
   repository_id?:string;project_label?:string;project_root?:string
   project_scope_id?:string;repo_group_id?:string

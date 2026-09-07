@@ -5986,6 +5986,8 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .row-title{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
 .row-diff .add{color:#5f9e6a}.row-diff .del{color:#a5605a}
 .row-gauge,.row-diffbar{display:inline-flex;gap:1.5px;align-self:center;flex:none}
+/* The `both` context rendering: cells and label as one token, one band. */
+.row-context{display:inline-flex;align-items:center;gap:4px;flex:none}
 .row-gauge i,.row-diffbar i{width:4px;height:7px;border-radius:1px;background:#2b352f;display:block}
 /* Same ramp as `.ind-fill`, and it has to stay the same: the arc and the cells
    are one scale drawn two ways, and a reader who switches between them is

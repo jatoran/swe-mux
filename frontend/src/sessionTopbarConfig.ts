@@ -2,7 +2,8 @@
 
 import { DRAWER_TABS, type DrawerTabId } from './drawerTabs.ts'
 import {
-  ROW_FIELDS, SEPARATORS, type RowAlign, type RowFieldId, type RowFieldMode, type SeparatorId,
+  CONTEXT_ROW_RENDERS, ROW_FIELDS, SEPARATORS, type ContextRowRender, type RowAlign, type RowFieldId,
+  type RowFieldMode, type SeparatorId, type SessionRowConfig,
 } from './sessionRowConfig.ts'
 
 export const SESSION_TOPBAR_VERSION = 1
@@ -10,7 +11,14 @@ export const SESSION_TOPBAR_MAX_ROWS = 3
 
 export type SessionTopbarDensity = 'compact' | 'standard' | 'comfortable'
 export type SessionTopbarActionId = 'approvals' | `drawer:${DrawerTabId}`
-export type SessionTopbarMetricItem = { kind:'metric';id:RowFieldId;mode:RowFieldMode }
+/**
+ * A placed metric. `style` exists for the one field whose rendering the sidebar
+ * decides elsewhere: the sidebar draws context on its indicator by default, and
+ * a top bar has no indicator, so a placed `context` inherited `arc` and drew
+ * nothing. The top bar therefore carries its own choice among the in-row
+ * renderings, defaulting to a percentage so a placed field always shows.
+ */
+export type SessionTopbarMetricItem = { kind:'metric';id:RowFieldId;mode:RowFieldMode;style?:ContextRowRender }
 export type SessionTopbarActionItem = { kind:'action';id:SessionTopbarActionId }
 export type SessionTopbarItem = SessionTopbarMetricItem | SessionTopbarActionItem
 export type SessionTopbarRow = { left:SessionTopbarItem[];right:SessionTopbarItem[];separator:SeparatorId }
@@ -72,11 +80,18 @@ export function defaultSessionTopbarConfig():SessionTopbarConfig {
 const METRIC_IDS=new Set(ROW_FIELDS.map(field=>field.id))
 const ACTION_IDS=new Set(SESSION_TOPBAR_ACTIONS.map(action=>action.id))
 
+const STYLED_METRIC_IDS:ReadonlySet<RowFieldId>=new Set<RowFieldId>(['context'])
+
 function readItem(raw:unknown):SessionTopbarItem|null {
   if(!raw||typeof raw!=='object')return null
-  const item=raw as {kind?:unknown;id?:unknown;mode?:unknown}
+  const item=raw as {kind?:unknown;id?:unknown;mode?:unknown;style?:unknown}
   if(item.kind==='metric'&&typeof item.id==='string'&&METRIC_IDS.has(item.id as RowFieldId)){
-    return {kind:'metric',id:item.id as RowFieldId,mode:item.mode==='always'?'always':'notable'}
+    const id=item.id as RowFieldId
+    const metric:SessionTopbarMetricItem={kind:'metric',id,mode:item.mode==='always'?'always':'notable'}
+    if(STYLED_METRIC_IDS.has(id)&&CONTEXT_ROW_RENDERS.includes(item.style as ContextRowRender)){
+      metric.style=item.style as ContextRowRender
+    }
+    return metric
   }
   if(item.kind==='action'&&typeof item.id==='string'&&ACTION_IDS.has(item.id as SessionTopbarActionId)){
     return {kind:'action',id:item.id as SessionTopbarActionId}
@@ -152,6 +167,41 @@ export function setSessionTopbarMetricMode(
   const apply=(items:SessionTopbarItem[])=>items.map(item=>
     item.kind==='metric'&&item.id===id?{...item,mode}:item)
   return {...config,rows:config.rows.map(row=>({...row,left:apply(row.left),right:apply(row.right)}))}
+}
+
+/** Whether the editor offers a rendering choice for this metric. */
+export const sessionTopbarMetricHasStyle=(id:RowFieldId):boolean=>STYLED_METRIC_IDS.has(id)
+
+export function setSessionTopbarMetricStyle(
+  config:SessionTopbarConfig,id:RowFieldId,style:ContextRowRender,
+):SessionTopbarConfig {
+  if(!STYLED_METRIC_IDS.has(id))return config
+  const apply=(items:SessionTopbarItem[])=>items.map(item=>
+    item.kind==='metric'&&item.id===id?{...item,style}:item)
+  return {...config,rows:config.rows.map(row=>({...row,left:apply(row.left),right:apply(row.right)}))}
+}
+
+/**
+ * The context rendering a placed top-bar metric draws with: its own `style`,
+ * else the sidebar's when that is an in-row rendering, else a percentage.
+ */
+export function sessionTopbarContextRender(item:SessionTopbarMetricItem,rowConfig:SessionRowConfig):ContextRowRender {
+  if(item.style)return item.style
+  return CONTEXT_ROW_RENDERS.includes(rowConfig.context as ContextRowRender)
+    ?rowConfig.context as ContextRowRender
+    :'percent'
+}
+
+/**
+ * The row configuration a top-bar metric is rendered under.
+ *
+ * Identical to the sidebar's for every field but `context`, whose sidebar
+ * setting names a surface (the indicator) the top bar does not have.
+ */
+export function sessionTopbarRowConfig(item:SessionTopbarMetricItem,rowConfig:SessionRowConfig):SessionRowConfig {
+  if(item.id!=='context')return rowConfig
+  const context=sessionTopbarContextRender(item,rowConfig)
+  return context===rowConfig.context?rowConfig:{...rowConfig,context}
 }
 
 export function addSessionTopbarRow(config:SessionTopbarConfig):SessionTopbarConfig {

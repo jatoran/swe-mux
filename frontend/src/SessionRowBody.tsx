@@ -105,9 +105,16 @@ export function RowTokenView({ token, session, config }: { token: RowToken; sess
     // ramp is configurable now, and the copy that used to live here is what
     // would leave the cells and the arc a shade apart at the moved boundary.
     const tone = token.gauge.band === 'calm' ? '' : ` ${token.gauge.band}`
-    return <span class={`row-gauge${tone}`} title={token.title} role="img" aria-label={token.text}>
+    const cells = <span class={`row-gauge${tone}`} title={token.title} role="img" aria-label={token.text}>
       {gaugeCells(pct, token.gauge.peak).map((cell, index) =>
         <i key={index} class={`${cell.on ? 'on' : ''}${cell.peak ? ' peak' : ''}`} />)}
+    </span>
+    if (config.context !== 'both') return cells
+    // One token, two renderings of one number: the label takes the same band
+    // the cells do, so the pair cannot disagree at a moved threshold.
+    return <span class="row-context" title={token.title}>
+      {cells}
+      <span class={`row-text${tone}`} aria-hidden="true">{token.text}</span>
     </span>
   }
   if (token.kind === 'diff' && token.diff) {

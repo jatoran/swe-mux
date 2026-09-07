@@ -23,6 +23,15 @@ from .harness import (
     native_id_matches,
     reports_lifecycle_hooks,
 )
+from .harness_status import (
+    STATUS_EVENT,
+    apply_claude_status_snapshot,
+    apply_codex_rate_limits,
+    apply_codex_settings,
+    apply_hook_permission_mode,
+    codex_context_fraction,
+    status_summary,
+)
 from .models import SessionState
 from .path_identity import same_path
 from .scrollback import SCREEN_TAIL_BYTES
@@ -4338,6 +4347,51 @@ async def _refresh_database_measurements(session: Session) -> None:
     _publish_update(session)
 
 
+async def _apply_status_snapshot(
+    session: Session, payload: dict[str, Any], events: EventBus
+) -> None:
+    """One Claude status-line snapshot: fold it in, publish, and watch the tee.
+
+    The `delegate` block reports whether the user's own status-line command ran
+    under the tee. A failure there is invisible in the pane - the CLI shows an
+    empty status row - so it is logged here, once per distinct error rather
+    than once per assistant message, and counted for status-health.
+    """
+    record = session.record
+    changed = apply_claude_status_snapshot(record, payload, now=time.time())
+    delegate = payload.get("delegate")
+    state = _observation_state(session)
+    if isinstance(delegate, dict):
+        error = delegate.get("error") if delegate.get("ok") is not True else None
+        error_text = str(error)[:300] if error else None
+        previous = state.get("status_delegate_error")
+        if error_text and error_text != previous:
+            counters = getattr(session, "status_health_counters", None)
+            if isinstance(counters, dict):
+                counters["status_delegate_failed"] = counters.get("status_delegate_failed", 0) + 1
+            log.warning(
+                "session %s status-line delegate failed (exit %s): %s",
+                record.id,
+                delegate.get("exit_code"),
+                error_text,
+            )
+        elif not error_text and previous:
+            log.info("session %s status-line delegate recovered", record.id)
+        state["status_delegate_error"] = error_text
+    if not changed:
+        return
+    _publish_update(session)
+    await events.emit(
+        "harness_status",
+        session_id=record.id,
+        source="hook",
+        scope="root",
+        backend=record.backend,
+        changed=changed,
+        **status_summary(record),
+    )
+
+
 async def apply_hook_observation(
     session: Session,
     event_type: str,
@@ -4424,6 +4478,18 @@ async def apply_hook_observation(
                 reason=refusal,
             )
             return None
+
+    if event_type == STATUS_EVENT:
+        # The Claude status-line tee. Measurement only: it carries the CLI's own
+        # effort, limits, context and cost, and never a turn boundary, so it
+        # returns here before any branch that could move state.
+        await _apply_status_snapshot(session, payload, events)
+        return None
+    # Every root-scoped hook of every harness names the permission mode in force,
+    # and no transcript does. Read here, past the scope and foreign filters, so a
+    # subagent's mode and a nested child's never overwrite the pane's own.
+    if apply_hook_permission_mode(session.record, payload, now=time.time()):
+        _publish_update(session)
 
     # Tool-activity and turn-start hooks only drive state as a fallback: when the
     # transcript observer is authoritative it already records the same boundaries
@@ -5143,7 +5209,12 @@ async def _claude(session: Session, event: dict[str, Any], events: EventBus) -> 
             )
             session.record.tokens_out = int(usage.get("output_tokens", 0))
             model = str(message.get("model") or "")
-            window = claude_context_window(model)
+            # The CLI's own window size, once its status line has reported one,
+            # outranks the model table: the table lags every new model and lags
+            # into a zero, which renders as a fresh conversation.
+            window = session.record.harness_status.context_window_size or claude_context_window(
+                model
+            )
             session.record.context_window = window
             session.record.context_pct = min(1, session.record.tokens_in / window) if window else 0
             session.record.context_peak_pct = max(
@@ -5263,8 +5334,20 @@ async def _codex(session: Session, event: dict[str, Any], events: EventBus) -> N
             if model and model != session.record.model:
                 session.record.model = model
                 _publish_update(session)
+            # The same record restates the reasoning effort per turn, which is
+            # the only place a mid-session `/effort` shows up.
+            if apply_codex_settings(session.record, payload, now=time.time()):
+                _publish_update(session)
     if outer_type == "turn_context" or payload_type == "thread_settings_applied":
         _note_approval_delegation(session, payload)
+        settings = payload.get("thread_settings")
+        if (
+            payload_type == "thread_settings_applied"
+            and isinstance(settings, dict)
+            and not provisional_observation(session)
+            and apply_codex_settings(session.record, settings, now=time.time())
+        ):
+            _publish_update(session)
     if payload_type in CODEX_RESUME_PAYLOADS:
         # Tooling or the model is running again, so any approval was answered.
         await _resume_from_awaiting(session, events, event, evidence=str(payload_type))
@@ -5530,13 +5613,17 @@ async def _codex(session: Session, event: dict[str, Any], events: EventBus) -> N
         session.record.tokens_out = int(total.get("output_tokens", session.record.tokens_out))
         window = int(info.get("model_context_window") or 0)
         session.record.context_window = window
-        current_input = int(current.get("input_tokens") or 0)
-        session.record.context_pct = min(1, current_input / window) if window else 0
+        # The CLI's own formula, so the row reads what the footer reads: the last
+        # response's total tokens against the window, both less the baseline.
+        session.record.context_pct = codex_context_fraction(current, window)
         session.record.context_peak_pct = max(
             session.record.context_peak_pct, session.record.context_pct
         )
         session.record.model = str(info.get("model") or "") or session.record.model
         session.record.measurement_source = "codex-transcript"
+        limits = payload.get("rate_limits")
+        if isinstance(limits, dict):
+            apply_codex_rate_limits(session.record, limits, now=time.time())
         _publish_update(session)
 
 

@@ -631,6 +631,16 @@
 - Changing session status detection, the transition ledger, the state watchdog,
   awaiting sub-reasons, the detection golden corpus, or status-health diagnostics:
   `design/features/status-detection.md`, `design/features/delivery-readiness.md`
+- Changing what a harness reports about its own session - effort, permission mode,
+  rate limits, the Claude status-line tee, the `Status` ingress event, or the `effort`,
+  `mode`, `limit5h`, `limit7d` row fields: `design/features/harness-status.md`,
+  `design/features/ui.md`, `design/features/session-topbars.md`, `design/data-model.md`,
+  `design/features/backends.md`, `technical/backend/packages/harnesses.md`.
+  Two rules the design turns on. **Nothing is guessed**: a field the harness did not
+  report stays absent and the row renders nothing for it, so a mixed fleet needs no
+  per-harness catalogue. And **the tee is written only when the user already has a
+  status line**, because Claude changes its footer the moment any custom status line is
+  configured, and that is the user's choice to make.
 - Changing control-plane approvals (the per-conversation mode, the allow rules, the
   never-auto-approved floor, the decision hook, or the approval strip):
   `design/features/approvals.md`, `design/features/status-detection.md`,

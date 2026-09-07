@@ -149,6 +149,7 @@ const CONTEXT_MODES: Array<{ id: ContextRender; label: string; hint: string }> =
   { id: 'arc', label: 'Around the indicator', hint: 'Costs no row width; peak marked on the outline.' },
   { id: 'gauge', label: 'Gauge', hint: 'Four cells in the row, comparable down the list.' },
   { id: 'percent', label: 'Percentage', hint: 'Exact number in the row.' },
+  { id: 'both', label: 'Gauge and percentage', hint: 'The cells with the exact number beside them.' },
   { id: 'off', label: 'Off', hint: 'Context pressure is not shown.' },
 ]
 

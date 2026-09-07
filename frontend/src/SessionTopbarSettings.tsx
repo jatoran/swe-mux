@@ -1,13 +1,17 @@
 import { useMemo, useState } from 'preact/hooks'
 import { Dropdown } from './Dropdown.tsx'
 import { SessionTopbar } from './SessionTopbar.tsx'
-import { ROW_FIELD_BY_ID, SEPARATORS, SEPARATOR_IDS, type RowAlign, type RowFieldId, type RowFieldMode, type SeparatorId } from './sessionRowConfig.ts'
+import {
+  ROW_FIELD_BY_ID, SEPARATORS, SEPARATOR_IDS, type ContextRowRender, type RowAlign, type RowFieldId,
+  type RowFieldMode, type SeparatorId,
+} from './sessionRowConfig.ts'
 import { deriveRowFleetFacts } from './sessionRowFields.ts'
 import { useSessionRowConfig } from './sessionRowPrefs.ts'
 import {
   SESSION_TOPBAR_ACTIONS, SESSION_TOPBAR_MAX_ROWS, addSessionTopbarRow,
   defaultSessionTopbarConfig, placeSessionTopbarItem, removeSessionTopbarItem,
-  removeSessionTopbarRow, sessionTopbarItemKey, setSessionTopbarMetricMode,
+  removeSessionTopbarRow, sessionTopbarContextRender, sessionTopbarItemKey,
+  sessionTopbarMetricHasStyle, setSessionTopbarMetricMode, setSessionTopbarMetricStyle,
   unplacedSessionTopbarItems, type SessionTopbarActionId, type SessionTopbarConfig,
   type SessionTopbarItem,
 } from './sessionTopbarConfig.ts'
@@ -24,7 +28,17 @@ const PREVIEW_SESSION={
   project_root:'D:/PROJECTS/swe-mux',
   git:{branch:'ui-settings-updates',worktree:'ui-settings-updates',dirty:6,ahead:3,behind:0,added:284,removed:41,root:'D:/PROJECTS/swe-mux-wt/ui-settings-updates',compare_ref:'origin/master',compare_added:640,compare_removed:112,compare_files:14},
   provider_account_hashes:{openai:'preview-account'},
+  harness_status:{
+    effort:'xhigh',permission_mode:'acceptEdits',
+    rate_limits:{five_hour:{used_pct:37,resets_at:PREVIEW_NOW+3*3600},seven_day:{used_pct:62,resets_at:PREVIEW_NOW+2*86400}},
+  },
 } as unknown as Session
+
+const CONTEXT_STYLE_OPTIONS:Array<{value:ContextRowRender;label:string}>=[
+  {value:'percent',label:'percentage'},
+  {value:'gauge',label:'gauge'},
+  {value:'both',label:'gauge + percentage'},
+]
 
 export function SessionTopbarSettings(){
   const [config,setConfig]=useState(loadSessionTopbarConfig)
@@ -48,6 +62,7 @@ export function SessionTopbarSettings(){
     return <li key={sessionTopbarItemKey(item)} class="topbar-slot">
       <span>{itemLabel(item)}</span>
       {item.kind==='metric'?<Dropdown ariaLabel={`${itemLabel(item)} visibility`} value={item.mode} onChange={value=>change(setSessionTopbarMetricMode(config,item.id,value as RowFieldMode))} options={[{value:'notable',label:'when notable'},{value:'always',label:'always'}]}/>:<em>shortcut</em>}
+      {item.kind==='metric'&&sessionTopbarMetricHasStyle(item.id)&&<Dropdown ariaLabel={`${itemLabel(item)} style`} value={sessionTopbarContextRender(item,rowConfig)} onChange={value=>change(setSessionTopbarMetricStyle(config,item.id,value as ContextRowRender))} options={CONTEXT_STYLE_OPTIONS}/>}
       {config.rows.length>1&&<Dropdown ariaLabel={`${itemLabel(item)} row`} value={String(rowIndex)} onChange={value=>change(placeSessionTopbarItem(config,item,Number(value),align))} options={config.rows.map((_,target)=>({value:String(target),label:`row ${target+1}`}))}/>} 
       <span class="topbar-slot-actions">
         <button type="button" title="Move earlier" disabled={index===0} onClick={()=>change(placeSessionTopbarItem(config,item,rowIndex,align,index-1))}>↑</button>

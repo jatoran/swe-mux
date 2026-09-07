@@ -3507,6 +3507,11 @@ Every session context menu carries **Configure appearance**, which deep-links to
   An ended session has no composer and is never marked.
 - **Every placed field is `when notable` or `always`.**
   Notability is per field: a branch that differs from the project's most common branch, a diff with changed lines, a queue with items, a model that differs from the project default, an account when more than one is live, a duration past its per-state threshold.
+- **Four fields print what the harness reports about its own session** (`features/harness-status.md`): `effort`, `mode`, `limit5h`, and `limit7d`.
+  Each renders nothing on a harness that does not report it, which is the rule the account and branch fields already follow, so a mixed fleet needs no per-harness catalogue.
+  `effort` is notable off the project's most common level, on the model's rule; `mode` is notable off `default` and amber for the modes under which the agent acts without asking; the limits are notable past half used and band at 50/75/90.
+- **Cost draws nothing until a harness has reported one.**
+  Only Claude's status line fills the figure and Codex reports none, so a `$0.00` on a Codex row was the absence of a measurement wearing the shape of one, on the same rule the duration field states at length.
   The default configuration is `always` for exactly two of them - the duration on the bottom line's left and the model on its right - and `when notable` for everything else, so a quiet fleet shows a title, a time, and a model, and anything else visible has earned its place.
 - **The shipped default is a transcription of the layout swe-mux is operated with, not a conservative guess at one.**
   The guess it replaced made every bottom-line field conditional, on the reasoning that a row where nothing is drawn unless it matters is the least noisy row available.
@@ -3602,7 +3607,8 @@ Every session context menu carries **Configure appearance**, which deep-links to
   `compareDiff`/`compareFiles` are measured from the merge base with the Project's comparison ref and therefore keep counting committed work; they carry a `⎇` scope mark so a row holding both does not print the same `+312 -48` twice with no way to tell which is which.
   A worktree-per-branch fleet that commits as it goes reads `+0 -0` on the HEAD-scoped pair alone, which is what the branch-scoped pair exists to fix.
   Either pair renders nothing at all when it could not be measured; a zero would claim a clean tree, or a branch identical to its base.
-- **Context pressure renders in exactly one place**, chosen by a single setting: an arc around the indicator (default, costs no row width, marks the peak on the same outline), a four-cell gauge, a percentage, or off.
+- **Context pressure renders in exactly one place**, chosen by a single setting: an arc around the indicator (default, costs no row width, marks the peak on the same outline), a four-cell gauge, a percentage, the gauge with the percentage beside it as one token (`both`), or off.
+  The pane top bar has no indicator, so a placed top-bar `context` resolves to one of the in-row renderings by itself (`features/session-topbars.md`).
 - **The context ramp is four bands, and where they change is configurable** (`contextWarn`/`contextHigh`/`contextCrit`, shipped at 40 / 60 / 80).
   The thresholds are inclusive lower bounds, so 80% is the first reading that is red: the number typed is the number the colour changes at, which is the only reading of "80% is red" that survives being checked against a row.
   They are held sorted and separated by `normalizeContextThresholds`, which clamps rather than rejects and pushes the upper thresholds *up* when one is dragged past them, because dragging `warn` later means "warn later" rather than "abandon the edit".

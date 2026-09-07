@@ -425,6 +425,11 @@ The guarded assertions themselves did not move: a real turn still has to produce
   own it: `SubagentStop` fires every time an async agent comes to rest and long before it
   finishes, so the transcript's launch/completion pair is counted alongside it
   (`status-detection.md`). The settings directory is removed when its owning terminal ends.
+  The same file carries a `statusLine` tee when, and only when, the user has a status line
+  of their own configured for the spawn directory: the shim runs the user's command with the
+  CLI's snapshot on stdin, prints its output unchanged, and posts the snapshot as the
+  `Status` event (`harness-status.md`). The `claude` harness alone gets the resolver; a
+  merely compatible CLI in the family is not known to share the status-line contract.
 - When mux MCP is registered, the same generated Claude settings allow only the closed read-tool set without a permission prompt.
   `notify` and `request_spawn` are deliberately absent from that allowlist and retain Claude's normal tool approval.
 - **`hook_approval_decisions`** declares whether a harness lets a hook *answer* a permission

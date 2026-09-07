@@ -1245,3 +1245,91 @@ test('the square is axis-aligned, not a diamond', () => {
   const corners = [...path.matchAll(/([\d.-]+),([\d.-]+)/g)].map(match => Number(match[1]))
   assert.ok(corners.some(x => x > 12) && corners.some(x => x < 12), 'edges reach both sides of centre')
 })
+
+// --- the harness's own report: effort, mode, limits -------------------------
+
+const REPORTED = session({
+  harness_status: {
+    effort: 'xhigh',
+    permission_mode: 'acceptEdits',
+    rate_limits: {
+      five_hour: { used_pct: 23.4, resets_at: NOW + 4 * 3600 + 120 },
+      seven_day: { used_pct: 61, resets_at: NOW + 3 * 86_400 },
+    },
+  },
+})
+
+test('a harness that reports nothing draws nothing for effort, mode, or limits', () => {
+  // The same rule the account and branch fields follow: silence where there is
+  // no source, so a mixed fleet needs no per-harness catalogue.
+  const config = withBottom(defaultSessionRowConfig(), ['effort', 'mode', 'limit5h', 'limit7d'])
+  assert.deepEqual(bottomText(session(), config), [])
+  assert.deepEqual(bottomText(session({ harness_status: null }), config), [])
+  assert.deepEqual(bottomText(session({ harness_status: { rate_limits: {} } }), config), [])
+})
+
+test('effort and mode print the harness’s own words, and mode colours the unattended ones', () => {
+  const config = withBottom(defaultSessionRowConfig(), ['effort', 'mode'])
+  assert.deepEqual(bottomText(REPORTED, config), ['xhigh', 'accept edits'])
+  const tokens = buildSessionRowTokens(REPORTED, config, context()).bottom.left.tokens
+  assert.equal(tokens[0]?.tone, 'muted')
+  assert.equal(tokens[1]?.tone, 'default')
+  for (const mode of ['bypassPermissions', 'dontAsk', 'auto']) {
+    const item = session({ harness_status: { permission_mode: mode } })
+    const token = buildSessionRowTokens(item, config, context()).bottom.left.tokens[0]
+    assert.equal(token?.tone, 'warn', `${mode} acts without asking`)
+    assert.match(token?.title ?? '', /without asking/)
+  }
+  // A mode this build has no word for is still a fact, printed as spelled.
+  const novel = session({ harness_status: { permission_mode: 'superAuto' } })
+  assert.deepEqual(bottomText(novel, config), ['superAuto'])
+})
+
+test('mode is notable off the default; effort is notable off the project’s common level', () => {
+  const config = withBottom(defaultSessionRowConfig(), ['effort', 'mode'], 'notable')
+  const plain = session({ harness_status: { effort: 'high', permission_mode: 'default' } })
+  const fleet = deriveRowContext([plain, REPORTED, session({ id: 's3', harness_status: { effort: 'high' } })], {}, NOW)
+  assert.deepEqual(bottomText(plain, config, fleet), [], 'the common effort, the default mode')
+  assert.deepEqual(bottomText(REPORTED, config, fleet), ['xhigh', 'accept edits'])
+  assert.equal(fleet.defaultEffort.p1, 'high')
+})
+
+test('limits print their window mark, band by share used, and are notable past half', () => {
+  const config = withBottom(defaultSessionRowConfig(), ['limit5h', 'limit7d'])
+  assert.deepEqual(bottomText(REPORTED, config), ['5h 23%', '7d 61%'])
+  const tokens = buildSessionRowTokens(REPORTED, config, context()).bottom.left.tokens
+  assert.equal(tokens[0]?.tone, 'muted')
+  assert.equal(tokens[0]?.title, '5-hour limit 23% used, resets in 4h02')
+  assert.equal(tokens[1]?.tone, 'warn')
+  assert.equal(tokens[1]?.title, 'weekly limit 61% used, resets in 3d')
+  const notable = withBottom(defaultSessionRowConfig(), ['limit5h', 'limit7d'], 'notable')
+  assert.deepEqual(bottomText(REPORTED, notable), ['7d 61%'])
+  for (const [pct, tone] of [[49, 'muted'], [50, 'warn'], [75, 'high'], [90, 'crit'], [120, 'crit']] as const) {
+    const item = session({ harness_status: { rate_limits: { five_hour: { used_pct: pct } } } })
+    const token = buildSessionRowTokens(item, config, context()).bottom.left.tokens[0]
+    assert.equal(token?.tone, tone, `${pct}%`)
+    assert.equal(token?.title, `5-hour limit ${pct}% used`, 'no reset time, no reset clause')
+  }
+})
+
+test('cost draws nothing until a harness has reported one', () => {
+  // `$0.00` was the absence of a measurement wearing the shape of one: only a
+  // harness that reports its own cost fills the figure, and Codex reports none.
+  const config = withBottom(defaultSessionRowConfig(), ['cost'])
+  assert.deepEqual(bottomText(session(), config), [])
+  assert.deepEqual(bottomText(session({ cost_usd: 0 }), config), [])
+  assert.deepEqual(bottomText(session({ cost_usd: 0.4321 }), config), ['$0.43'])
+  assert.deepEqual(bottomText(session({ cost_usd: 12.6 }), config), ['$13'])
+})
+
+test('the gauge-and-percentage rendering is one token carrying both', () => {
+  const base = withBottom(defaultSessionRowConfig(), ['context'])
+  const item = session({ context_pct: 0.74, context_peak_pct: 0.8 })
+  const both = buildSessionRowTokens(item, { ...base, context: 'both' }, context()).bottom.left.tokens
+  assert.equal(both.length, 1)
+  assert.equal(both[0]?.kind, 'gauge')
+  assert.equal(both[0]?.text, '74%')
+  assert.equal(both[0]?.gauge?.band, 'high')
+  assert.equal(sessionContextArc(item, { ...base, context: 'both' }), null, 'the arc stays off')
+  assert.equal(normalizeSessionRowConfig({ context: 'both' }).context, 'both')
+})

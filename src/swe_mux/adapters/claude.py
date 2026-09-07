@@ -15,7 +15,9 @@ from pathlib import Path
 
 from ..approvals import DECISION_HOOK_EVENTS
 from ..bundle_swap import ensure_exec_launcher
+from ..claude_status_line import StatusLineDelegate
 from ..harness import HARNESSES, descriptor
+from ..harness_status import STATUS_EVENT
 from ..host_platform import IS_WINDOWS
 from ..mcp_contract import claude_read_permissions
 from ..skill_install import materialize_claude_plugin
@@ -209,8 +211,15 @@ class ClaudeAdapter(BackendAdapter):
         instrument: bool = True,
         approval_hook_timeout: float = 5.0,
         skill: bool = False,
+        status_line_resolver: Callable[[Path], StatusLineDelegate | None] | None = None,
     ) -> None:
         self.name = name
+        # Which status-line command the user has configured for a spawn directory,
+        # so the per-session settings can tee it (`claude_status_line.py`). None
+        # means no tee is ever written: the production factory passes the real
+        # resolver, and a bare adapter never reads the host's settings, so a test
+        # asserting on generated files cannot depend on the machine running it.
+        self._status_line_resolver = status_line_resolver
         self.shim_name = f"{name}.cmd"
         self.config_dir_name = config_dir_name
         self.script_base_name = script_base_name
@@ -276,7 +285,12 @@ class ClaudeAdapter(BackendAdapter):
         }
         return _write_config_if_changed(path, payload)
 
-    def _write_hook_settings(self, data_dir: Path, identity: Path | None = None) -> Path:
+    def _write_hook_settings(
+        self,
+        data_dir: Path,
+        identity: Path | None = None,
+        status_line: StatusLineDelegate | None = None,
+    ) -> Path:
         path = data_dir / f"{self.script_base_name}-hooks.json"
         hooks: dict[str, list[dict[str, object]]] = {}
         family = descriptor(self.name) if self.name in HARNESSES else descriptor("claude")
@@ -294,10 +308,20 @@ class ClaudeAdapter(BackendAdapter):
         payload: dict[str, object] = {"hooks": hooks}
         if self._mux_read_permissions:
             payload["permissions"] = {"allow": self._mux_read_permissions}
+        if status_line is not None and identity is not None:
+            # The tee: the same shim, told to run the user's own command and post
+            # the JSON the CLI handed it. Only with an identity, because without
+            # one the shim would have nowhere to post and the user's command
+            # would be wrapped for nothing.
+            payload["statusLine"] = status_line.settings_entry(
+                _hook_command(STATUS_EVENT, self._hook_executable, identity=identity)
+            )
         return _write_config_if_changed(path, payload)
 
     @staticmethod
-    def _write_hook_identity(directory: Path, opts: SpawnOptions) -> Path | None:
+    def _write_hook_identity(
+        directory: Path, opts: SpawnOptions, status_line: StatusLineDelegate | None = None
+    ) -> Path | None:
         """Materialize this pane's hook credentials beside its settings file.
 
         On disk rather than in the environment because the environment does not
@@ -306,6 +330,11 @@ class ClaudeAdapter(BackendAdapter):
         whichever CLI first started it, while `--settings` is passed per request
         and always names the requesting pane. Rewritten on every spawn so the
         file can never hold a superseded secret.
+
+        The status-line delegate rides here too, as flat string keys: the shim
+        keeps only string-valued identity entries, and the command is a string
+        the shim hands to a shell rather than an argument it could receive on
+        its own command line without a quoting scheme every shell agrees on.
         """
         if not opts.hook_url or not opts.hook_secret:
             return None
@@ -313,6 +342,9 @@ class ClaudeAdapter(BackendAdapter):
         payload = {"url": opts.hook_url, "secret": opts.hook_secret}
         if opts.hook_spool:
             payload["spool"] = opts.hook_spool
+        if status_line is not None:
+            payload["status_line_command"] = status_line.command
+            payload["status_line_source"] = status_line.source
         temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
         temporary.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         temporary.replace(path)
@@ -324,6 +356,30 @@ class ClaudeAdapter(BackendAdapter):
             return None
         return self.data_dir / "sessions" / session_id
 
+    def _status_line_delegate(self, cwd: Path) -> StatusLineDelegate | None:
+        """The user's status-line command for this spawn, or None for no tee.
+
+        Never raises: a settings file the resolver cannot read costs the pane
+        its status-line mirror and nothing else, and says so in the log.
+        """
+        if self._status_line_resolver is None:
+            return None
+        try:
+            delegate = self._status_line_resolver(cwd)
+        except Exception:
+            log.exception("status line: resolving the delegate for %s failed", cwd)
+            return None
+        if delegate is not None:
+            log.info(
+                "status line: teeing %s from %s for sessions spawned in %s",
+                delegate.command,
+                delegate.source,
+                cwd,
+            )
+        else:
+            log.debug("status line: no command configured for %s, nothing to tee", cwd)
+        return delegate
+
     def _session_settings(self, opts: SpawnOptions) -> Path | None:
         """Write this pane's settings and hook identity; return the settings path."""
         if not self.instrument:
@@ -332,7 +388,9 @@ class ClaudeAdapter(BackendAdapter):
         if directory is None:
             return self.settings_path
         directory.mkdir(parents=True, exist_ok=True)
-        return self._write_hook_settings(directory, self._write_hook_identity(directory, opts))
+        status_line = self._status_line_delegate(opts.cwd)
+        identity = self._write_hook_identity(directory, opts, status_line)
+        return self._write_hook_settings(directory, identity, status_line)
 
     def _args(self, action: str, native_id: str, opts: SpawnOptions) -> list[str]:
         # `--mcp-config` is a VARIADIC option in the Claude CLI: it keeps

@@ -30,13 +30,24 @@ export type RowFieldId =
   | 'branch' | 'worktree' | 'diff' | 'dirty' | 'compareDiff' | 'compareFiles' | 'sync'
   | 'queue' | 'model' | 'account' | 'compactions' | 'cost' | 'cwd' | 'exit'
   | 'approvals'
+  | 'effort' | 'mode' | 'limit5h' | 'limit7d'
 
 export type RowFieldMode = 'notable' | 'always'
 export type RowLine = 'top' | 'bottom'
 export type RowAlign = 'left' | 'right'
 export type DotShape = 'hexagon' | 'circle' | 'square'
-/** How context pressure is drawn. One setting, because one fact must not render twice. */
-export type ContextRender = 'off' | 'arc' | 'gauge' | 'percent'
+/**
+ * How context pressure is drawn. One setting, because one fact must not render
+ * twice: `both` is one token (the cells with the number beside them), not two.
+ */
+export type ContextRender = 'off' | 'arc' | 'gauge' | 'percent' | 'both'
+/**
+ * The renderings that draw *in the row* rather than on the indicator. A surface
+ * with no indicator - the pane top bar - can only choose among these, which is
+ * why a top bar placed `context` under an `arc` sidebar used to show nothing.
+ */
+export type ContextRowRender = Extract<ContextRender, 'gauge' | 'percent' | 'both'>
+export const CONTEXT_ROW_RENDERS: readonly ContextRowRender[] = ['percent', 'gauge', 'both']
 /**
  * The band a context reading falls in, low to high.
  *
@@ -305,6 +316,14 @@ export const ROW_FIELDS: RowFieldDescriptor[] = [
   { id: 'sync', label: 'Ahead / behind', notable: 'diverged from upstream', priority: 45 },
   { id: 'queue', label: 'Queue depth', notable: 'something is queued', priority: 65 },
   { id: 'model', label: 'Model', notable: 'differs from the project default', priority: 40 },
+  // The harness's own report of its session (`harness_status`). Each renders
+  // nothing on a harness that does not report it, which is the same rule the
+  // account and branch fields already follow, so a mixed fleet needs no
+  // per-harness catalogue - a field is simply silent where it has no source.
+  { id: 'effort', label: 'Effort level', notable: 'differs from the project default', priority: 39 },
+  { id: 'mode', label: 'Permission mode', notable: 'anything but the default mode', priority: 66 },
+  { id: 'limit5h', label: '5-hour limit', notable: 'past half used', priority: 23 },
+  { id: 'limit7d', label: 'Weekly limit', notable: 'past half used', priority: 22 },
   { id: 'account', label: 'Provider account', notable: 'more than one account is live', priority: 35 },
   { id: 'state', label: 'State word', notable: 'never — the indicator already says it', priority: 30 },
   { id: 'idleFor', label: 'Idle for', notable: 'idle longer than 30 minutes', priority: 25 },
@@ -622,7 +641,7 @@ export function normalizeSessionRowConfig(value: unknown): SessionRowConfig {
     dotShape: pick(raw.dotShape, ['hexagon', 'circle', 'square'] as const, base.dotShape),
     dotSizeDesktop: normalizeDotSize(raw.dotSizeDesktop, base.dotSizeDesktop),
     dotSizeMobile: normalizeDotSize(raw.dotSizeMobile, base.dotSizeMobile),
-    context: pick(raw.context, ['off', 'arc', 'gauge', 'percent'] as const, base.context),
+    context: pick(raw.context, ['off', 'arc', 'gauge', 'percent', 'both'] as const, base.context),
     ...normalizeContextThresholds(raw, base),
     standing: pick(raw.standing, ['row', 'indicator', 'off'] as const, base.standing),
     diffStyle: pick(raw.diffStyle, ['numbers', 'bar'] as const, base.diffStyle),

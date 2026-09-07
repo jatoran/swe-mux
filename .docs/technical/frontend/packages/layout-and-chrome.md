@@ -196,7 +196,7 @@ The stylesheet is the only consumer of the *property* but not the only consumer 
 
 `sessionTopbarConfig.ts`, `sessionTopbarPrefs.ts`, `SessionTopbar.tsx`, `SessionTopbarSettings.tsx`
 
-`sessionTopbarConfig.ts` owns the browser-free one-to-three-row layout, the combined metric and drawer-shortcut catalog, normalization, placement, row removal with rehoming, and the non-removable title invariant.
+`sessionTopbarConfig.ts` owns the browser-free one-to-three-row layout, the combined metric and drawer-shortcut catalog, normalization, placement, row removal with rehoming, the non-removable title invariant, and the per-item context rendering (`sessionTopbarRowConfig`), which is the one place a top-bar metric's row configuration differs from the sidebar's.
 `sessionTopbarPrefs.ts` pins the shared layout to the canonical desktop profile and republishes settings changes.
 `SessionTopbar.tsx` combines the shared session-row metric engine with target-aware actions supplied by `App.tsx`.
 `SessionTopbarSettings.tsx` owns the dedicated Appearance page and sticky realtime preview.

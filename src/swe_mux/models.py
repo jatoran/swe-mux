@@ -146,6 +146,124 @@ class StandingActivity:
 
 
 @dataclass(slots=True)
+class RateLimitWindow:
+    """One provider rate-limit window as the harness itself reports it."""
+
+    #: Share of the window consumed, 0-100. Above 100 is possible on a spend limit.
+    used_pct: float
+    #: Wall clock at which the window resets, epoch seconds; None when unreported.
+    resets_at: float | None = None
+    #: Length of the window in minutes, when the harness names it (Codex does).
+    window_minutes: int | None = None
+
+    def snapshot(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_snapshot(cls, data: dict[str, Any]) -> RateLimitWindow | None:
+        used = data.get("used_pct")
+        if isinstance(used, bool) or not isinstance(used, (int, float)):
+            return None
+        resets = data.get("resets_at")
+        minutes = data.get("window_minutes")
+        resets_at: float | None = None
+        if isinstance(resets, (int, float)) and not isinstance(resets, bool):
+            resets_at = float(resets)
+        window_minutes: int | None = None
+        if isinstance(minutes, int) and not isinstance(minutes, bool):
+            window_minutes = minutes
+        return cls(used_pct=float(used), resets_at=resets_at, window_minutes=window_minutes)
+
+
+#: Keys of `HarnessStatus.rate_limits`, shared across harnesses so one row field
+#: reads either: Claude names them `five_hour`/`seven_day`, Codex reports a
+#: `primary`/`secondary` pair and names each by its length in minutes.
+RATE_LIMIT_FIVE_HOUR = "five_hour"
+RATE_LIMIT_SEVEN_DAY = "seven_day"
+RATE_LIMIT_SPEND = "spend_limit"
+
+
+@dataclass(slots=True)
+class HarnessStatus:
+    """What the harness reports about its own session that no transcript carries.
+
+    The facts a CLI's own status line draws and swe-mux could not otherwise
+    see: the reasoning effort in force, the permission mode, the provider rate
+    limits as of the last response. Every field is optional because every
+    harness reports a different subset, and a field the harness never reports
+    stays None rather than being guessed - the row renders nothing for it.
+
+    Per-field provenance rides in `sources` (field name -> `claude-statusline`,
+    `hook`, `codex-rollout`) because the fields arrive over different channels
+    at different moments, and one `source` for the whole object would name
+    whichever channel happened to speak last.
+
+    Run-scoped like the token measurements: cleared wherever a conversation is
+    replaced or a new agent run starts, and refilled by the next report.
+    """
+
+    #: Reasoning effort as the harness spells it (`low`..`max` on Claude,
+    #: `minimal`..`xhigh` on Codex). Live, including a mid-session change.
+    effort: str | None = None
+    #: Tool-permission mode in the hook vocabulary both Claude and Codex emit:
+    #: `default`, `acceptEdits`, `plan`, `dontAsk`, `bypassPermissions`, `auto`.
+    permission_mode: str | None = None
+    #: Claude output style name; None where the harness has no such setting.
+    output_style: str | None = None
+    #: Whether the harness's fast/priority service tier is active.
+    fast_mode: bool | None = None
+    #: Whether extended thinking is enabled (Claude reports it; others do not).
+    thinking: bool | None = None
+    #: Provider windows keyed by `RATE_LIMIT_*`, plus any window the harness
+    #: named that mapped to neither (kept under its own key, never dropped).
+    rate_limits: dict[str, RateLimitWindow] = field(default_factory=dict)
+    #: The context window size the harness itself reports, in tokens. Preferred
+    #: over swe-mux's model table wherever it is known, because the table lags
+    #: every new model and lags into a zero, which renders as 0% used.
+    context_window_size: int = 0
+    #: Field name -> channel that last wrote it.
+    sources: dict[str, str] = field(default_factory=dict)
+    #: Wall clock of the last report from any channel; None until the first.
+    updated_at: float | None = None
+
+    def snapshot(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_snapshot(cls, data: dict[str, Any]) -> HarnessStatus:
+        status = cls()
+        for name in ("effort", "permission_mode", "output_style"):
+            value = data.get(name)
+            if isinstance(value, str) and value:
+                setattr(status, name, value)
+        for name in ("fast_mode", "thinking"):
+            value = data.get(name)
+            if isinstance(value, bool):
+                setattr(status, name, value)
+        limits = data.get("rate_limits")
+        if isinstance(limits, dict):
+            for key, raw in limits.items():
+                window = RateLimitWindow.from_snapshot(raw) if isinstance(raw, dict) else None
+                if isinstance(key, str) and window is not None:
+                    status.rate_limits[key] = window
+        size = data.get("context_window_size")
+        if isinstance(size, int) and not isinstance(size, bool) and size > 0:
+            status.context_window_size = size
+        sources = data.get("sources")
+        if isinstance(sources, dict):
+            status.sources = {
+                str(key): str(value) for key, value in sources.items() if isinstance(value, str)
+            }
+        updated = data.get("updated_at")
+        if isinstance(updated, (int, float)) and not isinstance(updated, bool):
+            status.updated_at = float(updated)
+        return status
+
+    def is_empty(self) -> bool:
+        return self.updated_at is None
+
+
+@dataclass(slots=True)
 class GitState:
     """What Git says about the checkout a session is working in.
 
@@ -360,6 +478,9 @@ class SessionRecord:
     # command line still applies to whatever conversation the process is on.
     model_requested: str | None = None
     measurement_source: str | None = None
+    # The harness's own report of its session settings and provider limits
+    # (`HarnessStatus`). Run-scoped: reset beside the token measurements.
+    harness_status: HarnessStatus = field(default_factory=HarnessStatus)
     parser_status: str = "not_applicable"
     parser_diagnostic: str | None = None
     parser_events_seen: int = 0
@@ -622,9 +743,16 @@ class SessionRecord:
         when adopting metadata written by an older one.
         """
         known = set(cls.__dataclass_fields__)
-        nested = {"git", "standing_activity", "approval_policy"}
+        nested = {"git", "standing_activity", "approval_policy", "harness_status"}
         kwargs = {key: value for key, value in data.items() if key in known and key not in nested}
         record = cls(**kwargs)
+        harness_status = data.get("harness_status")
+        if isinstance(harness_status, dict):
+            # Rides the supervisor snapshot through a session-preserving restart
+            # like the grant does: the next status report refreshes it, but a
+            # restart that emptied every row's effort and limits until each
+            # session's next message would read as the feature flickering off.
+            record.harness_status = HarnessStatus.from_snapshot(harness_status)
         policy = data.get("approval_policy")
         if isinstance(policy, dict):
             # A grant survives a session-preserving daemon restart, which is a

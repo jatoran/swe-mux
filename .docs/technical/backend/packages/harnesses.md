@@ -31,11 +31,15 @@ The parser is declared per format rather than sniffed, because a parser that gue
 Provider command, resume, and transcript normalization; additive Claude and Codex lifecycle-hook launch wiring; adapter-owned worktree trust preflight and primary-root access argv; the packaged OMP in-process lifecycle extension; authenticated hook delivery and spooling; and relaying a daemon-composed permission decision to the CLI's stdout.
 That extension also publishes the running process's live MCP tool inventory to `MUX_RUNTIME_URL`, on its own route rather than through hook ingress, because it is not a lifecycle event.
 
+`hook_client.py` also carries the Claude status-line tee (`Status`): it runs the user's own status-line command, named in the identity file, under the shell Claude would use, writes that command's stdout back unchanged, and only then posts the CLI's snapshot in one short-budget attempt with no retry and no spool.
+The user's command is resolved once at spawn by `claude_status_line.py` (Claude's scope precedence, one implementation) and written into the identity file by the adapter; the shim itself keeps importing nothing from the package.
+`harness_status.py` is where every such report - the snapshot, the `permission_mode` on every hook, the Codex rollout's effort, tier and rate limits - is parsed into `SessionRecord.harness_status` (`design/features/harness-status.md`).
+
 `agent_launcher.py` additionally owns the console the CLI is about to run in, because it is the one process in that chain that is neither the shell nor the agent.
 It holds `CTRL_C_EVENT`/`CTRL_BREAK_EVENT` so it can never be the link that stops waiting first, passes `CTRL_CLOSE_EVENT` and the logoff/shutdown events through (real terminations with a deadline), spawns through `Popen` rather than `subprocess.call` so the CLI's pid can be published while it runs, and adds the colour-forcing pair a shell's environment deliberately lacks.
 It reports its own lifecycle to `MUX_SHIM_URL` at three moments (`started`, `child_started`, `exited`) from the normal return, an `atexit`, and the console handler, because the interesting exits are the ones that never run a `finally`.
 
-**Not:** public HTTP shapes, mandatory success of best-effort provider trust preparation, composing the decision shape itself (the shim imports nothing from the package and must stay a relay), or retrying a decision POST.
+**Not:** public HTTP shapes, mandatory success of best-effort provider trust preparation, composing the decision shape itself (the shim imports nothing from the package and must stay a relay), retrying a decision POST, or retrying a status snapshot (the next message supersedes it).
 Not deciding what its reports mean either - `console_contention.py` holds those rules - and never an argument *value* in a report, since an agent command line can carry a prompt.
 
 ## `shim_paths.py`

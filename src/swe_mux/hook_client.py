@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
+import subprocess
 import sys
 import time
 import urllib.request
@@ -41,6 +43,26 @@ _TIMEOUTS = (2.0, 3.0, 5.0)
 # behaviour with no hook installed at all.
 _DECISION_EVENTS = {"PermissionRequest"}
 _DECISION_TIMEOUT = 3.0
+
+# The Claude status-line tee. The CLI runs this command with a JSON snapshot on
+# stdin on every assistant message and shows whatever it prints, so the shim
+# must (1) run the user's own status-line command with that same stdin and print
+# its output unchanged, and (2) post the snapshot to the daemon - in that order,
+# because the terminal must never wait on the daemon. Single attempt, short
+# budget, no spool: the next message brings a fresher snapshot, so a missed one
+# is not worth retrying and is never worth replaying later.
+#
+# `Status` is not a hook event. It lives here because the identity file, the
+# ingress route, and the executable are the hooks' already, and a second shim
+# would be a second copy of every trap those solved.
+_STATUS_EVENT = "Status"
+_STATUS_POST_TIMEOUT = 2.0
+# The user's command is a status script and should take milliseconds; Claude
+# also cancels the whole tee when a newer update arrives, so this is a stall
+# bound rather than a budget the script is expected to use.
+_STATUS_DELEGATE_TIMEOUT = 10.0
+# What the tee will forward from the delegate. Status lines are a few rows.
+_STATUS_OUTPUT_BYTES = 64 * 1024
 
 
 def _request(url: str, secret: str, body: bytes) -> urllib.request.Request:
@@ -163,6 +185,112 @@ def _spool(spool: str | None, event: str, payload: object) -> None:
         sys.stderr.write(f"swe-mux hook spool write failed for {event}: {error}\n")
 
 
+def _post_once(url: str, secret: str, body: bytes, timeout: float) -> bool:
+    """One attempt, no retry: for a report a fresher one will soon replace."""
+    try:
+        urllib.request.urlopen(_request(url, secret, body), timeout=timeout).close()
+        return True
+    except OSError as error:
+        sys.stderr.write(f"swe-mux status POST failed: {error}\n")
+        return False
+
+
+def _status_shell(command: str) -> list[str]:
+    """How Claude Code itself would run this command line on this host.
+
+    Claude dispatches a status-line command through a shell: on Windows that is
+    Git Bash when one is available (`CLAUDE_CODE_GIT_BASH_PATH` names it) and
+    PowerShell otherwise, and `/bin/sh` everywhere else. The delegate is the
+    user's own command string, written for whichever of those they have, so it
+    has to reach the same shell to mean the same thing.
+    """
+    if os.name != "nt":
+        return ["/bin/sh", "-c", command]
+    bash = os.environ.get("CLAUDE_CODE_GIT_BASH_PATH") or shutil.which("bash")
+    if bash:
+        return [bash, "-c", command]
+    return ["powershell", "-NoProfile", "-NonInteractive", "-Command", command]
+
+
+def _run_delegate(command: str, stdin: bytes) -> tuple[bytes, dict[str, object]]:
+    """Run the user's status-line command on the CLI's snapshot.
+
+    Returns its stdout (bounded) and a report the daemon logs: a delegate that
+    fails leaves the pane's status row empty, which is invisible in the pane
+    and must not be invisible everywhere.
+    """
+    started = time.monotonic()
+    report: dict[str, object] = {"ok": False, "exit_code": None, "error": None, "elapsed_ms": 0}
+    try:
+        completed = subprocess.run(  # noqa: S603 - the user's own configured command
+            _status_shell(command),
+            input=stdin,
+            capture_output=True,
+            timeout=_STATUS_DELEGATE_TIMEOUT,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        report["error"] = f"timed out after {_STATUS_DELEGATE_TIMEOUT:g}s"
+    except OSError as error:
+        report["error"] = str(error)
+    else:
+        report["exit_code"] = completed.returncode
+        report["ok"] = completed.returncode == 0
+        if completed.stderr:
+            sys.stderr.buffer.write(completed.stderr[:_STATUS_OUTPUT_BYTES])
+            sys.stderr.flush()
+        if completed.returncode != 0:
+            tail = completed.stderr.decode("utf-8", errors="replace").strip()[-300:]
+            report["error"] = f"exit {completed.returncode}" + (f": {tail}" if tail else "")
+        report["elapsed_ms"] = int((time.monotonic() - started) * 1000)
+        return completed.stdout[:_STATUS_OUTPUT_BYTES], report
+    report["elapsed_ms"] = int((time.monotonic() - started) * 1000)
+    return b"", report
+
+
+def _status_line(identity: dict[str, str], url: str | None, secret: str | None) -> None:
+    """The tee: the user's status line first and unchanged, then the report."""
+    raw = _read_payload_bytes()
+    command = identity.get("status_line_command")
+    if command:
+        output, report = _run_delegate(command, raw)
+        sys.stdout.buffer.write(output)
+        sys.stdout.flush()
+    else:
+        # Nothing to delegate to. The settings only carry the tee when a command
+        # was resolved at spawn, so this is an identity file edited or replaced
+        # since; the pane shows an empty row and the daemon is told why.
+        report = {
+            "ok": False,
+            "exit_code": None,
+            "error": "no status line command in identity",
+            "elapsed_ms": 0,
+        }
+    if not url or not secret:
+        return
+    try:
+        payload = json.loads(raw.decode("utf-8", errors="replace") or "{}")
+    except ValueError:
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+    payload["delegate"] = report
+    _post_once(
+        url,
+        secret,
+        json.dumps({"event": _STATUS_EVENT, "payload": payload}).encode(),
+        _STATUS_POST_TIMEOUT,
+    )
+
+
+def _read_payload_bytes() -> bytes:
+    buffer = getattr(sys.stdin, "buffer", None)
+    if buffer is not None:
+        raw: bytes = buffer.read()
+        return raw
+    return str(sys.stdin.read()).encode("utf-8", errors="replace") if sys.stdin is not None else b""
+
+
 def _read_payload() -> str:
     """The hook payload, decoded as the UTF-8 that JSON is defined to be.
 
@@ -181,14 +309,11 @@ def _read_payload() -> str:
 
     Reading bytes and decoding explicitly is the fix. `errors="replace"` covers
     genuinely malformed input without ever reintroducing a lone surrogate.
+
+    No binary view means a frozen windowed build handed us a stub stream; nothing
+    better is available there, and it is not the path hooks actually take.
     """
-    buffer = getattr(sys.stdin, "buffer", None)
-    if buffer is not None:
-        raw: bytes = buffer.read()
-        return raw.decode("utf-8", errors="replace")
-    # No binary view: a frozen windowed build can hand us a stub stream. Nothing
-    # better is available there, and it is not the path hooks actually take.
-    return str(sys.stdin.read()) if sys.stdin is not None else ""
+    return _read_payload_bytes().decode("utf-8", errors="replace")
 
 
 def main() -> None:
@@ -196,6 +321,11 @@ def main() -> None:
     url = identity.get("url") or os.environ.get("MUX_HOOK_URL")
     secret = identity.get("secret") or os.environ.get("MUX_HOOK_SECRET")
     spool = identity.get("spool") or os.environ.get("MUX_HOOK_SPOOL")
+    if event == _STATUS_EVENT:
+        # Before the credential check: the user's status line must keep drawing
+        # whether or not the daemon can be reached.
+        _status_line(identity, url, secret)
+        return
     if not url or not secret:
         return
     raw = _read_payload() or inline_payload

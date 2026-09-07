@@ -1807,6 +1807,10 @@ The response carries only server name, tool name, description, and safe metadata
 Loopback-only and authenticated with the session's own `X-Mux-Hook-Secret`, like hook ingress, but on its own route: it is not a lifecycle event and must never touch status detection, history, or the prompt queue.
 The body is whitelisted to `mcp__*` names and descriptions, bounded, and held only in memory for the session's current process generation.
 
+`POST /api/hooks/{sid}` additionally accepts `{"event": "Status", "payload": <Claude status-line snapshot + delegate>}` from the status-line tee (`features/harness-status.md`).
+It shares the hooks' route, secret, and foreign-conversation filter because it speaks for the same conversation, but it is a measurement rather than a lifecycle event: it never moves state and is kept off the generic EventBus fan-out.
+A real change surfaces as a compact `harness_status` event, and the session snapshot carries the result as `harness_status` (`data-model.md`).
+
 ## Voice and Conversation mode
 
 ```text
