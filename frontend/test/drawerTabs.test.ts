@@ -163,7 +163,17 @@ test('both rails draw their badges from one rule, and the Queue badge sits at th
   assert.ok(app.includes('<i class={`drawer-badge ${tab.id}-badge`} aria-hidden="true">{badge.text}</i>'))
   // Bottom-right, and not amber: a staged message is not an alert. The corner it takes is
   // the session-scope dot's, which is hidden underneath rather than left to peek out.
-  assert.match(css, /\.drawer-badge\.queue-badge\{top:auto;bottom:-4px;[^}]*background:var\(--accent\)/)
+  const queueBadge = css.match(/\.drawer-badge\.queue-badge\{([^}]*)\}/)?.[1] ?? ''
+  assert.match(queueBadge, /(^|;)top:auto(;|$)/)
+  assert.match(queueBadge, /(^|;)color:var\(--accent\)(;|$)/)
+  // Inside the button box, never hanging past it: the title-mode launcher button is
+  // `overflow:hidden` and the drawer strip is an `overflow-x:auto` scroller, so an offset
+  // past the edge is clipped on both surfaces (it was, at `bottom:-4px`). And a tint rather
+  // than the solid accent, so a count of your own staged messages does not outshine an alert.
+  assert.doesNotMatch(queueBadge, /(right|bottom):-/, 'no negative offsets')
+  assert.match(queueBadge, /(^|;)right:\d+px(;|$)/)
+  assert.match(queueBadge, /(^|;)bottom:\d+px(;|$)/)
+  assert.match(queueBadge, /(^|;)background:color-mix\(in srgb,var\(--accent\) \d+%,var\(--panel2\)\)(;|$)/)
   assert.match(css, /\.drawer-tabs button:has\(>\.queue-badge\):before,\.utility-rail button:has\(>\.queue-badge\):before\{display:none\}/)
 })
 
