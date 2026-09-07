@@ -27,11 +27,14 @@ Metrics reuse `ROW_FIELDS` and `sessionFieldToken` from the sidebar session-row 
 The two surfaces therefore share field vocabulary, notability, duration semantics, Git attribution, model labels, and token styles.
 Each placed metric is `when notable` or `always`.
 
-A placed `context` metric additionally carries its own rendering (`style`: `percent`, `gauge`, or `both`).
-The sidebar draws context on its state indicator by default, and a top bar has no indicator, so a placed `context` used to inherit `arc` and draw nothing.
-`sessionTopbarRowConfig` resolves the item to an in-row rendering: its own `style`, else the sidebar's setting when that already draws in the row, else a percentage.
+Two placed metrics additionally carry their own rendering (`style`), each from its own vocabulary.
+`context` chooses among `percent`, `gauge`, and `both`: the sidebar draws context on its state indicator by default, and a top bar has no indicator, so a placed `context` used to inherit `arc` and draw nothing.
+`sessionTopbarRowConfig` resolves it to an in-row rendering: its own `style`, else the sidebar's setting when that already draws in the row, else a percentage.
+`cwd` chooses among `leaf`, `relative`, and `full` (the sidebar's `cwdStyle` vocabulary) and follows the sidebar's setting when the item names none, because a folder name reads well in a narrow sidebar row and a path reads well in a wide pane header.
 Every other metric renders under the sidebar's configuration untouched, so the two surfaces cannot disagree about a diff, a count, or a ramp.
-A stored `style` on any other field, or one this build does not draw, is dropped by normalization.
+A stored `style` on any other field, or one outside its field's vocabulary, is dropped by normalization.
+
+The preview session is a registered harness (`codex`), not a placeholder name: the context gauge is gated on the harness's `measurement` capability, so a made-up backend previewed a bar whose placed context drew nothing while the real one drew fine.
 
 Shortcuts are approvals plus every entry in `DRAWER_TABS`.
 Drawer shortcuts retain their registered label and scope.

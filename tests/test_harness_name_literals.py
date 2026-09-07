@@ -141,6 +141,7 @@ _FRONTEND_ALLOWLIST: dict[str, str] = {
     "commandRail.ts": "rail items declare the harnesses they apply to",
     "ProviderAccounts.tsx": "managed-provider branding, matching ManagedProvider",
     "SessionRowSettings.tsx": "static preview fixtures, not runtime behaviour",
+    "SessionTopbarSettings.tsx": "static preview fixture, not runtime behaviour",
     # A model family that happens to share a spelling with a harness. `openai/codex`
     # is a model id, not the Codex CLI, and compacting it is a display concern with
     # no harness capability behind it.

@@ -1063,6 +1063,9 @@ test('moving the shipped default repaints no device that has stored a layout', (
     contextWarn: base.contextWarn,
     contextHigh: base.contextHigh,
     contextCrit: base.contextCrit,
+    // So does the working-directory spelling, whose shipped value is the one
+    // rendering every earlier build had.
+    cwdStyle: base.cwdStyle,
   })
 })
 
@@ -1320,6 +1323,42 @@ test('cost draws nothing until a harness has reported one', () => {
   assert.deepEqual(bottomText(session({ cost_usd: 0 }), config), [])
   assert.deepEqual(bottomText(session({ cost_usd: 0.4321 }), config), ['$0.43'])
   assert.deepEqual(bottomText(session({ cost_usd: 12.6 }), config), ['$13'])
+})
+
+test('the working directory renders as a folder name, a path inside the Project, or the full path', () => {
+  const at = (cwd: string, root = 'D:\\PROJECTS\\swe-mux') => session({ runtime_cwd: cwd, project_root: root })
+  const styled = (style: 'leaf' | 'relative' | 'full') => ({ ...withBottom(defaultSessionRowConfig(), ['cwd']), cwdStyle: style })
+  assert.equal(defaultSessionRowConfig().cwdStyle, 'leaf')
+  const inside = at('D:/PROJECTS/swe-mux/frontend/src')
+  assert.deepEqual(bottomText(inside, styled('leaf')), ['src'])
+  assert.deepEqual(bottomText(inside, styled('relative')), ['frontend/src'])
+  assert.deepEqual(bottomText(inside, styled('full')), ['D:/PROJECTS/swe-mux/frontend/src'])
+  // At the root the relative form is the folder name: "which Project" is the
+  // only thing left to say, and `.` says nothing at a glance.
+  const root = at('d:\\PROJECTS\\swe-mux\\')
+  assert.deepEqual(bottomText(root, styled('relative')), ['swe-mux'])
+  assert.deepEqual(bottomText(root, styled('leaf')), ['swe-mux'])
+  // Outside the root only the full path can say where the session is.
+  const outside = at('C:/Users/me/scratch')
+  assert.deepEqual(bottomText(outside, styled('relative')), ['C:/Users/me/scratch'])
+  assert.deepEqual(bottomText(outside, styled('leaf')), ['scratch'])
+  // No Project root known: nothing to be relative to, so the full path.
+  assert.deepEqual(bottomText(at('D:/x/y', ''), styled('relative')), ['D:/x/y'])
+  assert.equal(normalizeSessionRowConfig({ cwdStyle: 'full' }).cwdStyle, 'full')
+  assert.equal(normalizeSessionRowConfig({ cwdStyle: 'short' }).cwdStyle, 'leaf')
+})
+
+test('the working directory is notable off the Project root, whichever spelling the daemon used', () => {
+  const config = withBottom(defaultSessionRowConfig(), ['cwd'], 'notable')
+  const root = 'D:\\PROJECTS\\swe-mux'
+  for (const same of ['D:\\PROJECTS\\swe-mux', 'd:/PROJECTS/swe-mux/', 'D:/PROJECTS/swe-mux']) {
+    assert.deepEqual(bottomText(session({ runtime_cwd: same, project_root: root }), config), [], same)
+  }
+  const tokens = buildSessionRowTokens(session({ runtime_cwd: 'D:/PROJECTS/swe-mux/frontend', project_root: root }), config, context())
+  assert.equal(tokens.bottom.left.tokens[0]?.text, 'frontend')
+  assert.equal(tokens.bottom.left.tokens[0]?.title, 'D:/PROJECTS/swe-mux/frontend (frontend inside the Project root)')
+  // A sibling whose folder happens to share the root's name is still elsewhere.
+  assert.deepEqual(bottomText(session({ runtime_cwd: 'E:/other/swe-mux', project_root: root }), config), ['swe-mux'])
 })
 
 test('the gauge-and-percentage rendering is one token carrying both', () => {

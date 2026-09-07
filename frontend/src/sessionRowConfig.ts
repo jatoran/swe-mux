@@ -68,6 +68,12 @@ export type ContextBand = 'calm' | 'warn' | 'high' | 'crit'
 export type StandingRender = 'row' | 'indicator' | 'off'
 export type DiffStyle = 'numbers' | 'bar'
 export type CountStyle = 'numbers' | 'pips'
+/**
+ * How the working directory is written: its folder name, its path inside the
+ * Project root (the full path when it sits outside), or the full path.
+ */
+export type CwdStyle = 'leaf' | 'relative' | 'full'
+export const CWD_STYLES: readonly CwdStyle[] = ['leaf', 'relative', 'full']
 
 export interface RowSlot { id: RowFieldId; mode: RowFieldMode }
 
@@ -194,6 +200,7 @@ export interface SessionRowConfig {
   standing: StandingRender
   diffStyle: DiffStyle
   countStyle: CountStyle
+  cwdStyle: CwdStyle
   /** Prefix git tokens with their glyph (⎇ / ⌂). Off keeps branch names bare. */
   gitGlyphs: boolean
   /** When false the phone renders identity only: indicator, provider mark, title. */
@@ -421,6 +428,7 @@ export function defaultSessionRowConfig(): SessionRowConfig {
     standing: 'row',
     diffStyle: 'numbers',
     countStyle: 'numbers',
+    cwdStyle: 'leaf',
     gitGlyphs: true,
     mobileFields: true,
   }
@@ -646,6 +654,7 @@ export function normalizeSessionRowConfig(value: unknown): SessionRowConfig {
     standing: pick(raw.standing, ['row', 'indicator', 'off'] as const, base.standing),
     diffStyle: pick(raw.diffStyle, ['numbers', 'bar'] as const, base.diffStyle),
     countStyle: pick(raw.countStyle, ['numbers', 'pips'] as const, base.countStyle),
+    cwdStyle: pick(raw.cwdStyle, CWD_STYLES, base.cwdStyle),
     gitGlyphs: typeof raw.gitGlyphs === 'boolean' ? raw.gitGlyphs : base.gitGlyphs,
     mobileFields: typeof raw.mobileFields === 'boolean' ? raw.mobileFields : base.mobileFields,
   }

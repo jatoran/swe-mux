@@ -2,8 +2,8 @@
 
 import { DRAWER_TABS, type DrawerTabId } from './drawerTabs.ts'
 import {
-  CONTEXT_ROW_RENDERS, ROW_FIELDS, SEPARATORS, type ContextRowRender, type RowAlign, type RowFieldId,
-  type RowFieldMode, type SeparatorId, type SessionRowConfig,
+  CONTEXT_ROW_RENDERS, CWD_STYLES, ROW_FIELDS, SEPARATORS, type ContextRowRender, type CwdStyle,
+  type RowAlign, type RowFieldId, type RowFieldMode, type SeparatorId, type SessionRowConfig,
 } from './sessionRowConfig.ts'
 
 export const SESSION_TOPBAR_VERSION = 1
@@ -11,14 +11,17 @@ export const SESSION_TOPBAR_MAX_ROWS = 3
 
 export type SessionTopbarDensity = 'compact' | 'standard' | 'comfortable'
 export type SessionTopbarActionId = 'approvals' | `drawer:${DrawerTabId}`
+/** The per-item renderings a top-bar metric may carry, by field. */
+export type SessionTopbarMetricStyle = ContextRowRender | CwdStyle
 /**
- * A placed metric. `style` exists for the one field whose rendering the sidebar
- * decides elsewhere: the sidebar draws context on its indicator by default, and
- * a top bar has no indicator, so a placed `context` inherited `arc` and drew
- * nothing. The top bar therefore carries its own choice among the in-row
- * renderings, defaulting to a percentage so a placed field always shows.
+ * A placed metric. `style` exists for the fields whose rendering the sidebar
+ * decides with a bar-wide setting the top bar may want to differ from: the
+ * sidebar draws context on its indicator by default, and a top bar has no
+ * indicator, so a placed `context` inherited `arc` and drew nothing; and the
+ * working directory reads well as a folder name in a narrow sidebar row and as
+ * a path in a wide pane header. Absent, the item follows the sidebar.
  */
-export type SessionTopbarMetricItem = { kind:'metric';id:RowFieldId;mode:RowFieldMode;style?:ContextRowRender }
+export type SessionTopbarMetricItem = { kind:'metric';id:RowFieldId;mode:RowFieldMode;style?:SessionTopbarMetricStyle }
 export type SessionTopbarActionItem = { kind:'action';id:SessionTopbarActionId }
 export type SessionTopbarItem = SessionTopbarMetricItem | SessionTopbarActionItem
 export type SessionTopbarRow = { left:SessionTopbarItem[];right:SessionTopbarItem[];separator:SeparatorId }
@@ -80,7 +83,16 @@ export function defaultSessionTopbarConfig():SessionTopbarConfig {
 const METRIC_IDS=new Set(ROW_FIELDS.map(field=>field.id))
 const ACTION_IDS=new Set(SESSION_TOPBAR_ACTIONS.map(action=>action.id))
 
-const STYLED_METRIC_IDS:ReadonlySet<RowFieldId>=new Set<RowFieldId>(['context'])
+/** The renderings each styled field accepts; a field absent here has none. */
+const METRIC_STYLES:Partial<Record<RowFieldId,readonly SessionTopbarMetricStyle[]>>={
+  context:CONTEXT_ROW_RENDERS,
+  cwd:CWD_STYLES,
+}
+
+const readStyle=(id:RowFieldId,raw:unknown):SessionTopbarMetricStyle|undefined=>{
+  const allowed=METRIC_STYLES[id]
+  return allowed&&allowed.includes(raw as SessionTopbarMetricStyle)?raw as SessionTopbarMetricStyle:undefined
+}
 
 function readItem(raw:unknown):SessionTopbarItem|null {
   if(!raw||typeof raw!=='object')return null
@@ -88,9 +100,8 @@ function readItem(raw:unknown):SessionTopbarItem|null {
   if(item.kind==='metric'&&typeof item.id==='string'&&METRIC_IDS.has(item.id as RowFieldId)){
     const id=item.id as RowFieldId
     const metric:SessionTopbarMetricItem={kind:'metric',id,mode:item.mode==='always'?'always':'notable'}
-    if(STYLED_METRIC_IDS.has(id)&&CONTEXT_ROW_RENDERS.includes(item.style as ContextRowRender)){
-      metric.style=item.style as ContextRowRender
-    }
+    const style=readStyle(id,item.style)
+    if(style)metric.style=style
     return metric
   }
   if(item.kind==='action'&&typeof item.id==='string'&&ACTION_IDS.has(item.id as SessionTopbarActionId)){
@@ -170,12 +181,12 @@ export function setSessionTopbarMetricMode(
 }
 
 /** Whether the editor offers a rendering choice for this metric. */
-export const sessionTopbarMetricHasStyle=(id:RowFieldId):boolean=>STYLED_METRIC_IDS.has(id)
+export const sessionTopbarMetricHasStyle=(id:RowFieldId):boolean=>id in METRIC_STYLES
 
 export function setSessionTopbarMetricStyle(
-  config:SessionTopbarConfig,id:RowFieldId,style:ContextRowRender,
+  config:SessionTopbarConfig,id:RowFieldId,style:SessionTopbarMetricStyle,
 ):SessionTopbarConfig {
-  if(!STYLED_METRIC_IDS.has(id))return config
+  if(readStyle(id,style)===undefined)return config
   const apply=(items:SessionTopbarItem[])=>items.map(item=>
     item.kind==='metric'&&item.id===id?{...item,style}:item)
   return {...config,rows:config.rows.map(row=>({...row,left:apply(row.left),right:apply(row.right)}))}
@@ -186,22 +197,37 @@ export function setSessionTopbarMetricStyle(
  * else the sidebar's when that is an in-row rendering, else a percentage.
  */
 export function sessionTopbarContextRender(item:SessionTopbarMetricItem,rowConfig:SessionRowConfig):ContextRowRender {
-  if(item.style)return item.style
+  const own=readStyle('context',item.style)
+  if(own)return own as ContextRowRender
   return CONTEXT_ROW_RENDERS.includes(rowConfig.context as ContextRowRender)
     ?rowConfig.context as ContextRowRender
     :'percent'
 }
 
+/** The rendering a styled top-bar metric draws with, for the editor's control. */
+export function sessionTopbarMetricStyle(item:SessionTopbarMetricItem,rowConfig:SessionRowConfig):SessionTopbarMetricStyle|undefined {
+  if(item.id==='context')return sessionTopbarContextRender(item,rowConfig)
+  if(item.id==='cwd')return readStyle('cwd',item.style)??rowConfig.cwdStyle
+  return undefined
+}
+
 /**
  * The row configuration a top-bar metric is rendered under.
  *
- * Identical to the sidebar's for every field but `context`, whose sidebar
- * setting names a surface (the indicator) the top bar does not have.
+ * Identical to the sidebar's for every field but the styled ones: `context`,
+ * whose sidebar setting names a surface (the indicator) the top bar does not
+ * have, and `cwd`, which follows the sidebar unless the item chose otherwise.
  */
 export function sessionTopbarRowConfig(item:SessionTopbarMetricItem,rowConfig:SessionRowConfig):SessionRowConfig {
-  if(item.id!=='context')return rowConfig
-  const context=sessionTopbarContextRender(item,rowConfig)
-  return context===rowConfig.context?rowConfig:{...rowConfig,context}
+  if(item.id==='context'){
+    const context=sessionTopbarContextRender(item,rowConfig)
+    return context===rowConfig.context?rowConfig:{...rowConfig,context}
+  }
+  if(item.id==='cwd'){
+    const cwdStyle=readStyle('cwd',item.style) as CwdStyle|undefined
+    return cwdStyle===undefined||cwdStyle===rowConfig.cwdStyle?rowConfig:{...rowConfig,cwdStyle}
+  }
+  return rowConfig
 }
 
 export function addSessionTopbarRow(config:SessionTopbarConfig):SessionTopbarConfig {

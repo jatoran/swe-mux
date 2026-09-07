@@ -558,6 +558,28 @@ function workingCwd(session: Session): string {
 
 const leafName = (path: string): string => path.split(/[\\/]/).filter(Boolean).pop() || path
 
+/**
+ * One spelling for comparing two paths the daemon may have written differently:
+ * forward slashes, no trailing slash, and a lower-cased drive letter, because
+ * `D:\x` and `d:/x/` are one directory and must not read as a cwd change.
+ */
+function normalizePath(path: string): string {
+  const slashed = path.replace(/\\/g, '/').replace(/\/+$/, '')
+  return /^[A-Za-z]:/.test(slashed) ? slashed[0].toLowerCase() + slashed.slice(1) : slashed
+}
+
+/**
+ * Where `cwd` sits inside `root`: `''` at the root itself, the relative path
+ * below it, or `null` when it is outside the root altogether.
+ */
+function pathInside(cwd: string, root: string): string | null {
+  const target = normalizePath(cwd)
+  const base = normalizePath(root)
+  if (!base) return null
+  if (target === base) return ''
+  return target.startsWith(`${base}/`) ? target.slice(base.length + 1) : null
+}
+
 function accountToken(session: Session): { text: string; title: string } | null {
   const entries = Object.entries(session.provider_account_hashes || {})
   if (!entries.length) return null
@@ -957,9 +979,25 @@ function candidateFor(
     case 'cwd': {
       const cwd = workingCwd(session)
       if (!cwd) return null
-      const leaf = leafName(cwd)
-      const root = session.project_root ? leafName(session.project_root) : undefined
-      return make({ kind: 'text', text: leaf, tone: 'muted', title: cwd }, leaf !== root)
+      const root = session.project_root || ''
+      const inside = root ? pathInside(cwd, root) : null
+      // Notable when the session is not standing at the Project root: a
+      // subdirectory of it, or somewhere outside it altogether.
+      const notable = !root || inside !== ''
+      let text: string
+      if (config.cwdStyle === 'full') {
+        text = cwd
+      } else if (config.cwdStyle === 'relative') {
+        // Inside the root the path below it says where the work is; at the root
+        // the folder name says which Project; outside, only the full path can.
+        text = inside === null ? cwd : inside || leafName(cwd)
+      } else {
+        text = leafName(cwd)
+      }
+      const title = inside === null || !root
+        ? cwd
+        : inside === '' ? `${cwd} (the Project root)` : `${cwd} (${inside} inside the Project root)`
+      return make({ kind: 'text', text, tone: 'muted', title }, notable)
     }
     case 'exit': {
       if (!isEnded(session)) return null

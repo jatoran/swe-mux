@@ -20,7 +20,7 @@ import {
   DOT_SIZE_MAX, DOT_SIZE_MIN, ROW_FIELDS, ROW_FIELD_BY_ID, ROW_PRESETS, SEPARATORS, SEPARATOR_IDS,
   defaultSessionRowConfig, lineConfig, normalizeDotSize, normalizeSessionRowConfig, placeField,
   presetConfig, removeField, setFieldMode, unplacedFields,
-  type ContextRender, type CountStyle, type DiffStyle, type DotShape,
+  type ContextRender, type CountStyle, type CwdStyle, type DiffStyle, type DotShape,
   type RowAlign, type RowFieldId, type RowLine, type RowPresetId, type SeparatorId,
   type SessionRowConfig, type StandingRender,
 } from './sessionRowConfig'
@@ -144,6 +144,13 @@ const sizeKey = (profile: SettingsProfile): 'dotSizeDesktop' | 'dotSizeMobile' =
   profile === 'mobile' ? 'dotSizeMobile' : 'dotSizeDesktop'
 /** How long a continuous control must rest before its value is persisted. */
 const SETTLE_MS = 250
+
+/** Shared with the top-bar editor, so the two surfaces name one choice one way. */
+export const CWD_STYLE_OPTIONS: Array<{ value: CwdStyle; label: string }> = [
+  { value: 'leaf', label: 'Folder name' },
+  { value: 'relative', label: 'Path inside the Project' },
+  { value: 'full', label: 'Full path' },
+]
 
 const CONTEXT_MODES: Array<{ id: ContextRender; label: string; hint: string }> = [
   { id: 'arc', label: 'Around the indicator', hint: 'Costs no row width; peak marked on the outline.' },
@@ -419,6 +426,9 @@ export function SessionRowSettings() {
         { value: 'numbers', label: 'Numbers' },
         { value: 'pips', label: 'Pips up to four, then numbers' },
       ]}/>
+    </label>
+    <label>Working directory
+      <Dropdown value={config.cwdStyle} onChange={value => change({ ...config, cwdStyle: value as CwdStyle })} options={CWD_STYLE_OPTIONS}/>
     </label>
     <label class="check"><span>Prefix git tokens with a glyph (⎇ branch, ⌂ worktree)</span>
       <input type="checkbox" checked={config.gitGlyphs} onChange={event => change({ ...config, gitGlyphs: event.currentTarget.checked })} />

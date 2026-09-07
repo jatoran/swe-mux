@@ -2,18 +2,19 @@ import { useMemo, useState } from 'preact/hooks'
 import { Dropdown } from './Dropdown.tsx'
 import { SessionTopbar } from './SessionTopbar.tsx'
 import {
-  ROW_FIELD_BY_ID, SEPARATORS, SEPARATOR_IDS, type ContextRowRender, type RowAlign, type RowFieldId,
+  ROW_FIELD_BY_ID, SEPARATORS, SEPARATOR_IDS, type RowAlign, type RowFieldId,
   type RowFieldMode, type SeparatorId,
 } from './sessionRowConfig.ts'
 import { deriveRowFleetFacts } from './sessionRowFields.ts'
 import { useSessionRowConfig } from './sessionRowPrefs.ts'
+import { CWD_STYLE_OPTIONS } from './SessionRowSettings.tsx'
 import {
   SESSION_TOPBAR_ACTIONS, SESSION_TOPBAR_MAX_ROWS, addSessionTopbarRow,
   defaultSessionTopbarConfig, placeSessionTopbarItem, removeSessionTopbarItem,
-  removeSessionTopbarRow, sessionTopbarContextRender, sessionTopbarItemKey,
-  sessionTopbarMetricHasStyle, setSessionTopbarMetricMode, setSessionTopbarMetricStyle,
+  removeSessionTopbarRow, sessionTopbarItemKey, sessionTopbarMetricHasStyle,
+  sessionTopbarMetricStyle, setSessionTopbarMetricMode, setSessionTopbarMetricStyle,
   unplacedSessionTopbarItems, type SessionTopbarActionId, type SessionTopbarConfig,
-  type SessionTopbarItem,
+  type SessionTopbarItem, type SessionTopbarMetricStyle,
 } from './sessionTopbarConfig.ts'
 import { loadSessionTopbarConfig, saveSessionTopbarConfig } from './sessionTopbarPrefs.ts'
 import type { Session } from './types.ts'
@@ -21,10 +22,15 @@ import type { Session } from './types.ts'
 const PREVIEW_NOW=Math.floor(Date.now()/1000)
 const PREVIEW_SESSION={
   id:'topbar-preview',project_id:'preview-project',name:'ship configurable pane headers',
-  backend:'preview-agent',model:'gpt-5.6-sol',state:'working',state_since:PREVIEW_NOW-420,
+  // A registered harness, not a placeholder name: the context gauge is gated on
+  // the harness's `measurement` capability, so a made-up backend previewed a
+  // top bar whose placed context drew nothing while the real one drew fine.
+  backend:'codex',model:'gpt-5.6-sol',state:'working',state_since:PREVIEW_NOW-420,
   turn_started_at:PREVIEW_NOW-420,created_at:PREVIEW_NOW-7200,worked_ms:51*60_000,
   context_pct:.64,context_peak_pct:.71,compaction_count:1,cost_usd:1.82,
-  runtime_cwd:'D:/PROJECTS/swe-mux/frontend',spawn_cwd:'D:/PROJECTS/swe-mux',cwd:'D:/PROJECTS/swe-mux',
+  // Two levels below the root, so the folder-name and path-inside renderings
+  // of the working directory preview as different things.
+  runtime_cwd:'D:/PROJECTS/swe-mux/frontend/src',spawn_cwd:'D:/PROJECTS/swe-mux',cwd:'D:/PROJECTS/swe-mux',
   project_root:'D:/PROJECTS/swe-mux',
   git:{branch:'ui-settings-updates',worktree:'ui-settings-updates',dirty:6,ahead:3,behind:0,added:284,removed:41,root:'D:/PROJECTS/swe-mux-wt/ui-settings-updates',compare_ref:'origin/master',compare_added:640,compare_removed:112,compare_files:14},
   provider_account_hashes:{openai:'preview-account'},
@@ -34,11 +40,14 @@ const PREVIEW_SESSION={
   },
 } as unknown as Session
 
-const CONTEXT_STYLE_OPTIONS:Array<{value:ContextRowRender;label:string}>=[
-  {value:'percent',label:'percentage'},
-  {value:'gauge',label:'gauge'},
-  {value:'both',label:'gauge + percentage'},
-]
+const METRIC_STYLE_OPTIONS:Partial<Record<RowFieldId,Array<{value:SessionTopbarMetricStyle;label:string}>>>={
+  context:[
+    {value:'percent',label:'percentage'},
+    {value:'gauge',label:'gauge'},
+    {value:'both',label:'gauge + percentage'},
+  ],
+  cwd:CWD_STYLE_OPTIONS,
+}
 
 export function SessionTopbarSettings(){
   const [config,setConfig]=useState(loadSessionTopbarConfig)
@@ -62,7 +71,7 @@ export function SessionTopbarSettings(){
     return <li key={sessionTopbarItemKey(item)} class="topbar-slot">
       <span>{itemLabel(item)}</span>
       {item.kind==='metric'?<Dropdown ariaLabel={`${itemLabel(item)} visibility`} value={item.mode} onChange={value=>change(setSessionTopbarMetricMode(config,item.id,value as RowFieldMode))} options={[{value:'notable',label:'when notable'},{value:'always',label:'always'}]}/>:<em>shortcut</em>}
-      {item.kind==='metric'&&sessionTopbarMetricHasStyle(item.id)&&<Dropdown ariaLabel={`${itemLabel(item)} style`} value={sessionTopbarContextRender(item,rowConfig)} onChange={value=>change(setSessionTopbarMetricStyle(config,item.id,value as ContextRowRender))} options={CONTEXT_STYLE_OPTIONS}/>}
+      {item.kind==='metric'&&sessionTopbarMetricHasStyle(item.id)&&<Dropdown ariaLabel={`${itemLabel(item)} style`} value={sessionTopbarMetricStyle(item,rowConfig)??''} onChange={value=>change(setSessionTopbarMetricStyle(config,item.id,value as SessionTopbarMetricStyle))} options={METRIC_STYLE_OPTIONS[item.id]??[]}/>}
       {config.rows.length>1&&<Dropdown ariaLabel={`${itemLabel(item)} row`} value={String(rowIndex)} onChange={value=>change(placeSessionTopbarItem(config,item,Number(value),align))} options={config.rows.map((_,target)=>({value:String(target),label:`row ${target+1}`}))}/>} 
       <span class="topbar-slot-actions">
         <button type="button" title="Move earlier" disabled={index===0} onClick={()=>change(placeSessionTopbarItem(config,item,rowIndex,align,index-1))}>↑</button>

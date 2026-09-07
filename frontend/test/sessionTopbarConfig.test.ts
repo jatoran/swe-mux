@@ -5,8 +5,8 @@ import {
   SESSION_TOPBAR_MAX_ROWS, addSessionTopbarRow, defaultSessionTopbarConfig,
   normalizeSessionTopbarConfig, placeSessionTopbarItem, removeSessionTopbarItem,
   removeSessionTopbarRow, sessionTopbarContextRender, sessionTopbarItemKey,
-  sessionTopbarMetricHasStyle, sessionTopbarRowConfig, setSessionTopbarMetricStyle,
-  unplacedSessionTopbarItems, type SessionTopbarMetricItem,
+  sessionTopbarMetricHasStyle, sessionTopbarMetricStyle, sessionTopbarRowConfig,
+  setSessionTopbarMetricStyle, unplacedSessionTopbarItems, type SessionTopbarMetricItem,
 } from '../src/sessionTopbarConfig.ts'
 
 test('the default is one row with title and the three existing agent controls',()=>{
@@ -92,4 +92,25 @@ test('the context style is stored per item, survives normalization, and is refus
   assert.ok(sessionTopbarMetricHasStyle('context'))
   assert.ok(!sessionTopbarMetricHasStyle('model'))
   assert.equal(setSessionTopbarMetricStyle(config,'model','gauge'),config)
+  // A style from the other styled field's vocabulary is refused too.
+  assert.equal(setSessionTopbarMetricStyle(config,'context','full'),config)
+})
+
+test('a placed working directory follows the sidebar unless the item chose its own spelling',()=>{
+  const rowConfig=defaultSessionRowConfig()
+  const item:SessionTopbarMetricItem={kind:'metric',id:'cwd',mode:'always'}
+  assert.ok(sessionTopbarMetricHasStyle('cwd'))
+  assert.equal(sessionTopbarMetricStyle(item,rowConfig),'leaf')
+  assert.equal(sessionTopbarRowConfig(item,rowConfig),rowConfig,'no override, no copy')
+  assert.equal(sessionTopbarMetricStyle(item,{...rowConfig,cwdStyle:'relative'}),'relative')
+  let config=defaultSessionTopbarConfig()
+  config=setSessionTopbarMetricStyle(config,'cwd','full')
+  const placed=config.rows[0].left.find(entry=>entry.kind==='metric'&&entry.id==='cwd') as SessionTopbarMetricItem
+  assert.equal(placed.style,'full')
+  assert.equal(sessionTopbarRowConfig(placed,rowConfig).cwdStyle,'full')
+  assert.equal(sessionTopbarMetricStyle(placed,rowConfig),'full')
+  // Round trip through storage keeps it; a context spelling on cwd does not survive.
+  assert.equal((normalizeSessionTopbarConfig(JSON.parse(JSON.stringify(config))).rows[0].left[1] as SessionTopbarMetricItem).style,'full')
+  const crossed=normalizeSessionTopbarConfig({rows:[{left:[{kind:'metric',id:'cwd',mode:'always',style:'gauge'}],right:[],separator:'dot'}]})
+  assert.equal((crossed.rows[0].left[1] as SessionTopbarMetricItem).style,undefined)
 })

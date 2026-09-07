@@ -3510,6 +3510,10 @@ Every session context menu carries **Configure appearance**, which deep-links to
 - **Four fields print what the harness reports about its own session** (`features/harness-status.md`): `effort`, `mode`, `limit5h`, and `limit7d`.
   Each renders nothing on a harness that does not report it, which is the rule the account and branch fields already follow, so a mixed fleet needs no per-harness catalogue.
   `effort` is notable off the project's most common level, on the model's rule; `mode` is notable off `default` and amber for the modes under which the agent acts without asking; the limits are notable past half used and band at 50/75/90.
+- **The working directory has three spellings** (`cwdStyle`, Settings → Appearance → Session rows → Token style): the folder name (default), the path inside the Project root, or the full path.
+  Inside the root the relative form says where the work is; at the root it is the folder name, because `.` says nothing at a glance; outside the root, and with no root known, only the full path can say where the session is.
+  Notability is the same under every spelling: the session is not standing at the Project root, compared on normalized paths so `D:\x` and `d:/x/` read as one directory.
+  The tooltip always carries the full path and, inside the root, the relative one.
 - **Cost draws nothing until a harness has reported one.**
   Only Claude's status line fills the figure and Codex reports none, so a `$0.00` on a Codex row was the absence of a measurement wearing the shape of one, on the same rule the duration field states at length.
   The default configuration is `always` for exactly two of them - the duration on the bottom line's left and the model on its right - and `when notable` for everything else, so a quiet fleet shows a title, a time, and a model, and anything else visible has earned its place.
