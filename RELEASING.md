@@ -117,15 +117,21 @@ disagreement *between* them: a tag that claims a version the tree does not, a ve
 a reporting route that was never bumped, a changelog entry still under `## [Unreleased]`, a
 `[project.urls]` placeholder, a command `README.md` tells a user to run that `[project.scripts]`
 no longer declares, or a store whose schema stamp cannot be the version it claims.
+It also reads the sdist, which is the whole checkout tarred: every tarball from 0.1.0 to 0.2.7
+carried `.docs/marketing/` - launch drafts, the outreach tracker, the GTM plan - because every
+artifact check read the wheel and the wheel never had them.
+`[tool.hatch.build.targets.sdist].exclude` in `pyproject.toml` now declares what a public tarball
+may not carry, and `--sdist` proves the built one honours it.
 
 ```bash
 uv run python packaging/verify_release_artifact.py dist/swe_mux-X.Y.Z-py3-none-any.whl
-uv run python packaging/verify_release_unit.py --tag vX.Y.Z dist/swe_mux-X.Y.Z-py3-none-any.whl
+uv run python packaging/verify_release_unit.py --tag vX.Y.Z --sdist dist/swe_mux-X.Y.Z.tar.gz dist/swe_mux-X.Y.Z-py3-none-any.whl
 ```
 
-Pass the tag you are **about to** cut.
+Pass the tag you are **about to** cut, and the tarball beside the wheel.
 That is the point at which a mismatch is still fixable, and it is why the second script refuses
-to run without a tag rather than reporting a pass it did not earn.
+to run without a tag, or without an sdist at the release stage, rather than reporting a pass it
+did not earn.
 Both run again in `release.yml` before anything is published, so this is a rehearsal rather than
 the enforcement.
 Neither replaces the `TODO(release)` sweep in step 1: those markers are deliberately still in the

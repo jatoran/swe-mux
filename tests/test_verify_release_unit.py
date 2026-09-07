@@ -21,8 +21,10 @@ pass.
 from __future__ import annotations
 
 import importlib.util
+import io
 import json
 import sys
+import tarfile
 import tempfile
 import zipfile
 from pathlib import Path
@@ -174,12 +176,19 @@ HEALTHY_STORES: tuple[StoreRow, ...] = (
 )
 
 
+# What the real tree declares a public tarball may not carry, in the one shape
+# the checker verifies. `None` in `_pyproject` omits the table, which is the
+# state the tree was in for seven releases.
+SDIST_EXCLUDE: tuple[str, ...] = (".private/**", ".docs/marketing/**")
+
+
 def _pyproject(
     *,
     version: str = VERSION,
     urls: dict[str, str] | None = None,
     scripts: dict[str, str] | None = None,
     gui_scripts: dict[str, str] | None = None,
+    sdist_exclude: tuple[str, ...] | None = SDIST_EXCLUDE,
 ) -> str:
     lines = [
         "[project]",
@@ -198,6 +207,10 @@ def _pyproject(
         lines.extend(["", "[project.gui-scripts]"])
         for command, target in gui_scripts.items():
             lines.append(f'{command} = "{target}"')
+    if sdist_exclude is not None:
+        lines.extend(["", "[tool.hatch.build.targets.sdist]", "exclude = ["])
+        lines.extend(f'  "{pattern}",' for pattern in sdist_exclude)
+        lines.append("]")
     return "\n".join(lines) + "\n"
 
 
@@ -306,6 +319,46 @@ def build_wheel(
     return path
 
 
+# The members a clean sdist has. The shape is what matters: source, the
+# declared artifacts, and the public documentation, under the distribution
+# directory PEP 517 requires.
+CLEAN_SDIST_MEMBERS: dict[str, str] = {
+    "PKG-INFO": metadata_text(),
+    "pyproject.toml": _pyproject(),
+    "README.md": README_BODY,
+    "src/swe_mux/__init__.py": f'__version__ = "{VERSION}"\n',
+    "src/swe_mux/static/index.html": "<html></html>\n",
+    ".docs/design/00_OVERVIEW.md": "# Overview\n",
+}
+
+
+def build_sdist(
+    path: Path,
+    *,
+    version: str = VERSION,
+    members: dict[str, str] | None = None,
+    extra: dict[str, str] | None = None,
+    distribution_dir: bool = True,
+) -> Path:
+    """A `.tar.gz` in the shape hatchling writes, with every member a regular file.
+
+    `extra` adds members to the clean set, which is how a test plants exactly
+    one offender on an otherwise-healthy tarball. `distribution_dir=False`
+    writes members at the archive root, the shape the checker must not be fooled
+    by.
+    """
+    body = dict(CLEAN_SDIST_MEMBERS if members is None else members)
+    body.update(extra or {})
+    prefix = f"swe_mux-{version}/" if distribution_dir else ""
+    with tarfile.open(path, mode="w:gz") as archive:
+        for member, text in body.items():
+            data = text.encode("utf-8")
+            info = tarfile.TarInfo(name=prefix + member)
+            info.size = len(data)
+            archive.addfile(info, io.BytesIO(data))
+    return path
+
+
 @pytest.fixture
 def tree(tmp_path: Path) -> Path:
     return build_tree(tmp_path / "tree")
@@ -316,13 +369,24 @@ def wheel(tmp_path: Path) -> Path:
     return build_wheel(tmp_path / "swe_mux-0.1.0-py3-none-any.whl")
 
 
-def run(wheel: Path, tree: Path, tag: str = TAG, stage: Any = verify_release_unit.RELEASE) -> Any:
+@pytest.fixture
+def sdist(tmp_path: Path) -> Path:
+    return build_sdist(tmp_path / "swe_mux-0.1.0.tar.gz")
+
+
+def run(
+    wheel: Path,
+    tree: Path,
+    tag: str = TAG,
+    stage: Any = verify_release_unit.RELEASE,
+    sdist: Path | None = None,
+) -> Any:
     """The default stage is the strict one, matching `verify`'s own default.
 
     Every test that does not name a stage is therefore asking the release-time
     question, which is the one that must not weaken.
     """
-    return verify_release_unit.verify(wheel, tag, tree, stage=stage)
+    return verify_release_unit.verify(wheel, tag, tree, stage=stage, sdist=sdist)
 
 
 def verdict(report: Any, name: str) -> bool:
@@ -362,9 +426,28 @@ def test_a_coherent_release_passes_every_check(wheel: Path, tree: Path) -> None:
     ]
 
 
-def test_every_passing_check_still_says_what_it_observed(wheel: Path, tree: Path) -> None:
+def test_a_coherent_release_with_its_sdist_passes_every_check(
+    wheel: Path, tree: Path, sdist: Path
+) -> None:
+    """The two tarball verdicts are appended, and only when a tarball was handed in.
+
+    The list without `sdist` is asserted by the test above and must not change:
+    the API stays a pure function over what it is given, and the CLI is where a
+    release run is refused for not giving one.
+    """
+    report = run(wheel, tree, sdist=sdist)
+    assert report.ok, verify_release_unit.render(report, subject="Release unit")
+    assert [check.name for check in report.checks][-2:] == ["sdist-readable", "sdist-contents"]
+    assert report.evidence["sdist"] == str(sdist)
+    assert report.evidence["sdist_member_count"] == len(CLEAN_SDIST_MEMBERS)
+    assert report.evidence["sdist_exclusions"] == list(SDIST_EXCLUDE)
+
+
+def test_every_passing_check_still_says_what_it_observed(
+    wheel: Path, tree: Path, sdist: Path
+) -> None:
     """A validator that speaks only when unhappy cannot be told from one that skipped."""
-    report = run(wheel, tree)
+    report = run(wheel, tree, sdist=sdist)
     assert all(check.detail for check in report.checks)
 
 
@@ -666,7 +749,7 @@ def test_the_development_stage_still_requires_the_entry_to_say_something(
 
 
 def test_the_stage_flag_selects_the_reading_and_the_evidence_records_it(
-    tmp_path: Path, wheel: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path, wheel: Path, sdist: Path, monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """Both stages over one tree, through `main`, with the report saying which ran.
@@ -678,7 +761,8 @@ def test_the_stage_flag_selects_the_reading_and_the_evidence_records_it(
     tree = _tree_with_leftover_unreleased(tmp_path / "tree")
     monkeypatch.setattr(verify_release_unit, "ROOT", tree)
 
-    assert verify_release_unit.main(["--json", "--tag", TAG, str(wheel)]) == 1
+    argv = ["--json", "--tag", TAG, "--sdist", str(sdist), str(wheel)]
+    assert verify_release_unit.main(argv) == 1
     strict = json.loads(capsys.readouterr().out)
     assert strict["evidence"]["stage"] == verify_release_unit.RELEASE
     assert {c["name"]: c["ok"] for c in strict["checks"]}["changelog-entry"] is False
@@ -1108,39 +1192,261 @@ def test_an_unreadable_artifact_still_reports_every_evidence_key(
     assert report.evidence["tag"] == TAG
 
 
+# ------------------------------------------------------------------------------- the sdist
+
+
+def test_a_member_under_a_declared_exclusion_fails_and_is_named(
+    tmp_path: Path, wheel: Path, tree: Path
+) -> None:
+    """The failure this check exists for: the tarball carries what the tree excluded."""
+    sdist = build_sdist(
+        tmp_path / "s.tar.gz",
+        extra={".private/marketing/OUTREACH_TRACKER.md": "# tracker\n"},
+    )
+    report = run(wheel, tree, sdist=sdist)
+    assert only_failure(report) == "sdist-contents"
+    text = message(report, "sdist-contents")
+    assert ".private/marketing/OUTREACH_TRACKER.md" in text
+    assert "1 of" in text
+    assert "Do not publish" in text
+
+
+def test_a_recreated_marketing_directory_is_refused_too(
+    tmp_path: Path, wheel: Path, tree: Path
+) -> None:
+    """`.docs/marketing/` stays declared after its move, so a recreated one is caught."""
+    sdist = build_sdist(tmp_path / "s.tar.gz", extra={".docs/marketing/show-hn.md": "# hn\n"})
+    report = run(wheel, tree, sdist=sdist)
+    assert only_failure(report) == "sdist-contents"
+    assert ".docs/marketing/show-hn.md" in message(report, "sdist-contents")
+
+
+def test_a_sibling_with_a_matching_prefix_is_not_an_offender(
+    tmp_path: Path, wheel: Path, tree: Path
+) -> None:
+    """`.private/**` excludes the directory, not every path that starts with `.private`."""
+    sdist = build_sdist(
+        tmp_path / "s.tar.gz",
+        extra={".private-api.md": "# public\n", ".docs/marketing-site.md": "# public\n"},
+    )
+    report = run(wheel, tree, sdist=sdist)
+    assert verdict(report, "sdist-contents") is True
+
+
+def test_more_than_five_offenders_are_counted_not_dumped(
+    tmp_path: Path, wheel: Path, tree: Path
+) -> None:
+    extra = {f".private/note-{index}.md": "x\n" for index in range(8)}
+    report = run(wheel, tree, sdist=build_sdist(tmp_path / "s.tar.gz", extra=extra))
+    text = message(report, "sdist-contents")
+    assert "8 of" in text
+    assert "(+3 more)" in text
+
+
+def test_members_outside_a_distribution_directory_are_still_judged(
+    tmp_path: Path, wheel: Path, tree: Path
+) -> None:
+    """A tarball that breaks the PEP 625 layout fails on what it carries, not on layout."""
+    sdist = build_sdist(
+        tmp_path / "s.tar.gz",
+        extra={".private/notes.md": "x\n"},
+        distribution_dir=False,
+    )
+    report = run(wheel, tree, sdist=sdist)
+    assert only_failure(report) == "sdist-contents"
+    assert ".private/notes.md" in message(report, "sdist-contents")
+
+
+def test_the_distribution_directory_is_recognised_by_shape_not_by_position() -> None:
+    """What is stripped, and what is not, so the prefix match is exact either way."""
+    module = verify_release_unit
+    assert module._distribution_dir(["swe_mux-0.2.7/PKG-INFO", "swe_mux-0.2.7/a/b.py"]) == (
+        "swe_mux-0.2.7"
+    )
+    assert module._distribution_dir(["swe_mux-0.2.7rc1/PKG-INFO"]) == "swe_mux-0.2.7rc1"
+    # A member at the root, two top-level directories, or one directory that
+    # is not `<name>-<version>` - each is read as written.
+    assert module._distribution_dir(["PKG-INFO", "swe_mux-0.2.7/a.py"]) is None
+    assert module._distribution_dir(["swe_mux-0.2.7/a.py", "other-1.0/b.py"]) is None
+    assert module._distribution_dir([".private/notes.md", ".private/more.md"]) is None
+    assert module._distribution_dir([]) is None
+
+
+def test_a_malformed_archive_under_an_excluded_directory_is_not_read_as_well_formed(
+    tmp_path: Path, wheel: Path, tree: Path
+) -> None:
+    """Every member under `.private/` is the worst case, and it must not pass."""
+    sdist = build_sdist(
+        tmp_path / "s.tar.gz",
+        members={".private/notes.md": "x\n", ".private/more.md": "y\n"},
+        distribution_dir=False,
+    )
+    report = run(wheel, tree, sdist=sdist)
+    assert only_failure(report) == "sdist-contents"
+    assert "2 of 2" in message(report, "sdist-contents")
+
+
+def test_a_tree_that_declares_no_exclusions_fails_the_sdist_check(
+    tmp_path: Path, wheel: Path, sdist: Path
+) -> None:
+    """Seven releases shipped private notes while nothing said they must not.
+
+    A clean tarball beside a silent declaration is that state again, so it is a
+    failure and not a pass: the check is of the declaration as much as of the
+    archive.
+    """
+    tree = build_tree(tmp_path / "tree", pyproject=_pyproject(sdist_exclude=None))
+    report = run(wheel, tree, sdist=sdist)
+    assert only_failure(report) == "sdist-contents"
+    assert "declares no" in message(report, "sdist-contents")
+    assert report.evidence["sdist_exclusions"] == []
+
+
+def test_an_empty_exclusion_list_is_the_same_as_none(
+    tmp_path: Path, wheel: Path, sdist: Path
+) -> None:
+    tree = build_tree(tmp_path / "tree", pyproject=_pyproject(sdist_exclude=()))
+    report = run(wheel, tree, sdist=sdist)
+    assert only_failure(report) == "sdist-contents"
+    assert "declares no" in message(report, "sdist-contents")
+
+
+@pytest.mark.parametrize(
+    "pattern",
+    ["*.secret", "!.private/keep.md", ".private/**/*.md", "/.private/**", ".private", "/**"],
+)
+def test_an_exclusion_shape_the_checker_cannot_verify_is_refused(
+    tmp_path: Path, wheel: Path, sdist: Path, pattern: str
+) -> None:
+    """Refusing beats approximating: a pattern half-understood is a tarball half-checked."""
+    tree = build_tree(
+        tmp_path / "tree", pyproject=_pyproject(sdist_exclude=SDIST_EXCLUDE + (pattern,))
+    )
+    report = run(wheel, tree, sdist=sdist)
+    assert only_failure(report) == "sdist-contents"
+    text = message(report, "sdist-contents")
+    assert pattern in text
+    assert "<dir>/**" in text
+
+
+def test_excluded_prefixes_reads_the_declared_shape_exactly() -> None:
+    prefixes, unsupported = verify_release_unit.excluded_prefixes(
+        [".private/**", ".docs/marketing/**", "build/out/**", "*.secret"]
+    )
+    assert prefixes == [".private/", ".docs/marketing/", "build/out/"]
+    assert unsupported == ["*.secret"]
+
+
+def test_a_missing_sdist_is_one_failing_check_beside_the_wheel_verdicts(
+    tmp_path: Path, wheel: Path, tree: Path
+) -> None:
+    report = run(wheel, tree, sdist=tmp_path / "never-built.tar.gz")
+    assert only_failure(report) == "sdist-readable"
+    assert "does not exist" in message(report, "sdist-readable")
+    assert "sdist-contents" not in [check.name for check in report.checks]
+    assert report.evidence["sdist_member_count"] is None
+    assert verdict(report, "wheel-version") is True
+
+
+def test_a_file_that_is_not_a_tarball_fails_readable_rather_than_raising(
+    tmp_path: Path, wheel: Path, tree: Path
+) -> None:
+    bogus = tmp_path / "bogus.tar.gz"
+    bogus.write_bytes(b"this is not gzip")
+    report = run(wheel, tree, sdist=bogus)
+    assert only_failure(report) == "sdist-readable"
+    assert "could not be read as an sdist" in message(report, "sdist-readable")
+
+
+def test_the_release_workflow_hands_the_validator_its_sdist() -> None:
+    """`release.yml` must pass `--sdist`, or the script refuses and the release stops.
+
+    That refusal is the design, and this test is what keeps the workflow on the
+    right side of it: the artifact that shipped private notes is the tarball, so
+    the one job that publishes one has to hand it over.
+    """
+    text = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+    steps = [line for line in text.splitlines() if not line.lstrip().startswith("#")]
+    invocations = [line for line in steps if "verify_release_unit.py" in line]
+    assert invocations, "release.yml no longer runs the release-unit validator"
+    for line in invocations:
+        assert "--sdist" in line, line
+
+
+def test_this_repository_declares_exclusions_the_checker_can_verify() -> None:
+    """The real `pyproject.toml`, read the way the release run reads it.
+
+    Two properties, both about the declaration rather than a built tarball
+    (which is `release.yml`'s to build): the operator-private directories are
+    declared, and every declared pattern is of the shape `_check_sdist_contents`
+    verifies - so a release run can never fail on "cannot verify" for a pattern
+    this tree wrote.
+    """
+    module = verify_release_unit
+    patterns = module.declared_sdist_exclusions(module.SourceTree(REPO_ROOT))
+    prefixes, unsupported = module.excluded_prefixes(patterns)
+    assert unsupported == [], unsupported
+    assert ".private/" in prefixes
+    assert ".docs/marketing/" in prefixes
+
+
 # ----------------------------------------------------------------------------- the CLI
 
 
 def test_the_cli_exits_zero_on_a_coherent_release(
-    tmp_path: Path, tree: Path, wheel: Path,
+    tmp_path: Path, tree: Path, wheel: Path, sdist: Path,
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
 ) -> None:
     monkeypatch.setattr(verify_release_unit, "ROOT", tree)
-    assert verify_release_unit.main(["--tag", TAG, str(wheel)]) == 0
+    assert verify_release_unit.main(["--tag", TAG, "--sdist", str(sdist), str(wheel)]) == 0
     out = capsys.readouterr().out
     assert "Release unit check" in out
-    assert "11 checks passed" in out
+    assert "13 checks passed" in out
 
 
 def test_the_cli_exits_nonzero_with_a_remedy(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+    tmp_path: Path, sdist: Path, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     tree = build_tree(tmp_path / "tree", init_version="0.0.9")
     wheel = build_wheel(tmp_path / "w.whl")
     monkeypatch.setattr(verify_release_unit, "ROOT", tree)
-    assert verify_release_unit.main(["--tag", TAG, str(wheel)]) == 1
+    assert verify_release_unit.main(["--tag", TAG, "--sdist", str(sdist), str(wheel)]) == 1
     out = capsys.readouterr().out
     assert "Release unit validation FAILED" in out
     assert "in one commit" in out
 
 
+def test_a_release_stage_run_without_an_sdist_refuses_rather_than_passing(
+    tmp_path: Path, tree: Path, wheel: Path, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The default stage is the one that publishes, and it must read the tarball."""
+    monkeypatch.setattr(verify_release_unit, "ROOT", tree)
+    with pytest.raises(SystemExit) as raised:
+        verify_release_unit.main(["--tag", TAG, str(wheel)])
+    assert raised.value.code == 2
+    assert "--sdist" in capsys.readouterr().err
+
+
+def test_a_development_stage_run_may_omit_the_sdist(
+    tmp_path: Path, tree: Path, wheel: Path, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The landing gate builds nothing, so it has no tarball to hand over."""
+    monkeypatch.setattr(verify_release_unit, "ROOT", tree)
+    stage = verify_release_unit.DEVELOPMENT
+    assert verify_release_unit.main(["--tag", TAG, "--stage", stage, str(wheel)]) == 0
+    assert "11 checks passed" in capsys.readouterr().out
+
+
 def test_the_tag_falls_back_to_the_workflow_environment(
-    tmp_path: Path, tree: Path, wheel: Path,
+    tmp_path: Path, tree: Path, wheel: Path, sdist: Path,
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
 ) -> None:
     monkeypatch.setattr(verify_release_unit, "ROOT", tree)
     monkeypatch.setenv("GITHUB_REF_NAME", TAG)
-    assert verify_release_unit.main([str(wheel)]) == 0
+    assert verify_release_unit.main(["--sdist", str(sdist), str(wheel)]) == 0
     capsys.readouterr()
 
 
@@ -1168,20 +1474,24 @@ def test_no_tag_anywhere_refuses_rather_than_passing(
 
 
 def test_json_output_carries_every_verdict_and_its_evidence(
-    tmp_path: Path, wheel: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path, wheel: Path, sdist: Path, monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     tree = build_tree(tmp_path / "tree", literal_version="0.0.9")
     monkeypatch.setattr(verify_release_unit, "ROOT", tree)
-    assert verify_release_unit.main(["--json", "--tag", TAG, str(wheel)]) == 1
+    argv = ["--json", "--tag", TAG, "--sdist", str(sdist), str(wheel)]
+    assert verify_release_unit.main(argv) == 1
     payload = json.loads(capsys.readouterr().out)
     assert payload["ok"] is False
     assert payload["evidence"]["tag"] == TAG
     assert payload["evidence"]["project_scripts"] == SCRIPTS
     assert payload["evidence"]["documented_commands"]
+    assert payload["evidence"]["sdist"] == str(sdist)
+    assert payload["evidence"]["sdist_member_count"] == len(CLEAN_SDIST_MEMBERS)
     names = {check["name"]: check["ok"] for check in payload["checks"]}
     assert names["version-literals"] is False
     assert names["version-sources"] is True
+    assert names["sdist-contents"] is True
 
 
 # ------------------------------------------------------------------- the real repository

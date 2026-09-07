@@ -106,11 +106,16 @@ Since 2026-08-27 this repository is published at `https://github.com/jatoran/swe
 Apache-2.0, and `swemux.dev` serves from `site/` on every push that touches it. Two things
 follow that did not apply while it was local-only.
 
-**Everything you write is published.** Not just source: commit messages, `.docs/`, and the
-`.docs/marketing/` drafts are all visible. There is exactly one private place in the tree,
-`.private/`, which is gitignored and is for operator notes about running the project. It is
-not for secrets - a gitignore rule is one `git add -f` away from not protecting anything, so
-keys live in a password manager.
+**Everything you write is published.** Not just source: commit messages and all of `.docs/`
+are visible, and so is every sdist on PyPI, which packs the whole checkout. There is exactly
+one private place in the tree, `.private/`, which is gitignored and holds operator notes about
+running the project plus the launch drafts, outreach tracker and GTM plan
+(`.private/marketing/`, moved out of `.docs/` on 2026-09-07 after shipping in every sdist up
+to 0.2.7). It is not for secrets - a gitignore rule is one `git add -f` away from not
+protecting anything, so keys live in a password manager. Two consequences: `.private/` exists
+only in the primary checkout, so a worktree or a clone cannot read it; and `pyproject.toml`
+declares it excluded from the sdist, which `verify_release_unit.py --sdist` checks the built
+tarball against before a release publishes.
 
 **A red badge is the first thing a visitor sees.** CI (`.github/workflows/ci.yml`) runs on
 every push to `master`: the full Windows gate, plus Ubuntu and macOS legs, plus a `site` job.

@@ -92,11 +92,15 @@ _agents-orchestrator/
 .trash/
 
 # === Operator-private notes ===
-# Account setup, infrastructure configuration, and anything else that is about
-# running this project rather than about the code. The repository is public, so
-# this is the only place in the tree where "nobody else will read this" is true.
-# It is NOT for secrets: keys and passwords belong in a password manager, and a
-# gitignore rule is one `git add -f` away from not protecting them.
+# Account setup, infrastructure configuration, the launch drafts and outreach
+# tracker (`.private/marketing/`, out of `.docs/` since 2026-09-07), and anything
+# else that is about running this project rather than about the code. The
+# repository is public, so this is the only place in the tree where "nobody else
+# will read this" is true. It is NOT for secrets: keys and passwords belong in a
+# password manager, and a gitignore rule is one `git add -f` away from not
+# protecting them. This rule is also not what keeps the directory out of the
+# sdist: `[tool.hatch.build.targets.sdist].exclude` in `pyproject.toml` declares
+# that, and `verify_release_unit.py --sdist` checks the tarball against it.
 .private/
 
 # Deployment-time plugin discovery output. The source page and validator are tracked;

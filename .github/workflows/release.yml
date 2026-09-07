@@ -103,10 +103,12 @@ jobs:
         id: artifacts
         run: |
           wheel=$(ls dist/*.whl)
+          sdist=$(ls dist/*.tar.gz)
           version=$(basename "$wheel" | cut -d- -f2)
           echo "wheel=$wheel" >> "$GITHUB_OUTPUT"
+          echo "sdist=$sdist" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "Built $wheel (version $version)"
+          echo "Built $wheel and $sdist (version $version)"
 
       # A tag and the version it claims to be are two independent facts, and they
       # have disagreed in every project that did not check. The manifest, the
@@ -138,7 +140,10 @@ jobs:
       # `__init__.py`, the reporting routes and the wheel's metadata; a changelog
       # entry that is not still under `## [Unreleased]`; publishable
       # `[project.urls]`; the entry points README and RELEASING tell a user to
-      # run; and the per-store schema stamps.
+      # run; the per-store schema stamps; and that the sdist carries nothing
+      # `pyproject.toml` declares excluded - every tarball from 0.1.0 to 0.2.7
+      # shipped `.docs/marketing/` because nothing read the tarball. The script
+      # refuses a release-stage run without `--sdist` for exactly that reason.
       #
       # The tag is passed explicitly rather than left to the script's
       # `$GITHUB_REF_NAME` fallback, because the `workflow_dispatch` path has no
@@ -149,6 +154,7 @@ jobs:
         env:
           VERSION: ${{ steps.artifacts.outputs.version }}
           WHEEL: ${{ steps.artifacts.outputs.wheel }}
+          SDIST: ${{ steps.artifacts.outputs.sdist }}
         run: |
           tag="$GITHUB_REF_NAME"
           case "$tag" in
@@ -156,7 +162,7 @@ jobs:
             *) tag="v${VERSION}" ;;
           esac
           echo "Validating the release unit as $tag"
-          uv run python packaging/verify_release_unit.py --tag "$tag" "$WHEEL"
+          uv run python packaging/verify_release_unit.py --tag "$tag" --sdist "$SDIST" "$WHEEL"
 
       # Uploaded once and downloaded by every later job, so the bytes that are
       # published, attached to the Release, and hashed into the update manifest

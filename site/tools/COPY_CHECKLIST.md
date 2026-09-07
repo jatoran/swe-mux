@@ -218,4 +218,4 @@ The homepage leads with live status, desktop/mobile work and voice.
 Feature recordings show clean application UI without tutorial cards, controls, callouts or cursor effects.
 Keep captions in the surrounding page copy and identify simulated activity there.
 Videos use visitor-controlled playback and seeking; there are no audio samples.
-The language and scope matrix in `../README.md` and `../../.docs/marketing/README.md` govern the current copy.
+The language and scope matrix in `../README.md` and `../../.private/marketing/README.md` (operator-private, gitignored) govern the current copy.

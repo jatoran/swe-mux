@@ -37,6 +37,13 @@ tree, which is exactly why a whole class of release defect passes it:
   decides only whether that launcher opens a console. Reading just one is how
   moving `swe-mux` to `gui-scripts` - to stop the tray popping a console window -
   reported the README as documenting a command that does not exist.
+- An sdist is the whole checkout, tarred. Every one from 0.1.0 to 0.2.7 carried
+  `.docs/marketing/` - the launch drafts, the outreach tracker with third-party
+  contacts, the GTM plan - and nothing noticed, because every artifact check
+  read the wheel and the wheel never had them. `pyproject.toml` now declares
+  what a public tarball may not carry (`[tool.hatch.build.targets.sdist]
+  exclude`), and `--sdist` proves the built one honours the declaration. A
+  release run must pass it; the declaration alone is a promise nobody reads.
 
 None of those is a defect *in* the artifact. Each is a disagreement *between*
 the tag, the source, and the artifact, so each needs the three read together -
@@ -67,10 +74,16 @@ is how a gate gets skipped.
 
 Usage
 -----
-    uv run python packaging/verify_release_unit.py --tag v0.1.0 dist/swe_mux-*.whl
-    uv run python packaging/verify_release_unit.py --json <wheel>
+    uv run python packaging/verify_release_unit.py --tag v0.1.0 --sdist dist/*.tar.gz dist/*.whl
+    uv run python packaging/verify_release_unit.py --json --sdist <sdist> <wheel>
+    uv run python packaging/verify_release_unit.py --stage development --tag v0.1.0 <wheel>
 
-Exit 0 when every check passes, 1 when any fails, 2 when no tag was supplied.
+Exit 0 when every check passes, 1 when any fails, 2 when no tag was supplied or
+when a release-stage run names no sdist. `--sdist` is the tarball `uv build`
+writes beside the wheel; at the default (release) stage it is required, because
+the tarball is the artifact that carried private notes for seven releases and a
+run that does not read it cannot say the release is clean. At the development
+stage it is optional, since the landing gate builds nothing.
 `--tag` defaults to `$GITHUB_REF_NAME` when that names a tag, which is what makes
 the `release.yml` step a bare invocation. There is deliberately no third
 behaviour when neither is present: the subject of this validator is the agreement
@@ -97,6 +110,7 @@ import json
 import os
 import re
 import sys
+import tarfile
 import tomllib
 import zipfile
 from collections.abc import Iterator
@@ -678,6 +692,106 @@ def read_wheel(wheel: Path) -> WheelFacts:
             entry_points=read("entry_points.txt"),
             dist_info=dist_info,
         )
+
+
+# --------------------------------------------------------------------------- sdist reading
+
+# Where `pyproject.toml` says what a source distribution may not carry.
+SDIST_TARGET_TABLE = ("tool", "hatch", "build", "targets", "sdist")
+
+# Characters that make a pattern something other than a plain directory path.
+# `!` because a negation re-includes; the rest because they glob.
+_PATTERN_METACHARACTERS = frozenset("*?[]!")
+
+
+@dataclass(frozen=True)
+class SdistFacts:
+    """Every regular file in the tarball, as named and as a path inside the tree.
+
+    `names` are the members as the archive spells them (`swe_mux-0.2.7/README.md`);
+    `members` have the distribution directory removed, which is the form the
+    exclusion patterns are written in. `distribution_dir` is that directory, or
+    `None` when the archive has no single one - see `_distribution_dir`.
+    """
+
+    names: list[str]
+    members: list[str]
+    distribution_dir: str | None
+
+
+# The `<name>-<version>` directory PEP 625 puts at the root of every sdist: a
+# distribution name, a dash, and a version that starts with a digit.
+_DISTRIBUTION_DIR = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._]*-\d[^/]*$")
+
+
+def _distribution_dir(names: list[str]) -> str | None:
+    """The one `<name>-<version>/` directory every member sits under, if there is one.
+
+    Stripped only when *every* member shares a single first component of that
+    shape. A tarball with members at its root, or under several directories,
+    has broken the sdist layout, and its paths are then judged as written: a
+    `.private/notes.md` at the root of a malformed archive is still
+    `.private/notes.md`, and stripping its first component would have turned
+    it into `notes.md` and passed it. The shape test is what stops a broken
+    archive whose only directory happens to be an excluded one from being read
+    as well-formed.
+    """
+    heads = {name.partition("/")[0] for name in names}
+    if len(heads) != 1 or any("/" not in name for name in names):
+        return None
+    head = heads.pop()
+    return head if _DISTRIBUTION_DIR.match(head) else None
+
+
+def read_sdist(sdist: Path) -> SdistFacts:
+    """The file members of a `.tar.gz` sdist. Nothing is extracted."""
+    with tarfile.open(sdist, mode="r:gz") as archive:
+        names = sorted(member.name for member in archive.getmembers() if member.isfile())
+    directory = _distribution_dir(names)
+    if directory is None:
+        members = list(names)
+    else:
+        members = sorted(name[len(directory) + 1 :] for name in names)
+    return SdistFacts(names=names, members=members, distribution_dir=directory)
+
+
+def declared_sdist_exclusions(tree: SourceTree) -> list[str]:
+    """`[tool.hatch.build.targets.sdist].exclude`, or empty when absent or malformed."""
+    table: Any = tree.pyproject() or {}
+    for key in SDIST_TARGET_TABLE:
+        table = table.get(key) if isinstance(table, dict) else None
+    if not isinstance(table, dict):
+        return []
+    exclude = table.get("exclude")
+    if not isinstance(exclude, list):
+        return []
+    return [pattern for pattern in exclude if isinstance(pattern, str)]
+
+
+def excluded_prefixes(patterns: list[str]) -> tuple[list[str], list[str]]:
+    """Split declared exclusions into directory prefixes and shapes this cannot verify.
+
+    Only `<dir>/**` is understood: a root-anchored directory whose whole subtree
+    is excluded, which is what "nothing under `.private/` ships" means. A
+    gitignore-style pattern of any other shape - a bare `*.secret`, a negation, a
+    `**` in the middle - has semantics this module does not reimplement, so it is
+    returned in the second list and the check refuses rather than approximating.
+    A pattern such as `.docs/marketing/**` contains a slash, which gitignore
+    anchors to the root, so plain prefix matching over the member path is exact.
+    """
+    prefixes: list[str] = []
+    unsupported: list[str] = []
+    for pattern in patterns:
+        directory = pattern[: -len("/**")] if pattern.endswith("/**") else None
+        if (
+            not directory
+            or directory.startswith("/")
+            or any(character in _PATTERN_METACHARACTERS for character in directory)
+        ):
+            unsupported.append(pattern)
+            continue
+        prefixes.append(directory.strip("/") + "/")
+    return prefixes, unsupported
 
 
 def metadata_headers(metadata: str | None) -> dict[str, list[str]]:
@@ -1297,16 +1411,115 @@ def _check_migration_coherence(
     )
 
 
+def _check_sdist_contents(tree: SourceTree, facts: SdistFacts) -> Check:
+    """Nothing the tree declares excluded is in the tarball.
+
+    The declaration is `pyproject.toml`'s, not this module's, so there is one
+    list to edit and the check can only ever agree with the build config or
+    report that the build did not honour it. An empty declaration fails: the
+    check exists because seven releases shipped `.docs/marketing/` while nothing
+    said they must not, and a tree that says nothing is that state again.
+    """
+    name = "sdist-contents"
+    patterns = declared_sdist_exclusions(tree)
+    if not patterns:
+        return Check(
+            name,
+            False,
+            "pyproject.toml declares no `[tool.hatch.build.targets.sdist].exclude` list, "
+            "so nothing states what a public tarball may not carry.",
+            "Declare the operator-private directories there as `<dir>/**` entries "
+            "(`.private/**` at least) and rebuild with `uv build`.",
+        )
+    prefixes, unsupported = excluded_prefixes(patterns)
+    if unsupported:
+        return Check(
+            name,
+            False,
+            f"{len(unsupported)} sdist exclusion(s) are not of the `<dir>/**` shape this "
+            f"check can verify: {', '.join(unsupported)}.",
+            "Write each exclusion as `<directory>/**`, or teach `excluded_prefixes` the new "
+            "shape and test it - the check refuses rather than guessing what a pattern "
+            "it does not understand would exclude.",
+        )
+    offenders = [
+        member for member in facts.members if any(member.startswith(prefix) for prefix in prefixes)
+    ]
+    if offenders:
+        shown = ", ".join(offenders[:5])
+        if len(offenders) > 5:
+            shown += f" (+{len(offenders) - 5} more)"
+        return Check(
+            name,
+            False,
+            f"{len(offenders)} of {len(facts.members)} sdist member(s) fall under a declared "
+            f"exclusion: {shown}.",
+            "Do not publish this tarball. hatchling's `artifacts` overrides `exclude` for "
+            "any path both match, and a stale checkout can carry a directory the tree "
+            "no longer tracks - fix `[tool.hatch.build.targets.sdist]` or the checkout, "
+            "then rebuild with `uv build`.",
+        )
+    return Check(
+        name,
+        True,
+        f"{len(facts.members)} sdist member(s), none under {', '.join(prefixes)}.",
+    )
+
+
+def _sdist_checks(tree: SourceTree, sdist: Path) -> tuple[list[Check], SdistFacts | None]:
+    """`sdist-readable`, then `sdist-contents` when there was something to read.
+
+    An unreadable tarball is one failing check rather than a traceback, and the
+    wheel-side verdicts stand beside it - the same "eight verdicts instead of
+    one" rule the malformed-tag path follows.
+    """
+    try:
+        facts = read_sdist(sdist)
+    except FileNotFoundError:
+        return [
+            Check(
+                "sdist-readable",
+                False,
+                f"{sdist} does not exist.",
+                "Pass the tarball `uv build` writes beside the wheel, e.g. "
+                "`--sdist dist/swe_mux-<version>.tar.gz`.",
+            )
+        ], None
+    except (OSError, tarfile.TarError) as error:
+        return [
+            Check(
+                "sdist-readable",
+                False,
+                f"{sdist} could not be read as an sdist (gzipped tar): {error}.",
+                "An sdist is a `.tar.gz`. Check the path points at the tarball and that the "
+                "build or the download completed, then rebuild with `uv build`.",
+            )
+        ], None
+    return [
+        Check("sdist-readable", True, f"{len(facts.names)} entries in the sdist."),
+        _check_sdist_contents(tree, facts),
+    ], facts
+
+
 # --------------------------------------------------------------------------- driver
 
 
 def verify(
-    wheel: Path, tag: str, root: Path | None = None, stage: Stage = RELEASE
+    wheel: Path,
+    tag: str,
+    root: Path | None = None,
+    stage: Stage = RELEASE,
+    sdist: Path | None = None,
 ) -> Report:
     """Run every check over `wheel` against the tag and the tree. Never raises.
 
     `stage` defaults to `RELEASE`, so a caller that does not think about it gets
     the strict reading. Only `changelog-entry` reads it; see `Stage`.
+
+    `sdist` adds the two tarball checks when given. The API leaves it optional
+    because the checks are pure functions over what they are handed; the CLI is
+    where a release-stage run is refused without one, since that is the only
+    caller that can be about to publish.
     """
     tree = SourceTree(ROOT if root is None else root)
     try:
@@ -1354,12 +1567,19 @@ def verify(
         _check_console_scripts(tree, facts),
         _check_migration_coherence(tree, stamps, pragma_users),
     ]
+    sdist_facts: SdistFacts | None = None
+    if sdist is not None:
+        sdist_checks, sdist_facts = _sdist_checks(tree, sdist)
+        checks.extend(sdist_checks)
     evidence = _empty_evidence()
     evidence.update(
         {
             "tag": tag,
             "stage": stage,
             "version": version,
+            "sdist": None if sdist is None else str(sdist),
+            "sdist_member_count": None if sdist_facts is None else len(sdist_facts.members),
+            "sdist_exclusions": declared_sdist_exclusions(tree),
             "pyproject_version": declared_version(tree),
             "init_version": dunder_version(tree),
             "wheel_version": (metadata_headers(facts.metadata).get("Version") or [None])[0],
@@ -1392,6 +1612,9 @@ def _empty_evidence() -> dict[str, Any]:
         "tag": "",
         "stage": "",
         "version": "",
+        "sdist": None,
+        "sdist_member_count": None,
+        "sdist_exclusions": [],
         "pyproject_version": None,
         "init_version": None,
         "wheel_version": None,
@@ -1443,6 +1666,15 @@ def main(argv: list[str] | None = None) -> int:
         "belong. A release workflow must never pass this flag.",
     )
     parser.add_argument(
+        "--sdist",
+        type=Path,
+        default=None,
+        help="Path to the built .tar.gz to validate against the sdist exclusions "
+        f"`pyproject.toml` declares. Required at the `{RELEASE}` stage: the tarball is "
+        "the artifact that carried operator-private notes for seven releases, and a "
+        "release run that does not read it cannot say the release is clean.",
+    )
+    parser.add_argument(
         "--json",
         dest="as_json",
         action="store_true",
@@ -1459,8 +1691,15 @@ def main(argv: list[str] | None = None) -> int:
             "Before tagging, pass the tag you are about to cut - that is the point at "
             "which a mismatch is still fixable."
         )
+    if args.stage == RELEASE and args.sdist is None:
+        parser.error(
+            "no sdist to validate: pass --sdist dist/swe_mux-<version>.tar.gz. A release-stage "
+            "run publishes the tarball too, and the tarball is where private notes shipped "
+            "unnoticed for seven releases, so a run that never reads it would report a pass "
+            f"it did not earn. `--stage {DEVELOPMENT}` is the run that may omit it."
+        )
 
-    report = verify(args.wheel, tag, stage=args.stage)
+    report = verify(args.wheel, tag, stage=args.stage, sdist=args.sdist)
     if args.as_json:
         print(json.dumps(asdict(report), indent=2, sort_keys=True))
     else:

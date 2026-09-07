@@ -406,6 +406,22 @@ artifacts = [
   "!src/swe_mux/static/**/*.gz",
   "src/swe_mux/assets/**",
 ]
+# Nothing operator-private ships in a public tarball, and this list is the
+# declaration the release gate checks the built sdist against
+# (`verify_release_unit._check_sdist_contents`, run with `--sdist` in
+# `release.yml`). Every sdist from 0.1.0 to 0.2.7 carried `.docs/marketing/` -
+# the launch drafts, the outreach tracker with third-party contacts, the GTM
+# plan - because hatchling packs the whole checkout and nothing looked.
+# `.private/` is gitignored and hatchling honours that, but a gitignore rule is
+# not a packaging contract: it is one `git add -f` or one edited `.gitignore`
+# away from silence, and this entry holds either way. `.docs/marketing/` stays
+# listed after its move so a recreated directory is refused rather than shipped.
+# Only the `<dir>/**` shape belongs here, because it is the only shape the
+# checker verifies; it refuses any other rather than guessing what it means.
+exclude = [
+  ".private/**",
+  ".docs/marketing/**",
+]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

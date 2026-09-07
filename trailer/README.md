@@ -1,7 +1,7 @@
 # swe-mux trailers
 
 The current website uses the interactive browser demo and feature captures from `frontend/scripts/export-showcase.mjs`.
-Read `site/DEMO.md` and `.docs/marketing/MEDIA.md` for the current workflow.
+Read `site/DEMO.md`, and the operator-private media plan in `.private/marketing/MEDIA.md`, for the current workflow.
 It is headless, uses an ephemeral static server, and never touches the live daemon.
 The recording methods documented in this file are historical; their live footage is not cleared for publication.
 

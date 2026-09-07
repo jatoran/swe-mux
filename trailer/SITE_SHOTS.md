@@ -1,7 +1,7 @@
 # The site screenshots, and the environment they are taken in
 
 Historical brief.
-Current website feature media come from the browser demo; see `site/DEMO.md` and `.docs/marketing/MEDIA.md`.
+Current website feature media come from the browser demo; see `site/DEMO.md` and the operator-private media plan in `.private/marketing/MEDIA.md`.
 
 `site/img/` holds the nine screenshot slots `swemux.dev` owns.
 This document is how they are re-recorded after a UI change, and why the environment they are recorded in exists.

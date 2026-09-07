@@ -4014,7 +4014,8 @@ Fix one positioning line and use it verbatim everywhere.
   Vibe Kanban, Conductor, omnara) and state the differentiation - session-preserving
   supervisor, phone and voice control, the land queue, provenance - in the launch material
   rather than leaving readers to infer it.
-- [ ] Work the full venue checklist; every item has a draft in `.docs/marketing/`:
+- [ ] Work the full venue checklist; every item has a draft in `.private/marketing/`
+  (operator-private since 2026-09-07; primary checkout only):
   - Blog (swemux.dev/blog, cross-posted to dev.to and Hashnode): the launch post, the
     session-preserving-runtime story, the land queue, status detection, phone-and-voice
     fleet control, and serverless update propagation - staggered weekly, not dumped.

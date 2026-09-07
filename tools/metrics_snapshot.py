@@ -7,8 +7,9 @@
 
 swe-mux has no telemetry, so nothing here asks a user anything. Every number below is
 either published by somebody else about their own infrastructure (PyPI, GitHub) or is a
-count of requests that already arrive at this project's website. `.docs/marketing/
-GTM_ROADMAP.md` § Metrics is where they are interpreted; this file only collects them.
+count of requests that already arrive at this project's website. `.private/marketing/
+GTM_ROADMAP.md` § Metrics (operator-private, beside the database this writes) is where
+they are interpreted; this file only collects them.
 
 **Why a local database rather than four dashboards.** Each source forgets, and each one
 forgets differently. GitHub's traffic API is a **14-day rolling window** - a fortnight

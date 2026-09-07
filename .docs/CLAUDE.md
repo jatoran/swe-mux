@@ -394,7 +394,8 @@
   what makes relicensing the core impossible later, and it is deliberate.
 - Changing what swemux.dev measures, or anything in the adoption-metrics path:
   `site/content/privacy.html` (then rebuild `site/`), `worker/index.js`, `wrangler.jsonc`,
-  `tools/metrics_snapshot.py`, `marketing/GTM_ROADMAP.md` § Metrics, `SECURITY.md`.
+  `tools/metrics_snapshot.py`, `.private/marketing/GTM_ROADMAP.md` § Metrics (operator-private,
+  primary checkout only), `SECURITY.md`.
   The rule the split exists to enforce: **the privacy page is a promise the build keeps,
   not prose beside the code.** The site counts exactly one path (`/version.json`, the daily
   update check) and the data point's whole schema is a constant label plus an HTTP status -
@@ -842,7 +843,10 @@
   harness is the way off.
 - Changing public-site recordings, video playback, or roadmap claims: `site/README.md`, `site/DEMO.md`, `site/ROADMAP_AUDIT.md`; range delivery lives in `worker/media.mjs` and is covered by `tests/test_site_video_ranges.py`.
 - Changing launch marketing material - blog/post drafts, the positioning line, or the venue
-  checklist: `marketing/README.md` (index + rules) and `development/ROADMAP.md` Phase 11.
+  checklist: `.private/marketing/README.md` (index + rules) and `development/ROADMAP.md`
+  Phase 11. That directory is operator-private and gitignored since 2026-09-07: it exists only
+  in the primary checkout, never in a worktree, a clone, or an sdist, and `pyproject.toml`
+  declares the sdist exclusion that `verify_release_unit.py --sdist` checks a release against.
   The rule the drafts carry: every claim must be true of the shipped artifact on the day it
   posts, `[verify]` markers are re-measured before publishing, and the positioning line is
   one string used verbatim everywhere.

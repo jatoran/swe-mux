@@ -69,7 +69,7 @@ Full architecture and capture contracts: [DEMO.md](DEMO.md).
 - Use “agent CLI” in introductory prose; technical documents may use “harness.”
 - No em dashes, hype vocabulary, jokes or stock motivational copy.
 
-The claim matrix and channel drafts are in `../.docs/marketing/`.
+The claim matrix and channel drafts are operator-private, in `../.private/marketing/` (gitignored; primary checkout only).
 The operational copy checklist is [tools/COPY_CHECKLIST.md](tools/COPY_CHECKLIST.md).
 
 ## Visuals and media
