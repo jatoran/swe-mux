@@ -95,6 +95,12 @@ const SOURCE_TEXT_TESTS: Readonly<Record<string, readonly Reason[]>> = {
   'desktopShell.test.ts': ['composition-root', 'negative-invariant', 'component-jsx', 'stylesheet'],
   'drawerSegments.test.ts': ['composition-root', 'component-jsx', 'stylesheet'],
   'drawerTabs.test.ts': ['composition-root', 'component-jsx', 'stylesheet'],
+  //: `composition-root` because the empty stage is inline in `App.tsx` and the assertion is
+  //: about its wiring to the Run menu - the same `toggleRunMenu` every other trigger calls,
+  //: with its own trigger id - and mounting `App` needs a daemon. `stylesheet` for the rule
+  //: that has to out-rank the generic `.empty-stage button` one, or the accent control the
+  //: comment promises renders as a grey 34px button.
+  'emptyStage.test.ts': ['composition-root', 'stylesheet'],
   'findings.test.ts': ['composition-root', 'component-jsx'],
   'grants.test.ts': ['component-jsx', 'cross-language-contract'],
   //: `registry` because a feature doc is read as the list of what a help topic says - the

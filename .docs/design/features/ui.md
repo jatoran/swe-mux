@@ -221,6 +221,9 @@ responsive controls.
   Desktop pane tab rails end with `+`, which focuses that pane and opens the same Run menu as the active-Project header.
   The header Run is styled as an accent chip rather than a faint label, and because it has no room in the 40 px collapsed header column, the collapsed rail carries an equivalent `▶` button.
   Mobile omits the pane `+`; its toolbar Run is the same surface.
+  **The empty workspace stage carries its own Run trigger**, a `▶ Run shell or session` button under its copy on desktop and mobile alike, front and centre because that stage is the biggest thing on screen exactly when the person on it has not yet found the header chip or a pane `+`.
+  It opens the same Run menu as every other trigger rather than a backend shortcut, is drawn only while a Project is active (nothing to run in otherwise), and reports its own open state by trigger id so the header chip's open menu never reads as its own.
+  Before it, the only control attached to that region was a right-click menu, invisible and unreachable on touch (`../../development/USABILITY_AUDIT_2026-08-20.md`, finding 8).
 - `projects` opens the viewport-level Projects manager, which lists configured visible and
   hidden Projects. A Project must exist before terminal actions are enabled.
   It is reachable from two places on purpose: the sidebar's `PROJECTS` header, beside the
@@ -411,7 +414,7 @@ Its rules, and what each one is defending:
   header, beside the tree they act on. Per-Project actions — Project settings, files, notes, and
   Project-scoped Fleet Queue approval rows — live on the Project itself: right-click a
   sidebar row, or tap the Project title in the mobile top bar (both open the same menu).
-- Starting work is the Run menu's job alone (active-Project header, desktop pane tab rails, every Project row, mobile rail).
+- Starting work is the Run menu's job alone (active-Project header, desktop pane tab rails, every Project row, mobile rail, and the empty workspace stage's own button).
   Neither the app menu nor the Project context menu carries "New terminal": Run already
   offers the same backends plus the Project's imported tasks, and a second door only split the
   affordance.

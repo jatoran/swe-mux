@@ -7944,13 +7944,35 @@ export function App() {
       <button role="tab" aria-label={`${label} ${leaf.kind} tab`} title={label} aria-selected={selected} class={`tab-main ${selected?'active':''} ${session?.state||''}`} onClick={()=>{if(suppressDragClickRef.current===`mobiletab:${leaf.id}`){suppressDragClickRef.current=null;return}if(mobileTabHeldRef.current){mobileTabHeldRef.current=false;return}activateMobileTab(leaf)}} onPointerDown={event=>{mobileTabHeldRef.current=false;beginMobileTabDrag(event,leaf,label,openMobileTabMenu)}} onContextMenu={event=>{event.preventDefault();event.stopPropagation()}}>{glyph}{visibleLabel}</button>
     </div>
   }
+  // The empty stage, shared by the desktop pane tree and the mobile projection. It names
+  // four ways to begin and hands over the one it can: a Run trigger, front and centre. It is
+  // the Run menu rather than a backend shortcut for the same reason the pane `+` is
+  // (`workspace-layout.md`) - one launcher surface - and it is the biggest thing on screen
+  // precisely when the person looking at it has not yet found the header chip or a pane `+`;
+  // before it, the only control attached to this region was a right-click menu, invisible and
+  // unreachable on touch. No active Project means nothing to run in, so the button goes with it.
+  const EMPTY_STAGE_RUN_TRIGGER='empty-workspace'
+  const emptyStage=(className:string)=><div class={className}>
+    <div class="hero-terminal" aria-hidden="true">&gt;_</div>
+    <h1>Your Project workspace.</h1>
+    <p>Run a terminal, or open a note, a file, or a preview to begin. Files and notes live in the side panel.</p>
+    {activeProject&&<button
+      type="button"
+      class="empty-stage-run"
+      aria-haspopup="menu"
+      aria-expanded={runMenu?.project.id===activeProject.id&&runMenu?.trigger===EMPTY_STAGE_RUN_TRIGGER}
+      aria-label={`Run shell or session in ${activeProject.name}`}
+      title={`Run in ${activeProject.name}`}
+      onClick={event=>toggleRunMenu(activeProject,event.currentTarget,EMPTY_STAGE_RUN_TRIGGER)}
+    >▶ Run shell or session</button>}
+  </div>
   // Mobile intentionally has no pane Run trigger, so an empty projection would render a
   // bare strip; drop the row entirely and let the empty stage own the section.
   const mobileUnifiedWorkspace=<section data-tutorial="workspace-pane" class={`pane-stack mobile-unified-workspace ${mobileProjection.tabs.length?'':'no-tabs'}`}>
     {mobileProjection.tabs.length>0&&<OverflowRail className="stack-tabs mobile-unified-tabs" wrapperClassName="stack-tabs-rail" activeKey={mobileProjection.selected?.id} stripProps={{'data-tutorial':'tab-strip',role:'tablist','aria-label':'All Project tabs'}}>
       {mobileProjection.tabs.map(mobileTab)}
     </OverflowRail>}
-    <div class="stack-active mobile-unified-active">{mobileProjection.selected?renderPaneNode(mobileProjection.selected,'mobile',true):<div class="empty-stage"><div class="hero-terminal" aria-hidden="true">&gt;_</div><h1>Your Project workspace.</h1><p>Run a terminal, or open a note, a file, or a preview to begin. Files and notes live in the side panel.</p></div>}</div>
+    <div class="stack-active mobile-unified-active">{mobileProjection.selected?renderPaneNode(mobileProjection.selected,'mobile',true):emptyStage('empty-stage')}</div>
   </section>
 
   // Where the keyboard cursor is, over the rows the filter left drawn in sidebar order.
@@ -8498,7 +8520,7 @@ export function App() {
         <div class="project-workspace unified-workspace">
           <div class="terminal-workspace">
             {mobileWorkspace?mobileUnifiedWorkspace:(activeLayout.root||focusedOutsideLayout) ? <div class="pane-tree">{renderPaneNode(zoomedId ? stackForView(activeLayout,zoomedId)||activeLayout.root! : focusedOutsideLayout&&activeId ? paneStack([terminalLeaf(activeId)],activeId) : activeLayout.root!)}</div> : <div class="pane-tree"><section data-tutorial="workspace-pane" class="pane-stack empty-workspace-pane">
-              <div class="stack-active empty-stage"><div class="hero-terminal" aria-hidden="true">&gt;_</div><h1>Your Project workspace.</h1><p>Run a terminal, or open a note, a file, or a preview to begin. Files and notes live in the side panel.</p></div>
+              {emptyStage('stack-active empty-stage')}
             </section></div>}
           </div>
         </div>

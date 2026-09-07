@@ -55,6 +55,9 @@ PaneLeaf = terminal | note | preview | history | queue
   seeding a pane with are Notes and Files, and both are now one click away in the
   utility drawer, so a seeded pane would cost pixels and a layout write to show what a panel
   already shows.
+  The stage does carry one control, a `▶ Run shell or session` button that opens the Project
+  Run menu (`ui.md` § Run), so the region that names four ways to begin hands over the one it
+  can rather than leaving a right-click menu as its only affordance.
 - New terminals and resources join the focused pane by default; explicit directional actions
   create a split left/right/above/below.
 - **A session the daemon started joins the tab layout on its own, the moment a client learns of
@@ -162,7 +165,7 @@ PaneLeaf = terminal | note | preview | history | queue
   RGB points that vanish on a phone screen in daylight and is easy to miss on desktop too. The
   active fill is published as `--tab-active-bg` so the close button's fade overlay tracks the
   same colour instead of blending toward a background the tab no longer uses.
-- The Project Run menu is the single launcher behind the desktop pane `+`, desktop top bar, collapsed-rail `▶`, mobile toolbar, and sidebar Project row.
+- The Project Run menu is the single launcher behind the desktop pane `+`, desktop top bar, collapsed-rail `▶`, mobile toolbar, sidebar Project row, and the empty stage's own button.
   The pane `+` is a menu trigger rather than a backend shortcut; an unsplit launch lands as a tab in the pane it focused.
   Explicit placement is **drag or the command palette**; no context menu
   carries it (see `ui.md` § context menus). A tab strip with nothing in it is not rendered,

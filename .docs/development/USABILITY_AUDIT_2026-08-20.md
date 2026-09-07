@@ -456,7 +456,7 @@ Each of these is a bounded change with no design question outstanding.
 4. Rewrite the `feature-menu` tour paragraph to match the current app menu. Finding 7.
 5. Correct the four stale side-panel tab counts in `design/features/ui.md`. Finding 7.
 6. Register `tutorial.start` as a command so the tour is in the palette, bindable, and speakable. Finding 5.
-7. Put a Run trigger inside the empty workspace stage. Finding 8.
+7. Put a Run trigger inside the empty workspace stage. Finding 8. Shipped 2026-09-07: a `▶ Run shell or session` button under the stage's copy, on desktop and mobile, opening the same Run menu as every other trigger (`design/features/ui.md` § Run).
 8. Rename `Collapse utility drawer` to `Collapse side panel`. Finding 12.
 9. Default side-panel tabs to titles on the mobile layout. Finding 11.
 10. Add a `harnesses.enable` setting target and a gate notice in Run's `NEW SESSION` section. Finding 4, hand off.
