@@ -2560,7 +2560,12 @@ The app-wide answer to "what is this", and the recovery path for the tour.
   **Processes is the one tab hidden by default** (`DEFAULT_HIDDEN_DRAWER_TABS`).
   It is not made redundant by the Resources dialog that also draws its surface - a modal covers the terminal, and this tab exists to answer "what is *this* session running" beside it, with the focused session pinned first - but that is asked rarely enough not to spend a permanent rail slot on for someone who has not asked for it.
   The default applies only to a browser with no stored visibility choice at all; an explicitly emptied set is a choice and stays empty.
-  **Alerts is deliberately not hidden**: it is the only tab that draws an unread badge, so hiding it would remove the one glanceable "something needs you" signal from the rail.
+  **Alerts is deliberately not hidden**: its badge is the one that means "something needs you", so hiding it would remove the one glanceable signal of that kind from the rail.
+  **Two tabs badge, and they mean different things** (`drawerTabBadge` in `frontend/src/drawerTabs.ts`, the one rule both the drawer's strips and the collapsed launcher draw from).
+  Alerts counts unread attention items and is amber at the button's head.
+  Queue counts the messages pending for the **focused session** - the number its body draws when opened, never the fleet total, which labels the `fleet` control inside the tab - and sits at the button's foot in the accent colour, because a staged message is not an alert and the two counts must not read as one kind of thing.
+  The foot is the session-scope dot's corner; the badge hides the dot rather than letting it peek out, since a count of what the focused session has staged already says the tab is session-scoped.
+  Both badges cap at `99+`, carry their count into the button's accessible name and tooltip, and draw nothing at zero - a badge is a claim that there is something.
   **The default is tier-shaped** (`defaultHiddenDrawerTabs`, the sanctioned frontend reader of `experience_tier`): a pure-terminal install additionally puts away Queue, Transcript, Activity, Agent, and Schedule - machinery for the agent layer that tier switched off - leaving Notes, Files, Actions, Git, and Alerts; a deterministic install additionally puts away Activity, whose findings and timeline are fed by the model-backed layer that tier keeps off.
   Presentation only, under the same consultation rule: a device with no stored choice re-derives on every config arrival (so applying a tier in Settings takes effect live), and a stored choice is never overwritten (`first-run.md`).
 
@@ -3041,8 +3046,8 @@ The app-wide answer to "what is this", and the recovery path for the tour.
   The rail's width stays reserved in both states and is handed to the drawer on open, so the
   Project workspace is exactly as wide either way and opening the drawer sends no larger reflow to
   the PTYs than it did when the rail stayed put.
-  What the rail uniquely provides — discoverability without a menu or a chord, and the Alerts unread
-  badge — only matters while the drawer is closed, which is precisely when it is drawn.
+  What the rail uniquely provides — discoverability without a menu or a chord, and the Alerts and
+  Queue badges — only matters while the drawer is closed, which is precisely when it is drawn.
   The cost is a split drawer, where the rail was the one place all eleven tabs appeared together and
   each pane strip shows only its own subset. The per-tab palette commands, their voice phrases, and
   pane tab cycling all still reach any tab, and a rail that appears and disappears with split

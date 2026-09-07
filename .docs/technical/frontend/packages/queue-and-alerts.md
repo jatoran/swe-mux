@@ -46,7 +46,8 @@ It delivers nothing and owns no control; it reports install-wide auto-delivery s
 `queueApi.ts` owns typed clients, refusal-to-outcome mapping, head and pending selectors, deletion, and schedule and sender helpers.
 Its `fetchFleetQueue` calls `/api/queue/mailbox`, whose name predates the surface's.
 
-`App.tsx` owns Queue drawer and pop-out placement, `openFleetQueue`, `toggleAutoPaused` (the `autodelivery.pause` command that needs nothing open), fleet pending totals, and `mux:queue-changed` re-dispatch.
+`App.tsx` owns Queue drawer and pop-out placement, `openFleetQueue`, `toggleAutoPaused` (the `autodelivery.pause` command that needs nothing open), fleet pending totals, the focused session's depth for the Queue tab's rail badge, and `mux:queue-changed` re-dispatch.
+The badge itself is `drawerTabBadge` in `drawerTabs.ts` - one JSX-free rule for both badged tabs, called by the drawer's strips and the collapsed launcher - so the two rails cannot disagree on which tabs count, the `99+` cap, or that zero draws nothing.
 
 ## Scheduled runs
 

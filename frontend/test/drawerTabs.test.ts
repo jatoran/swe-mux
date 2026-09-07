@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import test from 'node:test'
 import {
+  DRAWER_BADGE_CAP,
   DRAWER_COLLAPSE_WIDTH,
   DRAWER_DEFAULT_WIDTH,
   DRAWER_MIN_WIDTH,
@@ -11,6 +12,7 @@ import {
   clampDrawerWidth,
   drawerMaximumWidth,
   drawerTab,
+  drawerTabBadge,
   isNavigatorTab,
   storedDrawerWidth,
 } from '../src/drawerTabs.ts'
@@ -109,6 +111,60 @@ test('headered bodies keep compact headings while content-first bodies start wit
   assert.ok(host.includes('<DrawerSegmentControl'))
   assert.match(css, /\.drawer-panel-title\{[^}]*border:[^}]*background:/)
   assert.ok(css.includes('padding-left:calc(var(--drawer-panel-title-width) + 13px)'), 'existing top chrome must make room for the heading')
+})
+
+test('the Queue tab badges the focused session\'s pending count and nothing at zero', () => {
+  // The tab is session-scoped, so its badge is the number its body draws when opened.
+  assert.deepEqual(drawerTabBadge('queue', { unread: 0, queueDepth: 3 }), { text: '3', label: '3 queued messages' })
+  assert.deepEqual(drawerTabBadge('queue', { unread: 0, queueDepth: 1 }), { text: '1', label: '1 queued message' })
+  // An empty queue is not a claim that there is something; it draws nothing, not `0`.
+  assert.equal(drawerTabBadge('queue', { unread: 7, queueDepth: 0 }), null)
+  // No focused session, an ended target, or a daemon that has not answered yet all read
+  // as "nothing counted" - never as a badge.
+  assert.equal(drawerTabBadge('queue', { unread: 0, queueDepth: -1 }), null)
+  assert.equal(drawerTabBadge('queue', { unread: 0, queueDepth: Number.NaN }), null)
+  // A runaway count is capped so it cannot widen the button, but the label keeps the number.
+  const many = drawerTabBadge('queue', { unread: 0, queueDepth: DRAWER_BADGE_CAP + 151 })
+  assert.deepEqual(many, { text: `${DRAWER_BADGE_CAP}+`, label: `${DRAWER_BADGE_CAP + 151} queued messages` })
+  assert.equal(drawerTabBadge('queue', { unread: 0, queueDepth: DRAWER_BADGE_CAP })?.text, String(DRAWER_BADGE_CAP))
+})
+
+test('Alerts badges the unread count and no other tab badges at all', () => {
+  // Each badge reads its own count and never the other's: a queue depth may not badge
+  // Alerts, and an unread count may not badge Queue.
+  assert.deepEqual(drawerTabBadge('notifications', { unread: 2, queueDepth: 9 }), { text: '2', label: '2 unread alerts' })
+  assert.deepEqual(drawerTabBadge('notifications', { unread: 1, queueDepth: 9 }), { text: '1', label: '1 unread alert' })
+  assert.equal(drawerTabBadge('notifications', { unread: 0, queueDepth: 9 }), null)
+  for (const tab of DRAWER_TABS) {
+    if (tab.id === 'queue' || tab.id === 'notifications') continue
+    assert.equal(drawerTabBadge(tab.id, { unread: 5, queueDepth: 5 }), null, tab.id)
+  }
+})
+
+test('both rails draw their badges from one rule, and the Queue badge sits at the foot', () => {
+  const host = readFileSync(join(import.meta.dirname, '..', 'src', 'UtilityDrawer.tsx'), 'utf8')
+  const app = readFileSync(join(import.meta.dirname, '..', 'src', 'App.tsx'), 'utf8')
+  const css = readFileSync(join(import.meta.dirname, '..', 'src', 'style.css'), 'utf8')
+  // The drawer's strips and the collapsed launcher each call the shared rule rather than
+  // testing ids inline, so neither can badge a tab the other does not or cap differently.
+  assert.ok(host.includes('drawerTabBadge(id, { unread: props.unread, queueDepth: props.queueDepth })'))
+  assert.ok(app.includes('drawerTabBadge(tab.id,{unread:notificationUnread,queueDepth:focusedQueueDepth})'))
+  assert.doesNotMatch(host, /'99\+'/, 'the cap lives in drawerTabBadge, not in the strip')
+  assert.doesNotMatch(app, /notificationUnread>99/, 'the cap lives in drawerTabBadge, not in the launcher')
+  // The count on the badge is the focused session's, not the fleet total the `fleet`
+  // control inside the tab carries.
+  assert.ok(app.includes('const focusedQueueDepth=active?(rowQueueDepth[active.id]||0):0'))
+  assert.ok(app.includes('queueDepth={focusedQueueDepth}'))
+  assert.ok(app.includes('queuePending={queuePendingTotal}'), 'the fleet total still labels the way into the fleet queue')
+  // A screen reader hears the count through the button's name; the pill itself is decoration.
+  assert.ok(host.includes('${badge ? `, ${badge.label}` : \'\'}`}'))
+  assert.ok(app.includes('${badge?` ${badge.label}.`:\'\'}`}'))
+  assert.ok(host.includes('<i class={`drawer-badge ${id}-badge`} aria-hidden="true">{badge.text}</i>'))
+  assert.ok(app.includes('<i class={`drawer-badge ${tab.id}-badge`} aria-hidden="true">{badge.text}</i>'))
+  // Bottom-right, and not amber: a staged message is not an alert. The corner it takes is
+  // the session-scope dot's, which is hidden underneath rather than left to peek out.
+  assert.match(css, /\.drawer-badge\.queue-badge\{top:auto;bottom:-4px;[^}]*background:var\(--accent\)/)
+  assert.match(css, /\.drawer-tabs button:has\(>\.queue-badge\):before,\.utility-rail button:has\(>\.queue-badge\):before\{display:none\}/)
 })
 
 test('both tab-icon surfaces mark session scope without using notification badges', () => {

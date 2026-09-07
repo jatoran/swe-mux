@@ -156,6 +156,11 @@ separately opt-in.
   The pane header's `queue[:N]` chip focuses its named session before opening Queue, while `queue.open` and the rail open the focused session's queue.
   Queue has no application-wide or Project-wide mode.
   It live-updates from `mux:queue-changed`, re-dispatched from `queue_updated` and `queue_delivery` events.
+- **The Queue tab's rail button badges the focused session's pending count** (`drawerTabBadge`, `frontend/src/drawerTabs.ts`), on the drawer's tab strips and on the collapsed desktop launcher alike.
+  It counts `draft | armed | blocked | delivering` for the focused session from the same `GET /api/queue` summary the pane chips and sidebar rows read, refreshed off the same events, so every surface agrees on the number.
+  It is the focused session's count and not the fleet total because the tab is session-scoped: the number a badge promises has to be the number the tab shows when opened, and the fleet total already labels the `fleet` control inside it.
+  It draws nothing at zero, with no focused session, or while the daemon has not answered, caps at `99+`, and carries the count into the button's accessible name and tooltip.
+  It sits at the button's foot in the accent colour rather than beside the amber Alerts badge at the head, because a staged message is not an alert (`ui.md`, the utility drawer).
 - **The Queue tab states whether its target will take a message, and why not, continuously.**
   A strip under the header reads `deliverable`, `not deliverable — <reason>`, or `readiness unknown — <reason>`, and when it is not safe it also says what would clear it.
   It is permanently on screen rather than behind a disclosure because that is the question the pane is opened to decide, and the alternative is learning the answer by pressing Send and reading back the name of the check that fired.
@@ -344,10 +349,10 @@ newlines**. One message is unaccounted for entirely. The queue reported all seve
 - `frontend/src/queueApi.ts` - typed session-queue and fleet-queue clients plus refusal mapping.
 - `frontend/src/QueuePane.tsx` - session-scoped Queue in drawer-following and pinned-pop-out renderings, the install-wide auto-delivery brakes, and the control that opens the fleet queue.
 - `frontend/src/FleetQueue.tsx` - the fleet-wide modal: authorship and target filters, provenance rows, revocation.
-- `frontend/src/drawerTabs.ts` + `railIcons.tsx` - the `queue` drawer tab and its mark.
+- `frontend/src/drawerTabs.ts` + `railIcons.tsx` - the `queue` drawer tab, its mark, and `drawerTabBadge` (the focused session's pending count on the tab's rail button).
 - `frontend/src/UtilityDrawer.tsx` - drawer rendering and the Queue-to-fleet-queue handoff.
 - `frontend/src/SendToAgentPicker.tsx` - queue sender and confirm flow.
-- `frontend/src/App.tsx` - `deliverToAgent`, `openQueueForSession` versus `openQueueTab`, `openFleetQueue`, `toggleAutoPaused`, pane chip, fleet pending total, and event re-dispatch.
+- `frontend/src/App.tsx` - `deliverToAgent`, `openQueueForSession` versus `openQueueTab`, `openFleetQueue`, `toggleAutoPaused`, pane chip, fleet pending total, the focused session's depth for the tab badge, and event re-dispatch.
 - `frontend/src/layout.ts` - `queue` leaf kind.
 - Tests: `tests/test_prompt_queue.py`, `frontend/test/queueApi.test.ts`.
 

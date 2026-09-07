@@ -144,7 +144,7 @@ What crosses the boundary is one `data-rail-density` attribute on the root eleme
 - `UtilityDrawer.tsx` owns desktop recursion plus the flat mobile projection, tab long-press, and singleton body dispatch, delegating rail overflow mechanics to `OverflowRail`.
 - `UtilityDrawer.tsx` omits pane headings for Notes, Files, Actions, Git, Activity, and Agent, while preserving the header contract for Transcript, Schedule, Alerts, Queue, and Processes.
 - `DrawerViewTabs.tsx` owns the full-width secondary-rail markup, roving tab stop, arrow-key selection, and shared Actions-derived presentation.
-- `drawerTabs.ts` is the tab registry.
+- `drawerTabs.ts` is the tab registry, and `drawerTabBadge` in it is the one rule for which tabs badge a count (Alerts: unread items; Queue: the focused session's pending messages), how a count is capped, and that zero draws nothing; both rails call it rather than testing ids inline.
 - `drawerNotes.ts` remembers the selected Notes sub-tab per Project.
 - `noteTabs.ts` owns deterministic tab ordering, deletion fallback, and the per-Project note count behind the last-note delete guard.
 - Notes alone keeps one hidden inactive workspace, and Processes consumes App's fleet snapshot without another poll.

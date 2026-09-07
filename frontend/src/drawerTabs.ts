@@ -144,3 +144,49 @@ export function storedDrawerWidth(raw: string | null): number {
 export function drawerTab(id: DrawerTabId): DrawerTab {
   return DRAWER_TABS.find(tab => tab.id === id) || DRAWER_TABS[0]
 }
+
+/** The two counts a rail button may badge: unread attention items, and the number of
+ *  prompt-queue messages pending for the **focused** session. */
+export type DrawerTabCounts = {
+  unread: number
+  queueDepth: number
+}
+
+export type DrawerTabBadge = {
+  /** What the badge prints. Capped at `99+` so a runaway count cannot widen the button. */
+  text: string
+  /** What the number counts, for the button's accessible name and tooltip. */
+  label: string
+}
+
+/** Badges above this print `99+`: a 14px pill holds two digits legibly and no more. */
+export const DRAWER_BADGE_CAP = 99
+
+/**
+ * The count badge a tab's rail button draws, or `null` for none.
+ *
+ * Exactly two tabs badge, and both rails - the drawer's own strips and the collapsed
+ * desktop launcher - call this rather than testing ids inline, so the pair can never
+ * disagree about which tabs count, how a count is capped, or when a badge disappears.
+ *
+ * Alerts counts unread attention items: "something needs you", drawn amber. Queue counts
+ * the messages staged for the focused session - the number its body draws when opened.
+ * It is session-scoped like the tab (a fleet-wide total would badge a tab with a number
+ * that tab never shows; the fleet count labels the `fleet` control inside it instead), and
+ * it is not an alert, since the person reading it staged them. Zero draws nothing rather
+ * than `0`: a badge is a claim that there is something, and an empty queue is not.
+ */
+export function drawerTabBadge(id: DrawerTabId, counts: DrawerTabCounts): DrawerTabBadge | null {
+  if (id === 'notifications') return countBadge(counts.unread, 'unread alert')
+  if (id === 'queue') return countBadge(counts.queueDepth, 'queued message')
+  return null
+}
+
+function countBadge(count: number, noun: string): DrawerTabBadge | null {
+  if (!Number.isFinite(count) || count < 1) return null
+  const whole = Math.floor(count)
+  return {
+    text: whole > DRAWER_BADGE_CAP ? `${DRAWER_BADGE_CAP}+` : String(whole),
+    label: `${whole} ${noun}${whole === 1 ? '' : 's'}`,
+  }
+}

@@ -20,8 +20,9 @@ test('the shipped default hides Processes and nothing else', () => {
   // and this tab pins the focused session beside it - but it answers a question asked
   // rarely enough not to spend a rail slot on by default.
   assert.deepEqual([...DEFAULT_HIDDEN_DRAWER_TABS], ['processes'])
-  // Alerts is deliberately not hidden: it is the only tab that draws an unread badge, so
-  // hiding it would remove the one glanceable "something needs you" signal.
+  // Alerts is deliberately not hidden: its badge is the one that means "something needs
+  // you" (Queue's counts what the person staged), so hiding it would remove the one
+  // glanceable signal of that kind.
   assert.equal(DEFAULT_HIDDEN_DRAWER_TABS.includes('notifications'), false)
   // Every shipped default must name a registered tab, or it silently hides nothing.
   for (const id of DEFAULT_HIDDEN_DRAWER_TABS) assert.ok(every.includes(id), id)

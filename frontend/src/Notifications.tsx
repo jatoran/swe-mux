@@ -21,9 +21,9 @@
 // came with it, since it is a reading of this inbox rather than a fact about the pipeline
 // that fills it.
 //
-// Which is also why this tab is not hidden by default while Processes is. It is the only
-// drawer tab that draws an unread badge, and hiding the one surface that says something
-// needs you is the opposite of a simplification.
+// Which is also why this tab is not hidden by default while Processes is. Its badge is the
+// one that says something needs you (the Queue tab's counts messages the person staged
+// themselves), and hiding the one surface that says so is the opposite of a simplification.
 import { useEffect, useState } from 'preact/hooks'
 import { api } from './api'
 import { AttentionInbox } from './AttentionInbox'

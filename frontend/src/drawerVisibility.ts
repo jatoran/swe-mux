@@ -49,8 +49,9 @@ const known = (value: unknown): value is DrawerTabId =>
  * Processes is the one entry. It is not redundant with the Resources modal (a modal covers
  * the terminal; this tab pins the focused session beside it), but it answers a question
  * asked rarely enough not to spend a permanent rail slot on by default. Alerts is
- * deliberately *not* here: it is the only tab that draws an unread badge, and hiding the
- * one surface that says something needs you is the opposite of streamlining.
+ * deliberately *not* here: its badge is the one that says something needs you (the Queue
+ * tab's counts what the person staged themselves), and hiding the one surface that says so
+ * is the opposite of streamlining.
  */
 export const DEFAULT_HIDDEN_DRAWER_TABS: readonly DrawerTabId[] = ['processes']
 
@@ -65,7 +66,9 @@ export type ExperienceTierChoice = '' | 'terminal' | 'deterministic' | 'automati
  * terminal default keeps Actions, Files, Notes, Git, and Alerts - the surfaces a
  * terminal-first user still owns - and puts away Queue, Transcript, Activity,
  * Agent, Schedule, and Processes. Alerts stays for the reason
- * `DEFAULT_HIDDEN_DRAWER_TABS` records: it is the one tab with an unread badge.
+ * `DEFAULT_HIDDEN_DRAWER_TABS` records: it is the one tab whose badge means "something
+ * needs you" - Queue's badge goes away with the tab, since it counts the queue a
+ * terminal-first install does not use.
  *
  * The deterministic tier also puts Activity away: its findings and timeline are
  * fed by the model-backed layer that tier keeps off (automation, the scan

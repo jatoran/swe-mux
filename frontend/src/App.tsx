@@ -62,7 +62,7 @@ import {
   DRAWER_COLLAPSE_WIDTH, DRAWER_PROJECT_STATE_KEY, DRAWER_REOPEN_WIDTH,
   DRAWER_DEFAULT_WIDTH, DRAWER_MIN_WIDTH, DRAWER_TABS, DRAWER_TAB_KEY, DRAWER_WIDTH_KEY,
   clampDrawerWidth, drawerMaximumWidth,
-  drawerTab, storedDrawerWidth, type DrawerTabId,
+  drawerTab, drawerTabBadge, storedDrawerWidth, type DrawerTabId,
 } from './drawerTabs'
 import {
   DRAWER_LAYOUT_KEY, DRAWER_PROJECT_PRESENTATIONS_KEY, DRAWER_PROJECT_PRESENTATIONS_KEY_V2,
@@ -2711,6 +2711,10 @@ export function App() {
   },[])
 
   const active = sessions.find(session => session.id === activeId)
+  // The focused session's own pending count, for the Queue tab's rail badge. Per-session
+  // rather than `queuePendingTotal` because the tab is session-scoped: its body draws this
+  // session's queue, so a fleet total there would badge a number the tab never shows.
+  const focusedQueueDepth=active?(rowQueueDepth[active.id]||0):0
   const attention = sessions.filter(session => session.state === 'awaiting').length
   const activeProject = projects.find(project => project.id === projectId)
   const orderedProjects = [...projects].sort((a,b)=>a.position-b.position||a.name.localeCompare(b.name)||a.id.localeCompare(b.id))
@@ -8414,6 +8418,7 @@ export function App() {
         onOpenProjectSettings={id=>{const target=projects.find(item=>item.id===id);if(target)openProjectsManager({project:target})}}
         onOpenAutomationDashboard={()=>openAutomation('activity',activeProject?.id)}
         queuePending={queuePendingTotal}
+        queueDepth={focusedQueueDepth}
         onOpenFleetQueue={()=>openFleetQueue()}
         notesAllProjects={notesAllProjects}
         onNotesAllProjects={setNotesAllProjects}
@@ -8468,21 +8473,24 @@ export function App() {
             rendered while the drawer is closed, and a peek exists only while one is open. */}
         {drawerLauncherTabs.filter(tab=>drawerTabVisible(tab.id,{hidden:hiddenDrawerTabs,hasTranscript:hasHarnessTranscript(active?.backend)})).map(tab=>{
           const Icon=DRAWER_TAB_ICONS[tab.id]
+          // The same badge rule the open drawer's strips apply, and the same counts, so a
+          // tab reads the same number whether the drawer is open or collapsed.
+          const badge=drawerTabBadge(tab.id,{unread:notificationUnread,queueDepth:focusedQueueDepth})
           // No selected state to draw: the rail is only rendered while the drawer is closed,
           // so no tab it lists is showing anywhere.
           return <button
             key={tab.id}
             data-tutorial={tab.id==='notes'?'project-notes':undefined}
             data-scope={tab.scope}
-            aria-label={`${tab.title}${tab.scope==='session'?'. Session scoped.':''}`}
-            title={`${tab.title}${tab.scope==='session'?' - session scoped':''}`}
+            aria-label={`${tab.title}${tab.scope==='session'?'. Session scoped.':''}${badge?` ${badge.label}.`:''}`}
+            title={`${tab.title}${tab.scope==='session'?' - session scoped':''}${badge?` - ${badge.label}`:''}`}
             onContextMenu={event=>{
               event.preventDefault()
               event.stopPropagation()
               openDrawerDisplayMenu(event.clientX,event.clientY,'rail',tab.id)
             }}
             onClick={()=>showDrawerTab(tab.id)}
-          >{utilityRailDisplay==='title'?<span class="drawer-tab-title">{tab.label}</span>:<Icon/>}{tab.id==='notifications'&&notificationUnread>0&&<i class="drawer-badge">{notificationUnread>99?'99+':notificationUnread}</i>}</button>
+          >{utilityRailDisplay==='title'?<span class="drawer-tab-title">{tab.label}</span>:<Icon/>}{badge&&<i class={`drawer-badge ${tab.id}-badge`} aria-hidden="true">{badge.text}</i>}</button>
         })}
       </nav>}
 

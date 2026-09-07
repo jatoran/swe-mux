@@ -4444,6 +4444,13 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .utility-rail button svg{width:16px;height:16px;display:block}
 .utility-rail button:hover,.utility-rail button:focus-visible{border-color:var(--accent);color:var(--text)}
 .drawer-badge{position:absolute;top:-4px;right:-4px;min-width:14px;height:14px;padding:0 3px;display:grid;place-items:center;border-radius:7px;background:var(--amber);color:#12140c;font:600 8px 'Cascadia Mono',Consolas,monospace;font-style:normal}
+/* Pending work is not an alert: the amber badge means "unread", this one means "staged". It
+   hangs off the button's foot rather than its head so the two counts can never be read as one
+   kind of thing, and it takes over the corner the session-scope dot sits in - the dot is hidden
+   underneath rather than left to peek out, since a count of what the focused session has staged
+   already says the tab is session-scoped. */
+.drawer-badge.queue-badge{top:auto;bottom:-4px;background:var(--accent);color:var(--bg)}
+.drawer-tabs button:has(>.queue-badge):before,.utility-rail button:has(>.queue-badge):before{display:none}
 .drawer-tabs-rail{--overflow-rail-bg:var(--panel2);--overflow-rail-accent:var(--accent);flex:none}
 .drawer-tabs{width:100%;flex:1 1 auto;min-width:0;display:flex;flex-wrap:nowrap;align-items:stretch;overflow-x:auto;scrollbar-width:none;overscroll-behavior-x:contain;touch-action:pan-x;-webkit-overflow-scrolling:touch}
 .drawer-tabs-rail.overflow-rail-touch-drag{touch-action:none}

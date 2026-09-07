@@ -14,7 +14,7 @@ import { ProjectResource, type FileOpenIntent } from './ProjectResource'
 import { DrawerFilesRail } from './DrawerFilesRail'
 import type { DrawerFileState } from './drawerFiles'
 import { NotificationsTab, type NotificationData } from './Notifications'
-import { drawerTab, type DrawerTabId } from './drawerTabs'
+import { drawerTab, drawerTabBadge, type DrawerTabId } from './drawerTabs'
 import {
   drawerTabs, setDrawerSplitRatio,
   type DrawerLayout, type DrawerNode, type DrawerProjectPresentation, type DrawerStack,
@@ -203,6 +203,10 @@ type Props = {
    *  purpose — it answers "is anything waiting anywhere", which is the question you have
    *  while looking at some other session, and it labels the way to go find out. */
   queuePending: number
+  /** Queue: pending items for the focused session alone - the count the tab's rail badge
+   *  draws, because that is the queue the tab opens onto. Zero, or no focused session,
+   *  draws no badge (`drawerTabBadge`). */
+  queueDepth: number
   /** `tts_enabled`. The Transcript tab draws its per-message read-aloud markers only
    *  while it is on: a per-item surface repeated once per reply carries no gate of its
    *  own, and the one gate for the master switch lives in the voice panel's `tts` tab
@@ -672,6 +676,10 @@ export function UtilityDrawer(props: Props) {
   >
     {visibleDrawerTabs(stack.tabs, visibility).map((id, index, visibleTabs) => {
       const item = drawerTab(id)
+      // The badge's count rides the accessible name and the tooltip rather than the
+      // `<i>` itself: `aria-label` on the button already replaces its content, so a
+      // count left only in the pill is a count a screen reader never hears.
+      const badge = drawerTabBadge(id, { unread: props.unread, queueDepth: props.queueDepth })
       return <button
         id={tabDomId(stack.id, id)}
         key={id}
@@ -686,10 +694,10 @@ export function UtilityDrawer(props: Props) {
         data-scope={item.scope}
         aria-controls={panelDomId(stack.id)}
         aria-selected={id === selected}
-        aria-label={`${item.label}${item.scope === 'session' ? ', session scoped' : ''}`}
+        aria-label={`${item.label}${item.scope === 'session' ? ', session scoped' : ''}${badge ? `, ${badge.label}` : ''}`}
         tabIndex={id === selected ? 0 : -1}
         class={`${id === selected ? 'active' : ''} ${props.draggingTab === id ? 'dragging' : ''}`}
-        title={`${item.title}${item.scope === 'session' ? ' - session scoped' : ''}${id === selected && !props.transientTab ? ' - click again to collapse' : ''}${projection ? '' : ' - drag to rearrange or split'}`}
+        title={`${item.title}${item.scope === 'session' ? ' - session scoped' : ''}${badge ? ` - ${badge.label}` : ''}${id === selected && !props.transientTab ? ' - click again to collapse' : ''}${projection ? '' : ' - drag to rearrange or split'}`}
         onPointerDown={projection
           ? event => { beginTabLongPress(event, id); props.onProjectionTabReorder?.(event, id) }
           : event => props.onTabDragStart(event, id)}
@@ -712,7 +720,7 @@ export function UtilityDrawer(props: Props) {
         }}
       >
         {renderTabMark(id)}
-        {id === 'notifications' && props.unread > 0 && <i class="drawer-badge">{props.unread > 99 ? '99+' : props.unread}</i>}
+        {badge && <i class={`drawer-badge ${id}-badge`} aria-hidden="true">{badge.text}</i>}
       </button>
     })}
   </OverflowRail>
