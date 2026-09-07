@@ -485,11 +485,18 @@ def test_drawer_tabs_support_icon_and_title_modes_from_one_registry() -> None:
 
     # Icon-only means the accessible name can no longer come from visible text. Session tabs
     # also name the scope represented by their lower-right dot; Project/app tabs stay unchanged.
+    # A badged tab (Alerts, Queue) names its count too: `aria-label` replaces the button's
+    # content, so a count left only in the pill is one a screen reader never hears.
     assert (
-        "aria-label={`${item.label}${item.scope === 'session' ? ', session scoped' : ''}`}"
+        "aria-label={`${item.label}${item.scope === 'session' ? ', session scoped' : ''}"
+        "${badge ? `, ${badge.label}` : ''}`}"
         in drawer
     )
-    assert "aria-label={`${tab.title}${tab.scope==='session'?'. Session scoped.':''}`}" in app
+    assert (
+        "aria-label={`${tab.title}${tab.scope==='session'?'. Session scoped.':''}"
+        "${badge?` ${badge.label}.`:''}`}"
+        in app
+    )
     assert '.drawer-tabs button[data-scope="session"]:before' in css
     assert '.utility-rail button[data-scope="session"]:before' in css
     assert "width:3px;height:3px" in css
