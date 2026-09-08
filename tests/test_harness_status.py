@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import os
 import shlex
+import subprocess
 import sys
 from collections import deque
 from pathlib import Path
@@ -911,6 +912,47 @@ def test_the_delegate_runs_under_a_real_shell_with_the_snapshot_on_stdin() -> No
     assert report["exit_code"] == 0
     assert report["error"] is None
     assert isinstance(report["elapsed_ms"], int)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows console allocation regression")
+def test_delegate_from_consoleless_parent_has_no_window_and_forwards_stdin() -> None:
+    # A GUI hook helper has no console to inherit. CREATE_NO_WINDOW on the
+    # parent would mask the bug by supplying a windowless console, so detach it.
+    probe = """
+import ctypes
+import json
+import sys
+kernel = ctypes.WinDLL("kernel32")
+kernel.GetConsoleWindow.restype = ctypes.c_void_p
+print(json.dumps({"window": kernel.GetConsoleWindow(), "stdin": sys.stdin.buffer.read().hex()}))
+"""
+    payload = '{"model":"test", "text":"caf\u00e9"}\n'.encode()
+    relay = f"""
+import ctypes
+import json
+import sys
+from swe_mux import hook_client
+kernel = ctypes.WinDLL("kernel32")
+kernel.GetConsoleWindow.restype = ctypes.c_void_p
+kernel.FreeConsole()
+parent_window = kernel.GetConsoleWindow()
+hook_client._status_shell = lambda command: [sys.executable, "-c", {probe!r}]
+output, report = hook_client._run_delegate("probe", {payload!r})
+print(json.dumps({{"parent_window": parent_window,
+                  "child": json.loads(output), "report": report}}))
+"""
+    completed = subprocess.run(
+        [sys.executable, "-c", relay],
+        capture_output=True,
+        timeout=20,
+        check=True,
+        creationflags=subprocess.DETACHED_PROCESS,
+    )
+    result = json.loads(completed.stdout)
+    assert result["parent_window"] is None
+    assert result["child"] == {"window": None, "stdin": payload.hex()}
+    assert result["report"]["ok"] is True
+    assert result["report"]["exit_code"] == 0
 
 
 def test_a_delegate_that_fails_reports_its_exit_and_stderr_tail() -> None:

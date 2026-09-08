@@ -228,6 +228,9 @@ def _run_delegate(command: str, stdin: bytes) -> tuple[bytes, dict[str, object]]
             capture_output=True,
             timeout=_STATUS_DELEGATE_TIMEOUT,
             check=False,
+            # The frozen GUI hook helper has no console to pass to its shell.
+            # Redirecting stdio alone still creates a visible window per refresh.
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
     except subprocess.TimeoutExpired:
         report["error"] = f"timed out after {_STATUS_DELEGATE_TIMEOUT:g}s"

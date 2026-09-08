@@ -68,6 +68,8 @@ The tee therefore delegates.
   The user's `padding`, `refreshInterval`, and `hideVimModeIndicator` are copied onto the replacement, so the only thing that changes about their status line is who runs it.
 - `hook_client Status` reads the snapshot from stdin, runs the delegate under the shell Claude would use (Git Bash or PowerShell on Windows, `/bin/sh` elsewhere) with the same bytes on stdin, writes the delegate's stdout back unchanged, and only then posts the snapshot to the hook ingress in a single short-budget attempt with no retry and no spool.
   The terminal never waits on the daemon, and a missed snapshot is superseded by the next message.
+  On Windows the delegate shell is created with `CREATE_NO_WINDOW`: the frozen GUI hook helper has no console to inherit, and redirected stdio alone would create a visible console at every status refresh, including refreshes during tool execution.
+  The flag is applied at the delegate launch, independently of the session's ConPTY, and leaves status output and diagnostics intact.
 - The tee is written only when a delegate exists.
   Configuring a status line where the user had none changes their terminal, because Claude hides most of the footer's keyboard hints once any custom status line is set, and swe-mux must not make that choice for them.
 
