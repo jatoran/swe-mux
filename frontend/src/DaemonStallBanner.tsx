@@ -3,26 +3,8 @@ import {
   DAEMON_STALL_HEADING, DAEMON_STALL_PROMISE, daemonStallText, stallSeconds, useDaemonLiveness,
 } from './daemonLiveness'
 
-/**
- * App-level strip saying the daemon has stopped answering.
- *
- * It sits in the shell's banner row beside `UpdateBanner` and the UI-build
- * strip, which is what makes it non-blocking by construction: a row of chrome
- * that never covers a terminal, opens no dialog, and takes no focus. That last
- * point is the whole reason it is a banner and not an overlay - the thing it
- * reports is a daemon that will come back by itself, and the operator's
- * keystrokes are queued in the sockets meanwhile, so the worst thing this
- * could do is get between them and the terminal they were typing into.
- *
- * `role="status"` with `aria-live="polite"` announces the arrival once. The
- * clock beside the heading ticks every second and is marked `aria-live="off"`,
- * because a live region re-read on every change would announce a number
- * nobody asked for thirty times over a thirty-second stall.
- *
- * No buttons. There is nothing to press: a reload during a stall hangs on its
- * first request, and a daemon restart is a heavier act than the situation
- * warrants (`daemonLiveness.ts` has the reasoning).
- */
+/** A non-blocking status strip. Recovery belongs to the desktop process, since
+ * an HTTP recovery button cannot reach a dead or GIL-blocked daemon. */
 
 /**
  * @param suppressed True while a deliberate outage is in flight - a redeploy's

@@ -29,6 +29,8 @@
 
 ### Features
 
+- Daemon stall diagnostics and desktop recovery: `features/daemon-resilience.md`
+
 - Automation and OpenRouter observers: `features/automation.md`
 - Automation enablement (per-project opt-in DAG): `features/automation-enablement.md`
 - Scheduled agent runs (cron/interval/one-off session starts): `features/scheduled-runs.md`

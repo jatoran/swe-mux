@@ -1,5 +1,12 @@
 # Data model
 
+## Daemon recovery authority
+
+`daemon-recovery.json` and the persistent kernel-lock file `daemon-recovery.lock` live in the data directory.
+The record binds desktop recovery to an OS process generation and fences local PTY allocation against forced termination.
+It is separate from `daemon-heartbeat.json`, whose periodic writes are forensic observations.
+Fields and invariants: `features/daemon-resilience.md`.
+
 ## Ownership
 
 - `ProjectRecord`: stable ID, name, canonical root, optional Group, position, layout,

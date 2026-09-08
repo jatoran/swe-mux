@@ -56,10 +56,23 @@ The rules callers must follow are in `runtime-rules.md`.
 
 ### `stall_watchdog.py`
 
-Where the event loop was during a stall, captured from outside it: the loop-lag probe re-arms `faulthandler.dump_traceback_later`, a C thread that needs no GIL dumps every thread to `<data_dir>/loop-stalls.log` when the probe stops, a canary thread records its own lateness, and `explain()` turns the dump into one bounded `StallRecord` after the loop resumes.
-`server._loop_lag_loop` owns the beat, the log line, and the telemetry write; the rules are in `runtime-rules.md`.
+Bounded sampling through owned Python frame references, canary starvation measurements, and rotating `loop-stalls.log` output.
+The event loop only publishes a timestamp; sampling and file IO happen elsewhere.
+Native GIL-held stalls can prevent sampling, and the diagnostic snapshot reports that coverage limit explicitly.
+`server._loop_lag_loop` owns the lag measurement, explanation log, and telemetry write.
+Contracts: `../../../design/features/daemon-resilience.md`.
 
-**Not:** the lag measurement itself (`loop_lag.py`), and never a filter on what faulthandler writes - the report filters, the file does not.
+**Not:** automatic native frame traversal or process recovery.
+
+### `daemon_recovery.py`
+
+Desktop-side recovery state machine and the durable process-generation record shared with the daemon.
+A kernel-owned file lock fences automatic termination against local PTY creation and intentional shutdown.
+The desktop verifies the current supervisor with a read-only handshake before replacing a persistently hung daemon.
+`server.py` registers and marks ready; `SessionManager.before_local_pty` revokes forced recovery before local spawning; `lifecycle.planned_handoff` records intentional transitions.
+`desktop.py` owns the monitor thread, launch callback, and manual-action coordination.
+
+**Not:** the PTY supervisor, standalone service management, or uninterrupted terminal transport.
 
 ### `process_priority.py`
 

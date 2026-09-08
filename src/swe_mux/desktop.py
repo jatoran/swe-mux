@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any, TextIO
 
 from .config import Config, load_config
+from .daemon_recovery import DaemonRecovery, recovery_lock
 from .desktop_permissions import WebviewMicrophoneGrant
 from .desktop_window_state import (
     DEFAULT_WINDOW_HEIGHT,
@@ -399,6 +400,7 @@ class DesktopRuntime:
         )
         self.exiting = False
         self.stop = threading.Event()
+        self.recovery_pause = threading.Event()
         assert config.config_path is not None
         self.instance = WindowsSingleInstance(instance_key(config.config_path))
         self.token = load_or_create_control_token(config.data_dir)
@@ -429,6 +431,34 @@ class DesktopRuntime:
         budget = DAEMON_HEALTH_TIMEOUT_SECONDS if wait_seconds is None else wait_seconds
         if health_snapshot(self.url) is not None:
             return True
+        self._spawn_daemon()
+        assert self.child is not None
+        started = time.monotonic()
+        deadline = started + budget
+        while time.monotonic() < deadline:
+            if health_snapshot(self.url, timeout=0.5) is not None:
+                ledger(
+                    self.config.data_dir,
+                    f"daemon pid {self.child.pid} answered health after "
+                    f"{time.monotonic() - started:.1f}s",
+                )
+                return True
+            code = self.child.poll()
+            if code is not None:
+                raise RuntimeError(
+                    f"The swe-mux daemon exited during startup (code {code}) after "
+                    f"{time.monotonic() - started:.1f}s. See "
+                    f"{self.config.data_dir / 'desktop-daemon.log'}."
+                )
+            time.sleep(0.15)
+        ledger(
+            self.config.data_dir,
+            f"daemon pid {self.child.pid} is still starting after "
+            f"{budget:.0f}s; the tray will load the window when it answers",
+        )
+        return False
+
+    def _spawn_daemon(self) -> None:
         assert self.config.config_path is not None
         from .spawn_contract import scrub_claude_session_markers
 
@@ -457,29 +487,24 @@ class DesktopRuntime:
             )
         ledger(self.config.data_dir, f"tray spawned daemon pid {self.child.pid}")
         self._watch_daemon_exit(self.child)
-        started = time.monotonic()
-        deadline = started + budget
-        while time.monotonic() < deadline:
-            if health_snapshot(self.url, timeout=0.5) is not None:
-                ledger(
-                    self.config.data_dir,
-                    f"daemon pid {self.child.pid} answered health after "
-                    f"{time.monotonic() - started:.1f}s",
-                )
-                return True
-            code = self.child.poll()
-            if code is not None:
-                raise RuntimeError(
-                    f"The swe-mux daemon exited during startup (code {code}) after "
-                    f"{time.monotonic() - started:.1f}s. See {log_path}."
-                )
-            time.sleep(0.15)
-        ledger(
+
+    def _spawn_recovery_daemon(self) -> dict[str, Any]:
+        import psutil
+
+        self._spawn_daemon()
+        assert self.child is not None
+        return {"pid": self.child.pid, "created_at": psutil.Process(self.child.pid).create_time()}
+
+    def _start_daemon_recovery(self) -> None:
+        recovery = DaemonRecovery(
             self.config.data_dir,
-            f"daemon pid {self.child.pid} is still starting after "
-            f"{budget:.0f}s; the tray will load the window when it answers",
+            self.token,
+            health=lambda: health_snapshot(self.url) is not None,
+            spawn=self._spawn_recovery_daemon,
+            stop=self.stop,
+            pause=self.recovery_pause,
         )
-        return False
+        threading.Thread(target=recovery.run, name="mux-daemon-recovery", daemon=True).start()
 
     def _watch_daemon_exit(self, child: subprocess.Popen[bytes]) -> None:
         """Ledger the daemon's exit code; external kills leave no other trace.
@@ -691,6 +716,20 @@ class DesktopRuntime:
             self.window.hide()
 
     def restart_daemon(self, *_: object) -> None:
+        pause = getattr(self, "recovery_pause", None)
+        if pause is not None:
+            pause.set()
+        try:
+            # Drain an already committed automatic recovery without holding the
+            # fence across HTTP: the daemon needs it to record detach intent.
+            with recovery_lock(self.config.data_dir):
+                pass
+            self._restart_daemon()
+        finally:
+            if pause is not None:
+                pause.clear()
+
+    def _restart_daemon(self) -> None:
         """Replace the daemon process while supervisor-owned sessions keep running.
 
         The session-preserving half of "reload with my changes": the daemon is
@@ -746,6 +785,9 @@ class DesktopRuntime:
     def quit(self, *_: object) -> None:
         if self.exiting:
             return
+        self.stop.set()  # Fence automatic recovery before asking the daemon to quit.
+        with recovery_lock(self.config.data_dir):
+            pass
         self._flush_window_state()
         stopped = request_daemon_shutdown(self.url, self.token, mode="quit")
         if stopped:
@@ -856,6 +898,7 @@ class DesktopRuntime:
         # shell is the only way to reach the app, and exiting here used to strand
         # the user with a healthy daemon and nothing to talk to it.
         healthy = self.ensure_daemon()
+        self._start_daemon_recovery()
         webview.settings["OPEN_EXTERNAL_LINKS_IN_BROWSER"] = True
         self._enable_webview_debugging(webview)
         window_state = self._load_window_state(webview)

@@ -165,6 +165,10 @@ Inactive rows restore on every boot independently of unexpected-loss recovery se
 
 ## Failure modes
 
+- Desktop-owned recovery follows daemon process generations, replaces confirmed crashes, and replaces persistent hangs only after verifying supervisor protection and fencing out local PTY creation.
+  Planned handoffs, redeploys, slow startup, and repeated crashes have separate gates.
+  Terminal traffic still pauses while the daemon is unavailable; detailed contracts: `features/daemon-resilience.md`.
+
 - A daemon whose runtime build fails records the failing phase and its error on the health
   answer, then stops. It never lingers reachable-but-unusable: the desktop shell and the redeploy
   script both already handle a daemon that exits, and neither can act on one that serves 503

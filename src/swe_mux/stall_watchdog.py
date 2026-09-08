@@ -1,42 +1,20 @@
-"""Name the frame the event loop was stuck in, from outside the loop.
+"""Bounded Python stack sampling without asynchronous native frame traversal.
 
-`loop_lag` measures how late the loop ran its own timer and can say *how long* it
-was gone; it cannot say *where* the thread was, because the thing that would record
-that is the thread that is stuck. On 2026-09-01 the daemon froze for 46 s and 53 s
-twice in three minutes under a fleet-wide cargo build wave, every HTTP request and
-websocket frame hung with it, and nothing in the process could say what it had been
-doing. A profiler attached afterwards saw a healthy daemon.
-
-Two mechanisms, chosen because they fail differently:
-
-- **`faulthandler.dump_traceback_later` is a C watchdog that does not need the GIL.**
-  The loop re-arms it on every lag probe; when the loop stops re-arming it, the dump
-  fires and writes every thread's Python stack to `loop-stalls.log`. This is the only
-  thing that can see a stall whose cause is a native call holding the GIL in a
-  *worker* thread (psutil on Windows, `re` over a large string, a hung
-  `ReadProcessMemory`) - a Python watchdog thread is starved by exactly the thing it
-  is meant to observe.
-- **A Python canary thread that only measures its own lateness.** It sleeps a quarter
-  second in a loop and records every wake that came late. When the loop reports a
-  stall, whether the canary was starved across the same window is the one bit that
-  discriminates the two shapes: canary on time means synchronous Python work sat on
-  the loop thread and the dump names it; canary starved too means the GIL was held
-  natively or the whole process was descheduled, and the dump's *worker* frames are
-  the ones to read.
-
-The loop is the authority on duration (its own `sample()` measured it); this module
-supplies the explanation. `explain()` runs after the stall, off the loop, reads the
-dumps written during it, and returns one bounded record that `server.py` logs and
-`OperationalTelemetryStore` keeps, so the question "what was it doing" is answerable
-from `daemon.log` and `mux.db` after the fact rather than by being present.
+The sampler holds owned frame references from sys._current_frames().
+It can inspect a stalled event loop while other Python threads still run.
+A native call holding the GIL prevents sampling too; canary lateness records that
+coverage gap, and desktop-side recovery can still observe the unresponsive daemon.
+The event loop only publishes a timestamp. Sampling, trace IO, and rotation happen
+on other threads. Legacy faulthandler trace files remain readable.
 """
 
 from __future__ import annotations
 
-import faulthandler
+import asyncio
 import logging
 import os
 import re
+import sys
 import threading
 import time
 from collections import deque
@@ -61,6 +39,7 @@ CANARY_INTERVAL_SECONDS = 0.25
 CANARY_RECORD_SECONDS = 0.05
 CANARY_HISTORY = 128
 MAX_FRAMES = 40
+MAX_THREADS = 100
 MAX_BUSY_THREADS = 12
 RECENT_STALLS = 16
 #: Written after each explanation so the next one starts reading after it.
@@ -223,7 +202,7 @@ def default_host_probe() -> dict[str, Any]:
 
 
 class StallWatchdog:
-    """Arms a GIL-free stack dump from the loop and explains a stall after it ends."""
+    """Samples safely when Python can run and explains stalls after they end."""
 
     def __init__(
         self,
@@ -241,12 +220,9 @@ class StallWatchdog:
         self._rotate_bytes = rotate_bytes
         self._file: IO[bytes] | None = None
         self._explained_offset = 0
-        self._last_arm = 0.0
         self._last_beat = 0.0
-        #: Half the threshold, so the dump fires between one and one and a half
-        #: thresholds after the loop's last probe. Each arm starts a fresh C thread
-        #: (that is how faulthandler resets its timer), which is cheap at this rate.
-        self._rearm_interval = threshold / 2
+        self._last_capture = 0.0
+        self._trace_lock = threading.RLock()
         self._canary_late: deque[tuple[float, float]] = deque(maxlen=CANARY_HISTORY)
         self._canary_worst = 0.0
         #: When the canary's current sleep began, or None between sleeps. A wake
@@ -262,67 +238,109 @@ class StallWatchdog:
     # -- lifecycle ---------------------------------------------------------------
 
     def start(self) -> None:
+        if self._armed:
+            return
         self.trace_path.parent.mkdir(parents=True, exist_ok=True)
-        self._file = open(self.trace_path, "ab", buffering=0)  # noqa: SIM115 - kept open for faulthandler
+        self._file = open(self.trace_path, "ab", buffering=0)  # noqa: SIM115 - owned until close
         self._explained_offset = self._file.seek(0, os.SEEK_END)
-        self._note(f"# watchdog armed threshold={self.threshold:.1f}s")
+        self._note(f"# watchdog armed threshold={self.threshold:.1f}s capture=python_gil_required")
         self._canary_stop.clear()
+        self._armed = True
+        self.beat()
         self._canary_thread = threading.Thread(
             target=self._canary, name="loop-stall-canary", daemon=True
         )
         self._canary_thread.start()
-        self.beat()
         log.info(
-            "loop stall watchdog armed threshold_s=%.1f trace=%s", self.threshold, self.trace_path
+            "loop stall watchdog armed threshold_s=%.1f capture=python_gil_required trace=%s",
+            self.threshold,
+            self.trace_path,
         )
 
     async def stop(self) -> None:
-        """The shape every daemon handle is stopped through; the work is synchronous."""
-        self.close()
+        """File IO and sampler shutdown never wait on the event loop."""
+        await asyncio.to_thread(self.close)
 
     def close(self) -> None:
         self._canary_stop.set()
-        if self._armed:
-            faulthandler.cancel_dump_traceback_later()
-            self._armed = False
-        if self._file is not None:
-            self._note("# watchdog stopped")
-            self._file.close()
-            self._file = None
+        self._armed = False
+        thread = self._canary_thread
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout=1.0)
+            if thread.is_alive():
+                log.warning("loop stall sampler still draining trace=%s", self.trace_path)
+                return  # The sampler owns final close, including a slow filesystem write.
+        self._close_trace()
+
+    def _close_trace(self) -> None:
+        with self._trace_lock:
+            if self._file is not None:
+                self._note("# watchdog stopped")
+                self._file.close()
+                self._file = None
 
     # -- the loop's side ---------------------------------------------------------
 
     def beat(self) -> None:
-        """Called from the event loop on every lag probe; re-arms the C watchdog."""
-        now = self._monotonic()
-        self._last_beat = now
-        if self._file is None:
-            return
-        if not self._armed or now - self._last_arm >= self._rearm_interval:
-            self._arm()
+        """Publish progress only: no IO, thread creation, joins, or diagnostic locks."""
+        self._last_beat = self._monotonic()
 
-    def _arm(self) -> None:
-        if self._file is None:
+    def _capture_if_stalled(self, now: float) -> None:
+        if now - self._last_beat < self.threshold or now - self._last_capture < self.threshold:
             return
-        faulthandler.dump_traceback_later(self.threshold, repeat=True, file=self._file, exit=False)
-        self._armed = True
-        self._last_arm = self._monotonic()
+        self._last_capture = now
+        # sys._current_frames() returns owned Python frame references while holding
+        # the GIL. Never use dump_traceback_later here: its native thread traverses
+        # changing interpreter frames without the GIL and crashed the daemon on
+        # 2026-09-07. A GIL-held stall may have no sample; report that limitation.
+        lines = [f"# capture=python_gil_required pid={os.getpid()}", "Timeout (0:00:00)!"]
+        frames = sys._current_frames()
+        try:
+            for ident, frame in list(frames.items())[:MAX_THREADS]:
+                if ident == threading.get_ident():
+                    continue
+                lines.append(f"Thread 0x{ident:08x} (most recent call first):")
+                for _ in range(MAX_FRAMES):
+                    code = frame.f_code
+                    filename = code.co_filename.replace("\n", "\\n").replace("\r", "\\r")[:500]
+                    lines.append(
+                        f'  File "{filename}", line {frame.f_lineno} in {code.co_name[:500]}'
+                    )
+                    if frame.f_back is None:
+                        break
+                    frame = frame.f_back
+        finally:
+            frames.clear()
+        with self._trace_lock:
+            if self._file is None and self._armed:
+                self._file = open(self.trace_path, "ab", buffering=0)  # noqa: SIM115
+            self._rotate_if_large()
+            if self._file is not None:
+                self._file.write(("\n".join(lines) + "\n").encode("utf-8", "backslashreplace"))
 
     # -- the canary thread -------------------------------------------------------
 
     def _canary(self) -> None:
-        while not self._canary_stop.is_set():
-            before = self._monotonic()
-            with self._lock:
-                self._canary_sleeping_since = before
-            time.sleep(CANARY_INTERVAL_SECONDS)
-            after = self._monotonic()
-            late = after - before - CANARY_INTERVAL_SECONDS
-            with self._lock:
-                self._canary_sleeping_since = None
-                if late >= CANARY_RECORD_SECONDS:
-                    self._canary_late.append((after, late))
-                    self._canary_worst = max(self._canary_worst, late)
+        try:
+            while not self._canary_stop.is_set():
+                before = self._monotonic()
+                with self._lock:
+                    self._canary_sleeping_since = before
+                if self._canary_stop.wait(CANARY_INTERVAL_SECONDS):
+                    break
+                after = self._monotonic()
+                late = after - before - CANARY_INTERVAL_SECONDS
+                with self._lock:
+                    self._canary_sleeping_since = None
+                    if late >= CANARY_RECORD_SECONDS:
+                        self._canary_late.append((after, late))
+                        self._canary_worst = max(self._canary_worst, late)
+                try:
+                    self._capture_if_stalled(after)
+                except Exception:
+                    log.exception("loop stall capture failed trace=%s", self.trace_path)
+        finally:
+            self._close_trace()
 
     def canary_starved_since(self, started: float, minimum: float) -> bool:
         """Whether the canary thread itself failed to run across a window.
@@ -359,7 +377,8 @@ class StallWatchdog:
             started - CANARY_INTERVAL_SECONDS,
             max(2 * CANARY_INTERVAL_SECONDS, lag_seconds * 0.5),
         )
-        dumps = self._read_new_dumps()
+        with self._trace_lock:
+            dumps = self._read_new_dumps()
         main_ident = threading.main_thread().ident or 0
         names = {t.ident: t.name for t in threading.enumerate() if t.ident is not None}
         main_frames: list[str] = []
@@ -381,11 +400,12 @@ class StallWatchdog:
         with self._lock:
             self._recent.appendleft(record)
             self._stall_count += 1
-        self._note(
-            f"{END_MARKER} duration_s={lag_seconds:.2f} canary_starved={canary_starved} "
-            f"dumps={len(dumps)} main={record.main_leaf or '-'}"
-        )
-        self._rotate_if_large()
+        with self._trace_lock:
+            self._note(
+                f"{END_MARKER} duration_s={lag_seconds:.2f} canary_starved={canary_starved} "
+                f"dumps={len(dumps)} main={record.main_leaf or '-'}"
+            )
+            self._rotate_if_large()
         return record
 
     def _read_new_dumps(self) -> list[dict[int, list[tuple[str, str, str]]]]:
@@ -418,16 +438,15 @@ class StallWatchdog:
         try:
             if os.path.getsize(self.trace_path) < self._rotate_bytes:
                 return
-            if self._armed:
-                faulthandler.cancel_dump_traceback_later()
-                self._armed = False
             self._file.close()
+            self._file = None
             previous = self.trace_path.with_name(self.trace_path.name + ".1")
-            os.replace(self.trace_path, previous)
-            self._file = open(self.trace_path, "ab", buffering=0)  # noqa: SIM115
-            self._explained_offset = 0
+            try:
+                os.replace(self.trace_path, previous)
+                self._explained_offset = 0
+            finally:
+                self._file = open(self.trace_path, "ab", buffering=0)  # noqa: SIM115
             self._note("# rotated")
-            self._arm()
             log.info("loop stall trace rotated path=%s", self.trace_path)
         except OSError as exc:
             log.warning("loop stall trace rotation failed path=%s error=%s", self.trace_path, exc)
@@ -442,6 +461,8 @@ class StallWatchdog:
         return {
             "threshold_seconds": self.threshold,
             "armed": self._armed,
+            "capture_mode": "python_gil_required",
+            "gil_held_stacks_available": False,
             "trace_path": str(self.trace_path),
             "stalls_explained": count,
             "canary_worst_late_seconds": round(canary_worst, 4),

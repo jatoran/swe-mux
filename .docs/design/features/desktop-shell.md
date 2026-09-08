@@ -24,6 +24,9 @@ continues to own every terminal.
 
 ## Operations
 
+- A desktop-owned monitor follows daemon replacements, automatically relaunches confirmed crashes, and conditionally replaces persistent hangs.
+  Process identity, protected-session authority, startup, manual actions, planned handoffs, redeploys, and retry limits are governed by `daemon-resilience.md`.
+
 - One instance exists per resolved config path. A second visible launch signals the existing
   instance to restore/focus; a duplicate hidden login launch exits silently.
 - Startup probes `/api/health`. A healthy daemon is reused; otherwise the tray starts a
@@ -35,7 +38,7 @@ continues to own every terminal.
   `popen_outside_job` (breakaway from any inherited Job object) so a tray relaunched from
   inside a session cannot hand the daemon that session's kill-on-close Job; the tray also
   checks `process_in_job()` at startup and records a warning in the lifecycle ledger.
-- **A daemon that is still running has not failed.** Only a spawned child that *exits* is a
+- **A daemon that is still starting has not failed.** Only a spawned child that *exits* is a
   startup failure, and it ends the wait immediately; uptime is never evidence against it. The
   health wait is budgeted at `DAEMON_HEALTH_TIMEOUT_SECONDS` (300s) because a daemon's runtime
   is not ready the moment its port is, and a start whose page cache was just flushed

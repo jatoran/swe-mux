@@ -1,33 +1,8 @@
 /**
- * Is the daemon answering right now?
- *
- * The failure this exists to show: the daemon's event loop freezes for tens of
- * seconds under host load. Every HTTP request and every WebSocket frame hangs
- * for the duration, so terminals stop moving and clicks do nothing, and from
- * the browser that is indistinguishable from the app having crashed. It has
- * not: the daemon recovers on its own, and the agent sessions were never in
- * danger because a separate supervisor process owns the PTYs. What the operator
- * needs in that window is one sentence saying so, and how long it has been.
- *
- * This is a *symptom display*, not a health check. It probes `/api/health` with
- * a short deadline and reports when the daemon has stopped answering in time;
- * it draws no conclusion about why, restarts nothing, and clears itself the
- * moment an answer arrives. The redeploy wait loop (`redeployProgress.ts`) and
- * the post-restart reload in `App.tsx` watch the same endpoint for their own
- * reasons and are left alone; when one of those has deliberately taken the
- * daemon down the caller disables this so two surfaces do not describe one
- * outage.
- *
- * Two rules the numbers below encode. **A single slow probe never shows the
- * banner** - the redeploy loop learned the same lesson (`REDEPLOY_DOWN_PROBES`):
- * a phone waking, a GC pause, or one queued request behind a slow endpoint is
- * not a stall, so it takes two consecutive misses, roughly six seconds of
- * silence. **The first success clears it**, because the claim is "not answering
- * now" and one answer is the whole refutation.
- *
- * The state machine is pure and DOM-free so the thresholds are tested rather
- * than trusted; `watchDaemonLiveness` is the scheduler around it with every
- * side effect injectable, and `useDaemonLiveness` is the one-line hook.
+ * Reports missed health probes without inferring whether the daemon is stalled,
+ * starting, disconnected, or dead. Reconnection is attempted when it answers.
+ * Desktop recovery runs outside the daemon; standalone servers need their own
+ * supervisor. Neither session survival nor eventual recovery is assumed here.
  */
 
 // Extension-qualified so this module resolves under `node --experimental-strip-types`,
@@ -109,10 +84,8 @@ export function stallSeconds(since: number, now: number): number {
 /** What is happening. Rendered on its own so the ticking clock beside it can be
  *  kept out of what a screen reader re-announces every second. */
 export const DAEMON_STALL_HEADING = 'swe-mux daemon is not responding'
-/** The two things the operator most needs to hear: their sessions are fine, and
- *  there is nothing to press. Deliberately no "try reloading" - a reload during a
- *  stall hangs on the first request and turns a paused UI into a blank one. */
-export const DAEMON_STALL_PROMISE = 'Sessions keep running; the UI will catch up on its own.'
+/** Recovery is conditional; a missed probe cannot prove sessions are protected. */
+export const DAEMON_STALL_PROMISE = 'Reconnecting. If this persists, use the desktop tray to restart the daemon.'
 
 /** The whole sentence, as the banner's tooltip and as one string to test. */
 export function daemonStallText(since: number, now: number): string {

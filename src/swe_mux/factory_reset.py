@@ -103,6 +103,8 @@ CONFIRMATION_PHRASE = "factory reset"
 #:   running against the daemon it manages. A fresh one is written by the next
 #:   full app start.
 #: * `.trash` - where this reset is moving everything else.
+#: * `daemon-recovery.json` / `daemon-recovery.lock` - current generation and
+#:   the kernel fence shared with the desktop process that survives this reset.
 KEEP_ENTRIES: frozenset[str] = frozenset(
     {
         "bin",
@@ -112,6 +114,8 @@ KEEP_ENTRIES: frozenset[str] = frozenset(
         "frontend-overlay",
         "worktrees",
         "desktop-control.token",
+        "daemon-recovery.json",
+        "daemon-recovery.lock",
         TRASH_DIRNAME,
     }
 )

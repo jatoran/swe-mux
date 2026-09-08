@@ -123,6 +123,9 @@ def planned_handoff(data_dir: Path, intent: str) -> None:
     one: the successor reports the handoff and its intent instead of a crash,
     and `daemon.log` still holds whatever the teardown managed to say.
     """
+    from .daemon_recovery import update_daemon
+
+    update_daemon(data_dir, intent=intent, intent_at=time.time())
     ledger(data_dir, f"daemon pid {os.getpid()} planned {intent} handoff requested")
     if not _record_owned(data_dir):
         return

@@ -787,6 +787,9 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
     # also decides how hard the database-integrity phase must look: an
     # unplanned death forces the full probe.
     predecessor_died_uncleanly = daemon_started(config.data_dir, log)
+    from .daemon_recovery import register_daemon
+
+    await asyncio.to_thread(register_daemon, config.data_dir, app.get(keys.DESKTOP_CONTROL_TOKEN))
     app[keys.PREDECESSOR_PID] = predecessor_pid
     timeline = StartupTimeline(log, ledger=lambda message: ledger(config.data_dir, message))
     app[keys.STARTUP] = timeline
@@ -821,6 +824,14 @@ async def _build_runtime(
     """
     try:
         await _build_runtime_handles(app, timeline, predecessor_died_uncleanly)
+        from .daemon_recovery import mark_ready
+
+        supervisor = app.get(keys.SUPERVISOR)
+        await asyncio.to_thread(
+            mark_ready,
+            app[keys.CONFIG].data_dir,
+            supervisor.supervisor_pid if supervisor is not None else None,
+        )
     except asyncio.CancelledError:
         raise
     except BaseException as error:  # noqa: BLE001 - re-raised after being reported
@@ -1532,6 +1543,9 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
         },
         native_otel_enabled=config.canonical_telemetry_native_otel_enabled,
     )
+    from .daemon_recovery import revoke_for_local_pty
+
+    sessions.before_local_pty = lambda: revoke_for_local_pty(config.data_dir)
 
     # The observer decides an approval; this is the only way it can deliver one.
     # Installed as a factory rather than called from `observation.py` directly

@@ -655,6 +655,7 @@
   `design/features/status-detection.md`, `design/interfaces.md`, `design/data-model.md`,
   `technical/backend/sqlite.md`, `technical/backend/packages.md`,
   `development/STATUS_INCIDENT_RUNBOOK.md`
+- Changing daemon stall sampling, automatic crash/hang recovery, or session protection during recovery: `design/features/daemon-resilience.md`, `design/features/desktop-shell.md`, `technical/backend/packages/daemon-runtime.md`, `development/PERFORMANCE_RUNBOOK.md`.
 - Changing background-loop supervision, per-loop cost accounting, event-loop lag sampling,
   or the performance investigation procedure: `development/PERFORMANCE_RUNBOOK.md`,
   `technical/backend/packages.md`, `design/interfaces.md`

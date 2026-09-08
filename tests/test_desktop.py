@@ -259,9 +259,7 @@ def test_the_python_and_node_precompressors_agree_on_the_rule() -> None:
     import re
 
     root = Path(__file__).resolve().parent.parent
-    script = (root / "frontend" / "scripts" / "compress-static.mjs").read_text(
-        encoding="utf-8"
-    )
+    script = (root / "frontend" / "scripts" / "compress-static.mjs").read_text(encoding="utf-8")
 
     minimum = re.search(r"const MIN_BYTES\s*=\s*(\d+)", script)
     assert minimum is not None, "compress-static.mjs no longer declares MIN_BYTES"
@@ -404,6 +402,7 @@ def test_frozen_desktop_dispatches_allowlisted_internal_modules(
 
 def test_tray_quit_shuts_down_without_confirmation(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     events: list[str] = []
 
@@ -415,6 +414,7 @@ def test_tray_quit_shuts_down_without_confirmation(
             events.append("window-destroyed")
 
     runtime = object.__new__(DesktopRuntime)
+    runtime.config = Config(data_dir=tmp_path, config_path=tmp_path / "config.toml")
     runtime.url = "http://127.0.0.1:8765"
     runtime.token = "desktop-secret"
     runtime.child = None

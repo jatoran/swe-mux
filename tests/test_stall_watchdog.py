@@ -1,10 +1,4 @@
-"""The stall watchdog names the frame the loop was stuck in, from outside the loop.
-
-Two things a lag number cannot say: *where* the thread was, and whether the cause
-was Python on the loop or a native call holding the GIL somewhere else. The first
-comes from a C watchdog that needs no GIL; the second from a canary thread whose
-own lateness is the discriminator.
-"""
+"""Safe stack sampling, honest GIL-starvation coverage, and bounded trace retention."""
 
 from __future__ import annotations
 
@@ -71,6 +65,44 @@ def test_parse_tolerates_text_that_is_not_a_dump() -> None:
     assert parse_faulthandler_dumps(f"{END_MARKER} duration_s=4.0\nnonsense\n") == []
 
 
+def test_sampler_never_arms_native_frame_traversal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import faulthandler
+
+    def unsafe(*args: object, **kwargs: object) -> None:
+        pytest.fail("automatic native stack traversal can crash the interpreter")
+
+    monkeypatch.setattr(faulthandler, "dump_traceback_later", unsafe)
+    monkeypatch.setattr(faulthandler, "cancel_dump_traceback_later", unsafe)
+    watchdog = StallWatchdog(tmp_path / "loop-stalls.log", threshold=0.1)
+    watchdog.start()
+    try:
+        text = _wait_for_dump(watchdog.trace_path, time.monotonic() + 2)
+        assert "test_sampler_never_arms_native_frame_traversal" in text
+        watchdog.beat()
+        assert watchdog.explain(0.2).dumps > 0
+    finally:
+        watchdog.close()
+
+
+def test_heartbeat_does_not_wait_for_diagnostic_io(tmp_path: Path) -> None:
+    watchdog = StallWatchdog(tmp_path / "loop-stalls.log", monotonic=lambda: 42.0)
+    finished = threading.Event()
+
+    def beat() -> None:
+        watchdog.beat()
+        finished.set()
+
+    with watchdog._trace_lock:
+        thread = threading.Thread(target=beat)
+        thread.start()
+        assert finished.wait(1), "the event loop must not wait for trace-file locks"
+    thread.join(timeout=1)
+    assert watchdog._last_beat == 42.0
+
+
 def _wait_for_dump(path: Path, deadline: float) -> str:
     while time.monotonic() < deadline:
         if path.exists():
@@ -81,54 +113,32 @@ def _wait_for_dump(path: Path, deadline: float) -> str:
     return path.read_text(encoding="utf-8", errors="replace") if path.exists() else ""
 
 
-def test_a_blocked_loop_is_dumped_without_the_gil_and_explained_afterwards(
-    tmp_path: Path,
-) -> None:
-    """The C watchdog fires while this thread holds the GIL in a busy loop.
+def test_a_gil_held_stall_reports_missing_stack_coverage(tmp_path: Path) -> None:
+    import sys
 
-    A Python thread could never have observed that: it needs the GIL the stall is
-    holding. The canary is starved for the same reason, which is exactly the
-    signal that distinguishes a native or GIL-bound stall from synchronous work on
-    the loop thread.
-    """
     watchdog = StallWatchdog(tmp_path / "loop-stalls.log", threshold=0.3)
     watchdog.start()
     try:
-        watchdog.beat()
-        # Hold the GIL, in this (main) thread, for longer than the threshold. A
-        # pure-Python busy loop releases the GIL every switch interval, so the
-        # canary would run; sys.setswitchinterval makes the hold real.
-        import sys
-
+        deadline = time.monotonic() + 2.0
+        while watchdog._canary_sleeping_since is None and time.monotonic() < deadline:
+            time.sleep(0.005)
+        assert watchdog._canary_sleeping_since is not None
         previous = sys.getswitchinterval()
         sys.setswitchinterval(5.0)
         try:
             started = time.perf_counter()
             while time.perf_counter() - started < 1.0:
                 pass
+            lag = time.perf_counter() - started
+            watchdog.beat()  # Resume before releasing the GIL: no post-stall fake sample.
         finally:
             sys.setswitchinterval(previous)
-        lag = time.perf_counter() - started
-        text = _wait_for_dump(watchdog.trace_path, time.monotonic() + 2.0)
-        assert "Timeout (" in text, "the dump must fire while the loop never re-armed"
-        assert "test_a_blocked_loop_is_dumped" in text, "and it names this frame"
-
         record = watchdog.explain(lag)
-        assert record.duration_seconds == lag
-        assert record.dumps >= 1
-        assert any("test_a_blocked_loop_is_dumped" in frame for frame in record.main_thread), (
-            record.main_thread
-        )
-        assert record.canary_starved is True, (
-            "the canary thread could not run either, so this reads as a GIL-held stall"
-        )
-        assert record.trace_path == str(watchdog.trace_path)
-        snapshot = watchdog.snapshot()
-        assert snapshot["stalls_explained"] == 1
-        assert snapshot["recent"][0]["main_leaf"] == record.main_leaf
-        assert snapshot["armed"] is True
-        after = watchdog.trace_path.read_text(encoding="utf-8", errors="replace")
-        assert END_MARKER in after, "the marker is what the next explanation reads after"
+        assert record.canary_starved is True
+        assert record.dumps == 0
+        assert record.main_thread == []
+        assert watchdog.snapshot()["gil_held_stacks_available"] is False
+        assert END_MARKER in watchdog.trace_path.read_text()
     finally:
         watchdog.close()
     assert watchdog.snapshot()["armed"] is False

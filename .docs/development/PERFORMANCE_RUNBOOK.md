@@ -189,17 +189,15 @@ A stall count that climbs at a steady rate points at a periodic loop; correlate 
 
 Then read `stall_watchdog.recent` on the same endpoint, or `grep loop_stall daemon.log`, for
 every stall of three seconds or more.
-The lag number says how long the loop was gone; the watchdog says where it was, because the loop
-re-arms `faulthandler.dump_traceback_later` on every probe and a loop that stops probing gets
-every thread's stack dumped to `<data_dir>/loop-stalls.log` from a C thread that needs no GIL.
-Read `canary_starved` first.
-`false` means a Python thread kept running through the stall, so the main thread's frames name
-synchronous work that sat on the loop and the fix is to move that call off it.
-`true` means the canary thread was as stuck as the loop: the GIL was held by a native call in a
-worker (psutil on Windows, `re` over a large string, a hung `ReadProcessMemory`) or the whole
-process was descheduled, and the frames to read are `busy_threads[]`, not the main thread's, which
-will show the loop idle in `_poll` waiting for a GIL it could not get.
-Every stall is also a row in `mux.db` (`loop_stalls`), so this is answerable after a restart.
+The lag number says how long the loop was gone; the Python sampler may show where it was in `<data_dir>/loop-stalls.log`.
+Read `capture_mode` and `canary_starved` before interpreting frames.
+`capture_mode=python_gil_required` means a native GIL-held stall can prevent sampling altogether.
+`canary_starved=false` means another Python thread ran during the stall; available main-thread frames can identify synchronous work on the event loop.
+`canary_starved=true` means native GIL contention or host scheduling also delayed the sampler; absent frames do not identify a culprit.
+Explained stalls persist in `mux.db` (`loop_stalls`), while a daemon crash before explanation leaves OS crash evidence and any partial trace.
+For an outage that persists, inspect `daemon_recovery` state transitions in `lifecycle.log` and the generation record in `daemon-recovery.json`.
+Desktop automatic recovery and its session-protection gates are defined in `design/features/daemon-resilience.md`.
+The original asynchronous native sampler is no longer used: it crashed Python while traversing a changing frame during the 2026-09-07 incident.
 
 The 2026-09-01 freezes this was built for - 46 s and 53 s within three minutes while three
 worktree agents ran cargo concurrently - left no trace anywhere: `daemon.log` was silent for the

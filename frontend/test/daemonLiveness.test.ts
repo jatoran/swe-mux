@@ -96,10 +96,10 @@ test('the sentence names the elapsed seconds and promises only what holds', () =
   // Clock skew or a clamped timestamp must not print a negative duration.
   assert.equal(stallSeconds(t0, t0 - 5_000), 0)
   const text = daemonStallText(t0, t0 + 12_400)
-  assert.equal(text, 'swe-mux daemon is not responding (12s). Sessions keep running; the UI will catch up on its own.')
-  // No instruction, because there is nothing correct to do: a reload during a
-  // stall hangs on its first request.
-  assert.doesNotMatch(text, /reload|restart|refresh|click|press/i)
+  assert.equal(text, 'swe-mux daemon is not responding (12s). Reconnecting. If this persists, use the desktop tray to restart the daemon.')
+  // A missing health response proves neither survival nor automatic recovery.
+  // Host-side recovery remains reachable even when a page reload would fail.
+  assert.doesNotMatch(text, /sessions keep running|catch up on its own|reload|refresh/i)
 })
 
 // ---------------------------------------------------------------- the scheduler

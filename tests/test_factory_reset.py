@@ -73,6 +73,8 @@ def test_the_keep_list_is_exactly_what_a_reset_must_not_take() -> None:
         "frontend-overlay",
         "worktrees",
         "desktop-control.token",
+        "daemon-recovery.json",
+        "daemon-recovery.lock",
         ".trash",
     }
 
@@ -117,6 +119,21 @@ def test_the_sweep_moves_state_and_leaves_the_keepers(tmp_path: Path) -> None:
     # what an ordinary first start does too.
     assert "config.toml" in result.moved
     assert 'theme = "custom"' not in (config.data_dir / "config.toml").read_text(encoding="utf-8")
+
+
+def test_reset_preserves_the_live_recovery_fence_and_generation(tmp_path: Path) -> None:
+    from swe_mux import daemon_recovery as recovery
+
+    config = _install(tmp_path)
+    recovery.register_daemon(config.data_dir, "desktop-test-token")
+    record = recovery.read_record(config.data_dir)
+    lock_path = config.data_dir / recovery.LOCK_NAME
+    inode = lock_path.stat().st_ino
+    with recovery.recovery_lock(config.data_dir):
+        result = perform_reset(config, ResetRequest())
+    assert recovery.read_record(config.data_dir) == record
+    assert lock_path.stat().st_ino == inode
+    assert {recovery.RECORD_NAME, recovery.LOCK_NAME} <= set(result.kept)
 
 
 def test_nothing_is_deleted_and_the_result_says_where_it_went(tmp_path: Path) -> None:

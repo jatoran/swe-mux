@@ -43,6 +43,7 @@ Residue is what defeats the feature, and a data-directory entry added later is f
 | `frontend-overlay` | Build payload pinned to this backend. Removing it reverts the UI to a possibly-stale bundled copy. |
 | `worktrees` | The user's own git checkouts. Reported, never removed. |
 | `desktop-control.token` | Authenticates the shell process that is still running against the daemon it manages. |
+| `daemon-recovery.json`, `daemon-recovery.lock` | Current process-generation authority and the kernel fence shared with the surviving desktop monitor. Moving the lock would split that fence across two files. |
 | `.trash` | Where the reset is moving everything else. |
 
 **A repository is never touched.**

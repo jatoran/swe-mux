@@ -2863,6 +2863,9 @@ class SessionManager:
         # sessions survive a daemon restart; in-process spawning remains the
         # fallback whenever the supervisor is unreachable.
         self.supervisor = supervisor
+        # Installed by the composition root. Revoke forced daemon recovery
+        # durably before any live PTY can become owned by this process.
+        self.before_local_pty: Callable[[], None] | None = None
         # Supervised sessions this daemon could not rebuild at adoption. They keep
         # running with no UI handle, so the count is surfaced at /health.
         self.unadopted_supervisor_sessions = 0
@@ -3261,6 +3264,8 @@ class SessionManager:
             except Exception as exc:
                 pty = await self._resolve_failed_supervisor_spawn(remote, exc)
         if pty is None:
+            if self.before_local_pty is not None:
+                await asyncio.to_thread(self.before_local_pty)
             pty = PtyHost(
                 spawn_spec.executable,
                 spawn_spec.argv,
