@@ -30,6 +30,13 @@ interface RailStripProps {
   /** Enter arrange mode. Reached by holding this row's drawer control, right-clicking it,
    *  pressing the context-menu key on it, or from the popover's own control. */
   onArrange: () => void
+  /**
+   * A request from outside the row to open its popover: the rail's context menu offers
+   * "Open all actions" for the row it was opened on. A counter rather than a boolean,
+   * because the popover's open state is this row's own - the menu asks once, and a second
+   * ask after the operator closed the panel has to open it again. Zero is no request.
+   */
+  openRequest?: number
 }
 
 /**
@@ -48,10 +55,12 @@ interface RailStripProps {
  * entirely - a popover over a rail being rearranged would draw the same row twice with only
  * one of the copies under the pointer.
  */
-export function RailStrip({ chips, onConfigure, label, device, rowId, arranging, caretAt, onArrange }: RailStripProps) {
+export function RailStrip({ chips, onConfigure, label, device, rowId, arranging, caretAt, onArrange, openRequest = 0 }: RailStripProps) {
   const trailingRef = useRef<HTMLDivElement>(null)
   const [open, setOpen] = useState(false)
   const press = useRailLongPress()
+
+  useEffect(() => { if (openRequest > 0) setOpen(true) }, [openRequest])
 
   // A chip that navigates somewhere else folds the panel. Listened for on the bus rather
   // than wrapped around each handler, because the same departure arrives from a chip here,
@@ -72,7 +81,10 @@ export function RailStrip({ chips, onConfigure, label, device, rowId, arranging,
 
   const arrange = () => { setOpen(false); onArrange() }
 
-  return <div class="rail-row">
+  // `data-rail-row-id` on the row itself, where the strip's `data-rail-row` cannot be read
+  // from: a right-click on the trailing cluster or the row's own padding lands outside the
+  // scroller, and the context menu still has to know which row's popover to open.
+  return <div class="rail-row" data-rail-row-id={rowId}>
     <OverflowRail
       className="terminal-action-scroll"
       wrapperClassName="terminal-action-scroller"

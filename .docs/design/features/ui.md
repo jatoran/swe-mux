@@ -2025,6 +2025,17 @@ The app-wide answer to "what is this", and the recovery path for the tour.
   **The rail has a per-device-class master switch** (`rail_enabled_desktop` / `rail_enabled_mobile`, Settings → Actions → Action rail, both on by default, hot-applied).
   Off suppresses the whole rail block for that device class - on mobile that includes the pinned Send button, which the control's copy states - while the catalog, layouts, and per-Project overrides are retained untouched, so turning it back on restores exactly what was there.
   It is also one of the first-run Customize switches (`first-run.md`).
+  **The desktop rail can be hover-only** (`rail_hover_desktop`, Settings → Actions → Action rail, off by default, hot-applied, and toggled from the rail's own context menu).
+  On, the rail leaves the pane's flow: the terminal takes the rows the rail occupied, and the rail slides up *over* the bottom of the terminal while the pointer is in the strip it would have occupied, then slides away when the pointer leaves.
+  Revealing it moves nothing - it is stacked in the terminal's own grid cell rather than placed in a track - so the PTY grid is decided once by the switch and never by a hover.
+  The decision is `railHover.ts` and is re-read at every moment one of its inputs can change; the rules it turns on: the reveal zone is the rail's own footprint (with a floor, so a rail of no height yet is still reachable); an open rail panel - the complete-row popover, a drop-up, a standing pad dial, the arrange panel, the rail's context menu - holds the rail up wherever the pointer is, and a pointer over one of those overlays counts as being on the rail; a drag passing through the zone with a button held, and a pointer resting on the jump-to-latest or peek chip that share the corner, do not reveal, because covering the control under the pointer is the wrong answer; keyboard focus inside the rail shows it (`:focus-within`), so a Tab reaches a hidden rail's chips.
+  The mode applies only to the desktop profile on a device that can hover - the phone's rail is the keyboard, and a touch tablet at desktop width could never reach a rail that only appears on hover - and only while the desktop rail is on at all.
+  A hidden rail takes no pointer events, so the bottom row of the terminal beneath it stays clickable and selectable.
+  Bottom-anchored messages re-measure `--rail-clearance` on each reveal transition, so a message lifts while the rail is up and settles back when it is not.
+  **On desktop a right-click anywhere on the rail opens the rail's own menu**: Open all actions (this row's complete-row popover), Configure actions… (Settings → Actions), and the hover-only switch with its state marked.
+  Not on the drawer control, whose right-click is arrange; not inside the popover or the arrange panel, where the rows are already in hand; and not while arranging, when the chips are inert by design.
+  A phone keeps only the platform-menu suppression: its rail answers a hold with arrange, and there is nothing on a touch rail a menu is the answer to.
+  The terminal body itself still has no context menu on any device.
   **No message of any kind is drawn inside a rail row.**
   A rail row is chips plus its drawer control, and nothing else competes with them for width.
   The rule was learned the hard way: the selection readout used to ride the last row, in trailing furniture that does not shrink and under a `34vw` cap - viewport units inside a pane that is usually a fraction of the viewport.

@@ -992,6 +992,9 @@ export function App() {
   // object identity on an unchanged pair would re-render every live terminal per
   // config arrival.
   const [railEnabled, setRailEnabled] = useState<{desktop:boolean;mobile:boolean}>({desktop:true,mobile:true})
+  // `rail_hover_desktop`: the desktop rail overlays the bottom of the terminal and shows on
+  // hover. Off until a config says otherwise, which is the in-flow rail every build shipped.
+  const [railHover, setRailHover] = useState(false)
   // Chrome scale as a number. Every other surface reads it as a CSS custom property, but
   // xterm owns its own font and derives the cell grid from it, so the terminal has to be
   // handed the value rather than inheriting it.
@@ -2005,6 +2008,8 @@ export function App() {
       const next = {desktop: config.rail_enabled_desktop !== false, mobile: config.rail_enabled_mobile !== false}
       return current.desktop === next.desktop && current.mobile === next.mobile ? current : next
     })
+    // `=== true` for the opposite reason: a daemon predating the key keeps the in-flow rail.
+    setRailHover(config.rail_hover_desktop === true)
     // Value-compared for the same reason as mobileInput below: this feeds
     // TerminalPane's mount effect, so a fresh object identity on an unchanged
     // machine descriptor would dispose and rebuild every live terminal.
@@ -2092,6 +2097,21 @@ export function App() {
         void loadConfig(false)
       })
     },300)
+  }
+
+  // The rail's own context menu writes the hover switch straight through, the way the
+  // drawer-display menus do: the switch is one bit with its consequence in its label, and
+  // a round trip through the Settings draft would make a right-click cost a Save.
+  const persistRailHover=async(next:boolean)=>{
+    const previous=railHover
+    setRailHover(next)
+    try{
+      const config=await api<AppConfig>('PATCH','/api/config',{rail_hover_desktop:next})
+      applyConfig(config,false)
+    }catch(cause){
+      setRailHover(previous)
+      setError(`The rail's hover setting could not be saved: ${cause instanceof Error?cause.message:String(cause)}`)
+    }
   }
 
   const persistDrawerDisplay=async(surface:'tabs'|'rail',next:'icon'|'title')=>{
@@ -7532,7 +7552,8 @@ export function App() {
     const terminalPane=<section key={id} class={`terminal-pane ${session.plugin_id?'plugin-utility-pane ':''}${activeId === id||forceVisible ? 'focused' : ''} ${paneVisible ? '' : 'pane-warm'}`} aria-hidden={paneVisible?undefined:'true'} onPointerDown={() => {setActiveId(id);setFocusedViewId(id)}}>
       <SessionTopbar session={session} config={sessionTopbarConfig} rowConfig={rowConfig} facts={rowFacts}
         onContextMenu={openPaneMenu} onDblClick={()=>setZoomedId(current=>current===id?null:id)}
-        title={<div class="pane-identity"><span class="pane-title" title={paneTitleHint}>{paneTitle}</span>{!!paneFaults.length&&<span class="pane-fault" role="img" aria-label={`${paneFaults.length===1?'Session fault':'Session faults'}: ${paneFaults.join('; ')}`} title={paneFaults.join('\n')}>⚠</span>}</div>}
+        title={<span class="pane-title" title={paneTitleHint}>{paneTitle}</span>}
+        fault={paneFaults.length?<span class="pane-fault" role="img" aria-label={`${paneFaults.length===1?'Session fault':'Session faults'}: ${paneFaults.join('; ')}`} title={paneFaults.join('\n')}>⚠</span>:undefined}
         renderAction={(actionId:SessionTopbarActionId)=>{
           if(actionId==='approvals')return agentSession?<ApprovalChip session={session}/>:null
           const tabId=actionId.slice('drawer:'.length) as DrawerTabId
@@ -7549,7 +7570,7 @@ export function App() {
         onRestart={isInactiveSession(session)&&session.backend==='shell'?()=>void resumeSession(session):canRestartCold(session)?()=>void relaunchSession(session):undefined}
         onOpenTranscript={hasHarnessTranscript(session.backend)?()=>showHistoryEntry(session.agent_run_id||session.id):undefined}
       />}
-      <TerminalPane session={session} onState={updateSession} startupOrigin={startupOrigins.current[session.id]} onStartupTiming={(milestone,elapsedMs)=>recordClientStartupTiming(session.id,milestone,elapsedMs)} broadcast={broadcast} scrollback={xtermScrollback} rendererPreference={terminalRenderer} windowsPty={windowsPty} mobileInput={mobileInput} uiScale={uiScale} visible={paneVisible} claudeMaxColumns={claudeMaxColumns} railEnabled={railEnabled} onConfigureRail={openActionSettings} onBranch={()=>void branchSession(session)} />
+      <TerminalPane session={session} onState={updateSession} startupOrigin={startupOrigins.current[session.id]} onStartupTiming={(milestone,elapsedMs)=>recordClientStartupTiming(session.id,milestone,elapsedMs)} broadcast={broadcast} scrollback={xtermScrollback} rendererPreference={terminalRenderer} windowsPty={windowsPty} mobileInput={mobileInput} uiScale={uiScale} visible={paneVisible} claudeMaxColumns={claudeMaxColumns} railEnabled={railEnabled} railHover={railHover} onRailHoverChange={next=>void persistRailHover(next)} onConfigureRail={openActionSettings} onBranch={()=>void branchSession(session)} />
     </section>
     if(insideStack)return terminalPane
     return <section data-tutorial="workspace-pane" class={`pane-stack singleton-stack ${forceVisible?'plugin-popup-stack':''}`}><OverflowRail className="stack-tabs" wrapperClassName="stack-tabs-rail" activeKey={id} stripProps={{'data-tutorial':'tab-strip',role:'tablist','aria-label':'Terminal tabs'}}>

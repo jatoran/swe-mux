@@ -14,10 +14,15 @@ The daemon stores the document opaquely.
 - A layout contains one to three rows.
 - Every row has ordered left and right sections plus a separator.
 - A metric or shortcut occurs at most once in the whole layout.
-- Title is required and cannot be removed.
-- The overflow session menu is fixed outside the configurable catalog.
+- Every item is removable, the title included; a bar with nothing placed is a legal layout.
+- The overflow session menu is fixed outside the configurable catalog, which is what keeps every pane's recovery path whatever is removed.
 - Removing a row rehomes its items instead of discarding them.
-- Normalization repairs malformed items, duplicate entries, invalid separators, absent title, and excess rows.
+- Normalization repairs malformed items, duplicate entries, invalid separators, and excess rows.
+
+The stored document carries a `version`, and the title's removability is what it records.
+Under version 1 the editor could not remove the title, so a stored layout without one could only be malformed and normalization put it back at the head of the first row.
+Version 2 made the title removable, so a version-2 layout without a title is a choice and is kept.
+A blob carrying version 1, or no version at all, still receives the repair; every write from a current build stamps the current version.
 
 The shipped one-row default preserves the existing agent controls: title and conditional cwd on the left, approvals, Queue, and Transcript on the right.
 
@@ -47,7 +52,10 @@ Changing the persistent row count deliberately changes PTY geometry once; ordina
 The shared five-second row clock updates time-based metrics inside the top bar without making `App.tsx` a clock subscriber.
 
 Density is `compact`, `standard`, or `comfortable`.
-The title keeps its bounded yielding width and faults remain visible beside it.
+The title keeps its bounded yielding width.
+
+The session-fault marker is not a metric and cannot be removed.
+It is drawn beside the title while the title is placed, and alone at the head of the first row when the layout has no title, because a stale transcript is the one fault that otherwise looks like a healthy session and the agent header has no other pane-level surface for it.
 The overflow menu stays at the first row's right edge on every layout.
 
 ## Settings and navigation
@@ -55,6 +63,7 @@ The overflow menu stays at the first row's right edge on every layout.
 The editor has its own Appearance subpage and a sticky live preview on desktop and mobile.
 The preview fills the current device's available Settings width and has no separate width control.
 The preview renders one hypothetical active session and updates from local editor state before persistence finishes.
+A removed title is offered again under the row's add controls, so the removal is reversible from the same editor.
 Right-clicking a pane top bar and choosing **Configure appearance** deep-links to this page.
 The same row from sidebar, tab, and mobile session menus continues to target Appearance → Session rows.
 

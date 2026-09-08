@@ -135,6 +135,7 @@ type Config = {
   ui_scale_desktop:UiScale;ui_scale_mobile:UiScale
   rail_density_desktop:RailDensity;rail_density_mobile:RailDensity
   rail_enabled_desktop:boolean;rail_enabled_mobile:boolean
+  rail_hover_desktop:boolean
   claude_max_columns:ClaudeMaxColumns
   note_shortcut_overrides:Record<string,string>
   ccusage_enabled:boolean; ccusage_refresh_minutes:number
@@ -2835,6 +2836,8 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <label class="check" data-setting="rail_enabled_desktop"><span>Show the rail on desktop</span><input type="checkbox" checked={draft.rail_enabled_desktop} onChange={e=>change('rail_enabled_desktop',e.currentTarget.checked)} /></label>
           <label class="check" data-setting="rail_enabled_mobile"><span>Show the rail on mobile</span><input type="checkbox" checked={draft.rail_enabled_mobile} onChange={e=>change('rail_enabled_mobile',e.currentTarget.checked)} /></label>
           <p>The row of keys and actions under each terminal. Turning a device class off hides the whole rail there — on mobile that includes the pinned Send button — while your configured layout is kept and comes back untouched.</p>
+          <label class="check" data-setting="rail_hover_desktop"><span>Only show the desktop rail on hover</span><input type="checkbox" checked={draft.rail_hover_desktop} disabled={!draft.rail_enabled_desktop} onChange={e=>change('rail_hover_desktop',e.currentTarget.checked)} /></label>
+          <p>The terminal takes the rows the rail used to occupy, and the rail slides up over the bottom of the terminal while the mouse is there. It stays up while one of its panels is open - the complete-row popover, a drop-up, a pad's dial, arranging - and while a chip has keyboard focus. Right-click the rail to toggle this without opening Settings. Desktop only: a phone has nothing to hover with.</p>
           <label data-setting="rail_density_desktop">Desktop rail density<Dropdown value={draft.rail_density_desktop} onChange={value=>changeRailDensity('rail_density_desktop',value)} options={RAIL_DENSITIES.map(step=>({value:step,label:railDensityLabel(step)}))}/></label>
           <label data-setting="rail_density_mobile">Mobile rail density<Dropdown value={draft.rail_density_mobile} onChange={value=>changeRailDensity('rail_density_mobile',value)} options={RAIL_DENSITIES.map(step=>({value:step,label:railDensityLabel(step)}))}/></label>
           <p>How tightly the Action rail under each terminal packs its buttons. Below Comfortable, a phone's buttons drop under the 44px touch target, which is why the two devices are set separately.</p></section><section><h3>Action layout</h3><ActionEditorPanel projectId={focusedProjectId}/></section></Fragment>}

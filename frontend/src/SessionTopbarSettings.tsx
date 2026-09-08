@@ -77,7 +77,7 @@ export function SessionTopbarSettings(){
         <button type="button" title="Move earlier" disabled={index===0} onClick={()=>change(placeSessionTopbarItem(config,item,rowIndex,align,index-1))}>↑</button>
         <button type="button" title="Move later" disabled={index===total-1} onClick={()=>change(placeSessionTopbarItem(config,item,rowIndex,align,index+1))}>↓</button>
         <button type="button" title={`Move ${other}`} onClick={()=>change(placeSessionTopbarItem(config,item,rowIndex,other))}>{align==='left'?'→':'←'}</button>
-        <button type="button" class="danger" title="Remove" disabled={item.kind==='metric'&&item.id==='title'} onClick={()=>change(removeSessionTopbarItem(config,item))}>×</button>
+        <button type="button" class="danger" title="Remove" onClick={()=>change(removeSessionTopbarItem(config,item))}>×</button>
       </span>
     </li>
   }
@@ -97,7 +97,7 @@ export function SessionTopbarSettings(){
           menu={<button type="button" aria-label="More actions">⋯</button>}/>
       </div>
     </div>
-    <p>Arrange session metrics and shortcuts into one to three rows. The overflow menu stays fixed so every pane keeps a recovery path even when all optional shortcuts are removed.</p>
+    <p>Arrange session metrics and shortcuts into one to three rows. Everything is removable, the title included; the overflow menu stays fixed so every pane keeps a recovery path even when nothing else is placed.</p>
     {error&&<p class="settings-inline-error" aria-live="polite">{error}</p>}
     <label>Row density<Dropdown value={config.density} onChange={value=>change({...config,density:value as SessionTopbarConfig['density']})} options={[{value:'compact',label:'Compact'},{value:'standard',label:'Standard'},{value:'comfortable',label:'Comfortable'}]}/></label>
     <div class="theme-actions"><button type="button" onClick={()=>change(defaultSessionTopbarConfig())}>Reset to default</button></div>

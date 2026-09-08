@@ -917,6 +917,13 @@ class Config:
     # it back on restores exactly what was there.
     rail_enabled_desktop: bool = True
     rail_enabled_mobile: bool = True
+    # Whether the desktop rail is drawn over the terminal only while the pointer is at
+    # the bottom of the pane, instead of in flow under it. On, the terminal keeps the
+    # rows the rail used to take and the rail slides up over them on hover; it stays
+    # up while any of its overlays (the complete-row popover, a drop-up, a pad's dial,
+    # arrange mode) is open. Desktop only: a phone has no pointer to hover with, and
+    # its rail is the keyboard. Off is the shipped in-flow rail.
+    rail_hover_desktop: bool = False
     middle_click_paste: bool = True
     broadcast_default: bool = False
     mobile_vertical_drag: str = "smart"

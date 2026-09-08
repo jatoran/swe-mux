@@ -16,7 +16,7 @@ Design: `../../../design/features/terminal-input.md`.
 
 - xterm and WebSocket lifecycle, pointer gesture classification, and the redraw-clocked steering loop those decisions drive.
 - File picker, drop, and paste attachment uploads, plus unicast draft references.
-- Command-rail composition and pre-replay attach sizing.
+- Command-rail composition and pre-replay attach sizing, the rail's context menu, and the readings behind the hover-only rail (`railHover.ts`; `layout-and-chrome.md`).
 - Renderer policy and fallback: DOM-only for mobile, Claude, and OMP.
 - Replay, including the ring byte-cursor a reconnect offers as `since` so the daemon answers with a delta into an un-reset terminal instead of a fresh bounded window.
 - Device-response classification and Codex late-color suppression, input, and responsive fitting.

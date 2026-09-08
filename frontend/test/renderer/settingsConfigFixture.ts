@@ -249,6 +249,7 @@ export const SETTINGS_CONFIG_FIXTURE = {
   "rail_density_mobile": "comfortable",
   "rail_enabled_desktop": true,
   "rail_enabled_mobile": true,
+  "rail_hover_desktop": false,
   "reconcile_external_history": true,
   "request_spawn_enabled": true,
   "requires_auth": false,

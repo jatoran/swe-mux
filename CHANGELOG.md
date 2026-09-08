@@ -15,6 +15,21 @@ The release procedure that maintains this file is [`RELEASING.md`](RELEASING.md)
 
 ## [Unreleased]
 
+### Added
+
+- **The desktop command rail can be hover-only.**
+  Settings → Actions → Action rail → "Only show the desktop rail on hover" (`rail_hover_desktop`, off by default) takes the rail out of the pane: the terminal keeps the rows the rail used to occupy, and the rail slides up over the bottom of the terminal while the mouse is there.
+  Revealing it never resizes the terminal.
+  It stays up while one of its panels is open - the complete-row popover, a drop-up, a pad's dial, arranging - and while a chip has keyboard focus, and it does not appear under a drag or over the jump-to-latest chip.
+  Desktop only: a phone's rail is its keyboard, and a touch tablet has nothing to hover with.
+- **Right-clicking the desktop rail opens its own menu**: open this row's complete list of actions, configure the rail in Settings, or toggle hover-only without opening Settings.
+
+### Fixed
+
+- **The session title can be removed from the pane top bar.**
+  Settings → Appearance → Session top bars refused to remove it and put it back on every load; every item is now removable, the title is offered again under the row's add controls, and the pane's fault marker stays visible at the head of the bar when the title is gone.
+- **Switching the command rail off or on in Settings reaches an open pane immediately**, rather than on the next unrelated change to that session.
+
 ## [0.2.7] - 2026-09-06
 
 ### Changed
