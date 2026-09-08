@@ -2,9 +2,9 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { defaultSessionRowConfig } from '../src/sessionRowConfig.ts'
 import {
-  SESSION_TOPBAR_MAX_ROWS, addSessionTopbarRow, defaultSessionTopbarConfig,
+  SESSION_TOPBAR_MAX_ROWS, SESSION_TOPBAR_VERSION, addSessionTopbarRow, defaultSessionTopbarConfig,
   normalizeSessionTopbarConfig, placeSessionTopbarItem, removeSessionTopbarItem,
-  removeSessionTopbarRow, sessionTopbarContextRender, sessionTopbarItemKey,
+  removeSessionTopbarRow, sessionTopbarContextRender, sessionTopbarHasTitle, sessionTopbarItemKey,
   sessionTopbarMetricHasStyle, sessionTopbarMetricStyle, sessionTopbarRowConfig,
   setSessionTopbarMetricStyle, unplacedSessionTopbarItems, type SessionTopbarMetricItem,
 } from '../src/sessionTopbarConfig.ts'
@@ -18,7 +18,9 @@ test('the default is one row with title and the three existing agent controls',(
   ])
 })
 
-test('normalization keeps one title, unique items, and no more than three rows',()=>{
+test('normalization keeps unique items and no more than three rows, and repairs a version-1 layout\'s title',()=>{
+  // No `version`: a layout from before the title could be removed, whose missing title
+  // can only be a malformed blob and is put back.
   const config=normalizeSessionTopbarConfig({rows:Array.from({length:5},()=>({
     left:[{kind:'metric',id:'model',mode:'always'}],right:[],separator:'bad',
   }))})
@@ -26,6 +28,30 @@ test('normalization keeps one title, unique items, and no more than three rows',
   assert.equal(config.rows.flatMap(row=>row.left).filter(item=>sessionTopbarItemKey(item)==='metric:model').length,1)
   assert.equal(config.rows.flatMap(row=>row.left).filter(item=>sessionTopbarItemKey(item)==='metric:title').length,1)
   assert.equal(config.rows[0].separator,'dot')
+  assert.equal(config.version,SESSION_TOPBAR_VERSION,'every write stamps the current version')
+  const explicitV1=normalizeSessionTopbarConfig({version:1,rows:[{left:[{kind:'metric',id:'model',mode:'always'}],right:[],separator:'dot'}]})
+  assert.ok(sessionTopbarHasTitle(explicitV1))
+})
+
+test('a layout written since the title became removable keeps its choice',()=>{
+  // The whole reason for the version stamp: without it every load put the title back,
+  // and the editor's remove control could never take effect.
+  let config=defaultSessionTopbarConfig()
+  const title=config.rows[0].left[0]
+  assert.deepEqual(title,{kind:'metric',id:'title',mode:'always'})
+  config=removeSessionTopbarItem(config,title)
+  assert.ok(!sessionTopbarHasTitle(config))
+  assert.deepEqual(config.rows[0].left.map(sessionTopbarItemKey),['metric:cwd'])
+  const reloaded=normalizeSessionTopbarConfig(JSON.parse(JSON.stringify(config)))
+  assert.ok(!sessionTopbarHasTitle(reloaded),'the round trip through storage does not put it back')
+  // And it is offered again, so the removal is reversible from the same editor.
+  assert.ok(unplacedSessionTopbarItems(reloaded).some(item=>item.key==='metric:title'))
+  const restored=placeSessionTopbarItem(reloaded,{kind:'metric',id:'title',mode:'always'},0,'left')
+  assert.ok(sessionTopbarHasTitle(restored))
+  // A bar with everything removed still normalizes to one empty row rather than to the default.
+  let bare=defaultSessionTopbarConfig()
+  for(const item of [...bare.rows[0].left,...bare.rows[0].right])bare=removeSessionTopbarItem(bare,item)
+  assert.deepEqual(bare.rows,[{left:[],right:[],separator:'dot'}])
 })
 
 test('placing moves an item across rows and alignments rather than duplicating it',()=>{
@@ -36,10 +62,8 @@ test('placing moves an item across rows and alignments rather than duplicating i
   assert.deepEqual(config.rows[1].left.map(sessionTopbarItemKey),['action:drawer:queue'])
 })
 
-test('title cannot be removed and removing a row rehomes its contents',()=>{
+test('removing a row rehomes its contents',()=>{
   let config=addSessionTopbarRow(defaultSessionTopbarConfig())
-  const title=config.rows[0].left[0]
-  assert.deepEqual(removeSessionTopbarItem(config,title),config)
   config=placeSessionTopbarItem(config,{kind:'metric',id:'model',mode:'always'},1,'right')
   config=removeSessionTopbarRow(config,1)
   assert.equal(config.rows.length,1)

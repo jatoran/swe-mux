@@ -30,6 +30,8 @@ export interface TerminalPaneMemoProps {
   uiScale: number
   visible: boolean
   claudeMaxColumns: number
+  railEnabled?: { desktop: boolean; mobile: boolean }
+  railHover?: boolean
 }
 
 /** Value equality for a list the daemon rebuilds on every publish. */
@@ -81,5 +83,13 @@ export function terminalPanePropsEqual(
     // setting appears to do nothing until every terminal is rebuilt.
     a.claudeMaxColumns === b.claudeMaxColumns &&
     // Without this the memo swallows the change and the pane keeps the old font.
-    a.uiScale === b.uiScale
+    a.uiScale === b.uiScale &&
+    // The two rail switches. Both are read in the render body, so a change the memo
+    // swallowed reached a pane only on the next unrelated re-render - the rail toggled
+    // off in Settings stayed drawn until the session's state happened to move. Compared
+    // by value: App rebuilds the object only when a field changed, but the rule here is
+    // about the fields.
+    (a.railEnabled?.desktop ?? true) === (b.railEnabled?.desktop ?? true) &&
+    (a.railEnabled?.mobile ?? true) === (b.railEnabled?.mobile ?? true) &&
+    (a.railHover ?? false) === (b.railHover ?? false)
 }

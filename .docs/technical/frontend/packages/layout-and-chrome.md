@@ -26,7 +26,7 @@ App assigns each pane trigger a stable `pane:<stack-id>` identity and focuses th
 
 ## Pinned rail and overflow popover
 
-`RailStrip.tsx`, `RailOverflowPopover.tsx`, `railOverlayPlacement.ts`, `railClearance.ts`, plus `railOverlayBox` / `railPopoverClosingCommand` in `railOverflow.ts`
+`RailStrip.tsx`, `RailOverflowPopover.tsx`, `railOverlayPlacement.ts`, `railClearance.ts`, `railHover.ts`, plus `railOverlayBox` / `railPopoverClosingCommand` in `railOverflow.ts`
 
 `RailStrip.tsx` is one Action rail row.
 Every configured chip remains in `OverflowRail`; no measurement twin or fit split exists.
@@ -43,7 +43,19 @@ The drawer control is also the way into arranging the rail, and it is the right 
 It uses `railLongPress.ts` for all three routes at once - a touch hold, a right-click, and the context-menu key - which is what gives arrangement a keyboard route without a binding of its own.
 While arranging, that control stands down and the popover cannot be opened: the arrange panel restates every row as a grid, and a popover would be a third copy of a row with only one of the copies under the pointer.
 The popover's footer offers `Arrange` beside the configuration control, and taking it closes the popover for the same reason.
-`RailStrip` publishes its row's stored identity through `stripProps` as `data-rail-row`, which is what a drop resolves against (`actions-and-clipboard.md`).
+`RailStrip` publishes its row's stored identity through `stripProps` as `data-rail-row`, which is what a drop resolves against (`actions-and-clipboard.md`), and again as `data-rail-row-id` on the row element itself, because a right-click on the trailing cluster or the row's own padding lands outside the scroller and the pane's context menu still has to know which row's popover to open.
+That menu asks through `openRequest`, a counter rather than a boolean: the popover's open state is the row's own, and a second ask after the operator closed the panel has to open it again.
+
+`railHover.ts` is the browser-free decision behind the hover-only desktop rail (`rail_hover_desktop`; `design/features/ui.md`).
+`railHoverApplies` says whether the mode is on for this pane at all - the desktop profile, a device that can hover (`canHover` in `deviceSettings.ts`), the setting, and the rail's own master switch.
+`railHoverShown` answers one reading: the pointer's position against the surface's box, whether its target is the rail or one of the rail's overlays (`RAIL_HOVER_OVERLAY_SELECTOR`), whether it is a control that shares the corner (`RAIL_HOVER_TERMINAL_CONTROL_SELECTOR`), whether a button is held, and whether a panel is standing.
+`TerminalPane` takes the readings and re-runs the decision at every moment an input can change: pointer move and leave on the surface, a `MutationObserver` on the rail's subtree (the popover mounts there) and on the body's child list (the pad dial is portalled there), and an effect on the three pieces of pane state that count as engagement - arranging, an open drop-up, the rail's context menu.
+The result is one class pair on the rail element (`rail-hover`, `rail-hover-shown`); the stylesheet does the rest, and `:focus-within` shows a hidden rail to a keyboard with no help from the module.
+`remeasureRailClearance` exists for this mode: the show and hide are a transform, which moves the rail's box without resizing it, so neither the `ResizeObserver` nor the window fires and the pane asks for the measurement itself on each transition.
+
+The rail's context menu is the pane's one menu (`.terminal-menu.rail-menu`), opened by the surface-level `contextmenu` listener that also suppresses the platform menu on every device.
+It reuses the pane's menu state, dismissal, and arrow-key navigation, and offers the row's popover, Configure Actions, and the hover-only switch, which `App` writes straight through `PATCH /api/config` the way the drawer-display menus do.
+`test/renderer/rail-hover.spec.ts` drives all of it in the demo app over the fake daemon, because the menu, the hover decision, and the config write only meet inside a real `TerminalPane`; `test/renderer/pane-layout.spec.ts` pins the overlay's geometry and `test/railHover.test.ts` the rule.
 
 `railClearance.ts` keeps app-level floating messages off that rail.
 `.interaction-hud`, `.notification-toast`, and `.toast-stack` are pinned to the viewport's bottom-right corner, which on a maximised window is precisely where the rail is; the latter two take pointer events, so the overlap stole taps rather than only obscuring chips.
@@ -196,7 +208,9 @@ The stylesheet is the only consumer of the *property* but not the only consumer 
 
 `sessionTopbarConfig.ts`, `sessionTopbarPrefs.ts`, `SessionTopbar.tsx`, `SessionTopbarSettings.tsx`
 
-`sessionTopbarConfig.ts` owns the browser-free one-to-three-row layout, the combined metric and drawer-shortcut catalog, normalization, placement, row removal with rehoming, the non-removable title invariant, and the per-item context rendering (`sessionTopbarRowConfig`), which is the one place a top-bar metric's row configuration differs from the sidebar's.
+`sessionTopbarConfig.ts` owns the browser-free one-to-three-row layout, the combined metric and drawer-shortcut catalog, normalization, placement, and row removal with rehoming.
+It also owns the version stamp that makes a removed title a kept choice rather than a repaired defect (`SESSION_TOPBAR_VERSION`, `sessionTopbarHasTitle`), and the per-item context rendering (`sessionTopbarRowConfig`), which is the one place a top-bar metric's row configuration differs from the sidebar's.
+`SessionTopbar.tsx` takes the pane's `title` and its `fault` marker separately, because the marker is drawn beside the title while one is placed and alone at the head of the first row when none is.
 `sessionTopbarPrefs.ts` pins the shared layout to the canonical desktop profile and republishes settings changes.
 `SessionTopbar.tsx` combines the shared session-row metric engine with target-aware actions supplied by `App.tsx`.
 `SessionTopbarSettings.tsx` owns the dedicated Appearance page and sticky realtime preview.

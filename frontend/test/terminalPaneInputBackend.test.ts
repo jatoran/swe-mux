@@ -107,6 +107,20 @@ test('a launch seen in an unpromoted shell re-renders the pane', () => {
   )
 })
 
+test('the rail switches re-render the pane', () => {
+  // Both are read in the render body. A memo that compared neither delivered a rail
+  // toggled off in Settings only on the next unrelated re-render, so the setting looked
+  // as if it did nothing until the session's state happened to move.
+  const withRail = (railEnabled: unknown, railHover?: boolean) => ({ ...(props() as object), railEnabled, railHover }) as never
+  assert.equal(terminalPanePropsEqual(withRail({ desktop: true, mobile: true }), withRail({ desktop: true, mobile: true })), true)
+  assert.equal(terminalPanePropsEqual(withRail({ desktop: true, mobile: true }), withRail({ desktop: false, mobile: true })), false)
+  assert.equal(terminalPanePropsEqual(withRail({ desktop: true, mobile: true }), withRail({ desktop: true, mobile: false })), false)
+  assert.equal(terminalPanePropsEqual(withRail(undefined, false), withRail(undefined, true)), false)
+  // Absent means the shipped default, so a daemon predating a key compares equal to one
+  // that sends the default explicitly.
+  assert.equal(terminalPanePropsEqual(withRail(undefined, undefined), withRail({ desktop: true, mobile: true }, false)), true)
+})
+
 test('a contention verdict re-renders the pane', () => {
   // The notice is rendered from the record, so a pane that does not re-render on it
   // stays silent through exactly the fault the notice exists to state.

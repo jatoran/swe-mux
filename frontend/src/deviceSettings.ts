@@ -34,6 +34,16 @@ export function hasSoftKeyboard(): boolean {
   return typeof window !== 'undefined' && !!window.matchMedia?.(SOFT_KEYBOARD_QUERY).matches
 }
 
+/** Devices whose primary pointer can rest over something without pressing it. The
+ *  question the hover-only rail asks, and a different one from `MOBILE_QUERY`: a touch
+ *  tablet at desktop width is not mobile and still cannot hover. */
+export const HOVER_QUERY = '(hover: hover)'
+
+/** True where a pointer can hover. */
+export function canHover(): boolean {
+  return typeof window !== 'undefined' && !!window.matchMedia?.(HOVER_QUERY).matches
+}
+
 let cache: AllSettings = { desktop: {}, mobile: {} }
 let loaded = false
 let migrated = false

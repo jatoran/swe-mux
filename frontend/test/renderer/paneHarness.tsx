@@ -33,6 +33,10 @@ const draft = parameters.get('draft') === '1'
 const fault = parameters.get('fault') === '1'
 const tabs = parameters.get('tabs') === '1'
 const topbarRows = Math.max(1,Math.min(3,Number(parameters.get('rows')||1)))
+// The hover-only rail, in its two states. The classes are what `TerminalPane` writes from
+// `railHover.ts`; the geometry they produce is the stylesheet's, and that is what is pinned.
+const hoverRail = parameters.get('hover') === '1'
+const hoverShown = parameters.get('shown') === '1'
 
 const session={
   id:'pane-harness',project_id:'p1',name:'claude-1ee230 · refactor the scrollback ring so it keeps bracketed paste mode across replay',
@@ -60,13 +64,14 @@ function DraftHarness() {
 
 const pane = <section class="terminal-pane focused">
   <SessionTopbar preview session={session} config={topbarConfig} rowConfig={defaultSessionRowConfig()} facts={topbarFacts}
-    title={<div class="pane-identity"><span class="pane-title">{session.name}</span>{fault&&<span class="pane-fault" role="img" aria-label="Session fault: observation stale">⚠</span>}</div>}
+    title={<span class="pane-title">{session.name}</span>}
+    fault={fault?<span class="pane-fault" role="img" aria-label="Session fault: observation stale">⚠</span>:undefined}
     renderAction={id=>id==='approvals'?<div class="approval-chip-wrap"><button class="pane-tool-label approval-chip">appr:wait</button></div>:<button class={`pane-tool-label ${id.slice('drawer:'.length)}-chip`}>{id.slice('drawer:'.length)}</button>}
     menu={<button aria-label="More actions">⋯</button>}/>
   <div class="terminal-surface">
     <div class="terminal-host" />
     {draft&&<DraftHarness/>}
-    <div class="terminal-action-rail"><div class="terminal-action-rows" /></div>
+    <div class={`terminal-action-rail${hoverRail?' rail-hover':''}${hoverRail&&hoverShown?' rail-hover-shown':''}`}><div class="terminal-action-rows"><button type="button" class="term-key" data-key="esc">Esc</button></div></div>
   </div>
 </section>
 

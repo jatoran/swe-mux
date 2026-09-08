@@ -6,7 +6,17 @@ import {
   type RowAlign, type RowFieldId, type RowFieldMode, type SeparatorId, type SessionRowConfig,
 } from './sessionRowConfig.ts'
 
-export const SESSION_TOPBAR_VERSION = 1
+/**
+ * Version 2 made the title removable.
+ *
+ * Under version 1 the editor could not remove the title, so a stored layout without one
+ * could only be malformed, and normalization put it back at the head of the first row.
+ * A version-2 layout without a title is a choice, and is kept. The stored `version` is
+ * therefore what distinguishes the two: a blob carrying `1`, or none at all, still gets
+ * the repair, and every write from this build stamps `2`.
+ */
+export const SESSION_TOPBAR_VERSION = 2
+const SESSION_TOPBAR_TITLE_REMOVABLE_VERSION = 2
 export const SESSION_TOPBAR_MAX_ROWS = 3
 
 export type SessionTopbarDensity = 'compact' | 'standard' | 'comfortable'
@@ -126,7 +136,8 @@ function readItems(raw:unknown,seen:Set<string>):SessionTopbarItem[] {
 export function normalizeSessionTopbarConfig(raw:unknown):SessionTopbarConfig {
   const base=defaultSessionTopbarConfig()
   if(!raw||typeof raw!=='object')return base
-  const source=raw as {density?:unknown;rows?:unknown}
+  const source=raw as {version?:unknown;density?:unknown;rows?:unknown}
+  const titleRemovable=typeof source.version==='number'&&source.version>=SESSION_TOPBAR_TITLE_REMOVABLE_VERSION
   const seen=new Set<string>()
   const rows:Array<SessionTopbarRow>=[]
   if(Array.isArray(source.rows))for(const value of source.rows.slice(0,SESSION_TOPBAR_MAX_ROWS)){
@@ -140,7 +151,7 @@ export function normalizeSessionTopbarConfig(raw:unknown):SessionTopbarConfig {
     })
   }
   if(!rows.length)rows.push({left:[],right:[],separator:'dot'})
-  if(!seen.has('metric:title'))rows[0].left.unshift({kind:'metric',id:'title',mode:'always'})
+  if(!titleRemovable&&!seen.has('metric:title'))rows[0].left.unshift({kind:'metric',id:'title',mode:'always'})
   return {
     version:SESSION_TOPBAR_VERSION,
     density:['compact','standard','comfortable'].includes(String(source.density))
@@ -167,10 +178,15 @@ export function placeSessionTopbarItem(
   return normalizeSessionTopbarConfig({...config,rows})
 }
 
+/** Remove a placed item. Every item is removable, the title included: the overflow menu
+ *  is fixed outside the catalog, so a bar with nothing placed still has its recovery path. */
 export function removeSessionTopbarItem(config:SessionTopbarConfig,item:SessionTopbarItem):SessionTopbarConfig {
-  if(item.kind==='metric'&&item.id==='title')return config
   return normalizeSessionTopbarConfig({...config,rows:stripItem(config.rows,sessionTopbarItemKey(item))})
 }
+
+/** Whether the layout places the title anywhere. */
+export const sessionTopbarHasTitle=(config:SessionTopbarConfig):boolean=>
+  config.rows.some(row=>[...row.left,...row.right].some(item=>item.kind==='metric'&&item.id==='title'))
 
 export function setSessionTopbarMetricMode(
   config:SessionTopbarConfig,id:RowFieldId,mode:RowFieldMode,

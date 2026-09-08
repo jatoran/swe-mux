@@ -161,6 +161,55 @@ for (const viewport of [{ name: 'desktop', width: 1200, height: 760, mobile: 0 }
 }
 
 /**
+ * The hover-only rail (`rail_hover_desktop`) is an overlay, and the whole point of it is the
+ * geometry: the terminal takes the rows the rail used to occupy, and revealing the rail moves
+ * nothing. A rail that took its track back on reveal would resize the PTY on every hover,
+ * which is the regression this pins. The hidden state is also pinned as *unreachable by a
+ * pointer* rather than merely invisible, because a transparent rail that still took clicks
+ * would swallow the bottom row of the terminal.
+ */
+test('the hover-only rail overlays the surface and reveals without resizing the terminal', async ({ page }) => {
+  await page.setViewportSize({ width: 1200, height: 760 })
+  await page.goto('/pane-harness.html?mobile=0')
+  const inFlow = await page.evaluate(bounds)
+  // In flow, the rail takes a track and the host stops above it.
+  expect(inFlow.rail!.height).toBeGreaterThan(0)
+  expect(inFlow.host.y + inFlow.host.height).toBe(inFlow.rail!.y)
+
+  await page.goto('/pane-harness.html?mobile=0&hover=1')
+  const hidden = await page.evaluate(bounds)
+  // The host owns the whole surface: the second track has collapsed.
+  expect(hidden.host.y + hidden.host.height).toBe(hidden.surface.y + hidden.surface.height)
+  expect(hidden.host.height).toBeGreaterThan(inFlow.host.height)
+  // Hidden is off the bottom edge and takes no pointer.
+  expect(hidden.rail!.y).toBeGreaterThanOrEqual(hidden.surface.y + hidden.surface.height)
+  const hiddenHit = await page.evaluate(() => {
+    const surface = document.querySelector('.terminal-surface')!.getBoundingClientRect()
+    return document.elementFromPoint(surface.left + surface.width / 2, surface.bottom - 4)?.className ?? 'none'
+  })
+  expect(hiddenHit).toContain('terminal-host')
+
+  await page.goto('/pane-harness.html?mobile=0&hover=1&shown=1')
+  const shown = await page.evaluate(bounds)
+  // Shown: seated on the surface's bottom edge, over the host, and the host has not moved.
+  expect(shown.rail!.y + shown.rail!.height).toBe(shown.surface.y + shown.surface.height)
+  expect(shown.rail!.y).toBeLessThan(shown.surface.y + shown.surface.height)
+  expect(shown.host.height).toBe(hidden.host.height)
+  await expect(page.locator('.terminal-action-rail [data-key="esc"]')).toBeVisible()
+  const shownHit = await page.evaluate(() => {
+    const surface = document.querySelector('.terminal-surface')!.getBoundingClientRect()
+    return document.elementFromPoint(surface.left + surface.width / 2, surface.bottom - 4)?.closest('.terminal-action-rail') ? 'rail' : 'other'
+  })
+  expect(shownHit).toBe('rail')
+
+  // A keyboard reaches the hidden rail: focus inside it shows it without any pointer.
+  await page.goto('/pane-harness.html?mobile=0&hover=1')
+  await page.locator('.terminal-action-rail [data-key="esc"]').focus()
+  await expect.poll(async () => { const on = await page.evaluate(bounds); return on.rail!.y + on.rail!.height })
+    .toBe(hidden.surface.y + hidden.surface.height)
+})
+
+/**
  * The header names the session instead of restating its state, and the name is the one field
  * with no upper bound on its length — a generated title is a sentence. Both halves are CSS-only
  * and invisible to tsc and the unit suite: the cap is a `fit-content()` track, and the ellipsis

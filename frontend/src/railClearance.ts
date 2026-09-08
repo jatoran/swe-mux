@@ -82,6 +82,18 @@ function schedule(): void {
 }
 
 /**
+ * Re-measure without a resize.
+ *
+ * The hover-only rail shows and hides by a transform, which moves its box without
+ * changing its size, so neither the `ResizeObserver` nor the window fires. The pane calls
+ * this on each reveal transition so a message pinned to the corner lifts while the rail
+ * is up and settles back when it is not.
+ */
+export function remeasureRailClearance(): void {
+  schedule()
+}
+
+/**
  * Track one pane's rail. Returns the unregister function.
  *
  * The rail's own size is not enough to watch: splitting a pane moves a sibling's rail

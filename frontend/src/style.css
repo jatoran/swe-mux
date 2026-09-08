@@ -2720,6 +2720,18 @@ body {
    split rather than over a neighbour. */
 .terminal-action-rail{position:relative;grid-row:2;grid-column:1;min-width:0;min-height:var(--rail-row-h);display:grid;grid-template-columns:minmax(0,1fr);align-items:stretch;border-top:1px solid var(--line);background:var(--panel)}
 .terminal-action-rail.mobile-pinned-send{grid-template-columns:minmax(0,1fr) auto}
+/* The hover-only desktop rail (`rail_hover_desktop`, `railHover.ts`). It leaves the flow:
+   `grid-row:1` puts it in the terminal's own cell and `align-self:end` on that cell's bottom
+   edge, so the surface's second track collapses to nothing and the terminal keeps the rows.
+   Hidden is a transform off the bottom plus `pointer-events:none`, so the terminal beneath
+   receives the pointer and the reveal zone can be read from it. `visibility` is left alone
+   on purpose: a Tab into the rail has to land on a real chip, and `:focus-within` is what
+   shows the rail to a keyboard. The z-index sits under the clip toast (16) and over the
+   jump-to-latest and peek chips (14) - a message is a glance and wins, and a pointer on one
+   of those chips is exempted from revealing in `railHover.ts` rather than fought for here. */
+.terminal-action-rail.rail-hover{grid-row:1;align-self:end;z-index:15;transform:translateY(100%);opacity:0;pointer-events:none;transition:transform .16s ease-out,opacity .16s ease-out;box-shadow:0 -6px 18px #0009}
+.terminal-action-rail.rail-hover.rail-hover-shown,.terminal-action-rail.rail-hover:focus-within{transform:none;opacity:1;pointer-events:auto}
+@media(prefers-reduced-motion:reduce){.terminal-action-rail.rail-hover{transition:none}}
 /* Configured rows stack without wrapping. Each keeps a fixed drawer route to its complete
    button list, while the strip itself remains horizontally scrollable. */
 .terminal-action-rows{grid-row:1;grid-column:1;min-width:0;display:flex;flex-direction:column}

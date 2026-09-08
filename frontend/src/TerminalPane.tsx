@@ -26,6 +26,10 @@ import { terminalKeyDecision } from './terminalKeys'
 import { isTerminalProtocolResponse, shouldSuppressTerminalProtocolResponse } from './terminalProtocol'
 import { clampContextMenuLeft, fitMenuInViewport } from './menuPosition'
 import {
+  RAIL_HOVER_OVERLAY_SELECTOR, RAIL_HOVER_STANDING_IN_BODY_SELECTOR, RAIL_HOVER_STANDING_IN_RAIL_SELECTOR,
+  RAIL_HOVER_TERMINAL_CONTROL_SELECTOR, railHoverApplies, railHoverShown,
+} from './railHover'
+import {
   applicationTouchScroll,
   mobileDragTarget,
   terminalCellAtPoint,
@@ -54,8 +58,8 @@ import { RailArrangePanel, type RailArrangeCatalogEntry, type RailArrangeRow } f
 import { railArrangeScopeDetail, railArrangeScopeLabel } from './railArrange'
 import { useRailArrange } from './useRailArrange'
 import { applyScopedRail } from './railScope'
-import { registerRailClearance } from './railClearance'
-import { MOBILE_QUERY, currentProfile, currentRailBlob, loadRailConfig, loadResolvedRail, saveRailBlob } from './deviceSettings'
+import { registerRailClearance, remeasureRailClearance } from './railClearance'
+import { MOBILE_QUERY, canHover, currentProfile, currentRailBlob, loadRailConfig, loadResolvedRail, saveRailBlob } from './deviceSettings'
 import { APP_TAIL_KEY, VIEWPORT_MEASURE_RETRY_FRAMES, VIEWPORT_SETTLE_MS, appOffTailByDistance, appOwnsTail, attachRegistersViewport, createSurfaceRepairScheduler, createViewportScheduler, effectiveViewportCost, inputResetsAppTail, redrawVisibleTerminal, reflowVisibleTerminalRenderer, restoreTerminalScrollAnchor, scrollTerminalToTail, terminalHostIsVisible, terminalRowsAboveTail, terminalSurface, terminalSurfaceChanged, terminalWidthPolicyFontSize, trackAppTailDistance, claudeHostMaxWidth, claudeWidthCap, claudeWidthCapClamping, type SurfaceRepairScheduler, type TerminalSurface } from './terminalViewport'
 import { createWheelPacer, isWheelReportBurst } from './terminalWheelPacing'
 import { terminalRenderControl } from './terminalRenderPause'
@@ -268,6 +272,14 @@ interface Props {
    * is the stated cost of the setting rather than a surprise.
    */
   railEnabled?: { desktop: boolean; mobile: boolean }
+  /**
+   * `rail_hover_desktop`: the desktop rail lies over the bottom of the terminal and shows
+   * only while the pointer is there (`railHover.ts`). Absent means off, which is the
+   * in-flow rail every build before the key shipped.
+   */
+  railHover?: boolean
+  /** Write `rail_hover_desktop`, from the rail's own context menu. */
+  onRailHoverChange?: (next: boolean) => void
   /** Open Configure Actions from the rail's trailing gear. */
   onConfigureRail?: () => void
   /** Fork this agent conversation into a sibling pane (rail Branch button). */
@@ -401,7 +413,7 @@ async function pasteBrowserClipboard(term: Terminal, session: Session, inputBack
   return 'text'
 }
 
-function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, broadcast, scrollback, rendererPreference, windowsPty, mobileInput, uiScale, visible, claudeMaxColumns, railEnabled, onConfigureRail, onBranch }: Props) {
+function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, broadcast, scrollback, rendererPreference, windowsPty, mobileInput, uiScale, visible, claudeMaxColumns, railEnabled, railHover=false, onRailHoverChange, onConfigureRail, onBranch }: Props) {
   const utilityPane=!!session.plugin_id
   const host = useRef<HTMLDivElement>(null)
   // Held in a ref rather than closed over: every reader below lives inside the
@@ -412,7 +424,16 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
   const applyBaseFontRef = useRef<() => void>(() => {})
   const termRef = useRef<Terminal | null>(null)
   const searchRef = useRef<SearchAddon | null>(null)
-  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
+  // The rail's context menu (desktop only). The terminal body itself has no menu - a
+  // right-click there stays out of the surface entirely - so this is the pane's one menu.
+  // `rowId` is the rail row the menu was opened on, whose popover "Open all actions" opens.
+  const [menu, setMenu] = useState<{ x: number; y: number; rowId: string | null } | null>(null)
+  // "Open all actions" from that menu, as a counter per row (`RailStrip.openRequest`).
+  const [railPopoverRequest, setRailPopoverRequest] = useState<{ rowId: string; seq: number } | null>(null)
+  // Whether the hover-only rail is currently showing. Written by the effect below from
+  // `railHoverShown`, and only ever read by the render: every input to the decision lives
+  // in refs or in the DOM, so the effect re-reads rather than the render recomputing.
+  const [railShown, setRailShown] = useState(false)
   const [dropup, setDropup] = useState<RailDropupState | null>(null)
   const [findOpen, setFindOpen] = useState(false)
   const [findQuery, setFindQuery] = useState('')
@@ -542,6 +563,10 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     save:next=>arrangeSaveRef.current(next),
   })
   const exitArrange=arrange.exit
+  // For the listeners bound per session below (the rail's context menu, the hover-only
+  // rail), which must not be re-bound on every mode change to read it.
+  const arrangingRef=useRef(false)
+  arrangingRef.current=arrange.arranging
   // Ending a session is a two-click confirm, and App owns both the armed id and the
   // window that disarms it (`requestKill`). The rail button mirrors that broadcast
   // rather than running a second timer of its own, so its label can never disagree
@@ -3534,17 +3559,30 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     if(!surface)return
     return preserveSoftKeyboardAcross(surface,'.terminal-action-rail')
   },[session.id])
-  // Android's own long-press menu cancels the pointer about 500 ms in, which would kill an
-  // arrange drag a moment after it lifted, and there is nothing on this toolbar a context
-  // menu is the answer to.
+  // The rail's context menu, and the platform menu's suppression.
+  //
+  // The browser's own menu is refused on every device: Android's long-press menu cancels the
+  // pointer about 500 ms in, which would kill an arrange drag a moment after it lifted, and
+  // a phone's rail answers a hold with arrange rather than with a menu. On desktop the
+  // right-click opens the rail's menu instead - the complete row, the configuration editor,
+  // and the hover-only switch. Not on the drawer control, whose right-click is arrange and
+  // stops before it gets here; not inside the popover or the arrange panel, where the menu's
+  // rows are already in hand; and not while arranging, when the chips are inert by design.
   useEffect(()=>{
     const surface=host.current?.closest<HTMLElement>('.terminal-surface')
     if(!surface)return
-    const suppress=(event:Event)=>{
-      if(event.target instanceof Element&&event.target.closest('.terminal-action-rail'))event.preventDefault()
+    const onContextMenu=(event:MouseEvent)=>{
+      const target=event.target instanceof Element?event.target:null
+      if(!target?.closest('.terminal-action-rail'))return
+      event.preventDefault()
+      if(currentProfile()!=='desktop'||arrangingRef.current)return
+      if(target.closest('.rail-overflow-popover, .rail-arrange'))return
+      const rowId=target.closest<HTMLElement>('[data-rail-row-id]')?.dataset.railRowId??null
+      setDropup(null)
+      setMenu({x:event.clientX,y:event.clientY,rowId})
     }
-    surface.addEventListener('contextmenu',suppress)
-    return()=>surface.removeEventListener('contextmenu',suppress)
+    surface.addEventListener('contextmenu',onContextMenu)
+    return()=>surface.removeEventListener('contextmenu',onContextMenu)
   },[session.id])
 
   // Its own effect on purpose: the one above owns the terminal's whole lifetime, so
@@ -3945,6 +3983,81 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
   // arrival, and the breakpoint change that flips `currentProfile()` re-renders it too.
   const railOn=railEnabled?.[currentProfile()]??true
   const railDevice:RailDevice=currentProfile()
+  // ---- The hover-only rail (`railHover.ts`) ----------------------------------------------
+  //
+  // Resolved at render for the same reason `railOn` is. The decision itself runs in the
+  // effect below, off the DOM and refs, at every moment one of its inputs can change: the
+  // pointer moving over or leaving the surface, a rail panel mounting or unmounting (the
+  // popover inside the rail, the pad dial portalled to the body), and the three pieces of
+  // pane state that count as engagement.
+  const railHoverOn=railHoverApplies({railOn,hoverSetting:railHover,profile:railDevice,hoverCapable:canHover()})
+  const railEngagedRef=useRef(false)
+  railEngagedRef.current=arrange.arranging||dropup!==null||menu!==null
+  const reconsiderRailHoverRef=useRef<()=>void>(()=>{})
+  useEffect(()=>{
+    const surface=host.current?.closest<HTMLElement>('.terminal-surface')
+    const rail=railRef.current
+    if(!railHoverOn||!surface||!rail){
+      reconsiderRailHoverRef.current=()=>{}
+      setRailShown(false)
+      return
+    }
+    let pointer:{x:number;y:number}|null=null
+    let pointerOnRail=false
+    let pointerOnTerminalControl=false
+    let dragging=false
+    const reconsider=()=>{
+      const box=surface.getBoundingClientRect()
+      const engaged=railEngagedRef.current
+        ||!!rail.querySelector(RAIL_HOVER_STANDING_IN_RAIL_SELECTOR)
+        ||!!document.querySelector(RAIL_HOVER_STANDING_IN_BODY_SELECTOR)
+      setRailShown(railHoverShown({
+        pointer,
+        surface:{top:box.top,bottom:box.bottom,left:box.left,right:box.right},
+        railHeight:rail.offsetHeight,
+        pointerOnRail,
+        pointerOnTerminalControl,
+        dragging,
+        engaged,
+      }))
+    }
+    reconsiderRailHoverRef.current=reconsider
+    const move=(event:PointerEvent)=>{
+      pointer={x:event.clientX,y:event.clientY}
+      const target=event.target instanceof Element?event.target:null
+      pointerOnRail=!!target?.closest(RAIL_HOVER_OVERLAY_SELECTOR)
+      pointerOnTerminalControl=!pointerOnRail&&!!target?.closest(RAIL_HOVER_TERMINAL_CONTROL_SELECTOR)
+      dragging=event.buttons!==0&&!pointerOnRail
+      reconsider()
+    }
+    const leave=()=>{pointer=null;pointerOnRail=false;pointerOnTerminalControl=false;dragging=false;reconsider()}
+    // A panel closing while the pointer is elsewhere - Escape on the popover, a tap that
+    // dismissed a dial - is a change nothing above sees, so the rail's subtree and the
+    // body's portal slot are watched for it.
+    const inRail=new MutationObserver(reconsider)
+    inRail.observe(rail,{childList:true,subtree:true})
+    const inBody=new MutationObserver(reconsider)
+    inBody.observe(document.body,{childList:true})
+    // The show and hide are a transform, which moves the rail's box without resizing it, so
+    // the clearance every bottom-anchored message keeps from the rail is re-measured here.
+    const settled=()=>remeasureRailClearance()
+    surface.addEventListener('pointermove',move)
+    surface.addEventListener('pointerleave',leave)
+    rail.addEventListener('transitionend',settled)
+    reconsider()
+    return()=>{
+      reconsiderRailHoverRef.current=()=>{}
+      inRail.disconnect()
+      inBody.disconnect()
+      surface.removeEventListener('pointermove',move)
+      surface.removeEventListener('pointerleave',leave)
+      rail.removeEventListener('transitionend',settled)
+    }
+  },[railHoverOn,session.id])
+  // The three engagement signals held in pane state. Their *ending* is what matters: a
+  // drop-up closed with the pointer far from the rail has to let the rail go.
+  useEffect(()=>{reconsiderRailHoverRef.current()},[arrange.arranging,dropup,menu])
+  useEffect(()=>{if(railHoverOn)remeasureRailClearance()},[railHoverOn,railShown])
   // Empty rows are kept while arranging and dropped every other time. A row this session
   // filters out entirely, or one a drag has just emptied, is somewhere a chip has to be
   // droppable - a row that vanishes with its last chip is a row nothing can be put back
@@ -4265,7 +4378,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     '--peek-offset':`${peekOffset}px`,
     '--terminal-keyboard-reserve':`${keyboardReserved?reservePxRef.current:0}px`,
   } as Record<string,string>
-    return <div class={`terminal-surface${utilityPane?' plugin-utility-surface':''}${peekOffset>0?' keyboard-peek':''}${peekAnimated?' keyboard-peek-animated':''}${keyboardReserved?' keyboard-reserved':''}`} style={surfaceStyle}><div class={`terminal-host${letterboxActive?' letterboxed':''}`} style={claudeHostStyle} ref={host} /><input ref={attachmentInputRef} type="file" hidden multiple aria-label="Choose files to attach" onChange={event=>{const files=Array.from(event.currentTarget.files||[]);event.currentTarget.value='';void attachFilesRef.current(files)}}/><textarea ref={mobileLiveInputRef} class="mobile-terminal-live-input" rows={1} aria-label="Live mobile terminal input" autoCapitalize="off" autoCorrect="off" autoComplete="off" spellcheck={false} inputMode="text" enterkeyhint="enter"/>{mobileDraftOpen&&<MobileTerminalDraft sessionName={sessionDisplayName(session)||session.id} text={mobileDraftText} busy={mobileDraftInserting} error={mobileDraftError} onInput={setMobileDraftText} onInsert={()=>void insertMobileDraft()} onClear={()=>setMobileDraftText('')}/>} {!utilityPane&&railOn&&<div ref={railRef} class={`terminal-action-rail${mobilePinnedSend?' mobile-pinned-send':''}${arrange.arranging?' rail-arranging':''}`} role="toolbar" aria-label="Terminal keys and clipboard actions" onClick={event=>{if(arrange.arranging)return;pulseRail(event.currentTarget,event.target)}}>{arrange.arranging&&<RailArrangePanel device={railDevice} rows={arrangeRows} catalog={arrangeCatalog} catalogOpen={arrange.catalogOpen} onToggleCatalog={arrange.toggleCatalog} scopeLabel={railArrangeScopeLabel(arrangeScope)} scopeDetail={railArrangeScopeDetail(arrangeScope)} preview={arrange.preview} canUndo={arrange.canUndo} onUndo={arrange.undo} onDone={arrange.exit} onChipPointerDown={arrange.beginChipDrag} onCatalogPointerDown={arrange.beginCatalogDrag}/>}<div class="terminal-action-rows" data-rail-arrange-surface={arrange.arranging?'rail':undefined} onPointerDown={event=>arrange.beginChipDrag(event as unknown as PointerEvent)}>{renderedRailRows.map((row,index)=><RailStrip key={row.id} chips={row.nodes} label={renderedRailRows.length>1?`Actions, row ${index+1}`:'Actions'} onConfigure={()=>onConfigureRail?.()} device={railDevice} rowId={row.id} arranging={arrange.arranging} caretAt={arrange.caretFor(row.id)} onArrange={arrange.enter}/>)}</div>{mobilePinnedSend&&<button class="terminal-mobile-send" title="Send composed input; the keyboard Enter key inserts a newline" aria-label="Send composed input" onClick={()=>sendKey('\r')}><SendIcon/></button>}</div>}{peekToggleVisible(effectiveKeyboardInset,peekOffset>0,offTail,appOffTail)&&<button class={`terminal-peek-top${peekOffset>0?' active':''}`} aria-pressed={peekOffset>0} title={peekOffset>0?"Back to the composer":"Look at the top of the screen, the keyboard is covering it"} aria-label={peekOffset>0?"Back to the composer":"Show the top of the terminal"} onMouseDown={holdSoftKeyboard} onClick={()=>applyPeekRef.current('toggle')}>{peekOffset>0?'↓':'↑'}</button>}{clipboardStatus&&<div class="terminal-clip-toast" role="status">{clipboardStatus}</div>}{(offTail||appOffTail)&&<button class="terminal-jump-latest" title="Scroll to the newest output" aria-label="Jump to latest output" onMouseDown={holdSoftKeyboard} onClick={jumpToLatest}>↓</button>}{fileDropActive&&<div class="terminal-image-drop" role="status">Drop files to attach to {session.backend}</div>}{findOpen && <div class="terminal-find" role="search">
+    return <div class={`terminal-surface${utilityPane?' plugin-utility-surface':''}${peekOffset>0?' keyboard-peek':''}${peekAnimated?' keyboard-peek-animated':''}${keyboardReserved?' keyboard-reserved':''}`} style={surfaceStyle}><div class={`terminal-host${letterboxActive?' letterboxed':''}`} style={claudeHostStyle} ref={host} /><input ref={attachmentInputRef} type="file" hidden multiple aria-label="Choose files to attach" onChange={event=>{const files=Array.from(event.currentTarget.files||[]);event.currentTarget.value='';void attachFilesRef.current(files)}}/><textarea ref={mobileLiveInputRef} class="mobile-terminal-live-input" rows={1} aria-label="Live mobile terminal input" autoCapitalize="off" autoCorrect="off" autoComplete="off" spellcheck={false} inputMode="text" enterkeyhint="enter"/>{mobileDraftOpen&&<MobileTerminalDraft sessionName={sessionDisplayName(session)||session.id} text={mobileDraftText} busy={mobileDraftInserting} error={mobileDraftError} onInput={setMobileDraftText} onInsert={()=>void insertMobileDraft()} onClear={()=>setMobileDraftText('')}/>} {!utilityPane&&railOn&&<div ref={railRef} class={`terminal-action-rail${mobilePinnedSend?' mobile-pinned-send':''}${arrange.arranging?' rail-arranging':''}${railHoverOn?' rail-hover':''}${railHoverOn&&railShown?' rail-hover-shown':''}`} role="toolbar" aria-label="Terminal keys and clipboard actions" onClick={event=>{if(arrange.arranging)return;pulseRail(event.currentTarget,event.target)}}>{arrange.arranging&&<RailArrangePanel device={railDevice} rows={arrangeRows} catalog={arrangeCatalog} catalogOpen={arrange.catalogOpen} onToggleCatalog={arrange.toggleCatalog} scopeLabel={railArrangeScopeLabel(arrangeScope)} scopeDetail={railArrangeScopeDetail(arrangeScope)} preview={arrange.preview} canUndo={arrange.canUndo} onUndo={arrange.undo} onDone={arrange.exit} onChipPointerDown={arrange.beginChipDrag} onCatalogPointerDown={arrange.beginCatalogDrag}/>}<div class="terminal-action-rows" data-rail-arrange-surface={arrange.arranging?'rail':undefined} onPointerDown={event=>arrange.beginChipDrag(event as unknown as PointerEvent)}>{renderedRailRows.map((row,index)=><RailStrip key={row.id} chips={row.nodes} label={renderedRailRows.length>1?`Actions, row ${index+1}`:'Actions'} onConfigure={()=>onConfigureRail?.()} device={railDevice} rowId={row.id} arranging={arrange.arranging} caretAt={arrange.caretFor(row.id)} onArrange={arrange.enter} openRequest={railPopoverRequest?.rowId===row.id?railPopoverRequest.seq:0}/>)}</div>{mobilePinnedSend&&<button class="terminal-mobile-send" title="Send composed input; the keyboard Enter key inserts a newline" aria-label="Send composed input" onClick={()=>sendKey('\r')}><SendIcon/></button>}</div>}{peekToggleVisible(effectiveKeyboardInset,peekOffset>0,offTail,appOffTail)&&<button class={`terminal-peek-top${peekOffset>0?' active':''}`} aria-pressed={peekOffset>0} title={peekOffset>0?"Back to the composer":"Look at the top of the screen, the keyboard is covering it"} aria-label={peekOffset>0?"Back to the composer":"Show the top of the terminal"} onMouseDown={holdSoftKeyboard} onClick={()=>applyPeekRef.current('toggle')}>{peekOffset>0?'↓':'↑'}</button>}{clipboardStatus&&<div class="terminal-clip-toast" role="status">{clipboardStatus}</div>}{(offTail||appOffTail)&&<button class="terminal-jump-latest" title="Scroll to the newest output" aria-label="Jump to latest output" onMouseDown={holdSoftKeyboard} onClick={jumpToLatest}>↓</button>}{fileDropActive&&<div class="terminal-image-drop" role="status">Drop files to attach to {session.backend}</div>}{findOpen && <div class="terminal-find" role="search">
     <input value={findQuery} onInput={event => { setFindQuery(event.currentTarget.value); setFindResult('') }} onKeyDown={event => {
       // Stopped here so the keypress is one pop, on this bar's own level.
       if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); dismissStack.pop() }
@@ -4296,20 +4409,16 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     if(image){event.preventDefault();void attachFilesRef.current([image]).then(()=>setManualPaste(false));return}
     const text=data?.getData('text/plain')||''
     if(text){event.preventDefault();if(termRef.current)pasteIntoTerminal(termRef.current,inputBackendRef.current,text,'manual');focusTerminalInputRef.current();setManualPaste(false);showClipboardStatus('Pasted')}
-  }} onInput={event=>{const text=event.currentTarget.value;if(!text)return;if(termRef.current)pasteIntoTerminal(termRef.current,inputBackendRef.current,text,'manual');event.currentTarget.value='';focusTerminalInputRef.current();setManualPaste(false);showClipboardStatus('Pasted')}}/><button aria-label="Cancel paste" onClick={()=>{setManualPaste(false);focusTerminalInputRef.current()}}>×</button></div>}{preparedClipboard&&<div class="prepared-clipboard" role="status"><span>Clipboard write was blocked. Copy the prepared text once.</span><button onClick={()=>void retryPreparedCopy()}>Copy</button><button aria-label="Dismiss prepared clipboard" onClick={()=>{setPreparedClipboard('');setManualClipboard(false)}}>×</button><textarea ref={manualClipboardRef} class={manualClipboard?'manual':''} readOnly value={preparedClipboard} aria-label="Prepared terminal clipboard text" onFocus={event=>event.currentTarget.select()} /></div>}{dropup?.kind==='clipboard'&&<ClipboardDropup anchor={dropup.anchor} onClose={()=>setDropup(null)} onInsert={text=>injectText(text,false)} onOpenSection={()=>runCommand('clipboard.open')}/>}{dropup?.kind==='skills'&&<SkillsDropup sessionId={session.id} harness={harnessDisplayName(session.backend)} anchor={dropup.anchor} onClose={()=>setDropup(null)} onInsert={text=>injectText(text,false)} onOpenSection={()=>runCommand('drawer.actions.skills')}/>}{dropup?.kind==='prompts'&&<PromptsDropup projectId={session.project_id} backend={session.backend} anchor={dropup.anchor} onClose={()=>setDropup(null)} onInsert={text=>injectText(text,false)} onOpenSection={()=>runCommand('drawer.actions.prompts')} onCreate={()=>runCommand('prompts.new')}/>}{menu && <div ref={el=>fitMenuInViewport(el)} class="terminal-menu" role="menu" style={{ left: clampContextMenuLeft(menu.x, innerWidth), top: Math.min(menu.y, innerHeight - 230) }}>
-    <button role="menuitem" disabled={!termRef.current?.hasSelection()} onClick={() => runCommand('terminal.copy')}>Copy</button>
-    <button role="menuitem" onClick={() => runCommand('terminal.paste')}>Paste</button>
-    <button role="menuitem" onClick={() => { setMenu(null); runCommand('clipboard.open') }}>Clipboard history…</button>
-    <button role="menuitem" onClick={() => runCommand('terminal.selectAll')}>Select all</button>
-    <button role="menuitem" onClick={() => runCommand('terminal.find')}>Find…</button>
-    <button role="menuitem" onClick={() => runCommand('terminal.clear')}>Clear display</button>
-    <button role="menuitem" onClick={() => runCommand('processes.open')}>Processes and previews…</button>
-    <div class="context-rule" />
-    <button role="menuitem" onClick={() => runCommand('pane.splitHorizontal')}>Split right</button>
-    <button role="menuitem" onClick={() => runCommand('pane.splitVertical')}>Split below</button>
-    <button role="menuitem" onClick={() => runCommand('pane.detach')}>Detach pane</button>
-    <button role="menuitem" onClick={() => runCommand('pane.zoom')}>Zoom pane</button>
-    <button role="menuitem" class="danger" onClick={() => runCommand('session.kill')}>{session.state === 'exited' || session.state === 'crashed' ? 'Remove from sidebar' : 'Kill session'}</button>
+  }} onInput={event=>{const text=event.currentTarget.value;if(!text)return;if(termRef.current)pasteIntoTerminal(termRef.current,inputBackendRef.current,text,'manual');event.currentTarget.value='';focusTerminalInputRef.current();setManualPaste(false);showClipboardStatus('Pasted')}}/><button aria-label="Cancel paste" onClick={()=>{setManualPaste(false);focusTerminalInputRef.current()}}>×</button></div>}{preparedClipboard&&<div class="prepared-clipboard" role="status"><span>Clipboard write was blocked. Copy the prepared text once.</span><button onClick={()=>void retryPreparedCopy()}>Copy</button><button aria-label="Dismiss prepared clipboard" onClick={()=>{setPreparedClipboard('');setManualClipboard(false)}}>×</button><textarea ref={manualClipboardRef} class={manualClipboard?'manual':''} readOnly value={preparedClipboard} aria-label="Prepared terminal clipboard text" onFocus={event=>event.currentTarget.select()} /></div>}{dropup?.kind==='clipboard'&&<ClipboardDropup anchor={dropup.anchor} onClose={()=>setDropup(null)} onInsert={text=>injectText(text,false)} onOpenSection={()=>runCommand('clipboard.open')}/>}{dropup?.kind==='skills'&&<SkillsDropup sessionId={session.id} harness={harnessDisplayName(session.backend)} anchor={dropup.anchor} onClose={()=>setDropup(null)} onInsert={text=>injectText(text,false)} onOpenSection={()=>runCommand('drawer.actions.skills')}/>}{dropup?.kind==='prompts'&&<PromptsDropup projectId={session.project_id} backend={session.backend} anchor={dropup.anchor} onClose={()=>setDropup(null)} onInsert={text=>injectText(text,false)} onOpenSection={()=>runCommand('drawer.actions.prompts')} onCreate={()=>runCommand('prompts.new')}/>}{menu && <div ref={el=>fitMenuInViewport(el)} class="terminal-menu rail-menu" role="menu" aria-label="Action rail" style={{ left: clampContextMenuLeft(menu.x, innerWidth), top: Math.min(menu.y, innerHeight - 130) }}>
+    {/* The row the menu was opened on, or the first one when the press landed on no row
+        (the rail's own edge) or on a row that has since been re-rendered away. */}
+    <button role="menuitem" onClick={() => {
+      const rowId = renderedRailRows.some(row => row.id === menu.rowId) ? menu.rowId! : renderedRailRows[0].id
+      setMenu(null)
+      setRailPopoverRequest(current => ({ rowId, seq: (current?.seq ?? 0) + 1 }))
+    }}>Open all actions</button>
+    <button role="menuitem" onClick={() => { setMenu(null); onConfigureRail?.() }}>Configure actions…</button>
+    <button role="menuitemcheckbox" aria-checked={railHover} onClick={() => { setMenu(null); onRailHoverChange?.(!railHover) }}>{railHover ? '✓ ' : ''}Only show on hover</button>
   </div>}</div>
 }
 

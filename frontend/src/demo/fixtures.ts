@@ -559,6 +559,7 @@ export function demoConfig(): Record<string, unknown> {
     rail_density_mobile: 'comfortable',
     rail_enabled_desktop: true,
     rail_enabled_mobile: true,
+    rail_hover_desktop: false,
     middle_click_paste: true,
     broadcast_default: false,
     mobile_vertical_drag: 'smart',
