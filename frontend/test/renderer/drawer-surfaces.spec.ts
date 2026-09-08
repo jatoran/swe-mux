@@ -80,6 +80,43 @@ test('the instruction viewer is a labelled region, selected or not', async ({ pa
   await expect(page.locator('.agent-context-header small')).toContainText('D:/PROJECTS/swe-mux')
 })
 
+test('sixty memories scroll inside their own box rather than pushing the viewer a screen away', async ({ page }) => {
+  await page.setViewportSize({ width: 400, height: 1000 })
+  await page.goto('/drawer-surfaces-harness.html?tab=agent&memories=many')
+  await page.waitForSelector('.agent-context-viewer')
+  await page.locator('.agent-context-memories > summary').click()
+  await expect(page.locator('.agent-context-memory-list .agent-context-source')).toHaveCount(60)
+
+  const geometry = await page.evaluate(() => {
+    const rows = document.querySelector<HTMLElement>('.agent-context-memory-list .agent-context-sources')!
+    const memories = document.querySelector<HTMLElement>('.agent-context-memories')!
+    const viewer = document.querySelector<HTMLElement>('.agent-context-viewer')!
+    const scroller = document.querySelector<HTMLElement>('.agent-context')!
+    return {
+      rowsOverflow: rows.scrollHeight > rows.clientHeight,
+      rowsScrollable: getComputedStyle(rows).overflowY === 'auto',
+      rowsHeight: rows.clientHeight,
+      // How far the viewer sits below the top of the Memories disclosure: the distance a
+      // reader has to scroll past the list to reach what they picked from it.
+      viewerOffset: viewer.getBoundingClientRect().top - memories.getBoundingClientRect().top,
+      tabHeight: scroller.clientHeight,
+    }
+  })
+  // The rows overflow their box and the box scrolls, so the file rows are all reachable...
+  expect(geometry.rowsOverflow).toBe(true)
+  expect(geometry.rowsScrollable).toBe(true)
+  // ...while the box itself is capped well under the tab, and the viewer follows the
+  // disclosure within one tab height rather than sixty rows later.
+  expect(geometry.rowsHeight).toBeLessThanOrEqual(300)
+  expect(geometry.viewerOffset).toBeLessThan(geometry.tabHeight)
+
+  // Picking the last row still works from inside the scroller, and fills the viewer.
+  const last = page.locator('.agent-context-memory-list .agent-context-source').last()
+  await last.scrollIntoViewIfNeeded()
+  await last.click()
+  await expect(page.locator('.agent-context-viewer > header strong')).toHaveText('learned-note-60.md')
+})
+
 test('picking a file fills the viewer and keeps it a separate region', async ({ page }) => {
   await page.setViewportSize({ width: 400, height: 1000 })
   await page.goto('/drawer-surfaces-harness.html?tab=agent')

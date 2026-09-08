@@ -55,6 +55,14 @@ const source = (id: string, label: string, provider: string, detail: string) => 
   changed_after_start: false,
 })
 
+// `?memories=many` is the install this tab was built on: sixty learned files, which is the
+// shape under which the memory list used to *be* the tab and the viewer sat a screen below.
+const MANY_MEMORIES = params.get('memories') === 'many'
+const CLAUDE_MEMORIES = MANY_MEMORIES
+  ? Array.from({ length: 60 }, (_, index) => source(`memory:${index}`, `learned-note-${String(index + 1).padStart(2, '0')}.md`, 'claude', 'Learned memory'))
+  : [source('memory:one', 'release-readiness-p0.md', 'claude', 'Learned memory'),
+    source('memory:two', 'phase7-doctor-cli.md', 'claude', 'Learned memory')]
+
 const AGENT_CONTEXT = {
   instructions: {
     comparison: 'different',
@@ -67,9 +75,8 @@ const AGENT_CONTEXT = {
   providers: [
     {
       id: 'claude', label: 'Claude', status: 'available', detail: 'Learned project memory',
-      item_count: 2, truncated: false,
-      items: [source('memory:one', 'release-readiness-p0.md', 'claude', 'Learned memory'),
-        source('memory:two', 'phase7-doctor-cli.md', 'claude', 'Learned memory')],
+      item_count: CLAUDE_MEMORIES.length, truncated: false,
+      items: CLAUDE_MEMORIES,
     },
   ],
   sync_options: [{ direction: 'claude_to_codex', source: 'CLAUDE.md', target: 'AGENTS.md' }],

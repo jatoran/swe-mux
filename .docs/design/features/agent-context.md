@@ -26,7 +26,9 @@ the project-scoped block. It contains:
 - a `linked | in_sync | different | missing` comparison after normalizing CRLF/CR to LF;
 - one initially collapsed **Memories** disclosure whose badge counts the complete provider
   inventory; expanding it shows each harness's declared memory provider and explicit capability
-  state, with harness and entrypoint attribution on each available source, using the same high-contrast file rows as the instruction disclosures;
+  state, with harness and entrypoint attribution on each available source, using the same high-contrast file rows as the instruction disclosures.
+  Each provider's rows are capped (300px or 38vh, whichever is less) and scroll inside their own box, since 2026-09-08: on an install with sixty learned files the list was the whole tab and the Preview region sat a screen below the row just picked from it.
+  The cap is on the rows alone, so the provider's heading, state and "showing N of M" line stay in view around the scroller;
 - a read-only preformatted viewer and manual rescan; one `sync…` button opens a focus-trapped
   modal containing copy-once controls, both canonical link directions, unlink confirmation, diff confirmation, platform caveats, and recent restore points.
 

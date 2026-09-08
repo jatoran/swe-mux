@@ -4880,6 +4880,13 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .agent-context-memories>summary i{padding:1px 5px;border:1px solid var(--line);border-radius:2px;color:var(--muted);font-size:7px;font-style:normal;font-weight:400;letter-spacing:.02em}
 .agent-context-memory-list{display:grid;border-top:1px solid var(--line);background:var(--bg)}
 .agent-context-memory-provider{display:grid;gap:7px;padding:9px;background:var(--bg)}
+/* A provider's memory rows are capped and scroll inside their own box, so the Preview
+   region below stays a short scroll away however many files an install has learned: with
+   sixty memories the whole tab used to be that list, and the viewer sat a full screen or
+   more beneath it. The cap is on the rows alone rather than on the whole list, so each
+   provider's heading, state and "showing N of M" line stay in view above and below the
+   scroller. `min()` with a viewport share keeps it from eating a phone's drawer whole. */
+.agent-context-memory-list .agent-context-sources{max-height:min(300px,38vh);overflow-y:auto;overscroll-behavior:contain}
 .agent-context-memory-provider+.agent-context-memory-provider{border-top:1px solid var(--line)}
 .agent-context-memory-provider>header{display:flex;align-items:center;gap:6px}
 .agent-context-memory-provider h4{flex:1;margin:0;color:var(--text);font-size:9px;text-transform:uppercase;letter-spacing:.05em}

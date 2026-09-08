@@ -2888,7 +2888,11 @@ The app-wide answer to "what is this", and the recovery path for the tour.
   instruction sources in an initially expanded disclosure, descriptor-declared global
   instruction sources in an initially collapsed disclosure, and one
   initially collapsed **Memories** disclosure badged with the provider file count. All three
-  share the same high-contrast file-row surface; bodies are read-only.
+  share the same high-contrast file-row surface; bodies are read-only. A provider's memory
+  rows are capped at 300px or 38vh and scroll in their own box (2026-09-08), so the Preview
+  region below never sits more than about a tab height under the disclosure however many
+  files an install has learned; the provider heading and its "showing N of M" line stay
+  outside the scroller.
 - **Nothing is opened for you, and the viewer exists whether or not anything is.** The
   segment used to select whichever readable file sorted first — in practice the focused
   harness's own `CLAUDE.md` or `AGENTS.md` — which read as a decision the tab had made on
