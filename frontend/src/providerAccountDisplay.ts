@@ -237,10 +237,24 @@ export const strandedSessionRows=(
   provider:string,
 ):StrandedSessions[]=>status?.switch_reaches_live?.[provider]===false?strandedSessions(status,provider):[]
 
+/** The whole explanation, drawn once the notice is expanded. */
 export const strandedSessionNotice=(row:StrandedSessions,cli:string):string=>{
   const one=row.count===1
   return `${row.count} live session${one?'':'s'} on ${row.label}. ${cli} reads its login at startup, so ${one?'it keeps':'they keep'} spending ${row.label} until restarted.`
 }
+
+/** The collapsed line: the count and the login, nothing about why. The explanation
+ *  is the same sentence on every switch, and an operator who has read it once wants
+ *  the number, so the line carries the part that changes and the expansion the part
+ *  that does not. */
+export const strandedSessionSummary=(row:StrandedSessions):string=>
+  `${row.count} live session${row.count===1?'':'s'} still on ${row.label}`
+
+/** What a dismissal names. The login rather than the count: a row whose count moved
+ *  from 17 to 16 because one session was restarted is the notice the operator already
+ *  read, not a new one. `\0` because a label may contain anything a provider puts in
+ *  an email or an organisation name. */
+export const strandedNoticeKey=(provider:string,row:StrandedSessions):string=>`${provider}\0${row.label}`
 
 // A `chipUsageBand` once banded a chip by its *hottest* window so the border could escalate on
 // a window the chip was not printing. It went out with the mobile toolbar's multi-window chip:

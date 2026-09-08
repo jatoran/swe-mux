@@ -29,7 +29,7 @@
   moved into `.docs/` reads correctly from source and is silently absent for every user of
   the frozen app, which is the entire audience.
   The third rule governs **writes to a document this process cannot validate** (the
-  per-device settings store, seven of whose nine domains are the browser's schema):
+  per-device settings store, eight of whose ten domains are the browser's schema):
   the write takes path-scoped operations, never a document, so everything it did not name
   is untouched by construction - the only safety available where validation is not - and it
   is guarded by a content digest the caller must have read plus a backup of the previous

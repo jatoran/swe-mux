@@ -365,13 +365,23 @@ def test_the_popover_counts_sessions_per_account_without_claiming_identity() -> 
     assert "sessions?:AccountSessionCounts" in source
     assert "spawnedSessionCount(status?.sessions,account.id)" in source
     assert "not proof of what it authenticates as now" in source
-    # One sentence, drawn only where the daemon's per-provider fact says the CLI
-    # keeps the login it started with, and never chosen by a provider name in the
-    # browser. A CLI that follows the switch gets no paragraph at all: the operator
-    # asked for the "spending the selected account now" one to go, and it was noise.
+    # One notice per stranded login, drawn only where the daemon's per-provider fact
+    # says the CLI keeps the login it started with, and never chosen by a provider
+    # name in the browser. A CLI that follows the switch gets no notice at all: the
+    # operator asked for the "spending the selected account now" one to go, and it
+    # was noise. Since 2026-09-08 the notice is a collapsed line that expands to the
+    # sentence, dismisses for now, and can be hidden for good (the `notices` domain).
     assert "switch_reaches_live?:Record<ProviderName,boolean>" in source
-    assert "strandedSessionRows(status,provider).map" in source
-    assert "strandedSessionNotice(row,harnessDisplayName(provider))" in source
+    assert "strandedNotices(provider).map" in source
+    assert "<StrandedNotice key=" in source
+    assert "cli={harnessDisplayName(provider)}" in source
+    assert "strandedSessionNotice(row,cli)" in source
+    assert "strandedSessionSummary(row)" in source
+    assert "never show this again" in source
+    assert "setNoticeHidden('stranded-sessions',true)" in source
+    # The undo lives in Settings -> Accounts, and it writes the same id the popover does.
+    assert "setNoticeHidden('stranded-sessions',!event.currentTarget.checked)" in source
+    assert "still on ${row.label}" in display
     assert "switch_reaches_live?.[provider]===false?strandedSessions(status,provider):[]" in display
     assert "until restarted." in display
     assert "spending the selected account now" not in display

@@ -82,6 +82,19 @@ def test_session_topbar_domain_is_stored_opaquely(tmp_path: Path) -> None:
     assert store.all()["profiles"]["desktop"]["sessionTopbar"] == payload
 
 
+def test_notices_domain_is_stored_opaquely(tmp_path: Path) -> None:
+    """Which advisory notices are hidden for good is the browser's vocabulary.
+
+    The daemon stores the id list verbatim: an id it has never heard of is a notice a
+    newer frontend added, not a rejection, and refusing it would make "never show this
+    again" silently forget itself on the next daemon downgrade.
+    """
+    store = SettingsStore(tmp_path)
+    payload = {"hidden": ["stranded-sessions", "notice-from-a-newer-frontend"]}
+    store.update("desktop", {"notices": payload})
+    assert store.all()["profiles"]["desktop"]["notices"] == payload
+
+
 def test_update_persists_across_instances(tmp_path: Path) -> None:
     SettingsStore(tmp_path).update("desktop", {"sounds": {"volume": 0.2}})
     assert SettingsStore(tmp_path).all()["profiles"]["desktop"] == {"sounds": {"volume": 0.2}}

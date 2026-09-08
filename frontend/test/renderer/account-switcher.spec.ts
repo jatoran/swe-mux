@@ -128,6 +128,65 @@ test('the popover counts live sessions per account and names the ones a switch l
   expect(new Set(cells).size).toBe(1)
 })
 
+test('a stranded login is one collapsed line that expands, dismisses, and can be silenced for good', async ({ page }) => {
+  await page.goto('/account-switcher-harness.html?accounts=stranded')
+  await page.click('.account-summary > button >> nth=0')
+
+  // Codex keeps the login it started with, so each login still being spent is a notice:
+  // the saved account the switch left, and the login mux never saved. Claude follows the
+  // switch and draws nothing, whatever its counts.
+  const notices = page.locator('.account-popover .account-session-notice')
+  await expect(notices).toHaveCount(2)
+  const summaries = page.locator('.account-popover .account-session-notice-summary')
+  await expect(summaries).toHaveText([
+    /17 live sessions still on gorskovich\.tony@example\.com/,
+    /1 live session still on a login that is not saved here/,
+  ])
+  // Collapsed: one line, clamped rather than wrapped, and none of the explanation.
+  await expect(page.locator('.account-popover .account-session-notice-body')).toHaveCount(0)
+  await expect(summaries.first()).toHaveAttribute('aria-expanded', 'false')
+  const clamp = await summaries.first().locator('span').evaluate(node => {
+    const style = getComputedStyle(node)
+    return { whiteSpace: style.whiteSpace, overflow: style.textOverflow, lines: node.getBoundingClientRect().height / parseFloat(style.lineHeight) }
+  })
+  expect(clamp.whiteSpace).toBe('nowrap')
+  expect(clamp.overflow).toBe('ellipsis')
+  expect(clamp.lines).toBeLessThan(1.5)
+
+  // Expanded: the whole sentence, the checkbox unticked, and the button.
+  await summaries.first().click()
+  await expect(summaries.first()).toHaveAttribute('aria-expanded', 'true')
+  const body = notices.first().locator('.account-session-notice-body')
+  await expect(body).toHaveText(/17 live sessions on gorskovich\.tony@example\.com\. Codex reads its login at startup, so they keep spending gorskovich\.tony@example\.com until restarted\./)
+  await expect(body.getByRole('checkbox', { name: 'never show this again' })).not.toBeChecked()
+
+  // Dismiss without the box: this notice goes, its sibling stays, and it stays gone
+  // when the popover is reopened - a dismissal is not the lifetime of a portal.
+  await body.getByRole('button', { name: 'dismiss' }).click()
+  await expect(notices).toHaveCount(1)
+  await expect(summaries).toHaveText([/1 live session still on a login that is not saved here/])
+  await page.keyboard.press('Escape')
+  await expect(page.locator('.account-popover')).toHaveCount(0)
+  await page.click('.account-summary > button >> nth=0')
+  await expect(notices).toHaveCount(1)
+  // Nothing was persisted: no settings write for a dismissal that is only for now.
+  const before = await page.evaluate(() => (window as unknown as { __calls: { method: string; url: string }[] }).__calls.filter(call => call.url.startsWith('/api/settings')))
+  expect(before).toEqual([])
+
+  // Tick the box, dismiss: the last notice goes, and the choice is written to the
+  // shared store under the canonical desktop profile rather than remembered by this tab.
+  await summaries.first().click()
+  await notices.first().getByRole('checkbox', { name: 'never show this again' }).check()
+  await notices.first().getByRole('button', { name: 'dismiss' }).click()
+  await expect(notices).toHaveCount(0)
+  const after = await page.evaluate(() => (window as unknown as { __calls: { method: string; url: string }[] }).__calls.filter(call => call.url.startsWith('/api/settings')))
+  expect(after).toEqual([{ method: 'PUT', url: '/api/settings/desktop' }])
+  await page.keyboard.press('Escape')
+  await page.click('.account-summary > button >> nth=0')
+  await expect(page.locator('.account-popover .account-section-head h4')).toHaveText(['claude', 'codex'])
+  await expect(notices).toHaveCount(0)
+})
+
 test('the codex section carries two quota columns, not an empty fable one', async ({ page }) => {
   await page.goto('/account-switcher-harness.html?accounts=multi')
   await page.click('.account-summary > button >> nth=0')

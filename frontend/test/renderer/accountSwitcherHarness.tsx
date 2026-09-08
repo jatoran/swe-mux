@@ -21,6 +21,8 @@ const params = new URLSearchParams(location.search)
 // `empty` is the state a new install is in and the one the popover had no answer for.
 const saved = params.get('saved') === '1'
 const many = params.get('accounts') === 'multi'
+// A Codex switch that left sessions behind: the one scenario that draws a notice at all.
+const stranded = params.get('accounts') === 'stranded'
 const outcome = params.get('outcome') || 'succeeded'
 
 const NOW = Math.floor(Date.now() / 1000)
@@ -65,16 +67,33 @@ const MANY = [
   },
 ]
 
+// Two Codex accounts, the second just selected, with seventeen sessions still on the
+// first and one on a login mux never saved. The email is long on purpose: the collapsed
+// line has to ellipsize it, not wrap into the paragraph it replaced.
+const STRANDED = [
+  ...ACCOUNTS,
+  {
+    id: 'account-codex', provider: 'codex', label: 'gorskovich.tony@example.com', created_at: NOW, updated_at: NOW,
+    identity_source: 'token', email: 'gorskovich.tony@example.com',
+    quota: { status: 'ok', session: { used_percent: 41, window_minutes: 300 }, weekly: { used_percent: 12, window_minutes: 10080 }, refreshed_at: NOW },
+  },
+  {
+    id: 'account-codex-2', provider: 'codex', label: 'adamb@example.com', created_at: NOW, updated_at: NOW,
+    identity_source: 'token', email: 'adamb@example.com',
+    quota: { status: 'ok', session: { used_percent: 3, window_minutes: 300 }, weekly: { used_percent: 1, window_minutes: 10080 }, refreshed_at: NOW },
+  },
+]
+
 let login: Record<string, Login> = { claude: null, codex: null }
 
 const snapshot = () => ({
   providers: ['claude', 'codex'],
-  selected: { claude: saved || many ? 'account-claude' : null, codex: null },
+  selected: { claude: saved || many || stranded ? 'account-claude' : null, codex: stranded ? 'account-codex-2' : null },
   current: {
-    claude: { state: saved || many ? 'saved' : 'signed_out', account_id: saved || many ? 'account-claude' : null },
-    codex: { state: 'signed_out', account_id: null },
+    claude: { state: saved || many || stranded ? 'saved' : 'signed_out', account_id: saved || many || stranded ? 'account-claude' : null },
+    codex: stranded ? { state: 'saved', account_id: 'account-codex-2' } : { state: 'signed_out', account_id: null },
   },
-  accounts: many ? MANY : saved ? ACCOUNTS : [],
+  accounts: many ? MANY : stranded ? STRANDED : saved ? ACCOUNTS : [],
   poll_minutes: 5,
   stale_minutes: 30,
   refreshing: false,
@@ -92,7 +111,13 @@ const snapshot = () => ({
         unsaved: { claude: 1 },
         unattributed: {},
       }
-    : { by_account: {}, unsaved: {}, unattributed: {} },
+    : stranded
+      ? {
+          by_account: { 'account-claude': 1, 'account-codex': 17, 'account-codex-2': 1 },
+          unsaved: { codex: 1 },
+          unattributed: {},
+        }
+      : { by_account: {}, unsaved: {}, unattributed: {} },
 })
 
 window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {

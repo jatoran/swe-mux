@@ -7,12 +7,12 @@ own localStorage (unshareable, invisible to the push sender that runs on the
 server), settings live here keyed by a device *class* — ``desktop`` or
 ``mobile`` — and every device can read and edit either profile.
 
-The ``sounds``, ``commandRail``, ``fileTree``, ``drawerTabs``, ``sessionRows`` and ``sessionTopbar``
-domains are stored
+The ``sounds``, ``commandRail``, ``fileTree``, ``drawerTabs``, ``sessionRows``, ``sessionTopbar``
+and ``notices`` domains are stored
 opaquely: the browser owns their schema and normalization (custom sound data URLs,
 per-event sound ids, the file-tree's ``{projectId: expandedPaths[]}`` blob, the
 utility drawer's ``{order: tabId[]}``, the sidebar row layout, the session pane top-bar
-layout). The ``alerts`` and
+layout, the advisory notices hidden for good). The ``alerts`` and
 ``notifications`` domains
 are interpreted server-side because the Web Push sender must apply the shared
 master, quiet hours, and push-channel policy before any tab is alive to filter it.
@@ -52,6 +52,12 @@ DOMAINS: tuple[str, ...] = (
     # the measurement corrects it per device. Stored verbatim; only the browser
     # reads it.
     "keyboard",
+    # Advisory notices the operator has asked never to see again, by notice id
+    # (``{"hidden": [id, ...]}``). One document under ``desktop`` regardless of the
+    # device asking, because "never show this again" is a fact about the operator's
+    # understanding, not about a screen: a notice dismissed for good on the desktop
+    # must not come back on the phone. Stored verbatim; only the browser reads it.
+    "notices",
 )
 #: The two the daemon reads and enforces policy over, because the Web Push sender
 #: has to apply the master switch and quiet hours before any tab is alive to

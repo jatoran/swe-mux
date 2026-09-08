@@ -121,7 +121,10 @@ Then read it back and tell the operator what the row is now.
 `drawerTabs` is the utility drawer's tab order. `sessionRows` is the sidebar row
 layout. `sessionTopbar` is the one-to-three-row session pane header layout, including
 metrics and drawer shortcuts. `fileTree` is which directories are expanded, per Project. `sounds` is
-per-event sound choices. All are edited the same way and all are opaque to the
+per-event sound choices. `notices` is `{"hidden": [id, ...]}`: the advisory notices the
+operator has ticked "never show this again" on (today only `stranded-sessions`, the account
+switcher's warning about live Codex sessions still on an outgoing login); it lives under
+`desktop` whichever device wrote it. All are edited the same way and all are opaque to the
 daemon.
 
 `alerts` and `notifications` are the two the daemon *does* interpret, because the

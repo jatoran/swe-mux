@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { accountAbbreviation, accountPopoverStyle, formatResetRemaining, hasFableWindow, loginCommand, loginOf, loginRunning, providerQuotaWindows, quotaGridSegments, quotaRowCells, quotaSummary, shownUsageBand, signInTitle, spawnedSessionCount, strandedSessionNotice, strandedSessionRows, strandedSessions, usageBand, visibleProviders } from '../src/providerAccountDisplay.ts'
+import { accountAbbreviation, accountPopoverStyle, formatResetRemaining, hasFableWindow, loginCommand, loginOf, loginRunning, providerQuotaWindows, quotaGridSegments, quotaRowCells, quotaSummary, shownUsageBand, signInTitle, spawnedSessionCount, strandedNoticeKey, strandedSessionNotice, strandedSessionRows, strandedSessionSummary, strandedSessions, usageBand, visibleProviders } from '../src/providerAccountDisplay.ts'
 
 test('quota windows come from the selected account of each provider, never another slot',()=>{
   const accounts=[
@@ -237,4 +237,13 @@ test('stranded sessions name the accounts a switch left behind, and only those',
   assert.deepEqual(strandedSessionRows(status,'claude'),[])
   assert.equal(strandedSessionNotice(claude[0],'Codex'),'2 live sessions on Work. Codex reads its login at startup, so they keep spending Work until restarted.')
   assert.equal(strandedSessionNotice({label:'Work',count:1},'Codex'),'1 live session on Work. Codex reads its login at startup, so it keeps spending Work until restarted.')
+  // The collapsed line carries the part that changes - the count and the login - and
+  // leaves the explanation, which is the same on every switch, to the expansion.
+  assert.equal(strandedSessionSummary(claude[0]),'2 live sessions still on Work')
+  assert.equal(strandedSessionSummary({label:'Work',count:1}),'1 live session still on Work')
+  // A dismissal names the login, not the count: one restarted session moving 17 to 16
+  // is the notice already read, and the same label under another provider is not.
+  assert.equal(strandedNoticeKey('codex',{label:'Work',count:17}),strandedNoticeKey('codex',{label:'Work',count:16}))
+  assert.notEqual(strandedNoticeKey('codex',{label:'Work',count:1}),strandedNoticeKey('claude',{label:'Work',count:1}))
+  assert.notEqual(strandedNoticeKey('codex',{label:'Work',count:1}),strandedNoticeKey('codex',{label:'Home',count:1}))
 })

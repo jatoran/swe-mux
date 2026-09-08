@@ -171,10 +171,26 @@ the last good reading and changes no state.
   in the popover and on the accounts payload (`session_counts`). The stamp is taken once, at
   spawn (`SessionRecord.spawn_provider*`), because spawn is the one moment mux can vouch for:
   what the process does with a later switch is the CLI's behaviour (`switch_reaches_live`).
-  The popover draws a sentence under the count only for a provider whose CLI does not
+  The popover draws a notice under the count only for a provider whose CLI does not
   follow - "keeps spending X until restarted" - and nothing for one that does, or when the
   daemon predates the field: a paragraph saying "these sessions are fine" under every Claude
   count was noise, and the operator asked for it to go.
+  Since 2026-09-08 that notice is **one collapsed line per stranded login** ("17 live
+  sessions still on X"), expanding on a click to the whole sentence, a `dismiss` button and a
+  "never show this again" checkbox (`StrandedNotice` in `ProviderAccounts.tsx`). The
+  explanation is the same on every switch and an operator who has read it once wants the
+  number, so the line carries what changes and the expansion what does not. Two dismissals,
+  deliberately different in scope. `dismiss` alone is for now: keyed by provider and login
+  rather than by count (`strandedNoticeKey`, so one restarted session moving 17 to 16 is not a
+  new notice), shared by every switcher on the page, and ended when that login stops being
+  stranded - sessions left on the same login by a later switch are a new fact to read. The
+  checkbox arms the dismissal rather than acting on its own, so ticking it never makes the
+  thing being read vanish, and it is persistent: `noticePrefs.ts` writes the notice id into
+  the `notices` device-settings domain under the canonical `desktop` profile (like the rail
+  and the session top bar - the preference is about the operator's understanding, not a
+  screen, so a phone must not re-show what the desk silenced). The undo is a checkbox under
+  the explainer in Settings -> Accounts. The count on each row is untouched by either; only
+  the sentence about what it means goes.
   It records what mux had *selected*, not what the process authenticates as: a `/login` typed
   inside a pane is invisible, so every surface says "spawned under" and never "using".
   Resolution goes through the provider's own account id before the local slot - the rule the

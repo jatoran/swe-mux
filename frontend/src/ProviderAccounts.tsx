@@ -4,7 +4,8 @@ import { api } from './api'
 import { alertPreferences, setAlertPreferencesFor } from './alertPrefs'
 import { currentProfile } from './deviceSettings'
 import { setSoundPreferences, soundPreferences } from './sessionSounds'
-import { accountAbbreviation, accountPopoverStyle, formatResetRemaining, hasFableWindow, loginOf, loginRunning, signInTitle, percent, providerQuotaWindows, quotaGridSegments, quotaRowCells, quotaSummary, quotaWindowSummary, shownUsageBand, spawnedSessionCount, strandedSessionNotice, strandedSessionRows, visibleProviders, type LoginDisplay, type QuotaWindowDisplay, type SessionCountsDisplay } from './providerAccountDisplay'
+import { setNoticeHidden, useNoticePreferences } from './noticePrefs'
+import { accountAbbreviation, accountPopoverStyle, formatResetRemaining, hasFableWindow, loginOf, loginRunning, signInTitle, percent, providerQuotaWindows, quotaGridSegments, quotaRowCells, quotaSummary, quotaWindowSummary, shownUsageBand, spawnedSessionCount, strandedNoticeKey, strandedSessionNotice, strandedSessionRows, strandedSessionSummary, visibleProviders, type LoginDisplay, type QuotaWindowDisplay, type SessionCountsDisplay, type StrandedSessions } from './providerAccountDisplay'
 import { serverNow } from './serverClock.ts'
 import { emitTutorialAction } from './tutorial'
 // Provider marks live in `harnessIcons.tsx`, which every surface naming a harness reads. This
@@ -148,6 +149,35 @@ function LoginProgress({login,busy,onDismiss}:{login:LoginState|null;busy:boolea
   </div>
 }
 
+/** The stranded-session notices dismissed for now, by `strandedNoticeKey`. Module-level
+ *  rather than component state because the page can hold more than one switcher (the
+ *  sidebar's and the phone toolbar's draw the same rows), and a notice dismissed in one
+ *  must not still be waiting in the other. It lasts until the page reloads or the login
+ *  stops being stranded, whichever is first: `AccountSwitcher` prunes a key whose row
+ *  has gone, so sessions stranded on the same login *again* are a new notice. "Never
+ *  show this again" is the persistent one, and lives in `noticePrefs`. */
+const dismissedStranded=new Set<string>()
+
+/** One alert: a single collapsed line naming the count and the login, and the whole
+ *  explanation behind a chevron. The sentence is the same on every switch and an
+ *  operator who has read it once wants the number, so the line carries what changes
+ *  and the expansion what does not. The checkbox arms the dismissal rather than acting
+ *  on its own, so ticking it never makes the thing you are reading vanish under you. */
+function StrandedNotice({row,cli,onDismiss}:{row:StrandedSessions;cli:string;onDismiss:(neverAgain:boolean)=>void}) {
+  const [expanded,setExpanded]=useState(false)
+  const [neverAgain,setNeverAgain]=useState(false)
+  return <div class="account-session-notice">
+    <button type="button" class="account-session-notice-summary" aria-expanded={expanded} onClick={()=>setExpanded(value=>!value)}><i class="account-session-notice-chevron" aria-hidden="true">{expanded?'▾':'▸'}</i><span>{strandedSessionSummary(row)}</span></button>
+    {expanded&&<div class="account-session-notice-body">
+      <p>{strandedSessionNotice(row,cli)}</p>
+      <div class="account-session-notice-actions">
+        <label><input type="checkbox" checked={neverAgain} onChange={event=>setNeverAgain(event.currentTarget.checked)}/>never show this again</label>
+        <button type="button" onClick={()=>onDismiss(neverAgain)}>dismiss</button>
+      </div>
+    </div>}
+  </div>
+}
+
 export function AccountSwitcher({variant='full',placement,onManage,onViewUsage,promptDismissed,promptSuppressed,onDismissPrompt}:{
   // `variant` picks the trigger; `placement` is independent because the collapsed
   // desktop rail wants a condensed trigger with an upward-opening popover.
@@ -185,6 +215,24 @@ export function AccountSwitcher({variant='full',placement,onManage,onViewUsage,p
   const resetItems=status?.reset_alert?.items||[]
   const resetProviders=useMemo(()=>[...new Set(resetItems.map(item=>item.provider))],[resetItems])
   const resetUnread=resetItems.length>0
+  // Which stranded-session notices to draw: not the ones hidden for good (server-side,
+  // every device), and not the ones dismissed for now (this page, every switcher on it).
+  const strandedHidden=useNoticePreferences().hidden.includes('stranded-sessions')
+  const [,noticesChanged]=useState(0)
+  const strandedNotices=(provider:ProviderName)=>strandedHidden?[]:strandedSessionRows(status,provider).filter(row=>!dismissedStranded.has(strandedNoticeKey(provider,row)))
+  const dismissStranded=(provider:ProviderName,row:StrandedSessions,neverAgain:boolean)=>{
+    dismissedStranded.add(strandedNoticeKey(provider,row))
+    if(neverAgain)void setNoticeHidden('stranded-sessions',true)
+    noticesChanged(value=>value+1)
+  }
+  // A dismissal names a login, and it ends when that login stops being stranded: the
+  // next time a switch leaves sessions on it there is a new fact to read. Pruned
+  // against the payload rather than kept forever, and only once one has arrived.
+  useEffect(()=>{
+    if(!status)return
+    const live=new Set(providers.flatMap(provider=>strandedSessionRows(status,provider).map(row=>strandedNoticeKey(provider,row))))
+    for(const key of dismissedStranded)if(!live.has(key))dismissedStranded.delete(key)
+  },[status])
   const toggleResetSound=()=>setResetSound(value=>{const next=!value,prefs=soundPreferences();if(next){const alerts=alertPreferences();setAlertPreferencesFor(currentProfile(),{...alerts,enabled:true})}setSoundPreferences({...prefs,enabled:next||prefs.enabled,events:{...prefs.events,reset:next}});return next})
   // One click resolves the whole group: three accounts observing one provider rollover
   // is one judgement, not three.
@@ -266,14 +314,15 @@ export function AccountSwitcher({variant='full',placement,onManage,onViewUsage,p
         })}
         {!saved.length&&!login&&<button class="account-empty-cta" disabled={!!busy} onClick={()=>startLogin(provider)}>No saved accounts — <strong>sign in to {provider}</strong></button>}
         {/* The point of the counts. A switch reaches the next process, not the ones
-            already running, so this names the logins still being spent. The whole
-            sentence is on screen rather than in a tooltip: this popover is the phone's
-            account surface too, and a phone cannot hover. Keyed by position, because
-            two accounts may carry the same label. */}
+            already running, so this names the logins still being spent. One collapsed
+            line each, expanding to the whole sentence on a click rather than in a
+            tooltip: this popover is the phone's account surface too, and a phone cannot
+            hover. Keyed by login and position, because two accounts may carry the same
+            label. */}
         {/* Only for a provider whose CLI keeps the login it started with (the daemon
             says which: `switch_reaches_live`). Where the CLI follows the switch nothing
             is drawn - the count on the row is the whole story there. */}
-        {strandedSessionRows(status,provider).map((row,index)=><p class="account-session-notice" key={`${provider}-${index}`}>{strandedSessionNotice(row,harnessDisplayName(provider))}</p>)}
+        {strandedNotices(provider).map((row,index)=><StrandedNotice key={`${strandedNoticeKey(provider,row)}-${index}`} row={row} cli={harnessDisplayName(provider)} onDismiss={neverAgain=>dismissStranded(provider,row,neverAgain)}/>)}
       </section>})}
       {error&&<p class="account-error" role="alert">{error}</p>}
       {resetUnread&&<section class="account-reset-alert"><h4>quota reset evidence</h4><p>{resetItems.length===1?'One confirmed unexpected reset:':`${status?.reset_alert?.count??resetItems.length} confirmed unexpected resets · one provider rollover reaches every account on that plan:`}</p><ul>{resetItems.map(item=><li key={item.id}><strong>{item.provider} {item.window}</strong> · {status?.accounts.find(account=>account.id===item.account_id)?.label||item.account_id} · {item.before_value}% → {item.after_value}%</li>)}</ul><div>{resetProviders.length===1&&resetProviders[0]==='codex'&&<button disabled={!!busy} onClick={()=>void reviewResets('manual_usage')}>{busy==='reset-manual_usage'?'marking…':resetItems.length>1?'all manual Codex usage':'manual Codex usage'}</button>}<button class="danger" disabled={!!busy} onClick={()=>void reviewResets('discarded')}>{busy==='reset-discarded'?'discarding…':resetItems.length>1?'discard all as errors':'discard as error'}</button><button disabled={!!busy} onClick={()=>void reviewResets('seen')}>{busy==='reset-seen'?'marking…':'mark seen'}</button><button disabled={!!busy} onClick={toggleResetSound}>{resetSound?'mute reset sound':'enable reset sound'}</button></div></section>}
@@ -382,6 +431,7 @@ export function AccountSettings() {
   // so the gate follows the login to `succeeded` instead.
   const succeeded=providers.filter(provider=>loginOf(status?.login,provider)?.state==='succeeded').join('\0')
   useEffect(()=>{if(succeeded)emitTutorialAction({action:'account-saved'})},[succeeded])
+  const strandedHidden=useNoticePreferences().hidden.includes('stranded-sessions')
   const mutate=async(key:string,method:string,path:string,body?:unknown,tutorialAction=false)=>{
     setBusy(key);setError('');setMessage('')
     try{const next=await api<ProviderAccountsStatus>(method,path,body);setStatus(next);notifyChanged();setMessage('Account state updated.');if(tutorialAction)emitTutorialAction({action:'account-saved'})}
@@ -412,6 +462,11 @@ export function AccountSettings() {
         thing on the panel every time. Folded away, it is still one click from the
         control it describes. */}
     <details class="account-explainer"><summary>How switching works</summary><p>Switching replaces only the provider's system authentication file. Global config, skills, projects, and histories remain shared. It is never blocked and never confirmed. Whether it reaches sessions already running is up to the CLI: Claude Code re-reads its credential file when the file changes, so a running pane spends the new account from its next request, while Codex reads its login once at startup and keeps spending the outgoing account until it is restarted. The account switcher counts live sessions against the account each one was spawned under, and flags the Codex ones still on an outgoing login.</p><p>The switch also restores the account's cached CLI profile, so <code>/status</code> in new sessions names the right account immediately; panes already running keep the old display until restarted, even where their requests already go to the new account.</p><p>swe-mux follows the daemon host credentials; startup never restores an older saved account. Credentials move into a saved account only on a provider-verified identity or an explicit relink.</p></details>
+    {/* The undo for the switcher's "never show this again". A checkbox ticked in a
+        popover that then vanishes needs a way back, and the setting is worth a line
+        here in its own right: the count on each row is the fact, and this is only
+        whether the popover also spells out what it means. */}
+    <label class="check account-notice-pref"><span>Flag live Codex sessions still on an outgoing login in the account switcher</span><input type="checkbox" checked={!strandedHidden} onChange={event=>void setNoticeHidden('stranded-sessions',!event.currentTarget.checked)}/></label>
     {providers.map(provider=>{const current=status?.current[provider];const accounts=grouped[provider]||[];const active=accounts.find(account=>account.id===current?.account_id);const login=loginOf(status?.login,provider);return <div class="account-provider-settings"><header><div><strong>{provider.toUpperCase()}</strong><small>{accounts.length} saved · quotas refresh every {status?.poll_minutes||15} minutes</small></div></header>
       {/* Only the states that need explaining, and that carry an action. While the live
           login is a saved account, this block restated the row already marked ◆ active

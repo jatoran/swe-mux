@@ -48,9 +48,12 @@ Process rollups reuse App's fleet sample, while sidebar child rows come only fro
 
 ## Accounts and the resource rail
 
-`ProviderAccounts.tsx`, `ResourceUsage.tsx`, `resourceTotals.ts`, `resourceTooling.ts`
+`ProviderAccounts.tsx`, `providerAccountDisplay.ts`, `noticePrefs.ts`, `ResourceUsage.tsx`, `resourceTotals.ts`, `resourceTooling.ts`
 
 Anchored viewport popovers and summaries.
+The switcher's stranded-session notice (a Codex login a switch left live sessions on) is one collapsed line per login that expands to the sentence, a dismiss, and a "never show this again" checkbox.
+`noticePrefs.ts` owns the persistent half: a closed vocabulary of notice ids written to the `notices` device-settings domain under the canonical `desktop` profile, republished on `mux:settings-changed`, with the undo under the explainer in Settings -> Accounts.
+The for-now half is a module-level set in `ProviderAccounts.tsx` keyed by `strandedNoticeKey` (provider and login, never the count) and pruned when the login stops being stranded.
 Each saved-account row names quota periods inline with its figures (`remaining/5h`, `remaining/7d`, `fable`) instead of relying on a detached heading row.
 The quota refresh age stays right-aligned on the account identity line, leaving the quota line to compare usage only.
 The expanded sidebar uses one icon-led row for a boxed live-session count, boxed process-tree count, rounded whole-system CPU, and swe-mux process-tree working set, with full labels in its tooltip and accessible name.

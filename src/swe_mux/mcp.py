@@ -2028,15 +2028,16 @@ CONFIGURATOR_TOOLS: list[dict[str, Any]] = [
                     "type": "string",
                     "description": (
                         "alerts, sounds, notifications, commandRail, fileTree, "
-                        "drawerTabs, sessionRows, or sessionTopbar. Omit for the index."
+                        "drawerTabs, sessionRows, sessionTopbar, or notices. Omit for "
+                        "the index."
                     ),
                 },
                 "profile": {
                     "type": "string",
                     "description": (
                         "desktop or mobile. Omit and the right one is chosen - "
-                        "notably `commandRail`, `sessionRows`, and `sessionTopbar` "
-                        "are always under `desktop`."
+                        "notably `commandRail`, `sessionRows`, `sessionTopbar`, and "
+                        "`notices` are always under `desktop`."
                     ),
                 },
             },
