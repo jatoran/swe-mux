@@ -14,6 +14,7 @@ import { render } from 'preact'
 import { useRef, useState } from 'preact/hooks'
 import { RailDropup } from '../../src/RailDropup'
 import { RailScroller } from '../../src/RailScroller'
+import '../../src/deviceMode'
 import '../../src/style.css'
 
 declare global {

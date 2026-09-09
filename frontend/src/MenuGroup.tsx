@@ -1,5 +1,6 @@
 import { Fragment } from 'preact'
 import type { ComponentChildren } from 'preact'
+import { mobileLayout, watchDeviceMode } from './deviceMode'
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks'
 
 // A collapsible group of items inside any `.context-menu`. Host a set of them with
@@ -26,15 +27,16 @@ const OPEN_DELAY_MS = 120
 // Generous enough that the diagonal from the header to the flyout's far rows does
 // not collapse the group mid-traverse.
 const CLOSE_DELAY_MS = 250
-const FLYOUT_QUERY = '(pointer:fine) and (min-width:761px)'
+const FLYOUT_QUERY = '(pointer:fine) and (hover:hover)'
 
 export function useFlyoutCapable() {
-  const [capable, setCapable] = useState(() => window.matchMedia(FLYOUT_QUERY).matches)
+  const [capable, setCapable] = useState(() => window.matchMedia(FLYOUT_QUERY).matches&&!mobileLayout())
   useEffect(() => {
     const query = window.matchMedia(FLYOUT_QUERY)
-    const update = () => setCapable(query.matches)
+    const update = () => setCapable(query.matches&&!mobileLayout())
+    const stop = watchDeviceMode(update)
     query.addEventListener('change', update)
-    return () => query.removeEventListener('change', update)
+    return () => { stop(); query.removeEventListener('change', update) }
   }, [])
   return capable
 }

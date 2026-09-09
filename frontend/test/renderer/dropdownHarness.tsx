@@ -1,6 +1,7 @@
 import { render } from 'preact'
 import { useState } from 'preact/hooks'
 import { Dropdown } from '../../src/Dropdown'
+import '../../src/deviceMode'
 import '../../src/style.css'
 
 // The dropdown on its own, in the three placements that decide whether it can replace a

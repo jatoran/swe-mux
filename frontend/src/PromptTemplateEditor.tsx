@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { api } from './api'
 import { Dropdown } from './Dropdown'
 import { projectDropdownOptions } from './projectOptions'
@@ -129,7 +129,9 @@ export function usePromptDraft({ template, project, owners = [], resetKey, persi
 
   // A different template (or a new revision of the same one, after a save
   // elsewhere) replaces the draft; edits in progress on *this* one do not.
-  useEffect(() => setDraft(restored(initial)), [initial, stashKey])
+  // Restore before the fields are painted. A deferred reset can otherwise erase the
+  // first keystroke and remove its stash after the editor has already accepted input.
+  useLayoutEffect(() => setDraft(restored(initial)), [initial, stashKey])
 
   const dirty = JSON.stringify(draft) !== JSON.stringify(initial)
   const variables = useMemo(() => promptTemplateVariables(draft.body), [draft.body])

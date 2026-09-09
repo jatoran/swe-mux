@@ -2,6 +2,7 @@ import { render } from 'preact'
 import { VoiceControl, VoiceDock, type Conversation } from '../../src/ConversationControl'
 import type { Command } from '../../src/commands'
 import type { VoiceDockState } from '../../src/voiceDock'
+import '../../src/deviceMode'
 import '../../src/style.css'
 
 /**

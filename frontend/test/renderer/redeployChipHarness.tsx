@@ -11,6 +11,7 @@
 import { render } from 'preact'
 import { RedeployChip } from '../../src/RedeployChip'
 import type { RedeployState } from '../../src/redeployProgress'
+import '../../src/deviceMode'
 import '../../src/style.css'
 
 const params = new URLSearchParams(location.search)

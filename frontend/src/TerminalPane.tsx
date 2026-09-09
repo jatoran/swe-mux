@@ -1,3 +1,4 @@
+import { deviceMode, mobileLayout, touchInput, watchDeviceMode } from './deviceMode'
 import type { ComponentChildren, VNode } from 'preact'
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { memo } from 'preact/compat'
@@ -59,7 +60,7 @@ import { railArrangeScopeDetail, railArrangeScopeLabel } from './railArrange'
 import { useRailArrange } from './useRailArrange'
 import { applyScopedRail } from './railScope'
 import { registerRailClearance, remeasureRailClearance } from './railClearance'
-import { MOBILE_QUERY, canHover, currentProfile, currentRailBlob, loadRailConfig, loadResolvedRail, saveRailBlob } from './deviceSettings'
+import { canHover, currentProfile, currentRailBlob, loadRailConfig, loadResolvedRail, saveRailBlob } from './deviceSettings'
 import { APP_TAIL_KEY, VIEWPORT_MEASURE_RETRY_FRAMES, VIEWPORT_SETTLE_MS, appOffTailByDistance, appOwnsTail, attachRegistersViewport, createSurfaceRepairScheduler, createViewportScheduler, effectiveViewportCost, inputResetsAppTail, redrawVisibleTerminal, reflowVisibleTerminalRenderer, restoreTerminalScrollAnchor, scrollTerminalToTail, terminalHostIsVisible, terminalRowsAboveTail, terminalSurface, terminalSurfaceChanged, terminalWidthPolicyFontSize, trackAppTailDistance, claudeHostMaxWidth, claudeWidthCap, claudeWidthCapClamping, type SurfaceRepairScheduler, type TerminalSurface } from './terminalViewport'
 import { createWheelPacer, isWheelReportBurst } from './terminalWheelPacing'
 import { terminalRenderControl } from './terminalRenderPause'
@@ -199,11 +200,10 @@ const HIDDEN_OUTPUT_INPUT_GRACE_MS = 1500
  */
 const MOBILE_DRAG_INERT_MIN_TRAVEL_PX = 40
 /**
- * Whether a soft keyboard is what this device types with. `MOBILE_QUERY` is a width, and a
- * desktop window dragged narrow matches it — reserving 40% of that pane for a keyboard that
- * is never coming would be a bug with no symptom the user could connect to anything.
+ * Whether focus needs soft-keyboard handling. A compact desktop layout alone does not
+ * justify reserving terminal space for a keyboard that will never open.
  */
-const typesWithSoftKeyboard = () => !!window.matchMedia?.('(pointer:coarse)').matches
+const typesWithSoftKeyboard = () => touchInput()
 
 /**
  * How long the Claude width-cap notice stays up after a resize that the cap clamped.
@@ -383,7 +383,7 @@ function terminalCaretSnapshot(term: Terminal): TerminalCaretSnapshot {
 }
 
 function mobileClipboardFallback(): boolean {
-  return window.matchMedia('(max-width: 760px), (pointer: coarse)').matches
+  return touchInput()
 }
 
 /** The focused element, in the shape `focusHeldByOtherField` reads. `.xterm` is what
@@ -498,19 +498,11 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     const timer=window.setTimeout(()=>setLetterboxSettled(true),LETTERBOX_NOTICE_DELAY_MS)
     return ()=>window.clearTimeout(timer)
   },[letterboxSize])
-  // Whether this device is on the compact projection, tracked live because a desktop
-  // window dragged across the breakpoint has to drop the desktop width envelope with
-  // the rest of the desktop layout. Same query the workspace and the settings
-  // profiles use, so all three flip together.
-  const [compactLayout,setCompactLayout]=useState(()=>
-    typeof window!=='undefined'&&!!window.matchMedia?.(MOBILE_QUERY).matches)
-  useEffect(()=>{
-    const query=window.matchMedia(MOBILE_QUERY)
-    const on=()=>setCompactLayout(query.matches)
-    on()
-    query.addEventListener('change',on)
-    return()=>query.removeEventListener('change',on)
-  },[])
+  // Layout controls the width envelope; the independently resolved profile controls
+  // settings. Subscribe to both so a same-layout override refreshes the rail too.
+  const [deviceEnvironment,setDeviceEnvironment]=useState(deviceMode)
+  const compactLayout=deviceEnvironment.layout==='mobile'
+  useEffect(()=>watchDeviceMode(setDeviceEnvironment),[])
   const compactLayoutRef=useRef(compactLayout)
   compactLayoutRef.current=compactLayout
   const widthCap=claudeWidthCap(session.backend,compactLayout,claudeMaxColumns)
@@ -1083,7 +1075,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       if (proposed && Number.isFinite(proposed.cols) && Number.isFinite(proposed.rows)) {
         normalFontSize = terminalWidthPolicyFontSize(
           backendRef.current,
-          window.matchMedia('(max-width:760px)').matches,
+          mobileLayout(),
           proposed.cols,
           base,
         )
@@ -1300,7 +1292,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         phase,
         detail: {
           ...detail,
-          device,
+          device: currentProfile(),
           owner: ownsInput,
           paneHidden: paneIsHidden(),
           online: navigator.onLine,
@@ -2040,7 +2032,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     // Chromium device emulation can preserve a live WebGL context while changing
     // its emulated pixel ratio, leaving xterm interactive but visually blank.
     // The built-in renderer is reliable for the single full-screen mobile pane.
-    const mobileRenderer = window.matchMedia('(max-width:760px)').matches
+    const mobileRenderer = mobileLayout()
     // Claude is DOM-only because its alternate-screen WebGL surface can remain live
     // but corrupt after a retained hidden interval; there is no context-loss event to
     // recover from.
@@ -2105,13 +2097,8 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     })
     let ownsInput = false
     let ownership: OwnershipView = UNOWNED
-    // The same device class the presence heartbeat reports, deliberately: the daemon
-    // compares these two strings, and `isMobileTerminalInput()` is a *different*
-    // question (does this pane need the IME bridge — true for any coarse pointer,
-    // including one wider than the mobile breakpoint). A phone that answered "mobile"
-    // here and "desktop" there would report itself in use and then refuse its own
-    // claims for being the other device.
-    const device = currentProfile()
+    // Claims and presence read the same current profile, including after an override.
+    // IME capability is a separate question and cannot identify the claim's device class.
     // When the user last did something in this pane. A focus event within the gesture
     // window is the user asking for the keyboard; anything later is the pane restoring
     // its own focus, which must not take input from another device.
@@ -2132,7 +2119,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     // inconsistently — see deviceIsFocused. Reporting it raw made the phone's every
     // claim look like it came from a background window.
     const paneIsFocused = () => deviceIsFocused({
-      profile: device,
+      profile: currentProfile(),
       visible: !paneIsHidden(),
       // A hidden pane must never look focused: input arbitration hands the keyboard
       // to whoever answers true, and a warm pane in a background tab has as much
@@ -2144,7 +2131,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         socket.send(JSON.stringify({
           type: 'claim_input',
           reason,
-          device,
+          device: currentProfile(),
           // A minimized or backgrounded window answers false and so cannot passively
           // take the keyboard from the device in front of the user.
           focused: paneIsFocused(),
@@ -3980,7 +3967,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
   const railItems=new Map(railConfig.items.map(entry=>[entry.id,entry]))
   // The per-device-class master switch. Resolved at render (not memoized) for the
   // same reason `loadRailConfig` above is: this pane re-renders on every config
-  // arrival, and the breakpoint change that flips `currentProfile()` re-renders it too.
+  // arrival, and device-mode changes refresh the current profile without remounting.
   const railOn=railEnabled?.[currentProfile()]??true
   const railDevice:RailDevice=currentProfile()
   // ---- The hover-only rail (`railHover.ts`) ----------------------------------------------

@@ -1,6 +1,7 @@
 // Explicit extension: `dropdownPlacement.ts` reuses this module and is imported directly by
 // the node test runner, which resolves no extensionless specifiers.
 import { railOverlayBox, type RailOverlayBox, type RailOverlayView, type RailPopoverRect } from './railOverflow.ts'
+import { DEVICE_MODE_EVENT, mobileLayout } from './deviceMode.ts'
 
 // The DOM half of placing a command-rail overlay: what "visible" means right now, and what
 // `position:fixed` actually means at the place this overlay is mounted.
@@ -72,7 +73,7 @@ export function railOverlayStyle(
   host: HTMLElement | null,
   maxWidth: number,
 ): Record<string, string> {
-  return railOverlayCss(railOverlayBox(anchor, railOverlayView(), maxWidth), host)
+  return railOverlayCss(railOverlayBox(anchor, railOverlayView(), maxWidth, mobileLayout()), host)
 }
 
 /**
@@ -84,11 +85,13 @@ export function railOverlayStyle(
  */
 export function watchRailOverlayPlacement(reposition: () => void): () => void {
   const visual = window.visualViewport
+  window.addEventListener(DEVICE_MODE_EVENT, reposition)
   window.addEventListener('resize', reposition)
   window.addEventListener('scroll', reposition, true)
   visual?.addEventListener('resize', reposition)
   visual?.addEventListener('scroll', reposition)
   return () => {
+    window.removeEventListener(DEVICE_MODE_EVENT, reposition)
     window.removeEventListener('resize', reposition)
     window.removeEventListener('scroll', reposition, true)
     visual?.removeEventListener('resize', reposition)

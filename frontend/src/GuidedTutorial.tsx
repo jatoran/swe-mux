@@ -1,3 +1,4 @@
+import { mobileLayout } from './deviceMode'
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import type { JSX } from 'preact'
 import { matchesTutorialAction, placeTutorialCard, TUTORIAL_ACTION_EVENT, type TutorialActionDetail, type TutorialActionGate, type TutorialStepId } from './tutorial'
@@ -47,7 +48,7 @@ const sameRect=(first:DOMRect|null,second:DOMRect|null)=>first===second||Boolean
 
 export function GuidedTutorial({hasProject,setupCompleted=false,initialStep,onStep,onNavigate,onExit,onComplete}:Props){
   const initialHasProject=useRef(hasProject).current
-  const mobileAtStart=useRef(window.matchMedia('(max-width:760px)').matches).current
+  const mobileAtStart=useRef(mobileLayout()).current
   const [dragging,setDragging]=useState(false)
   const [targetRect,setTargetRect]=useState<DOMRect|null>(null)
   const cardRef=useRef<HTMLElement>(null)

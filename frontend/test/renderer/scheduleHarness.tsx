@@ -8,6 +8,7 @@ import { render } from 'preact'
 import { ScheduleTab } from '../../src/ScheduleTab'
 import type { Schedule } from '../../src/schedules'
 import type { LaunchProfile, Project } from '../../src/types'
+import '../../src/deviceMode'
 import '../../src/style.css'
 
 const NOW = Math.floor(Date.now() / 1000)

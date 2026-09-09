@@ -24,6 +24,7 @@ import {
 } from '../../src/drawerFiles'
 import { ProjectResource } from '../../src/ProjectResource'
 import type { Project } from '../../src/types'
+import '../../src/deviceMode'
 import '../../src/style.css'
 
 const params = new URLSearchParams(location.search)

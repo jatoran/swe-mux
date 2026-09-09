@@ -12,6 +12,7 @@
 import { render } from 'preact'
 import { useState } from 'preact/hooks'
 import { AccountSwitcher } from '../../src/ProviderAccounts'
+import '../../src/deviceMode'
 import '../../src/style.css'
 
 type Call = { method: string; url: string }

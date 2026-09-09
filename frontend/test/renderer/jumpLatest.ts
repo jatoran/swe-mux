@@ -16,6 +16,7 @@
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
+import '../../src/deviceMode'
 import '../../src/style.css'
 import { scrollTerminalToTail } from '../../src/terminalViewport'
 

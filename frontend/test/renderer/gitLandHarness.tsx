@@ -3,6 +3,7 @@ import { useState } from 'preact/hooks'
 import { GitTab, type GitView } from '../../src/GitTab'
 import { DrawerSegmentControl } from '../../src/DrawerSegmentControl'
 import type { Project, Session } from '../../src/types'
+import '../../src/deviceMode'
 import '../../src/style.css'
 
 // The Map with a gate actually running, which is the state the whole progress reading

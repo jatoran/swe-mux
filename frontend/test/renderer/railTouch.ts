@@ -33,7 +33,7 @@ export async function touch(page: Page): Promise<Finger> {
  * an edge button instead.
  */
 export async function keyPoint(page: Page, selector: string): Promise<{ x: number; y: number }> {
-  const point = await page.evaluate((keySelector: string) => {
+  const measure = () => page.evaluate((keySelector: string) => {
     const strip = document.querySelector<HTMLElement>('.terminal-action-scroll')!
     const key = strip.querySelector<HTMLElement>(keySelector)
     if (!key) return null
@@ -47,6 +47,13 @@ export async function keyPoint(page: Page, selector: string): Promise<{ x: numbe
     if (after) right = Math.min(right, after.getBoundingClientRect().left)
     return right - left < 8 ? null : { x: (left + right) / 2, y: keyBox.top + keyBox.height / 2 }
   }, selector)
+  let point = await measure()
+  // Touch-sized chips can push a later key out of the initial fixture viewport.
+  // Reveal only an unreachable target; preserve the deliberate parking of visible keys.
+  if (!point) {
+    await page.locator('.terminal-action-scroll').locator(selector).scrollIntoViewIfNeeded()
+    point = await measure()
+  }
   if (!point) throw new Error(`rail key ${selector} is not reachable inside the strip`)
   return point
 }

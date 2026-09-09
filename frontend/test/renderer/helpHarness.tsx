@@ -6,6 +6,7 @@
 // the same way `App` passes one through from a palette command or a drawer's help control.
 import { render } from 'preact'
 import { HelpModal } from '../../src/HelpModal'
+import '../../src/deviceMode'
 import '../../src/style.css'
 
 declare global {

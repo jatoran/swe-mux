@@ -1,3 +1,4 @@
+import { deviceMode, watchDeviceMode } from './deviceMode'
 import { ProviderConnectionFields, providerKeyOperation } from './ProviderSetup'
 import { ExperiencePreview } from './ExperiencePreview'
 import { Fragment } from 'preact'
@@ -28,6 +29,7 @@ import type { Budget } from './types'
 import { uiScaleKeyboardIntent, uiScaleLabel, UI_SCALE_STEPS, type UiScale } from './uiScale'
 import { applyRailDensity, railDensityLabel, RAIL_DENSITIES, type RailDensity } from './railDensity'
 import { CLAUDE_MAX_COLUMN_STEPS, claudeMaxColumnsLabel, type ClaudeMaxColumns } from './terminalViewport'
+import { DeviceModeSetting } from './DeviceModeSetting'
 import { currentProfile } from './deviceSettings'
 import { DRAWER_TABS, type DrawerTabId } from './drawerTabs'
 import { canHideDrawerTab } from './drawerVisibility'
@@ -302,11 +304,6 @@ type SettingsBundle = {
  *  not noticeably ignored. */
 const SCROLL_CLAIM_MS = 800
 
-/** Below this the section list is a slide-in drawer rather than a docked column. The
- *  same breakpoint the workspace uses, because it is the width at which the panel stops
- *  being a dialog on a desktop and becomes the whole screen. */
-const SETTINGS_NARROW_QUERY = '(max-width:760px)'
-
 // Search entries harvested from a tab's real DOM while it was on screen. Module
 // scope, not component state: a tab visited in one Settings session stays fully
 // searchable in the next one, for as long as the page lives.
@@ -547,10 +544,9 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   const [errors, setErrors] = useState<Record<string,string>>({})
   const [scanJob, setScanJob] = useState<HistoryScanJob|null>(null)
   const [activeTab,setActiveTab] = useState<SettingsTab>(()=>initialSection?tabForSection(initialSection):rememberedTab())
-  // The same breakpoint the workspace switches on, watched live rather than sampled
-  // once: the panel fills the viewport at this width, so a rotation or a desktop window
-  // dragged narrow has to move the section list between column and drawer with it.
-  const [narrow,setNarrow] = useState(()=>window.matchMedia(SETTINGS_NARROW_QUERY).matches)
+  // Keep the section drawer and profile labels synchronized with the shared policy.
+  const [deviceEnvironment,setDeviceEnvironment] = useState(deviceMode)
+  const narrow=deviceEnvironment.layout==='mobile'
   /**
    * The active tab's rendered sections, carrying the tab they were read from.
    *
@@ -928,15 +924,10 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
 
   useEffect(()=>setThemePickerOpen(false),[activeTab])
 
-  useEffect(()=>{
-    const query=window.matchMedia(SETTINGS_NARROW_QUERY)
-    const changed=()=>setNarrow(query.matches)
-    changed();query.addEventListener('change',changed)
-    return()=>query.removeEventListener('change',changed)
-  },[])
+  useEffect(()=>watchDeviceMode(setDeviceEnvironment),[])
 
   const setNavOpen=useCallback((open:boolean)=>onNavOpenChange?.(open),[onNavOpenChange])
-  // Widening past the breakpoint turns the drawer back into a docked column, and a
+  // Switching to desktop layout turns the drawer back into a docked column, and a
   // column that is permanently on screen must not leave a dismiss level standing —
   // back would then swallow a press doing nothing visible.
   useEffect(()=>{if(!narrow&&navOpen)setNavOpen(false)},[narrow,navOpen,setNavOpen])
@@ -2802,7 +2793,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           {factoryResetOpen&&<FactoryResetDialog onClose={()=>setFactoryResetOpen(false)}/>}
         </Fragment>}
 
-        {activeTab==='appearance'&&<Fragment><section><h3>Theme</h3>
+        {activeTab==='appearance'&&<Fragment><DeviceModeSetting /><section><h3>Theme</h3>
           <div class="theme-field">
             <span>Theme</span>
             <ThemePicker value={draft.theme} customTheme={draft.custom_theme} open={themePickerOpen} onOpenChange={setThemePickerOpen} onChange={value=>{change('theme',value);applyTheme(value)}} onPreview={previewTheme} />

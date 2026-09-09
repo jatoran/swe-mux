@@ -1,3 +1,4 @@
+import { watchDeviceMode } from './deviceMode.ts'
 // Persistence bridge and shared clock for the sidebar session row.
 //
 // The layout blob lives in ONE canonical settings bucket rather than the
@@ -15,7 +16,7 @@
 // set from either device.
 
 import { useEffect, useState } from 'preact/hooks'
-import { MOBILE_QUERY, currentProfile, rawDomain, saveDomain, type SettingsProfile } from './deviceSettings.ts'
+import { currentProfile, rawDomain, saveDomain, type SettingsProfile } from './deviceSettings.ts'
 import {
   defaultSessionRowConfig, normalizeSessionRowConfig, type SessionRowConfig,
 } from './sessionRowConfig.ts'
@@ -63,17 +64,11 @@ export function applySessionDotSize(config: SessionRowConfig): number {
 }
 
 /**
- * Re-resolve when the device class changes under a live page.
- *
- * A desktop window dragged across the breakpoint adopts the mobile layout, and
- * without this it would keep the desktop size while rendering it — the same
- * reason chrome scale watches the same query.
+ * Re-resolve when capabilities or the browser override change the interaction profile.
  */
 export function watchSessionDotProfile(): () => void {
-  const query = window.matchMedia(MOBILE_QUERY)
   const update = () => { if (appliedConfig) applySessionDotSize(appliedConfig) }
-  query.addEventListener('change', update)
-  return () => query.removeEventListener('change', update)
+  return watchDeviceMode(update)
 }
 
 /** The live configuration, re-read whenever any device edits settings. */

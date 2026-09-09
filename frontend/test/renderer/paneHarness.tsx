@@ -8,6 +8,7 @@ import { defaultSessionRowConfig } from '../../src/sessionRowConfig'
 import { deriveRowFleetFacts } from '../../src/sessionRowFields'
 import { addSessionTopbarRow, defaultSessionTopbarConfig, placeSessionTopbarItem } from '../../src/sessionTopbarConfig'
 import type { Session } from '../../src/types'
+import '../../src/deviceMode'
 import '../../src/style.css'
 
 // The pane's own layout, with the real components and the real stylesheet. What it exists

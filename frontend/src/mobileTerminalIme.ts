@@ -1,3 +1,4 @@
+import { touchInput } from './deviceMode.ts'
 import { composerNewline, isAgentBackend } from './harnessRegistry.ts'
 
 export const TERMINAL_DELETE = '\x7f'
@@ -29,5 +30,5 @@ export function mobileImeDelta(previous:string,next:string,lineBreak='\r'):strin
 }
 
 export function isMobileTerminalInput():boolean {
-  return window.matchMedia('(max-width: 760px), (pointer: coarse)').matches
+  return touchInput()
 }

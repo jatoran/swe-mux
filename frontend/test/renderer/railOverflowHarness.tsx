@@ -18,6 +18,7 @@ import { RailDropup } from '../../src/RailDropup'
 import { RailStrip } from '../../src/RailStrip'
 import { registerRailClearance } from '../../src/railClearance'
 import { AttachIcon, BranchIcon, CopyIcon, PasteIcon } from '../../src/railIcons'
+import '../../src/deviceMode'
 import '../../src/style.css'
 
 declare global {

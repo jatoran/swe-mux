@@ -4,6 +4,7 @@ import { GitDiffView } from '../../src/GitDiffView'
 import { GitReviewModal } from '../../src/GitReviewModal'
 import type { AnnotationAnchor, GitAnnotation } from '../../src/gitReview'
 import type { Project } from '../../src/types'
+import '../../src/deviceMode'
 import '../../src/style.css'
 
 const patch='diff --git a/example.ts b/example.ts\n--- a/example.ts\n+++ b/example.ts\n@@ -1,2 +1,2 @@\n-const value = 1\n+const value = 2\n export default value\n'

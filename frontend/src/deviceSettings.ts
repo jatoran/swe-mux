@@ -11,6 +11,8 @@
 // settings (the daemon emits `settings_changed` over the /events socket). Reads
 // are synchronous against the cache so hot paths like handleSessionSound stay
 // sync; an unloaded cache simply yields defaults.
+import { deviceMode, touchInput, HOVER_QUERY } from './deviceMode.ts'
+export { HOVER_QUERY } from './deviceMode.ts'
 import { api } from './api.ts'
 import { clearProjectRailBlob, railConfigFromBlob, writeRailConfigBlob, type RailBlob, type RailConfig } from './commandRail.ts'
 import { resolveRail, type ResolvedRail } from './railScope.ts'
@@ -20,26 +22,11 @@ export type SettingsDomain = 'alerts' | 'sounds' | 'notifications' | 'commandRai
 type ProfileSettings = Partial<Record<SettingsDomain, Record<string, unknown>>>
 type AllSettings = Record<SettingsProfile, ProfileSettings>
 
-/** The one device-class breakpoint. Exported so chrome scale (`uiScale.ts`) splits
- *  desktop from mobile on exactly the same line the workspace and these settings do. */
-export const MOBILE_QUERY = '(max-width:760px)'
-/** Devices whose only keyboard is an on-screen one that covers the layout when it
- *  opens. A separate question from `MOBILE_QUERY`: a narrowed desktop window has a
- *  real keyboard, and a landscape tablet is wider than the breakpoint but not. */
-export const SOFT_KEYBOARD_QUERY = '(max-width: 760px), (pointer: coarse)'
 const LEGACY_SOUND_KEY = 'swe-mux:session-sounds-v1'
 
-/** True where focusing a field would raise the soft keyboard over the workspace. */
-export function hasSoftKeyboard(): boolean {
-  return typeof window !== 'undefined' && !!window.matchMedia?.(SOFT_KEYBOARD_QUERY).matches
-}
+/** Whether focus needs the touch keyboard affordances, independent of layout width. */
+export const hasSoftKeyboard = touchInput
 
-/** Devices whose primary pointer can rest over something without pressing it. The
- *  question the hover-only rail asks, and a different one from `MOBILE_QUERY`: a touch
- *  tablet at desktop width is not mobile and still cannot hover. */
-export const HOVER_QUERY = '(hover: hover)'
-
-/** True where a pointer can hover. */
 export function canHover(): boolean {
   return typeof window !== 'undefined' && !!window.matchMedia?.(HOVER_QUERY).matches
 }
@@ -48,9 +35,9 @@ let cache: AllSettings = { desktop: {}, mobile: {} }
 let loaded = false
 let migrated = false
 
-/** The profile this device uses, from the same breakpoint the workspace uses. */
+/** The interaction profile, independent of viewport width. */
 export function currentProfile(): SettingsProfile {
-  return typeof window !== 'undefined' && window.matchMedia?.(MOBILE_QUERY).matches ? 'mobile' : 'desktop'
+  return deviceMode().profile
 }
 
 export function settingsLoaded(): boolean { return loaded }

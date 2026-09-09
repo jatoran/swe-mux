@@ -12,6 +12,7 @@
 import { render } from 'preact'
 import { QueuePane } from '../../src/QueuePane'
 import type { DeliveryReadiness, Session } from '../../src/types'
+import '../../src/deviceMode'
 import '../../src/style.css'
 
 type Row = {

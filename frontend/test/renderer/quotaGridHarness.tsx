@@ -14,6 +14,7 @@ import { render } from 'preact'
 import {
   accountAbbreviation, quotaGridSegments, type ProviderQuotaWindows,
 } from '../../src/providerAccountDisplay'
+import '../../src/deviceMode'
 import '../../src/style.css'
 
 const NOW = 1_770_000_000

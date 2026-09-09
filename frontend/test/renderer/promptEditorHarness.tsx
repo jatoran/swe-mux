@@ -8,6 +8,7 @@ import { render } from 'preact'
 import { PromptsTab } from '../../src/PromptsTab'
 import type { PromptTemplate } from '../../src/promptTemplates'
 import type { Project, Session } from '../../src/types'
+import '../../src/deviceMode'
 import '../../src/style.css'
 
 declare global {

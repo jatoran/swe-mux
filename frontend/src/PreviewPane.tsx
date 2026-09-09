@@ -1,3 +1,4 @@
+import { touchInput } from './deviceMode'
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { api } from './api'
 import { captureUnavailableNote, type CaptureResult } from './previewCapture'
@@ -9,7 +10,7 @@ type Clip = { x: number; y: number; width: number; height: number }
 
 // Mirrors TerminalPane: coarse/small viewports get the manual copy overlay because
 // clipboard writes across an async gap and over insecure (HTTP) contexts fail there.
-const mobileClipboardFallback = () => window.matchMedia('(max-width: 760px), (pointer: coarse)').matches
+const mobileClipboardFallback = () => touchInput()
 
 export function PreviewPane({ preview, onClose }: { preview: Preview; onClose: () => void }) {
   const [refresh,setRefresh] = useState(0)

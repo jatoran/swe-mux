@@ -1,3 +1,4 @@
+import { mobileLayout, watchDeviceMode } from './deviceMode'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import type { ComponentChildren, JSX } from 'preact'
 import { api, openWebSocket, type ApiError } from './api'
@@ -923,7 +924,7 @@ export function App() {
   },[loadCommandPlugins])
   // The utility workspace has one device-local split tree shared by every Project. Selection
   // and desktop expansion remain device-local per Project. Mobile visibility is transient.
-  const [mobileWorkspace,setMobileWorkspace]=useState(()=>window.matchMedia('(max-width:760px)').matches)
+  const [mobileWorkspace,setMobileWorkspace]=useState(()=>mobileLayout())
   const [viewportWidth,setViewportWidth]=useState(()=>window.innerWidth)
   const [mobileDrawerOpen,setMobileDrawerOpen]=useState(false)
   useEffect(()=>{ activePointerDragCancelRef.current?.() },[projectId,mobileWorkspace])
@@ -2722,12 +2723,14 @@ export function App() {
   },[])
 
   useEffect(()=>{
-    const query=window.matchMedia('(max-width:760px)')
-    // Responsive transitions never turn a remembered desktop column into an unsolicited
-    // mobile overlay, and a formerly open overlay does not reappear after another transition.
-    const changed=()=>{setMobileWorkspace(query.matches);setMobileDrawerOpen(false)}
-    changed();query.addEventListener('change',changed)
-    return()=>query.removeEventListener('change',changed)
+    // Capability or preference changes share one policy with CSS and settings.
+    let previous=mobileLayout()
+    return watchDeviceMode(mode=>{
+      const mobile=mode.layout==='mobile'
+      setMobileWorkspace(mobile)
+      if(mobile!==previous)setMobileDrawerOpen(false)
+      previous=mobile
+    })
   },[])
 
   const active = sessions.find(session => session.id === activeId)

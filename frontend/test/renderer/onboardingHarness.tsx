@@ -6,6 +6,7 @@ import { GuidedTutorial } from '../../src/GuidedTutorial'
 import { useOnboarding } from '../../src/onboarding'
 import { api } from '../../src/api'
 import type { TutorialStepId } from '../../src/tutorial'
+import '../../src/deviceMode'
 import '../../src/style.css'
 
 function Host(){

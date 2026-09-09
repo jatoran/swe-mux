@@ -75,6 +75,7 @@ A body that *begins* with a newline is the shape that made this dangerous: sent 
 The builder lifts that leading run into the harness's own newline key ahead of the paste, so the template does what its author meant and the standing draft survives.
 Insert also refuses outright when the target session is showing an approval or a question, because there the text answers the dialog rather than filling a composer — and the refusal reaches the button, which is why insertion waits for an acknowledgement instead of dispatching and walking away.
 Editor changes use explicit Save/Discard and an in-app close confirmation.
+Template and revision transitions restore the editor draft before fields are painted, so a deferred reset cannot erase the first edit or its recovery stash.
 
 Insert routing is **terminals-only** for prompts. Everything else that injects text (clipboard
 history, note sends) lands in the last-focused surface, which may be a note or file editor; a

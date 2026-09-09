@@ -1,6 +1,7 @@
 import { render } from 'preact'
 import { HistoryBrowser, type HistoryEntry } from '../../src/HistoryBrowser'
 import type { Project } from '../../src/types'
+import '../../src/deviceMode'
 import '../../src/style.css'
 
 const entry:HistoryEntry={

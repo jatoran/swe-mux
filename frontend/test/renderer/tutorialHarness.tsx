@@ -12,6 +12,7 @@
 // reads `matchMedia` once at mount.
 import { render } from 'preact'
 import { GuidedTutorial } from '../../src/GuidedTutorial'
+import '../../src/deviceMode'
 import '../../src/style.css'
 
 declare global {

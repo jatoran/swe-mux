@@ -1,3 +1,4 @@
+import '../../src/deviceMode'
 import '../../src/style.css'
 
 const root = document.querySelector<HTMLElement>('#root')!

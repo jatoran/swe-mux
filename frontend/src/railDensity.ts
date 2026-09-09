@@ -1,3 +1,4 @@
+import { watchDeviceMode } from './deviceMode.ts'
 /**
  * Rail density: how tightly the Action rail packs, per device class.
  *
@@ -15,7 +16,7 @@
  * answered, both render the stylesheet's own `:root` values and are indistinguishable from a
  * build without this feature.
  */
-import { MOBILE_QUERY, currentProfile, type SettingsProfile } from './deviceSettings.ts'
+import { currentProfile, type SettingsProfile } from './deviceSettings.ts'
 
 /** Mirrors `RAIL_DENSITIES` in `config.py`. Anything else is snapped back to comfortable. */
 export const RAIL_DENSITIES = ['comfortable', 'compact', 'dense'] as const
@@ -65,15 +66,10 @@ function writeRailDensity(density: RailDensity): void {
 }
 
 /**
- * Re-resolve when the device class itself changes under a live page.
- *
- * A desktop window dragged past the breakpoint adopts the mobile layout and the mobile
- * variable group; without this it would keep the desktop *step* while rendering the mobile
- * numbers, which is the one combination nobody chose.
+ * Re-resolve the chosen step when the interaction profile changes. CSS independently
+ * selects the geometry appropriate to the resolved workspace layout.
  */
 export function watchRailDensityProfile(onChange?: (density: RailDensity) => void): () => void {
-  const query = window.matchMedia(MOBILE_QUERY)
   const update = () => { if (current) onChange?.(applyRailDensity(current)) }
-  query.addEventListener('change', update)
-  return () => query.removeEventListener('change', update)
+  return watchDeviceMode(update)
 }

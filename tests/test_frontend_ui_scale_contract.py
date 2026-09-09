@@ -95,6 +95,16 @@ INTENTIONAL_PINS = {
 
 def test_no_unintended_rule_pins_a_height_the_base_scales() -> None:
     css = (SRC / "style.css").read_text(encoding="utf-8")
+    # Device policy scopes have zero specificity, just like the media queries they
+    # replace. Compare their declarations against the same unscoped base selectors.
+    scopes = (
+        '[data-workspace-layout="mobile"]',
+        '[data-workspace-layout="desktop"]',
+        ':is([data-workspace-layout="mobile"],[data-touch-input="true"])',
+    )
+    for scope in scopes:
+        css = css.replace(f":where(:root{scope}) ", "")
+        css = css.replace(f":where({scope})", "")
     # Blank comments, keeping newlines so the reported lines match the file.
     css = re.sub(
         r"/\*.*?\*/", lambda m: re.sub(r"[^\n]", " ", m.group(0)), css, flags=re.DOTALL

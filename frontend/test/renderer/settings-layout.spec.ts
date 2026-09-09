@@ -168,7 +168,7 @@ test('narrow: picking a section closes the drawer and retitles the header', asyn
   expect(g.headingText).toContain('Appearance')
   expect(g.navVisibility).toBe('hidden')
   expect(g.focusableInNav).toBe(0)
-  await expect(page.locator('.settings-content h3').first()).toHaveText('Theme')
+  await expect(page.locator('.settings-content h3').first()).toHaveText('Device mode')
 })
 
 test('narrow: the soft keyboard shortens the panel instead of hiding its footer', async ({ page }) => {

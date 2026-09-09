@@ -2,6 +2,7 @@ import { render } from 'preact'
 import { useState } from 'preact/hooks'
 import { GitTab, type GitView } from '../../src/GitTab'
 import type { Project, Session } from '../../src/types'
+import '../../src/deviceMode'
 import '../../src/style.css'
 
 // Shift-click range selection on Map, against an inventory long enough to have a middle.

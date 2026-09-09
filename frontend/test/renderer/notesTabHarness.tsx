@@ -13,6 +13,7 @@ import { render } from 'preact'
 import { useState } from 'preact/hooks'
 import { NotesTab, type ProjectNoteSummary } from '../../src/NotesTab'
 import type { Project } from '../../src/types'
+import '../../src/deviceMode'
 import '../../src/style.css'
 
 const NOW = 1_770_000_000

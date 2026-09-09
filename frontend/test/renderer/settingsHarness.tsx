@@ -14,6 +14,7 @@ import { Settings } from '../../src/Settings'
 import type { FirewallStatus, RemoteStatus } from '../../src/remoteConnection'
 import type { WslBridgeStatus } from '../../src/wslBridge'
 import { SETTINGS_CONFIG_FIXTURE } from './settingsConfigFixture'
+import '../../src/deviceMode'
 import '../../src/style.css'
 
 /**

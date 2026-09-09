@@ -1,6 +1,7 @@
 import { render } from 'preact'
 import { GitTab } from '../../src/GitTab'
 import type { Project } from '../../src/types'
+import '../../src/deviceMode'
 import '../../src/style.css'
 
 const project={id:'project',name:'Project',root:'D:\\PROJECTS\\project'} as Project

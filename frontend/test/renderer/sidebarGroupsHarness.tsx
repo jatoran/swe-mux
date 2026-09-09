@@ -11,6 +11,7 @@
 // section chrome, and mounting App would drag in the daemon, the layout store, and every
 // poller for nothing.
 import { render } from 'preact'
+import '../../src/deviceMode'
 import '../../src/style.css'
 
 const projectRow = (name: string, active = false) => <section class={`project-group ${active ? 'active' : ''}`}>

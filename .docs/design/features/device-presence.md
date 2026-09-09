@@ -23,7 +23,7 @@ and neither can derive it from its own state: notification routing
 ## Operations
 
 - Report: clients send `{type:"presence", profile, visible, focused, interaction_age}` on
-  the `/events` socket every 30 s, on every visibility/focus change, and on the first
+  the `/events` socket every 30 s, on every visibility/focus or device-mode change, and on the first
   interaction after 10 s of quiet. The connection closing drops the device.
 - Aggregate: any active connection makes its class active; `leading_profile` picks the
   class with the newest interaction.
@@ -42,9 +42,9 @@ and neither can derive it from its own state: notification routing
   holds that socket whether or not it can receive Web Push. The Windows desktop shell is a
   WebView that cannot subscribe, so it reported nothing at all through the push path — any
   cross-device rule built on that would ship and do nothing.
-- Device class comes from `currentProfile()` on every client surface that reports or
-  claims. The daemon compares those strings; a surface using a different breakpoint would
-  report itself in use under one name and be judged under another.
+- Device class comes from `currentProfile()` on every client surface that reports or claims.
+  [Device mode](device-mode.md) resolves the profile from primary-pointer capabilities and the browser-local override, independently of viewport width.
+  Terminal claims read it on each send so an override cannot diverge from presence in a retained pane.
 
 ## Failure modes
 

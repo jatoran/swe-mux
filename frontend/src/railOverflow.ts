@@ -34,9 +34,6 @@ export const RAIL_POPOVER_MAX_WIDTH_PX = 520
 export const RAIL_DROPUP_MAX_WIDTH_PX = 340
 /** Most of the visible height a rail overlay may take, so it never blankets the composer. */
 export const RAIL_POPOVER_MAX_HEIGHT_RATIO = 0.5
-/** Below this the layout is the phone's, and a rail overlay takes half the screen at most.
- *  The same breakpoint the workspace projection and the device-class settings use. */
-export const RAIL_OVERLAY_MOBILE_MAX_PX = 760
 /** How much of a phone's screen a rail overlay may cover. Operator-chosen: the terminal it
  *  is opened over has to stay readable beside it, which a near-full-width panel prevents. */
 export const RAIL_OVERLAY_MOBILE_WIDTH_RATIO = 0.5
@@ -84,11 +81,12 @@ export function railOverlayBox(
   anchor: RailPopoverRect,
   view: RailOverlayView,
   maxWidth: number,
+  mobile: boolean,
 ): RailOverlayBox {
   const viewRight = view.left + view.width
   const viewBottom = view.top + view.height
   const room = view.width - RAIL_POPOVER_MARGIN_PX * 2
-  const cap = view.width <= RAIL_OVERLAY_MOBILE_MAX_PX
+  const cap = mobile
     ? Math.floor(view.width * RAIL_OVERLAY_MOBILE_WIDTH_RATIO)
     : maxWidth
   const width = Math.max(Math.min(cap, room), Math.min(RAIL_OVERLAY_MIN_WIDTH_PX, room))
@@ -99,7 +97,7 @@ export function railOverlayBox(
   // second apart appear in two places. The desktop keeps the trigger; the phone gets one
   // place, which is the same edge the rail's own trailing cluster sits on.
   const trailing = viewRight - width - RAIL_POPOVER_MARGIN_PX
-  const left = view.width <= RAIL_OVERLAY_MOBILE_MAX_PX
+  const left = mobile
     ? Math.max(view.left + RAIL_POPOVER_MARGIN_PX, trailing)
     : clamp(anchor.right - width, view.left + RAIL_POPOVER_MARGIN_PX, Math.max(view.left + RAIL_POPOVER_MARGIN_PX, trailing))
   const above = anchor.top - (view.top + RAIL_POPOVER_MARGIN_PX) - 4

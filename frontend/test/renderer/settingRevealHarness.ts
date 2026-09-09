@@ -13,6 +13,7 @@
 // closed disclosure `display:none`s its body, so the control is in the DOM with no layout box:
 // the reveal has to open the way in rather than wait for a box that will never appear.
 import { revealSetting } from '../../src/settingReveal.ts'
+import '../../src/deviceMode'
 import '../../src/style.css'
 
 const params = new URLSearchParams(location.search)

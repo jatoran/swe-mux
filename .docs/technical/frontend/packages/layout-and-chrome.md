@@ -71,7 +71,8 @@ The number cannot be a constant - rail height is the configured row count times 
 Portalling the overlays to the body would fix the same thing and take the rail's chip styling with them, which is why the block is measured instead.
 `watchRailOverlayPlacement()` is the listener set both components share: `visualViewport` resize and scroll on top of window resize and capture-phase scroll, since the keyboard's open and close fire nothing else and the rail is itself a horizontal scroller.
 
-`railOverlayBox` is the pure geometry, and the two rules worth knowing are both device-class rules: below 760px an overlay takes half the screen and goes to the screen's trailing edge whatever opened it, while above it keeps its trigger's edge and its own width cap (`RAIL_POPOVER_MAX_WIDTH_PX` for a wrap grid, `RAIL_DROPUP_MAX_WIDTH_PX` for a list).
+`railOverlayBox` takes the shared mobile-layout decision explicitly: a mobile overlay takes half the visible screen and goes to its trailing edge at every width, while desktop keeps its trigger's edge and its own width cap (`RAIL_POPOVER_MAX_WIDTH_PX` for a wrap grid, `RAIL_DROPUP_MAX_WIDTH_PX` for a list).
+`watchRailOverlayPlacement` also listens for device-mode changes so an open overlay follows a browser override without a resize.
 It returns the panel's bottom *edge* rather than a CSS inset, which is what makes the containing-block conversion checkable rather than implied.
 
 `RailOverflowPopover.tsx` is the panel, and it is deliberately not a `RailDropup`: a drop-up is a picker that closes on selection, this is the rail folded, and a rail does not close when you press a key on it.
@@ -133,12 +134,22 @@ Every rule in `style.css` that styled a `select` names `.dropdown-trigger` besid
 `settingsSearch.ts` harvests the `options` prop, because the choices moved from `<option>` children into a prop and "Tokyo Night" would otherwise be text nowhere in the tree.
 And `test/renderer/dropdown.ts` is the Playwright stand-in for `selectOption`: the rows are never inside the trigger's container, so one helper knows about the portal instead of twelve specs.
 
+## Device policy
+
+`deviceMode.ts` is the shared browser policy for settings profile and workspace layout.
+It initializes document root attributes, subscribes to capability and local-storage changes, and owns bounded browser-local diagnostics.
+`DeviceModeSetting.tsx` exposes the immediate local override in Appearance > Interface.
+`deviceSettings.currentProfile()` delegates to this policy; `watchDeviceMode` drives App, Settings, terminal width policy, scale, rail density, and dot sizing.
+Semantic mobile CSS uses `data-workspace-layout` rather than independent width queries.
+Soft-keyboard behavior uses `touchInput()` independently of the layout preference.
+The full policy and persistence contract is [Device mode](../../../design/features/device-mode.md).
+
 ## Rail density
 
 `railDensity.ts`
 
 The per-device-class `Comfortable | Compact | Dense` choice, and nothing else.
-Structurally a twin of `uiScale.ts`: two `Config` fields resolved through the same `(max-width:760px)` device-class breakpoint, a `watch…Profile` that re-resolves when a window crosses it, and a default that writes nothing at all.
+Structurally a twin of `uiScale.ts`: two `Config` fields resolved through `deviceSettings.currentProfile()`, a `watch…Profile` that subscribes to `watchDeviceMode`, and a default that writes nothing at all.
 The numbers live in `style.css` as one variable group per step (gap, chip height, chip padding, container padding, row height, overflow-chip width), because they are six lengths that have to move together and because the mobile group is a second set rather than a scaled desktop one — a phone's Comfortable chip is a 44px touch target, not a multiple of 27.
 What crosses the boundary is one `data-rail-density` attribute on the root element; Comfortable removes it, so an opted-out device renders the stylesheet's own `:root` values and is indistinguishable from a build without the feature.
 

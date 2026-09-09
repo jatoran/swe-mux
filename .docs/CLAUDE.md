@@ -130,6 +130,8 @@
   checkouts may hold the only copy of uncommitted work, so both are reported rather than removed.
 - Changing panes, tabs, splits, drag/drop, or the mobile workspace projection:
   `design/features/workspace-layout.md`, `technical/frontend/workspace-state.md`
+- Changing device detection, wide mobile behavior, browser mode overrides, or responsive profile selection:
+  `design/features/device-mode.md`, `design/features/device-presence.md`, `design/features/workspace-layout.md`, `technical/frontend/packages/layout-and-chrome.md`.
 - Changing browser chrome, sidebar interaction, settings, focus, or overlays:
   `design/features/ui.md`, `technical/frontend/packages.md`
 - Changing session pane top-bar metrics, shortcuts, rows, density, persistence, or editor:

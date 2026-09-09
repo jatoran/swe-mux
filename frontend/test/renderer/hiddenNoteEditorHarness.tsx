@@ -9,6 +9,7 @@
 import { render } from 'preact'
 import { useState } from 'preact/hooks'
 import { ContinuityMarkdownEditor } from '../../src/ProjectNoteEditor'
+import '../../src/deviceMode'
 import '../../src/style.css'
 
 const NOTE = [

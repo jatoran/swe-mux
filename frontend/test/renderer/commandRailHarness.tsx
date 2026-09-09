@@ -19,6 +19,7 @@ import { RailPad, useRailPad, type RailPadSlotView } from '../../src/RailPad'
 import { pointerDragOwnsPointer } from '../../src/pointerDragClaim'
 import { dismissSoftKeyboard } from '../../src/mobileKeyboard'
 import { normalizeRailPad, padRingCount, padSlotKeys, railPadSlotMode, type RailItem } from '../../src/commandRail'
+import '../../src/deviceMode'
 import '../../src/style.css'
 
 declare global {

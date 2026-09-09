@@ -3,6 +3,7 @@ import { useState } from 'preact/hooks'
 import { GitTab, type GitView } from '../../src/GitTab'
 import { DrawerSegmentControl } from '../../src/DrawerSegmentControl'
 import type { Project, Session } from '../../src/types'
+import '../../src/deviceMode'
 import '../../src/style.css'
 
 const project={id:'swe-mux',name:'swe-mux',root:'D:\\PROJECTS\\swe-mux'} as Project

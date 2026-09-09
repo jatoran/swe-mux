@@ -86,15 +86,16 @@ body.demo-framed .app-shell {
 
 .demo-bar-stop { color: var(--accent, #8bd450); }
 
-@media (max-width: 760px) {
-  body.demo-framed .app-shell { height: calc(var(--app-height, 100dvh) - 34px); margin-top: 34px; }
-  .demo-bar { --demo-bar-h: 34px; gap: 6px; padding: 0 6px; font-size: 11px; }
-  .demo-bar-kick { display: none; }
-  .demo-bar a, .demo-bar button, .demo-bar select { padding: 3px 5px; }
-}
+:where(:root[data-workspace-layout="mobile"]) body.demo-framed .app-shell { height: calc(var(--app-height, 100dvh) - 34px); margin-top: 34px; }
+
+:where(:root[data-workspace-layout="mobile"]) .demo-bar { --demo-bar-h: 34px; gap: 6px; padding: 0 6px; font-size: 11px; }
+
+:where(:root[data-workspace-layout="mobile"]) .demo-bar-kick { display: none; }
+
+:where(:root[data-workspace-layout="mobile"]) .demo-bar a, :where(:root[data-workspace-layout="mobile"]) .demo-bar button, :where(:root[data-workspace-layout="mobile"]) .demo-bar select { padding: 3px 5px; }
 
 .demo-keymaps { position: absolute; left: 10px; right: 10px; bottom: 3px; display: flex; align-items: center; gap: 5px; min-width: 0; }
 .demo-keymaps button { padding: 2px 6px; }
 .demo-keymaps button[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); }
 .demo-keymap-hint { overflow: hidden; text-overflow: ellipsis; font-size: 11px; }
-@media (max-width: 760px) { .demo-keymaps { display: none; } }
+:where(:root[data-workspace-layout="mobile"]) .demo-keymaps { display: none; }

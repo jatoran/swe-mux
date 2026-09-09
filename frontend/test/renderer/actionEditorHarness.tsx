@@ -8,6 +8,7 @@ import { render } from 'preact'
 import { ActionEditorPanel } from '../../src/ActionEditorModal'
 import { defaultRailConfig, writeRailConfigBlob } from '../../src/commandRail'
 import { loadSettings } from '../../src/deviceSettings'
+import '../../src/deviceMode'
 import '../../src/style.css'
 
 const PROJECTS = [

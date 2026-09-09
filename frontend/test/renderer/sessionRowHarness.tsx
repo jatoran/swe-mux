@@ -20,6 +20,7 @@ import {
   buildSessionRowTokens, deriveRowContext, rowBudget, sessionContextArc, sessionStandingMark,
 } from '../../src/sessionRowFields'
 import type { Session } from '../../src/types'
+import '../../src/deviceMode'
 import '../../src/style.css'
 
 const NOW = 1_770_000_000

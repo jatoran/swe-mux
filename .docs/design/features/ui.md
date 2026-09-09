@@ -1186,14 +1186,9 @@ Its rules, and what each one is defending:
     same browser scale state.
     A live selector or shortcut preview therefore changes terminal type without disposing the terminal,
     and discarding the Settings draft restores both chrome and terminal type together.
-  - The split is by device class because the same UI is driven from a desktop browser and a
-    phone and one number cannot say "the phone is too small but the desktop is fine". A window
-    resolves its value through the same `(max-width:760px)` breakpoint as the mobile workspace
-    projection and the device-class settings profiles, and re-resolves when that breakpoint
-    flips, so a desktop window dragged narrow adopts the mobile scale live. Both values are
-    editable from either device — sizing the phone from the desktop is the point, since the
-    phone is the harder device to type on — and the panel says which of the two the window
-    you are looking at is currently using.
+  - The scale is split by interaction profile through [Device mode](device-mode.md).
+    Touch-primary phones retain mobile scale when unfolded or rotated; narrow desktop windows retain desktop scale while compacting navigation.
+    Both values are editable from either device, and the panel identifies the active profile.
   - The sidebar row layout is deliberately **not** split by device class.
     It lives in one canonical `sessionRows` settings domain, and mobile differs only by the
     `mobileFields` flag inside that one blob.

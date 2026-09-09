@@ -7,6 +7,7 @@ import Sigma from 'sigma'
 import { ChangeMapPane } from '../../src/ChangeMapPane'
 import type { LayoutResult } from '../../src/changeMap'
 import type { Project, Session } from '../../src/types'
+import '../../src/deviceMode'
 import '../../src/style.css'
 
 /** Just enough of Sigma for a spec to place the pointer over a node and read back

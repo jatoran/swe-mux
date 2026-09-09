@@ -10,6 +10,7 @@
 // Interaction is reported as an *age*, never a timestamp: a phone whose clock is
 // minutes off would otherwise look permanently active and permanently silence
 // itself.
+import { DEVICE_MODE_EVENT } from './deviceMode.ts'
 import { currentProfile } from './deviceSettings.ts'
 
 export interface PresenceFrame {
@@ -130,6 +131,7 @@ export function watchDevicePresence(
   document.addEventListener('pointerdown', interacted, true)
   document.addEventListener('keydown', interacted, true)
   document.addEventListener('visibilitychange', report)
+  window.addEventListener(DEVICE_MODE_EVENT, report)
   window.addEventListener('focus', report)
   window.addEventListener('blur', report)
   const timer = window.setInterval(report, options.interval ?? PRESENCE_INTERVAL_MS)
@@ -140,6 +142,7 @@ export function watchDevicePresence(
       document.removeEventListener('pointerdown', interacted, true)
       document.removeEventListener('keydown', interacted, true)
       document.removeEventListener('visibilitychange', report)
+      window.removeEventListener(DEVICE_MODE_EVENT, report)
       window.removeEventListener('focus', report)
       window.removeEventListener('blur', report)
     },

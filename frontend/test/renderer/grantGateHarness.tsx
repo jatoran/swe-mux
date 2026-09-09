@@ -12,6 +12,7 @@
 import { render } from 'preact'
 import { GrantGate } from '../../src/GrantGate'
 import type { GrantId } from '../../src/grants'
+import '../../src/deviceMode'
 import '../../src/style.css'
 
 type Call = { method: string; url: string; body: unknown }

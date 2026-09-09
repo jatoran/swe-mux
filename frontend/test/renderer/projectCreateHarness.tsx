@@ -2,6 +2,7 @@ import { render } from 'preact'
 import { useState } from 'preact/hooks'
 import { ProjectCreateDialog } from '../../src/ProjectCreateDialog'
 import type { Project } from '../../src/types'
+import '../../src/deviceMode'
 import '../../src/style.css'
 
 function Host(){

@@ -13,6 +13,7 @@ import { render } from 'preact'
 import { useState } from 'preact/hooks'
 import { LazyCodeEditor } from '../../src/LazyCodeEditor'
 import { LazyChangeMap } from '../../src/LazyChangeMap'
+import '../../src/deviceMode'
 import '../../src/style.css'
 
 // Nothing here should reach the daemon; the Change Map is mounted with no session, which

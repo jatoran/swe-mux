@@ -10,6 +10,7 @@
 import { render } from 'preact'
 import { TranscriptTab } from '../../src/TranscriptTab'
 import type { Session } from '../../src/types'
+import '../../src/deviceMode'
 import '../../src/style.css'
 
 const params = new URLSearchParams(location.search)

@@ -52,7 +52,7 @@ test('the voice control is lit by capture and by nothing else', () => {
   // the same variables, or one state drifts on one surface only.
   for (const rule of [
     /\n\s*\.app-identity \.conversation-talk-toggle\{([^}]+)\}/,
-    /\n\s*\.mobile-toolbar>\.conversation-talk-toggle\{([^}]+)\}/,
+    /\n\s*:where\(:root\[data-workspace-layout="mobile"\]\) \.mobile-toolbar>\.conversation-talk-toggle\{([^}]+)\}/,
   ]) {
     const match = css.match(rule)
     assert.ok(match, `missing host rule ${rule}`)
@@ -75,7 +75,7 @@ test('the voice control is a mic glyph that carries its own state, with no label
   // Square on both surfaces: a min-width sized for a word left the icon off-centre.
   for (const rule of [
     /\n\s*\.conversation-talk-toggle\{([^}]+)\}/,
-    /\n\s*\.mobile-toolbar>\.conversation-talk-toggle\{([^}]+)\}/,
+    /\n\s*:where\(:root\[data-workspace-layout="mobile"\]\) \.mobile-toolbar>\.conversation-talk-toggle\{([^}]+)\}/,
   ]) {
     const match = css.match(rule)
     assert.ok(match)

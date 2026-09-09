@@ -67,7 +67,7 @@ export const settingsSubpages:Partial<Record<SettingsTab,SettingsSubpage[]>> = {
 
 const groupedHeadings:Partial<Record<SettingsTab,Record<string,string>>> = {
   appearance:{
-    'Theme':'interface','Right sidebar':'interface','Interface scale':'interface',
+    'Device mode':'interface','Theme':'interface','Right sidebar':'interface','Interface scale':'interface',
     'Session rows':'session-rows',
     'Session top bars':'session-top-bars',
   },

@@ -13,6 +13,7 @@
 // copy, and this is where that shows up.
 import { render } from 'preact'
 import { UsageModal } from '../../src/UsageModal'
+import '../../src/deviceMode'
 import '../../src/style.css'
 
 const NOW = 1_770_000_000

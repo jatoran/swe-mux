@@ -11,6 +11,7 @@
 import { render } from 'preact'
 import { ScanTimelineTab } from '../../src/ScanTimelineTab'
 import type { Session } from '../../src/types'
+import '../../src/deviceMode'
 import '../../src/style.css'
 
 const NOW = 1_770_000_000

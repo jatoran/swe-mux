@@ -46,6 +46,7 @@
 - Crash recovery for sessions the PTY supervisor could not keep alive: `features/session-recovery.md`
 - Multi-device terminal input and shared geometry: `features/terminal-input.md`
 - Device presence (which device the human is at): `features/device-presence.md`
+- Browser device mode, wide mobile layouts, and local overrides: `features/device-mode.md`
 - Project registry and Groups: `features/projects.md`
 - Project-owned notes, files, ignores, and watches: `features/project-resources.md`
 - Read-only Project/global agent instructions, memory, and manual Project-root sync: `features/agent-context.md`

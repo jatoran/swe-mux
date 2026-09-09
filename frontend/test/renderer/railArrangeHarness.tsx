@@ -24,6 +24,7 @@ import { RailStrip } from '../../src/RailStrip'
 import { railArrangeScopeDetail, railArrangeScopeLabel } from '../../src/railArrange'
 import { defaultRailConfig, type RailConfig, type RailItem } from '../../src/commandRail'
 import { useRailArrange } from '../../src/useRailArrange'
+import '../../src/deviceMode'
 import '../../src/style.css'
 
 declare global {

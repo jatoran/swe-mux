@@ -1,3 +1,4 @@
+import { watchDeviceMode } from './deviceMode.ts'
 /**
  * Chrome scale: one multiplier on the size of every non-terminal surface.
  *
@@ -28,11 +29,10 @@
  *
  * The value is split desktop/mobile because the same UI is driven from a browser
  * and a phone, and one number cannot say "the phone is too small but the desktop
- * is fine". The split uses the same breakpoint as the workspace projection and
- * the device-class settings profiles, so a desktop window dragged narrow adopts
- * the mobile value live.
+ * is fine". The interaction profile follows deviceMode.ts independently of width,
+ * so folding a phone or narrowing a desktop window retains its scale preference.
  */
-import { MOBILE_QUERY, currentProfile, type SettingsProfile } from './deviceSettings.ts'
+import { currentProfile, type SettingsProfile } from './deviceSettings.ts'
 
 /** Mirrors `UI_SCALES` in `config.py`. Anything else is snapped back to 1. */
 export const UI_SCALE_STEPS = [0.9, 1.0, 1.1, 1.25, 1.4] as const
@@ -174,13 +174,9 @@ function writeUiScale(scale: UiScale): void {
 }
 
 /**
- * Re-resolve when the device class itself changes. A desktop browser dragged
- * across the breakpoint switches which config key applies, and without this it
- * would keep the desktop scale while rendering the mobile layout.
+ * Re-resolve when capabilities or the browser override change the interaction profile.
  */
 export function watchUiScaleProfile(onChange?: (scale: UiScale) => void): () => void {
-  const query = window.matchMedia(MOBILE_QUERY)
   const update = () => { if (current) onChange?.(applyUiScale(current)) }
-  query.addEventListener('change', update)
-  return () => query.removeEventListener('change', update)
+  return watchDeviceMode(update)
 }

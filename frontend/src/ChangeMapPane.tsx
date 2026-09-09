@@ -1,10 +1,10 @@
+import { mobileLayout, watchDeviceMode } from './deviceMode'
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import Graph from 'graphology'
 import Sigma from 'sigma'
 import { api } from './api'
 import { Dropdown } from './Dropdown'
 import { GrantGate } from './GrantGate'
-import { MOBILE_QUERY } from './deviceSettings'
 import {
   DEFAULT_ROLE_PALETTE, HOP_CHOICES, ROLE_DESCRIPTIONS, ROLE_LABELS, ROLE_ORDER,
   SCOPE_DESCRIPTIONS, SCOPE_LABELS, UNINDEXED_MARK,
@@ -44,7 +44,7 @@ export type ChangeMapPaneProps = {
 }
 
 const isMobile = () =>
-  typeof window !== 'undefined' && !!window.matchMedia?.(MOBILE_QUERY).matches
+  mobileLayout()
 
 /** The role colours as this theme defines them, reduced to what Sigma's WebGL colour
  *  parser accepts. `--yellow` is not a variable this app defines; the amber it does
@@ -150,13 +150,7 @@ export function ChangeMapPane({ session, project, onPopOut, onOpenFile }: Change
   useEffect(() => {
     if (selectedPath && !data?.nodes.some(node => node.path === selectedPath)) setSelectedPath(null)
   }, [data])
-  useEffect(() => {
-    const query = window.matchMedia?.(MOBILE_QUERY)
-    if (!query) return
-    const update = () => setMobile(query.matches)
-    query.addEventListener('change', update)
-    return () => query.removeEventListener('change', update)
-  }, [])
+  useEffect(() => watchDeviceMode(mode => setMobile(mode.layout === 'mobile')), [])
   useEffect(() => () => {
     workerRef.current?.terminate()
     workerRef.current = null

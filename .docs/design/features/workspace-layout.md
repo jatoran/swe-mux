@@ -252,8 +252,9 @@ PaneLeaf = terminal | note | preview | history | queue
 
 ## Mobile projection
 
-- At `max-width: 760px`, all leaves are flattened depth-first in desktop visual order into one
-  horizontally scrolling, non-wrapping tab rail. Exactly one selected view renders full-screen.
+- The mobile workspace policy in [Device mode](device-mode.md) flattens all leaves depth-first in desktop visual order into one horizontally scrolling, non-wrapping tab rail.
+  Exactly one selected view renders full-screen.
+  Touch-primary phones and tablets retain this projection at every width; Auto also compacts desktop windows at `max-width:760px` without switching their settings profile.
 - Selection prefers the focused view, then active terminal, then pane-active tabs, then the first
   tab. Closing selects an adjacent projected tab.
 - Opening a tab on mobile places it in the selected tab's underlying desktop pane, or the first

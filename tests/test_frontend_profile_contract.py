@@ -84,8 +84,10 @@ def test_desktop_drawer_note_search_precedes_the_agent_action() -> None:
     css = (root / "frontend" / "src" / "style.css").read_text(encoding="utf-8")
 
     assert 'class="resource-find"' in source
-    assert "@media(min-width:761px)" in css
-    assert ".drawer-note-host .resource-actions .resource-find{order:-1" in css
+    assert (
+        ':where(:root[data-workspace-layout="desktop"]) '
+        '.utility-drawer .drawer-note-host .resource-actions .resource-find{order:-1'
+    ) in css
     assert "min-width:31px" in css
     assert "font-size:13px" in css
 

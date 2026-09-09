@@ -12,6 +12,7 @@ import { ActionsTab } from '../../src/ActionsTab'
 import { AgentContextTab } from '../../src/AgentContextTab'
 import { DrawerSegmentControl } from '../../src/DrawerSegmentControl'
 import type { Project, Session } from '../../src/types'
+import '../../src/deviceMode'
 import '../../src/style.css'
 
 const NOW = 1_770_000_000

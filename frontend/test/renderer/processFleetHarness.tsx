@@ -5,6 +5,7 @@ import { render } from 'preact'
 import { ResourcesModal } from '../../src/ResourcesModal'
 import type { ProcessItem } from '../../src/processFleet'
 import type { Project, Session } from '../../src/types'
+import '../../src/deviceMode'
 import '../../src/style.css'
 
 const NOW = 1_770_000_000

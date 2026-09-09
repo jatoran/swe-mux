@@ -1,3 +1,4 @@
+import { mobileLayout } from '../deviceMode.ts'
 /**
  * Driving the real app from outside it, without pretending to be the daemon.
  *
@@ -25,7 +26,7 @@ export const text = (value: string | null | undefined): string =>
 export const visible = (element: Element): boolean => element.getClientRects().length > 0
 
 /** The phone layout, by the same query the app's own CSS uses. */
-export const narrow = (): boolean => window.matchMedia('(max-width: 760px)').matches
+export const narrow = (): boolean => mobileLayout()
 
 export const delay = (ms: number): Promise<void> =>
   new Promise(resolve => { window.setTimeout(resolve, ms) })

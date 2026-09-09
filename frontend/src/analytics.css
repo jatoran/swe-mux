@@ -96,43 +96,41 @@
 .analytics-panel .usage-pot b{overflow-wrap:anywhere;font-size:24px}
 .analytics-panel .analytics-live-summary{display:flex;gap:14px;align-items:center;flex-wrap:wrap;width:100%;padding:14px;margin-top:14px;text-align:left}
 .analytics-live-summary small{color:var(--muted)}
-@media(max-width:760px){
-  .usage-dialog{padding:0;height:100dvh}
-  .analytics-panel{width:100%;height:100%;max-height:100dvh;border:0;box-shadow:none}
-  .analytics-panel>header{padding:8px 12px;align-items:center}
-  .analytics-panel>header strong{display:none}
-  .analytics-panel>main.analytics-content{padding:12px;scrollbar-gutter:auto}
-  .analytics-panel>footer{font-size:10px;padding-bottom:max(7px,env(safe-area-inset-bottom))}
-  .analytics-primary .analytics-tab-row{display:none}
-  .analytics-section-picker{display:flex;align-items:center;justify-content:space-between;gap:12px;color:var(--muted)}
-  .analytics-section-picker select{flex:1;min-height:44px}
-  .analytics-secondary{padding:3px 8px}
-  .analytics-secondary .analytics-tab-row{gap:0;max-width:none}
-  .analytics-secondary .analytics-tab-row>button{min-height:44px;padding:0 5px}
-  .analytics-toolbar{gap:6px 10px;padding:6px 10px}
-  .analytics-panel select,.analytics-panel .analytics-toolbar>button,.analytics-filter-menu>summary{min-height:44px}
-  .analytics-filter-menu>div>label{min-height:44px}
-  .analytics-headlines{gap:8px}
-  .analytics-headlines>article{padding:12px}
-  .analytics-headlines strong{font-size:21px}
-  .analytics-facts{grid-template-columns:1fr;gap:9px}
-  .analytics-record>summary,.analytics-list-heading{grid-template-columns:minmax(0,1fr) 65px 78px;gap:8px;padding:12px 2px}
-  .analytics-record-body{padding:4px 6px 10px}
-  .analytics-list-heading{font-size:11px}
-  .analytics-trend{padding:8px}
-  .analytics-trend svg{height:170px}
-  .analytics-chart-picker{display:grid;grid-template-columns:auto minmax(0,1fr)}
-  .analytics-chart-picker select{max-width:100%;width:100%}
-  .analytics-diagnostics{padding:10px}
-  .analytics-diagnostics>summary{min-height:34px}
-  .analytics-run-card{display:block}
-  .analytics-run-meta{max-width:none;display:flex;justify-content:space-between;align-items:baseline;margin-top:10px;text-align:left}
-  .analytics-run-card>button:not(.analytics-run-open){margin-top:10px}
-  .analytics-export-list{grid-template-columns:1fr}
-  .quota-account-grid{grid-template-columns:1fr}
-  .analytics-panel .usage-pots{grid-template-columns:1fr}
-  .analytics-panel .analytics-live-summary{display:grid;gap:9px}
-}
+:where(:root[data-workspace-layout="mobile"]) .usage-dialog{padding:0;height:100dvh}
+:where(:root[data-workspace-layout="mobile"]) .analytics-panel{width:100%;height:100%;max-height:100dvh;border:0;box-shadow:none}
+:where(:root[data-workspace-layout="mobile"]) .analytics-panel>header{padding:8px 12px;align-items:center}
+:where(:root[data-workspace-layout="mobile"]) .analytics-panel>header strong{display:none}
+:where(:root[data-workspace-layout="mobile"]) .analytics-panel>main.analytics-content{padding:12px;scrollbar-gutter:auto}
+:where(:root[data-workspace-layout="mobile"]) .analytics-panel>footer{font-size:10px;padding-bottom:max(7px,env(safe-area-inset-bottom))}
+:where(:root[data-workspace-layout="mobile"]) .analytics-primary .analytics-tab-row{display:none}
+:where(:root[data-workspace-layout="mobile"]) .analytics-section-picker{display:flex;align-items:center;justify-content:space-between;gap:12px;color:var(--muted)}
+:where(:root[data-workspace-layout="mobile"]) .analytics-section-picker select{flex:1;min-height:44px}
+:where(:root[data-workspace-layout="mobile"]) .analytics-secondary{padding:3px 8px}
+:where(:root[data-workspace-layout="mobile"]) .analytics-secondary .analytics-tab-row{gap:0;max-width:none}
+:where(:root[data-workspace-layout="mobile"]) .analytics-secondary .analytics-tab-row>button{min-height:44px;padding:0 5px}
+:where(:root[data-workspace-layout="mobile"]) .analytics-toolbar{gap:6px 10px;padding:6px 10px}
+:where(:root[data-workspace-layout="mobile"]) .analytics-panel select,:where(:root[data-workspace-layout="mobile"]) .analytics-panel .analytics-toolbar>button,:where(:root[data-workspace-layout="mobile"]) .analytics-filter-menu>summary{min-height:44px}
+:where(:root[data-workspace-layout="mobile"]) .analytics-filter-menu>div>label{min-height:44px}
+:where(:root[data-workspace-layout="mobile"]) .analytics-headlines{gap:8px}
+:where(:root[data-workspace-layout="mobile"]) .analytics-headlines>article{padding:12px}
+:where(:root[data-workspace-layout="mobile"]) .analytics-headlines strong{font-size:21px}
+:where(:root[data-workspace-layout="mobile"]) .analytics-facts{grid-template-columns:1fr;gap:9px}
+:where(:root[data-workspace-layout="mobile"]) .analytics-record>summary,:where(:root[data-workspace-layout="mobile"]) .analytics-list-heading{grid-template-columns:minmax(0,1fr) 65px 78px;gap:8px;padding:12px 2px}
+:where(:root[data-workspace-layout="mobile"]) .analytics-record-body{padding:4px 6px 10px}
+:where(:root[data-workspace-layout="mobile"]) .analytics-list-heading{font-size:11px}
+:where(:root[data-workspace-layout="mobile"]) .analytics-trend{padding:8px}
+:where(:root[data-workspace-layout="mobile"]) .analytics-trend svg{height:170px}
+:where(:root[data-workspace-layout="mobile"]) .analytics-chart-picker{display:grid;grid-template-columns:auto minmax(0,1fr)}
+:where(:root[data-workspace-layout="mobile"]) .analytics-chart-picker select{max-width:100%;width:100%}
+:where(:root[data-workspace-layout="mobile"]) .analytics-diagnostics{padding:10px}
+:where(:root[data-workspace-layout="mobile"]) .analytics-diagnostics>summary{min-height:34px}
+:where(:root[data-workspace-layout="mobile"]) .analytics-run-card{display:block}
+:where(:root[data-workspace-layout="mobile"]) .analytics-run-meta{max-width:none;display:flex;justify-content:space-between;align-items:baseline;margin-top:10px;text-align:left}
+:where(:root[data-workspace-layout="mobile"]) .analytics-run-card>button:not(.analytics-run-open){margin-top:10px}
+:where(:root[data-workspace-layout="mobile"]) .analytics-export-list{grid-template-columns:1fr}
+:where(:root[data-workspace-layout="mobile"]) .quota-account-grid{grid-template-columns:1fr}
+:where(:root[data-workspace-layout="mobile"]) .analytics-panel .usage-pots{grid-template-columns:1fr}
+:where(:root[data-workspace-layout="mobile"]) .analytics-panel .analytics-live-summary{display:grid;gap:9px}
 
 .analytics-panel .cost-summary{grid-template-columns:repeat(4,minmax(0,1fr))}
 @media(max-width:760px){.analytics-panel .cost-summary{grid-template-columns:repeat(2,minmax(0,1fr))}}

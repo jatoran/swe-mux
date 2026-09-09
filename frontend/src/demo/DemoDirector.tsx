@@ -19,7 +19,7 @@ import {
   start, togglePlayback, advanceBeat, directorSnapshot, dismissResume, resume, stop, subscribeDirector,
   type DirectorSnapshot,
 } from './director.ts'
-import { firstVisible } from './drive.ts'
+import { firstVisible, narrow } from './drive.ts'
 
 /**
  * Where a dodging card lands when it goes upwards.
@@ -140,7 +140,7 @@ export function DemoDirector() {
   const cardStyle = anchored
     ? { left: position.left, top: position.top }
     : terminalSubject
-      ? { top: innerWidth <= 760 ? 128 : TOP_DODGE, bottom: 'auto' as const }
+      ? { top: narrow() ? 128 : TOP_DODGE, bottom: 'auto' as const }
       : { bottom: 18, top: 'auto' as const }
 
   return <div class={`demo-director ${rect ? 'targeted' : 'centered'}`} role="dialog" aria-label="Demo walkthrough">

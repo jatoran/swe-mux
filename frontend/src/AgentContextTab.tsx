@@ -1,3 +1,4 @@
+import { mobileLayout } from './deviceMode'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { api, type ApiError } from './api'
 import {
@@ -124,7 +125,7 @@ function SourceRow({ item, selected, focusedBackend, runStartedAt, onOpen, onRev
     title={`${item.detail || (available ? `View ${item.label}` : statusLabel(item.status))}${item.revealable ? ' · right-click to open file location' : ''}`}
     onClick={() => available && onOpen(item.id)}
     onContextMenu={event => {
-      if (!agentContextSourceMenuEnabled(item, window.matchMedia(AGENT_CONTEXT_DESKTOP_MENU_QUERY).matches)) return
+      if (mobileLayout() || !agentContextSourceMenuEnabled(item, window.matchMedia(AGENT_CONTEXT_DESKTOP_MENU_QUERY).matches)) return
       event.preventDefault()
       event.stopPropagation()
       onRevealMenu(item, event.clientX, event.clientY)

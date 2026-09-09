@@ -6,6 +6,7 @@
 // exactly the rows that used to truncate or read as free.
 import { render } from 'preact'
 import { AutomationDashboard } from '../../src/AutomationDashboard'
+import '../../src/deviceMode'
 import '../../src/style.css'
 import { SETTINGS_CONFIG_FIXTURE } from './settingsConfigFixture'
 import type { Project } from '../../src/types'

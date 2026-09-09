@@ -248,6 +248,7 @@ test('agent authority keeps readable Global and Project columns at desktop and p
   expect(desktopWidths.every(width => width >= 220)).toBe(true)
 
   await page.setViewportSize({ width: 390, height: 800 })
+  await expect(page.locator('html')).toHaveAttribute('data-workspace-layout','mobile')
   const geometry = await authority.evaluate(node => ({
     width: node.getBoundingClientRect().width,
     scrollWidth: node.scrollWidth,

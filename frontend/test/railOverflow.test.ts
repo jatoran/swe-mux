@@ -93,7 +93,7 @@ test('jump-to-latest does not request terminal input focus', () => {
 
 test('the overflow popover opens upward, on the rail\'s trailing edge, inside the viewport', () => {
   // The rect is the fixed drawer cluster, so the panel lands on the rail's trailing edge.
-  const box = railOverlayBox({ left: 1040, right: 1150, top: 860 }, wholeWindow(1400, 900), RAIL_POPOVER_MAX_WIDTH_PX)
+  const box = railOverlayBox({ left: 1040, right: 1150, top: 860 }, wholeWindow(1400, 900), RAIL_POPOVER_MAX_WIDTH_PX, false)
   assert.equal(box.width, RAIL_POPOVER_MAX_WIDTH_PX)
   // Right edge on the cluster's right edge: 1150 - 520.
   assert.equal(box.left, 630)
@@ -104,7 +104,7 @@ test('the overflow popover opens upward, on the rail\'s trailing edge, inside th
 
 test('a drop-up gets a list width where the popover gets a grid width', () => {
   const view = wholeWindow(1400, 900)
-  const dropup = railOverlayBox({ left: 300, right: 360, top: 860 }, view, RAIL_DROPUP_MAX_WIDTH_PX)
+  const dropup = railOverlayBox({ left: 300, right: 360, top: 860 }, view, RAIL_DROPUP_MAX_WIDTH_PX, false)
   assert.equal(dropup.width, RAIL_DROPUP_MAX_WIDTH_PX)
   // Same rule, one number apart: a list of one-line rows at grid width reads as a stretched
   // menu, and a wrap grid of chips at list width is a column of one chip per row.
@@ -113,7 +113,7 @@ test('a drop-up gets a list width where the popover gets a grid width', () => {
 
 test('a phone gives a rail overlay half its screen, on the screen\'s trailing edge', () => {
   const view = wholeWindow(390, 760)
-  const box = railOverlayBox({ left: 300, right: 360, top: 700 }, view, RAIL_POPOVER_MAX_WIDTH_PX)
+  const box = railOverlayBox({ left: 300, right: 360, top: 700 }, view, RAIL_POPOVER_MAX_WIDTH_PX, true)
   // Half the screen, so the terminal it is opened over stays readable beside it.
   assert.equal(box.width, 195)
   assert.equal(box.left, 390 - 195 - 8)
@@ -122,30 +122,30 @@ test('a phone gives a rail overlay half its screen, on the screen\'s trailing ed
 
   // And the *screen's* edge rather than the trigger's: a drop-up opened from a chip in the
   // middle of the rail must land where the overflow popover lands, not in the middle.
-  const middle = railOverlayBox({ left: 120, right: 180, top: 700 }, view, RAIL_DROPUP_MAX_WIDTH_PX)
+  const middle = railOverlayBox({ left: 120, right: 180, top: 700 }, view, RAIL_DROPUP_MAX_WIDTH_PX, true)
   assert.equal(middle.left, box.left)
 })
 
 test('a desktop keeps a rail overlay on its own trigger, where there is room to say so', () => {
   const view = wholeWindow(1400, 900)
-  const left = railOverlayBox({ left: 300, right: 360, top: 860 }, view, RAIL_DROPUP_MAX_WIDTH_PX)
-  const right = railOverlayBox({ left: 1040, right: 1150, top: 860 }, view, RAIL_DROPUP_MAX_WIDTH_PX)
+  const left = railOverlayBox({ left: 300, right: 360, top: 860 }, view, RAIL_DROPUP_MAX_WIDTH_PX, false)
+  const right = railOverlayBox({ left: 1040, right: 1150, top: 860 }, view, RAIL_DROPUP_MAX_WIDTH_PX, false)
   assert.equal(left.left, 360 - RAIL_DROPUP_MAX_WIDTH_PX)
   assert.equal(right.left, 1150 - RAIL_DROPUP_MAX_WIDTH_PX)
 })
 
-test('the half-screen rule follows the device class, not the anchor', () => {
+test('the half-screen rule follows the explicit layout even on a wide device', () => {
   const anchor = { left: 700, right: 760, top: 700 }
-  // Exactly at the breakpoint is still the phone's layout, so still the phone's budget.
-  assert.equal(railOverlayBox(anchor, wholeWindow(760, 800), RAIL_POPOVER_MAX_WIDTH_PX).width, 380)
-  assert.equal(railOverlayBox(anchor, wholeWindow(761, 800), RAIL_POPOVER_MAX_WIDTH_PX).width, RAIL_POPOVER_MAX_WIDTH_PX)
+  // Identical geometry, different device policies.
+  assert.equal(railOverlayBox(anchor, wholeWindow(900, 800), RAIL_POPOVER_MAX_WIDTH_PX, true).width, 450)
+  assert.equal(railOverlayBox(anchor, wholeWindow(900, 800), RAIL_POPOVER_MAX_WIDTH_PX, false).width, RAIL_POPOVER_MAX_WIDTH_PX)
 })
 
 test('an open soft keyboard shrinks what the overlay is allowed to fill', () => {
   // The layout viewport stays 760 tall under `interactive-widget=resizes-visual`; only the
   // visual one shrinks. The rail rides up with it, so the anchor moves too.
   const keyboard = { left: 0, top: 0, width: 390, height: 420 }
-  const box = railOverlayBox({ left: 300, right: 360, top: 380 }, keyboard, RAIL_POPOVER_MAX_WIDTH_PX)
+  const box = railOverlayBox({ left: 300, right: 360, top: 380 }, keyboard, RAIL_POPOVER_MAX_WIDTH_PX, true)
   // Half of what is *visible*, not half of a viewport that runs behind the keyboard.
   assert.ok(box.maxHeight <= 210, `maxHeight ${box.maxHeight} is measured against the layout viewport`)
   // And the panel's top stays on screen rather than being pushed above it.
@@ -156,7 +156,7 @@ test('an open soft keyboard shrinks what the overlay is allowed to fill', () => 
 test('a rail too high in a short view stops hugging rather than opening off the top', () => {
   // The minimum height is a floor, so an anchor with less room above it than that floor
   // would otherwise be handed a panel whose first row is above the window.
-  const box = railOverlayBox({ left: 100, right: 200, top: 60 }, wholeWindow(390, 400), RAIL_POPOVER_MAX_WIDTH_PX)
+  const box = railOverlayBox({ left: 100, right: 200, top: 60 }, wholeWindow(390, 400), RAIL_POPOVER_MAX_WIDTH_PX, true)
   assert.ok(box.bottom - box.maxHeight >= 0, 'the panel opened off the top of the view')
 })
 

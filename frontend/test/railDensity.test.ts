@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import test from 'node:test'
-import { MOBILE_QUERY } from '../src/deviceSettings.ts'
+import { COARSE_QUERY } from '../src/deviceMode.ts'
 import {
   applyRailDensity, DEFAULT_RAIL_DENSITY, RAIL_DENSITIES, railDensityConfigKey, railDensityFrom,
 } from '../src/railDensity.ts'
@@ -10,18 +10,14 @@ const CSS = readFileSync(new URL('../src/style.css', import.meta.url), 'utf8')
 /** The variables one density step has to define, all of them or none. */
 const GROUP = ['--rail-gap', '--rail-pad-y', '--rail-pad-x', '--rail-chip-h', '--rail-chip-pad', '--rail-text-pad', '--rail-row-h', '--rail-more-width']
 
-// The mobile group lives inside the one `@media(max-width:760px)` block that opens with the
-// bare `:root` step, which is what makes "second copy, not a multiplier" checkable.
-const MOBILE_AT = CSS.search(/@media\(max-width:760px\)\{\s*:root\{--rail-gap/)
-
 function block(selector: string, mobile: boolean): string {
-  if (mobile && MOBILE_AT < 0) throw new Error('style.css has no mobile rail density group')
-  const source = mobile ? CSS.slice(MOBILE_AT) : CSS
+  const source = CSS
+  if (mobile) selector = selector.replace(':root', ':root:where([data-workspace-layout="mobile"])')
   // The *density* block for this selector, not merely the first block that shares the
   // selector: bare `:root` is also where several unrelated token groups live (the rail's
   // glass opacities among them), and taking the first match read one of those instead and
   // reported the whole group missing. Anchored the same way `MOBILE_AT` already is.
-  const all = source.matchAll(new RegExp(`${selector.replace(/[[\]"]/g, String.raw`\$&`)}\\{([^}]*)\\}`, 'g'))
+  const all = source.matchAll(new RegExp(`${selector.replace(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`)}\\{([^}]*)\\}`, 'g'))
   for (const found of all) {
     if (found[1].includes('--rail-gap')) return found[1]
   }
@@ -50,7 +46,7 @@ function withFakeRoot<T>(mobile: boolean, run: (attributes: Map<string, string>)
     document: (globalThis as { document?: unknown }).document,
   }
   ;(globalThis as { window?: unknown }).window = {
-    matchMedia: (query: string) => ({ matches: mobile && query === MOBILE_QUERY }),
+    matchMedia: (query: string) => ({ matches: mobile && query === COARSE_QUERY }),
   }
   ;(globalThis as { document?: unknown }).document = {
     documentElement: {

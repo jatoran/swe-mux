@@ -1,6 +1,7 @@
 import { render } from 'preact'
 import { useState } from 'preact/hooks'
 import { PluginPopup } from '../../src/PluginPopup'
+import '../../src/deviceMode'
 import '../../src/style.css'
 
 function Harness() {
