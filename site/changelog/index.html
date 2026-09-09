@@ -1089,22 +1089,48 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
     <h1>Changelog</h1>
     <div class="rel">
       <div class="relhead">
-        <h2><a href="https://github.com/jatoran/swe-mux/compare/v0.2.7...HEAD">Unreleased</a></h2>
+        <h2><a href="https://github.com/jatoran/swe-mux/compare/v0.2.8...HEAD">Unreleased</a></h2>
         <span class="fill"></span>
       </div>
+      <p class="prose">Nothing yet.</p>
+    </div>
+    <div class="rel">
+      <div class="relhead">
+        <h2><a href="https://github.com/jatoran/swe-mux/releases/tag/v0.2.8">0.2.8</a></h2>
+        <span class="when">2026-09-09</span>
+        <span class="fill"></span>
+        <a class="relnotes" href="https://github.com/jatoran/swe-mux/releases/tag/v0.2.8">release notes</a>
+      </div>
       <div class="relgroups">
-        <div><span class="k">Added</span> <span class="sep">2 entries</span></div>
-        <div><span class="k">Fixed</span> <span class="sep">2 entries</span></div>
+        <div><span class="k">Added</span> <span class="sep">8 entries</span></div>
+        <div><span class="k">Changed</span> <span class="sep">5 entries</span></div>
+        <div><span class="k">Fixed</span> <span class="sep">4 entries</span></div>
       </div>
       <details class="relmore">
-        <summary>all 4 entries</summary>
+        <summary>all 17 entries</summary>
         <div class="changetype">Added</div>
         <ul class="bullets">
+          <li><span><b>Each session row and top bar can show what the agent's own status line shows.</b> The reasoning effort in force, the permission mode, and the provider's 5-hour and weekly limits are new row fields, alongside the CLI's own context window size and cost figure where it reports one. Codex reports these through the rollout it already writes. Claude reports them only through its status line, so swe-mux tees it: when you already have a <code>statusLine</code> configured, the per-session settings run your command unchanged and forward the same snapshot to the daemon afterwards. Where you have none, nothing is configured, because any custom status line changes Claude's footer and that choice stays yours. A field a harness never reports draws nothing, and the sidebar's cost no longer reads <code>$0.00</code> for a session whose harness reported no cost. Codex context pressure now uses the CLI's own formula, so the row reads what the footer reads.</span></li>
+          <li><span><b>The working directory has three spellings.</b> Settings → Appearance → Session rows → Token style chooses the folder name (the default), the path inside the Project root, or the full path; a placed top-bar <code>cwd</code> item may choose its own. A placed top-bar <code>context</code> item likewise carries its own rendering - percentage, gauge, or both - instead of inheriting the sidebar's indicator arc and drawing nothing.</span></li>
+          <li><span><b>The Queue tab is badged with the focused session's pending count</b>: draft, armed, blocked and delivering messages, on the drawer's tab strips and the collapsed desktop launcher, capped at 99+ and carried into the button's accessible name. It is an accent tint rather than an amber pill, because a message you staged yourself is not an alert.</span></li>
+          <li><span><b>The empty workspace stage has a Run button</b> that opens the Run menu, on desktop and on the phone alike, so the four ways to begin it names are reachable without a right-click.</span></li>
+          <li><span><b>Device mode.</b> Settings → Appearance → Device mode chooses Auto, Mobile or Desktop for this browser only, and applies at once. Auto now keeps a touch-first device on mobile controls and the mobile layout when its screen is wide: an unfolded phone or a tablet in landscape no longer flips to desktop splits, hover-only chrome and a docked sidebar because its width crossed a breakpoint. A laptop with a touchscreen stays on desktop.</span></li>
+          <li><span><b>The desktop app recovers a daemon that has died or hung.</b> The tray process watches the daemon it started and relaunches a confirmed crash after four seconds of failed probes. A daemon that was ready and has answered nothing for 45 seconds is replaced only after the desktop has verified that every live session is held by the PTY supervisor and none was spawned in the daemon's own process, so terminals pause during the swap and resume afterwards rather than being lost. A daemon that is still starting is never counted as failed, an intentional quit or a redeploy suppresses recovery, and after three replacements in ten minutes it stops trying and leaves the tray's "Restart daemon (keep sessions)" as the manual control. Every transition is written to the lifecycle log.</span></li>
           <li><span><b>The desktop command rail can be hover-only.</b> Settings → Actions → Action rail → "Only show the desktop rail on hover" (<code>rail_hover_desktop</code>, off by default) takes the rail out of the pane: the terminal keeps the rows the rail used to occupy, and the rail slides up over the bottom of the terminal while the mouse is there. Revealing it never resizes the terminal. It stays up while one of its panels is open - the complete-row popover, a drop-up, a pad's dial, arranging - and while a chip has keyboard focus, and it does not appear under a drag or over the jump-to-latest chip. Desktop only: a phone's rail is its keyboard, and a touch tablet has nothing to hover with.</span></li>
           <li><span><b>Right-clicking the desktop rail opens its own menu</b>: open this row's complete list of actions, configure the rail in Settings, or toggle hover-only without opening Settings.</span></li>
         </ul>
+        <div class="changetype">Changed</div>
+        <ul class="bullets">
+          <li><span><b>Stall diagnostics no longer risk crashing the daemon they are diagnosing.</b> The previous sampler let <code>faulthandler</code> walk every thread's frames from a C thread while they changed, and on 2026-09-07 that took the daemon down mid-stall. A Python sampler now reads owned frame references every 250 ms, writes bounded stacks to a rotating <code>loop-stalls.log</code> after three seconds without progress, and states its own limit: a native call holding the GIL can prevent sampling, and the diagnostics endpoint reports <code>capture_mode</code> so an absent stack is never read as an absent cause.</span></li>
+          <li><span><b>The "daemon is not responding" banner says what to do.</b> It now reads "Reconnecting. If this persists, use the desktop tray to restart the daemon", because a missed probe cannot tell a stall from a crash and the page cannot promise that sessions survive one.</span></li>
+          <li><span><b>The account switcher's stranded-session notice is one line, not a paragraph.</b> Each Codex login that a switch left live sessions on is a collapsed "N live sessions still on X" that expands on a click; it can be dismissed for now, or silenced with "never show this again", which persists per device profile and is undone under Settings → Accounts.</span></li>
+          <li><span><b>Agent Context's memory rows scroll in their own box.</b> Sixty learned memory files used to make the Memories disclosure the whole Instructions tab and push the preview a screen below the row just picked; each provider's rows are now capped and scroll inside their own box, with the heading and "showing N of M" line kept outside it.</span></li>
+          <li><span><b>The source tarball no longer carries operator-private drafts.</b> Every sdist from 0.1.0 to 0.2.7 packed the whole checkout, including launch drafts and an outreach tracker under <code>.docs/marketing/</code>, because every artifact check read only the wheel. Those files have moved out of the public tree, the sdist declares them excluded, and the release gate reads the built tarball against that declaration before publishing. The wheel and the desktop bundle were never affected.</span></li>
+        </ul>
         <div class="changetype">Fixed</div>
         <ul class="bullets">
+          <li><span><b>Console windows no longer flash on Windows while Claude refreshes its status line.</b> The status-line tee runs your own status command from the frozen app's hook helper, which has no console of its own, so every refresh - including the ones during a tool call - opened a visible window for the shell it started.</span></li>
+          <li><span><b>The top-bar settings preview draws a placed context metric.</b> The preview session used a made-up backend that no harness capability matched, so the bar previewed empty while the real one drew fine.</span></li>
           <li><span><b>The session title can be removed from the pane top bar.</b> Settings → Appearance → Session top bars refused to remove it and put it back on every load; every item is now removable, the title is offered again under the row's add controls, and the pane's fault marker stays visible at the head of the bar when the title is gone.</span></li>
           <li><span><b>Switching the command rail off or on in Settings reaches an open pane immediately</b>, rather than on the next unrelated change to that session.</span></li>
         </ul>

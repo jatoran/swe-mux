@@ -15,8 +15,32 @@ The release procedure that maintains this file is [`RELEASING.md`](RELEASING.md)
 
 ## [Unreleased]
 
+## [0.2.8] - 2026-09-09
+
 ### Added
 
+- **Each session row and top bar can show what the agent's own status line shows.**
+  The reasoning effort in force, the permission mode, and the provider's 5-hour and weekly limits are new row fields, alongside the CLI's own context window size and cost figure where it reports one.
+  Codex reports these through the rollout it already writes.
+  Claude reports them only through its status line, so swe-mux tees it: when you already have a `statusLine` configured, the per-session settings run your command unchanged and forward the same snapshot to the daemon afterwards.
+  Where you have none, nothing is configured, because any custom status line changes Claude's footer and that choice stays yours.
+  A field a harness never reports draws nothing, and the sidebar's cost no longer reads `$0.00` for a session whose harness reported no cost.
+  Codex context pressure now uses the CLI's own formula, so the row reads what the footer reads.
+- **The working directory has three spellings.**
+  Settings → Appearance → Session rows → Token style chooses the folder name (the default), the path inside the Project root, or the full path; a placed top-bar `cwd` item may choose its own.
+  A placed top-bar `context` item likewise carries its own rendering - percentage, gauge, or both - instead of inheriting the sidebar's indicator arc and drawing nothing.
+- **The Queue tab is badged with the focused session's pending count**: draft, armed, blocked and delivering messages, on the drawer's tab strips and the collapsed desktop launcher, capped at 99+ and carried into the button's accessible name.
+  It is an accent tint rather than an amber pill, because a message you staged yourself is not an alert.
+- **The empty workspace stage has a Run button** that opens the Run menu, on desktop and on the phone alike, so the four ways to begin it names are reachable without a right-click.
+- **Device mode.**
+  Settings → Appearance → Device mode chooses Auto, Mobile or Desktop for this browser only, and applies at once.
+  Auto now keeps a touch-first device on mobile controls and the mobile layout when its screen is wide: an unfolded phone or a tablet in landscape no longer flips to desktop splits, hover-only chrome and a docked sidebar because its width crossed a breakpoint.
+  A laptop with a touchscreen stays on desktop.
+- **The desktop app recovers a daemon that has died or hung.**
+  The tray process watches the daemon it started and relaunches a confirmed crash after four seconds of failed probes.
+  A daemon that was ready and has answered nothing for 45 seconds is replaced only after the desktop has verified that every live session is held by the PTY supervisor and none was spawned in the daemon's own process, so terminals pause during the swap and resume afterwards rather than being lost.
+  A daemon that is still starting is never counted as failed, an intentional quit or a redeploy suppresses recovery, and after three replacements in ten minutes it stops trying and leaves the tray's "Restart daemon (keep sessions)" as the manual control.
+  Every transition is written to the lifecycle log.
 - **The desktop command rail can be hover-only.**
   Settings → Actions → Action rail → "Only show the desktop rail on hover" (`rail_hover_desktop`, off by default) takes the rail out of the pane: the terminal keeps the rows the rail used to occupy, and the rail slides up over the bottom of the terminal while the mouse is there.
   Revealing it never resizes the terminal.
@@ -24,8 +48,28 @@ The release procedure that maintains this file is [`RELEASING.md`](RELEASING.md)
   Desktop only: a phone's rail is its keyboard, and a touch tablet has nothing to hover with.
 - **Right-clicking the desktop rail opens its own menu**: open this row's complete list of actions, configure the rail in Settings, or toggle hover-only without opening Settings.
 
+### Changed
+
+- **Stall diagnostics no longer risk crashing the daemon they are diagnosing.**
+  The previous sampler let `faulthandler` walk every thread's frames from a C thread while they changed, and on 2026-09-07 that took the daemon down mid-stall.
+  A Python sampler now reads owned frame references every 250 ms, writes bounded stacks to a rotating `loop-stalls.log` after three seconds without progress, and states its own limit: a native call holding the GIL can prevent sampling, and the diagnostics endpoint reports `capture_mode` so an absent stack is never read as an absent cause.
+- **The "daemon is not responding" banner says what to do.**
+  It now reads "Reconnecting. If this persists, use the desktop tray to restart the daemon", because a missed probe cannot tell a stall from a crash and the page cannot promise that sessions survive one.
+- **The account switcher's stranded-session notice is one line, not a paragraph.**
+  Each Codex login that a switch left live sessions on is a collapsed "N live sessions still on X" that expands on a click; it can be dismissed for now, or silenced with "never show this again", which persists per device profile and is undone under Settings → Accounts.
+- **Agent Context's memory rows scroll in their own box.**
+  Sixty learned memory files used to make the Memories disclosure the whole Instructions tab and push the preview a screen below the row just picked; each provider's rows are now capped and scroll inside their own box, with the heading and "showing N of M" line kept outside it.
+- **The source tarball no longer carries operator-private drafts.**
+  Every sdist from 0.1.0 to 0.2.7 packed the whole checkout, including launch drafts and an outreach tracker under `.docs/marketing/`, because every artifact check read only the wheel.
+  Those files have moved out of the public tree, the sdist declares them excluded, and the release gate reads the built tarball against that declaration before publishing.
+  The wheel and the desktop bundle were never affected.
+
 ### Fixed
 
+- **Console windows no longer flash on Windows while Claude refreshes its status line.**
+  The status-line tee runs your own status command from the frozen app's hook helper, which has no console of its own, so every refresh - including the ones during a tool call - opened a visible window for the shell it started.
+- **The top-bar settings preview draws a placed context metric.**
+  The preview session used a made-up backend that no harness capability matched, so the bar previewed empty while the real one drew fine.
 - **The session title can be removed from the pane top bar.**
   Settings → Appearance → Session top bars refused to remove it and put it back on every load; every item is now removable, the title is offered again under the row's add controls, and the pane's fault marker stays visible at the head of the bar when the title is gone.
 - **Switching the command rail off or on in Settings reaches an open pane immediately**, rather than on the next unrelated change to that session.
@@ -962,7 +1006,8 @@ macOS is implemented and typechecked but has never been executed.
   resolved dependency closure that runs in the test suite, and a payload check over the built
   desktop bundle. No GPL or AGPL code ships; the two LGPL libraries ship as replaceable source.
 
-[Unreleased]: https://github.com/jatoran/swe-mux/compare/v0.2.7...HEAD
+[Unreleased]: https://github.com/jatoran/swe-mux/compare/v0.2.8...HEAD
+[0.2.8]: https://github.com/jatoran/swe-mux/releases/tag/v0.2.8
 [0.2.7]: https://github.com/jatoran/swe-mux/releases/tag/v0.2.7
 [0.2.6]: https://github.com/jatoran/swe-mux/releases/tag/v0.2.6
 [0.2.5]: https://github.com/jatoran/swe-mux/releases/tag/v0.2.5
