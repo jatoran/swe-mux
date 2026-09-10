@@ -122,7 +122,7 @@ test('declared subpages are unique, plural, and belong to live tabs', () => {
 
 test('Appearance separates session rows from the rest of the interface controls', () => {
   assert.deepEqual(settingsSubpages.appearance?.map(page=>page.label), ['Interface','Session rows','Session top bars'])
-  for(const heading of ['Theme','Right sidebar','Interface scale'])
+  for(const heading of ['Theme','Terminal font','Right sidebar','Interface scale'])
     assert.equal(settingsSubpageId('appearance',heading),'interface')
   assert.equal(settingsSubpageId('appearance','Session rows'),'session-rows')
   assert.equal(settingsSubpageId('appearance','Session top bars'),'session-top-bars')

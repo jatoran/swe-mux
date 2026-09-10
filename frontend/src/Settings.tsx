@@ -29,6 +29,7 @@ import type { Budget } from './types'
 import { uiScaleKeyboardIntent, uiScaleLabel, UI_SCALE_STEPS, type UiScale } from './uiScale'
 import { applyRailDensity, railDensityLabel, RAIL_DENSITIES, type RailDensity } from './railDensity'
 import { CLAUDE_MAX_COLUMN_STEPS, claudeMaxColumnsLabel, type ClaudeMaxColumns } from './terminalViewport'
+import { canvasTextMeasurer, DEFAULT_TERMINAL_FONT_FAMILIES, TERMINAL_FONT_FAMILY_MAX_CHARS, terminalFontAvailability } from './terminalFont'
 import { DeviceModeSetting } from './DeviceModeSetting'
 import { currentProfile } from './deviceSettings'
 import { DRAWER_TABS, type DrawerTabId } from './drawerTabs'
@@ -92,6 +93,7 @@ type Config = {
   update_check_enabled:boolean
   frontend_overlay_enabled:boolean
   terminal_renderer:'auto'|'dom'|'webgl'
+  terminal_font_family:string
   harness_args:Record<string,string[]>
   harness_enabled:Record<string,boolean>
   harness_mcp_enabled:Record<string,boolean>
@@ -348,6 +350,22 @@ function ProviderReadiness({readiness}:{readiness?:LlmReadiness|null}){
 }
 
 /** Verified, edited-since, or never proven — as three distinct words, never two. */
+/**
+ * Whether each family the draft names resolves on *this* device, read from a canvas
+ * measurement as it is typed. The setting is daemon-wide and a font is per device, so
+ * this is the one place the two can be seen to disagree - and a blank draft says nothing,
+ * because the default stack is not a claim anybody made.
+ */
+function TerminalFontAvailability({family}:{family:string}){
+  const readings=useMemo(()=>terminalFontAvailability(family,canvasTextMeasurer()),[family])
+  if(!readings.length)return null
+  return <p class="settings-hint terminal-font-availability" aria-live="polite">{readings.map(reading=>
+    <span key={reading.name} class={reading.available===false?'warn':''}>
+      <code>{reading.name}</code>{' '}
+      {reading.available===null?'cannot be checked here':reading.available?'is installed on this device':'is not installed on this device, so the default draws instead'}
+    </span>)}</p>
+}
+
 function VerificationBadge({entry}:{entry:LlmProviderEntry}){
   if(entry.verification.verified) return <em class="project-setting-chip">verified</em>
   if(entry.verification.stale) return <em class="project-setting-chip spends">endpoint changed</em>
@@ -1984,11 +2002,11 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
             <p>Escape then Tab always leaves the editor, so the keyboard is never trapped.</p>
           </section>
 
-          <section><h3>Typography</h3>
-            <label>Font family<input value={draft.note_font_family} placeholder="editor default: ui-monospace, Cascadia Mono, Consolas" onInput={e=>change('note_font_family',e.currentTarget.value)}/></label>
-            <label>Font size<input type="number" min="0" max="48" value={draft.note_font_size_px} onInput={e=>change('note_font_size_px',Number(e.currentTarget.value))}/></label>
-            <label>Line height<input type="number" min="0" max="3" step="0.05" value={draft.note_line_height} onInput={e=>change('note_line_height',Number(e.currentTarget.value))}/></label>
-            <p>Pixels and a multiplier; zero keeps the editor's own default (16px, 1.55). Saving re-measures open notes in place with no lost undo history.</p>
+          <section><h3>Note editor typography</h3>
+            <label data-setting="note_font_family">Note font family<input value={draft.note_font_family} placeholder="notes only; editor default: ui-monospace, Cascadia Mono, Consolas" onInput={e=>change('note_font_family',e.currentTarget.value)}/></label>
+            <label>Note font size<input type="number" min="0" max="48" value={draft.note_font_size_px} onInput={e=>change('note_font_size_px',Number(e.currentTarget.value))}/></label>
+            <label>Note line height<input type="number" min="0" max="3" step="0.05" value={draft.note_line_height} onInput={e=>change('note_line_height',Number(e.currentTarget.value))}/></label>
+            <p>These apply to notes and the Scratchpad only; the terminal's font is under <strong>Appearance → Terminal font</strong>. Pixels and a multiplier; zero keeps the editor's own default (16px, 1.55). Saving re-measures open notes in place with no lost undo history.</p>
           </section>
 
           <section><h3>Touch command rail</h3>
@@ -2802,6 +2820,10 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <input class="file-input" ref={themeFile} type="file" accept="application/json" onChange={e=>void importTheme(e.currentTarget.files?.[0])} />
           <div class="theme-actions"><button onClick={()=>themeFile.current?.click()}>Import theme</button><button onClick={exportTheme}>Export theme</button></div>
           <p>Settings, menus, controls, and terminal chrome use the same monospace font token.</p>
+          </section><section><h3>Terminal font</h3>
+          <label data-setting="terminal_font_family">Font family<input value={draft.terminal_font_family} maxLength={TERMINAL_FONT_FAMILY_MAX_CHARS} placeholder={`default: ${DEFAULT_TERMINAL_FONT_FAMILIES.join(', ')}`} spellcheck={false} onInput={e=>change('terminal_font_family',e.currentTarget.value)}/></label>
+          <TerminalFontAvailability family={draft.terminal_font_family} />
+          <p>A font installed on the device viewing the terminal, such as <code>JetBrainsMono Nerd Font</code>; a Nerd Font supplies the icons prompt themes and agent CLIs draw. Blank keeps the default, and whatever you enter falls back to it. Saving re-fits every open terminal in place.</p>
           </section><section><SessionRowSettings /></section><section><SessionTopbarSettings /></section><section>
           <h3>Right sidebar</h3>
           <label>Drawer tabs<Dropdown value={draft.drawer_tab_display} onChange={value=>change('drawer_tab_display',value as Config['drawer_tab_display'])} options={[{value:'icon',label:'Icons'},{value:'title',label:'Titles'}]}/></label>
@@ -2820,7 +2842,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <label>Desktop interface scale<Dropdown value={String(draft.ui_scale_desktop)} onChange={value=>changeUiScale('ui_scale_desktop',value)} options={UI_SCALE_STEPS.map(step=>({value:String(step),label:uiScaleLabel(step)}))}/></label>
           <label>Mobile interface scale<Dropdown value={String(draft.ui_scale_mobile)} onChange={value=>changeUiScale('ui_scale_mobile',value)} options={UI_SCALE_STEPS.map(step=>({value:String(step),label:uiScaleLabel(step)}))}/></label>
           <p class="settings-scale-active">This window is using the <strong>{currentProfile()==='mobile'?'mobile':'desktop'}</strong> value — the other one will not change anything you can see from here.</p>
-          <p><kbd>Ctrl</kbd>+wheel, <kbd>Ctrl</kbd>+<kbd>+</kbd>/<kbd>-</kbd>, and <kbd>Ctrl</kbd>+<kbd>0</kbd> also drive the active value. The note editor keeps its own typography under <strong>Notes</strong>.</p>
+          <p><kbd>Ctrl</kbd>+wheel, <kbd>Ctrl</kbd>+<kbd>+</kbd>/<kbd>-</kbd>, and <kbd>Ctrl</kbd>+<kbd>0</kbd> also drive the active value. The terminal's font family is under <strong>Terminal font</strong> on this tab; the note editor keeps its own typography under <strong>Notes</strong>.</p>
           </section></Fragment>}
 
         {activeTab==='actions'&&<Fragment><section><h3>Action rail</h3>

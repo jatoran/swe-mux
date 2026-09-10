@@ -160,6 +160,10 @@ const SOURCE_TEXT_TESTS: Readonly<Record<string, readonly Reason[]>> = {
   //: unit tests for each of their pure helpers stayed green.
   'terminalPaneInputBackend.test.ts': ['negative-invariant'],
   'terminalViewport.test.ts': ['composition-root', 'component-jsx'],
+  //: The same three inert halves as the width envelope (the prop reaching the pane, the
+  //: family kept out of the construction effect's deps, the control on Appearance), plus
+  //: the absence of the old hardcoded family anywhere in the pane.
+  'terminalFont.test.ts': ['composition-root', 'component-jsx', 'negative-invariant'],
   //: The initial metadata is the HTML build input itself and must precede executable
   //: scripts, while the fixed-palette assertions treat the stylesheet as the artifact.
   'theme.test.ts': ['build-artifact', 'stylesheet'],

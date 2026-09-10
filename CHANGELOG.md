@@ -15,6 +15,19 @@ The release procedure that maintains this file is [`RELEASING.md`](RELEASING.md)
 
 ## [Unreleased]
 
+### Added
+
+- **The terminal's font family is a setting.**
+  Settings → Appearance → Terminal font takes a family list such as `JetBrainsMono Nerd Font`, which is what makes prompt-theme and agent-CLI icons render as glyphs rather than boxes.
+  Whatever you enter is placed ahead of the default stack rather than replacing it, so a typo or a font the viewing device lacks falls back to the terminal you had.
+  The field says whether each name is installed on the device you are typing on, since the setting is shared by every device and fonts are not.
+  Saving re-fits every open terminal in place; nothing is restarted.
+
+### Changed
+
+- The note editor's font controls under Settings → Notes are now titled "Note editor typography" and say they apply to notes only.
+  They were the only "Font family" field in Settings, and a terminal font typed there did nothing, before and after a restart.
+
 ## [0.2.8] - 2026-09-09
 
 ### Added

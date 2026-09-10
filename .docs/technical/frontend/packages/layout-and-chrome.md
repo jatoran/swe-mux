@@ -206,6 +206,7 @@ Pure config to root custom properties.
 - `ThemePicker.tsx` owns the keyboard-accessible fixed-column swatch listbox.
   It is the design `Dropdown` is modelled on and stays its own component: every row carries a swatch strip, and highlighting one *applies* the theme without committing it, which is a preview contract no generic picker has.
 - `uiScale.ts` owns `--ui-scale`, per-device-class resolution, discrete step movement, fixed keyboard classification, and high-resolution wheel accumulation.
+- The terminal font family control on the same page is owned by `terminalFont.ts` (`terminal.md`), because its value never becomes a custom property: xterm is handed the resolved stack as an option, the way it is handed the scale as a number.
 - `style.css` owns shared theme-derived chrome, including compact scrollbars and the one `--check-size` rule that sizes every native checkbox and radio.
   Every fixed palette declares `color-scheme: only light|dark`, forbidding user-agent auto-transformation without opting out of forced-colors accessibility.
   That rule is fixed px, not `--ui-scale`, because that property multiplies type and the rows holding a line of type, never glyph-sized controls.

@@ -811,6 +811,14 @@ class Config:
     # moment the overlay itself would.
     frontend_overlay_enabled: bool = True
     terminal_renderer: str = "auto"
+    # The terminal's font family, as a CSS family list ("JetBrainsMono Nerd Font").
+    # Blank draws the stack the app has always used (Cascadia Mono, Consolas,
+    # monospace); a value is prepended to that stack rather than replacing it, so a
+    # typo or a font absent from the device viewing the terminal falls back to the
+    # default terminal rather than to the browser's. Daemon-wide rather than per
+    # device because the failure mode is safe: the browser measures whether the name
+    # resolves and says so in Settings. Read live by every pane.
+    terminal_font_family: str = ""
     # Desktop width envelope for Claude panes, in columns. Claude Code's live-region
     # renderer can leave stale and duplicated cells across large column changes, so a
     # Claude pane dragged wider than this adds margin instead of resizing the PTY
@@ -2058,8 +2066,15 @@ _CHOICE_RULES: tuple[_Choice, ...] = (
     ),
 )
 
+# What cannot be part of a font family name and could only be there to end the
+# declaration it is written into: the characters that close a CSS declaration or a
+# canvas font shorthand, and control characters. The browser strips the same set from
+# a hand-edited file (`terminalFont.ts`), so the two readers agree.
+_FONT_FAMILY_FORBIDDEN = re.compile(r"[;{}\x00-\x1f\x7f]")
+
 _TEXT_RULES: tuple[_Text, ...] = (
     _Text("note_font_family", 200, "must be 200 characters or fewer"),
+    _Text("terminal_font_family", 200, "must be 200 characters or fewer"),
     _Text("scan_timeline_model", 200, "must be an exact OpenRouter model id", required=True),
     _Text("assistant_model", 200, "must be an exact OpenRouter model id", required=True),
     _Text(
@@ -2225,6 +2240,13 @@ def _validate(config: Config) -> None:
     for pattern_rule in _PATTERN_RULES:
         if not pattern_rule.pattern.fullmatch(str(getattr(config, pattern_rule.field))):
             errors[pattern_rule.field] = pattern_rule.message
+    # Not a `_Pattern`: those describe a required shape, and a family list has none -
+    # blank is the default and any name is the browser's to resolve. Only what cannot
+    # be part of a name is refused.
+    if _FONT_FAMILY_FORBIDDEN.search(config.terminal_font_family):
+        errors["terminal_font_family"] = (
+            "must not contain semicolons, braces, or control characters"
+        )
     if config.default_backend != "shell" and not is_agent_harness(config.default_backend):
         errors["default_backend"] = "must be shell or a registered agent"
     if config.default_harness and not is_agent_harness(config.default_harness):

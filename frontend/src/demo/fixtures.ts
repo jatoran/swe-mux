@@ -547,6 +547,7 @@ export function demoConfig(): Record<string, unknown> {
     utility_rail_display: 'icon',
     xterm_scrollback_lines: 4000,
     terminal_renderer: 'dom',
+    terminal_font_family: '',
     claude_max_columns: 0,
     // Both frames are drawn smaller than the device they stand for - the desktop is
     // shrunk to sit beside the phone, the phone is a real phone viewport shrunk into a

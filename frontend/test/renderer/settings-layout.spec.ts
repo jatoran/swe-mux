@@ -42,6 +42,32 @@ test('Notes settings expose the global Scratchpad visibility toggle',async({page
   await expect(toggle.locator('input[type="checkbox"]')).toBeChecked()
 })
 
+test('Appearance owns the terminal font and says whether a name resolves on this device',async({page})=>{
+  await page.setViewportSize(DESKTOP)
+  await page.goto('/settings-harness.html')
+  await page.getByRole('tab',{name:'Appearance',exact:true}).click()
+  const control=page.locator('[data-setting="terminal_font_family"]')
+  await expect(control).toContainText('Font family')
+  const input=control.locator('input')
+  await expect(input).toHaveValue('')
+  // Blank is the default and makes no claim, so nothing is measured.
+  await expect(page.locator('.terminal-font-availability')).toHaveCount(0)
+  // A generic keyword is always available; a name no device has is measured absent
+  // and drawn as the warning, not as a save error. Neither depends on which fonts the
+  // runner happens to ship.
+  await input.fill('monospace, No Such Font 8f1c')
+  const readings=page.locator('.terminal-font-availability span')
+  await expect(readings).toHaveCount(2)
+  await expect(readings.nth(0)).toContainText('monospace is installed on this device')
+  await expect(readings.nth(0)).not.toHaveClass(/warn/)
+  await expect(readings.nth(1)).toContainText('No Such Font 8f1c is not installed on this device')
+  await expect(readings.nth(1)).toHaveClass(/warn/)
+  // The note editor's own field says what it is for, so a terminal font is not typed there.
+  await page.getByRole('tab',{name:'Notes',exact:true}).click()
+  await expect(page.locator('[data-setting="note_font_family"]')).toContainText('Note font family')
+  await expect(page.locator('[data-setting="note_font_family"] input')).toHaveAttribute('placeholder',/^notes only;/)
+})
+
 async function chrome(page: Page) {
   return page.evaluate(() => {
     const box = (selector: string) => {

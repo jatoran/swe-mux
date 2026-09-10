@@ -283,6 +283,7 @@ export const SETTINGS_CONFIG_FIXTURE = {
   "stt_whisper_model": "turbo",
   "tailnet_enabled": true,
   "terminal_auto_copy_selection": true,
+  "terminal_font_family": "",
   "terminal_renderer": "auto",
   "theme": "dark",
   "tts_cache_mb": 200,

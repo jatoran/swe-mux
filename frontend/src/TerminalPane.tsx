@@ -66,6 +66,7 @@ import { createWheelPacer, isWheelReportBurst } from './terminalWheelPacing'
 import { terminalRenderControl } from './terminalRenderPause'
 import { adoptsOwnGeometryOnReveal, geometryMatchesFit, letterboxFontSize } from './terminalLetterbox'
 import { scaledFontSize } from './uiScale'
+import { canvasTextMeasurer, loadTerminalFont, terminalFontAvailability, terminalFontStack } from './terminalFont'
 import {
   applyOwnerFrame,
   applyOwnerReleased,
@@ -245,6 +246,13 @@ interface Props {
    */
   uiScale: number
   /**
+   * The configured terminal family list (`terminal_font_family`), `''` for the default
+   * stack. Applied live for the same reason as the scale: `fontFamily` is assignable on
+   * a running terminal, and xterm re-measures its cells and rebuilds its glyph atlas on
+   * the assignment, so nothing about the socket or the buffer has to move.
+   */
+  fontFamily?: string
+  /**
    * Whether this pane is the one on screen in its stack. A false value is a *warm*
    * pane (`warmPanes.ts`): fully live, deliberately kept mounted so returning to it
    * costs no replay, but not being looked at. It therefore has to behave like a
@@ -413,7 +421,7 @@ async function pasteBrowserClipboard(term: Terminal, session: Session, inputBack
   return 'text'
 }
 
-function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, broadcast, scrollback, rendererPreference, windowsPty, mobileInput, uiScale, visible, claudeMaxColumns, railEnabled, railHover=false, onRailHoverChange, onConfigureRail, onBranch }: Props) {
+function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, broadcast, scrollback, rendererPreference, windowsPty, mobileInput, uiScale, fontFamily='', visible, claudeMaxColumns, railEnabled, railHover=false, onRailHoverChange, onConfigureRail, onBranch }: Props) {
   const utilityPane=!!session.plugin_id
   const host = useRef<HTMLDivElement>(null)
   // Held in a ref rather than closed over: every reader below lives inside the
@@ -422,6 +430,15 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
   const baseFontRef = useRef(baseFont)
   baseFontRef.current = baseFont
   const applyBaseFontRef = useRef<() => void>(() => {})
+  // The family, held the same way and for the same reason as the size. The raw list
+  // is kept beside the resolved stack because the availability reading names what the
+  // user typed, not the fallback chain behind it.
+  const fontStack = terminalFontStack(fontFamily)
+  const fontStackRef = useRef(fontStack)
+  fontStackRef.current = fontStack
+  const fontFamilyRef = useRef(fontFamily)
+  fontFamilyRef.current = fontFamily
+  const applyFontFamilyRef = useRef<() => void>(() => {})
   const termRef = useRef<Terminal | null>(null)
   const searchRef = useRef<SearchAddon | null>(null)
   // The rail's context menu (desktop only). The terminal body itself has no menu - a
@@ -995,7 +1012,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     reportStartup('pane_mounted')
     const mobileTerminalInput = isMobileTerminalInput()
     const term = new Terminal({
-      cursorBlink: true, cursorStyle: 'bar', fontFamily: '"Cascadia Mono", Consolas, monospace',
+      cursorBlink: true, cursorStyle: 'bar', fontFamily: fontStackRef.current,
       ...terminalCursorOptions(mobileTerminalInput),
       fontSize: baseFontRef.current, fontWeight: '600', fontWeightBold: '600', lineHeight: 1.2, scrollback, allowProposedApi: true,
       screenReaderMode: false,
@@ -1876,6 +1893,39 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       localFitBox = null
       runViewportPass()
     }
+    // The family moved. Same pass as the size, because a different face is a different
+    // cell width and the grid the daemon holds for this device has to follow it - and
+    // the host box under a Claude width cap carries the same stack, so both move together.
+    // The assignment alone makes xterm re-measure and rebuild its glyph atlas; the redraw
+    // after the pass is asked to clear it again anyway, which is cheap and covers a
+    // renderer that cached glyphs between the two.
+    applyFontFamilyRef.current = () => {
+      if (term.options.fontFamily === fontStackRef.current) return
+      term.options.fontFamily = fontStackRef.current
+      invalidateAtlasOnRedraw = true
+      localFit = null
+      localFitBox = null
+      diagnoseRender?.('font_family_applied', {
+        stack: fontStackRef.current,
+        available: terminalFontAvailability(fontFamilyRef.current, canvasTextMeasurer()),
+      })
+      runViewportPass()
+      void settleTerminalFont()
+    }
+    // A web font in the stack arrives after xterm has already measured against its
+    // fallback, and only a re-fit once it is in puts the cells right. An installed font
+    // resolves at once with nothing loaded, and the fit already taken stands.
+    const settleTerminalFont = async () => {
+      const stack = fontStackRef.current
+      const loaded = await loadTerminalFont(stack, '600', term.options.fontSize ?? baseFontRef.current, document.fonts)
+      if (disposed || !loaded || stack !== fontStackRef.current) return
+      diagnoseRender?.('font_face_loaded', { stack })
+      invalidateAtlasOnRedraw = true
+      localFit = null
+      localFitBox = null
+      runViewportPass()
+    }
+    void settleTerminalFont()
     // Repaint the surface again, without touching geometry.
     //
     // Deliberately not another viewport pass: a fit is `term.resize` plus a pseudoconsole
@@ -3488,7 +3538,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     loadLatestReply()
     window.addEventListener(PRESENCE_REPORTED_EVENT, onPresenceReported)
     connect(false)
-    return () => { disposed=true;finishCaretPlacement('disposed');stopSelectionScroll();stopLivenessWatch();stopInputStallWatch();clearHandshakeWatchdog();reconnectNowRef.current=()=>{};if(reconnectTimer!==undefined)clearTimeout(reconnectTimer);if(replyRefreshTimer!==undefined)clearTimeout(replyRefreshTimer);if(lineBreakResetTimer!==undefined)clearTimeout(lineBreakResetTimer);if(outputAckTimer!==undefined)clearTimeout(outputAckTimer);window.clearInterval(terminalStateTimer);if(keyboardSettleTimer!==undefined)window.clearTimeout(keyboardSettleTimer);scheduleKeyboardSettleRef.current=()=>{};bufferChange.dispose();tailScroll.dispose();tailRender.dispose();writeParsed.dispose();renderDiagnostic?.dispose();input.dispose();wheelPacer.dispose();selectionChange.dispose();caretCursorMove.dispose();caretWriteParsed.dispose();caretResize.dispose();cancelLongPress();observer.disconnect();trackObserver.disconnect();intersection?.disconnect();window.cancelAnimationFrame(fitFrame);window.cancelAnimationFrame(redrawFrame);surfaceRepair?.cancel();window.cancelAnimationFrame(visibilityFrame);window.clearTimeout(surfaceConfirmTimer);window.removeEventListener('resize',scheduleBurstFit);window.visualViewport?.removeEventListener('resize',scheduleBurstFit);viewportScheduler.cancel();document.removeEventListener('visibilitychange',onVisibility);window.removeEventListener('pageshow',onPageShow);window.removeEventListener('focus',onWindowFocus);window.removeEventListener('error',onRenderError);window.removeEventListener('pointermove',pointerMove);window.removeEventListener('pointerup',pointerEnd);window.removeEventListener('pointercancel',pointerCancel);window.removeEventListener('mux:theme',onTheme);window.removeEventListener(PRESENCE_REPORTED_EVENT,onPresenceReported);mobileLiveInput?.removeEventListener('beforeinput',mobileBeforeInput);mobileLiveInput?.removeEventListener('input',mobileTextInput);mobileLiveInput?.removeEventListener('keydown',mobileKeyDown);mobileLiveInput?.removeEventListener('paste',mobilePaste);mobileLiveInput?.removeEventListener('focusout',keepBridgeFocused);holdingBridgeFocus=false;terminalGestureActiveRef.current=false;deferredKeyboardInsetRef.current=null;setKeyboardGestureHold(false);if(mobileLiveInput)mobileLiveInput.value='';host.current?.removeEventListener('pointerdown',pointerClaim);host.current?.removeEventListener('mousedown',mobileMouseClaim,true);host.current?.removeEventListener('keydown',terminalKeyCapture,true);host.current?.removeEventListener('beforeinput',terminalBeforeInputCapture,true);host.current?.removeEventListener('focusin',claimOnFocus);host.current?.removeEventListener('contextmenu',openMenu);host.current?.removeEventListener('paste',pasteEvent,true);term.textarea?.removeEventListener('paste',unclaimedPaste);document.removeEventListener('paste',documentPaste,true);host.current?.removeEventListener('dragenter',dragEnter);host.current?.removeEventListener('dragover',dragOver);host.current?.removeEventListener('dragleave',dragLeave);host.current?.removeEventListener('drop',drop);if(socket){socket.onclose=null;socket.close()}term.dispose();termRef.current=null;searchRef.current=null;focusTerminalInputRef.current=()=>{};pasteAttachmentRef.current=()=>{};claimInputRef.current=()=>{};resizeToPaneRef.current=()=>{};applyBaseFontRef.current=()=>{} }
+    return () => { disposed=true;finishCaretPlacement('disposed');stopSelectionScroll();stopLivenessWatch();stopInputStallWatch();clearHandshakeWatchdog();reconnectNowRef.current=()=>{};if(reconnectTimer!==undefined)clearTimeout(reconnectTimer);if(replyRefreshTimer!==undefined)clearTimeout(replyRefreshTimer);if(lineBreakResetTimer!==undefined)clearTimeout(lineBreakResetTimer);if(outputAckTimer!==undefined)clearTimeout(outputAckTimer);window.clearInterval(terminalStateTimer);if(keyboardSettleTimer!==undefined)window.clearTimeout(keyboardSettleTimer);scheduleKeyboardSettleRef.current=()=>{};bufferChange.dispose();tailScroll.dispose();tailRender.dispose();writeParsed.dispose();renderDiagnostic?.dispose();input.dispose();wheelPacer.dispose();selectionChange.dispose();caretCursorMove.dispose();caretWriteParsed.dispose();caretResize.dispose();cancelLongPress();observer.disconnect();trackObserver.disconnect();intersection?.disconnect();window.cancelAnimationFrame(fitFrame);window.cancelAnimationFrame(redrawFrame);surfaceRepair?.cancel();window.cancelAnimationFrame(visibilityFrame);window.clearTimeout(surfaceConfirmTimer);window.removeEventListener('resize',scheduleBurstFit);window.visualViewport?.removeEventListener('resize',scheduleBurstFit);viewportScheduler.cancel();document.removeEventListener('visibilitychange',onVisibility);window.removeEventListener('pageshow',onPageShow);window.removeEventListener('focus',onWindowFocus);window.removeEventListener('error',onRenderError);window.removeEventListener('pointermove',pointerMove);window.removeEventListener('pointerup',pointerEnd);window.removeEventListener('pointercancel',pointerCancel);window.removeEventListener('mux:theme',onTheme);window.removeEventListener(PRESENCE_REPORTED_EVENT,onPresenceReported);mobileLiveInput?.removeEventListener('beforeinput',mobileBeforeInput);mobileLiveInput?.removeEventListener('input',mobileTextInput);mobileLiveInput?.removeEventListener('keydown',mobileKeyDown);mobileLiveInput?.removeEventListener('paste',mobilePaste);mobileLiveInput?.removeEventListener('focusout',keepBridgeFocused);holdingBridgeFocus=false;terminalGestureActiveRef.current=false;deferredKeyboardInsetRef.current=null;setKeyboardGestureHold(false);if(mobileLiveInput)mobileLiveInput.value='';host.current?.removeEventListener('pointerdown',pointerClaim);host.current?.removeEventListener('mousedown',mobileMouseClaim,true);host.current?.removeEventListener('keydown',terminalKeyCapture,true);host.current?.removeEventListener('beforeinput',terminalBeforeInputCapture,true);host.current?.removeEventListener('focusin',claimOnFocus);host.current?.removeEventListener('contextmenu',openMenu);host.current?.removeEventListener('paste',pasteEvent,true);term.textarea?.removeEventListener('paste',unclaimedPaste);document.removeEventListener('paste',documentPaste,true);host.current?.removeEventListener('dragenter',dragEnter);host.current?.removeEventListener('dragover',dragOver);host.current?.removeEventListener('dragleave',dragLeave);host.current?.removeEventListener('drop',drop);if(socket){socket.onclose=null;socket.close()}term.dispose();termRef.current=null;searchRef.current=null;focusTerminalInputRef.current=()=>{};pasteAttachmentRef.current=()=>{};claimInputRef.current=()=>{};resizeToPaneRef.current=()=>{};applyBaseFontRef.current=()=>{};applyFontFamilyRef.current=()=>{} }
     // `keybindings` used to be a dependency here, so every keymap edit tore down and
     // rebuilt the terminal. The key handler now asks `keymapDispatch` at the moment
     // it fires, so a changed map is picked up without remounting anything.
@@ -3576,6 +3626,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
   // listing the scale in its deps would dispose the terminal, drop the socket and
   // replay the entire buffer to change a number xterm takes directly.
   useEffect(() => { applyBaseFontRef.current() }, [uiScale])
+  useEffect(() => { applyFontFamilyRef.current() }, [fontStack])
 
   const copy = async () => {
     const term = termRef.current
@@ -4354,7 +4405,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     width:'100%',
     maxWidth:claudeHostMaxWidth(widthCap),
     justifySelf:'center',
-    fontFamily:'"Cascadia Mono", Consolas, monospace',
+    fontFamily:fontStack,
     fontSize:`${baseFont}px`,
     fontWeight:'600',
   }:undefined

@@ -1233,6 +1233,43 @@ def test_legacy_sidebar_gestures_migrate_to_toggle(tmp_path: Path) -> None:
     assert custom.mobile_gestures["two_finger_swipe_right"] == "palette.open"
 
 
+def test_terminal_font_family_is_hot_reloadable_and_bounded(tmp_path: Path) -> None:
+    """The terminal font is a family list the browser prepends to its default stack.
+
+    Blank is the default and must stay so, because every install predating the key
+    reads as blank. The daemon bounds length and refuses only what cannot be part of
+    a family name; every other string is the browser's to resolve, and a name that
+    resolves to nothing there falls back to the stack the app has always drawn.
+    """
+    path = tmp_path / "config.toml"
+    config = load_config(path)
+    assert config.terminal_font_family == ""
+
+    hot, restart = update_config(config, {"terminal_font_family": "JetBrainsMono Nerd Font"})
+    assert hot == {"terminal_font_family"}
+    assert restart == set()
+    assert load_config(path).terminal_font_family == "JetBrainsMono Nerd Font"
+
+    # A list, quotes, and a generic keyword are all the browser's business.
+    hot, _ = update_config(config, {"terminal_font_family": '"Fira Code", Iosevka, monospace'})
+    assert hot == {"terminal_font_family"}
+    assert load_config(path).terminal_font_family == '"Fira Code", Iosevka, monospace'
+
+    # Exactly the bound is accepted; one past it is not.
+    update_config(config, {"terminal_font_family": "x" * 200})
+    with pytest.raises(ValueError, match="200 characters or fewer"):
+        update_config(config, {"terminal_font_family": "x" * 201})
+    for bad in ("Fira; color:red", "Fira {", "Fira }", "Fira\nCode", "Fira\x00", "Fira\x7f"):
+        with pytest.raises(ValueError, match="semicolons, braces, or control characters"):
+            update_config(config, {"terminal_font_family": bad})
+    assert load_config(path).terminal_font_family == "x" * 200
+
+    # Back to blank is a stored value, not an unset one.
+    hot, _ = update_config(config, {"terminal_font_family": ""})
+    assert hot == {"terminal_font_family"}
+    assert load_config(path).terminal_font_family == ""
+
+
 def test_terminal_renderer_is_hot_reloadable_and_validated(tmp_path: Path) -> None:
     config = load_config(tmp_path / "config.toml")
 

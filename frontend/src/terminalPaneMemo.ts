@@ -28,6 +28,8 @@ export interface TerminalPaneMemoProps {
   windowsPty?: unknown
   mobileInput: unknown
   uiScale: number
+  /** The configured family list, `''` for the default stack (`terminalFont.ts`). */
+  fontFamily?: string
   visible: boolean
   claudeMaxColumns: number
   railEnabled?: { desktop: boolean; mobile: boolean }
@@ -84,6 +86,9 @@ export function terminalPanePropsEqual(
     a.claudeMaxColumns === b.claudeMaxColumns &&
     // Without this the memo swallows the change and the pane keeps the old font.
     a.uiScale === b.uiScale &&
+    // Same shape as the scale: the family is applied live from its own effect, and a
+    // swallowed prop is a font setting that reaches no pane until each is rebuilt.
+    (a.fontFamily ?? '') === (b.fontFamily ?? '') &&
     // The two rail switches. Both are read in the render body, so a change the memo
     // swallowed reached a pane only on the next unrelated re-render - the rail toggled
     // off in Settings stayed drawn until the session's state happened to move. Compared

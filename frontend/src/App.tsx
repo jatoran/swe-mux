@@ -199,6 +199,7 @@ import {
 } from './uiScale'
 import { applyRailDensity, watchRailDensityProfile } from './railDensity'
 import { DEFAULT_CLAUDE_MAX_COLUMNS, claudeMaxColumnsFrom } from './terminalViewport'
+import { terminalFontFamilyFrom } from './terminalFont'
 import { bindingFor, displayChord, paletteResults, paletteScope, PALETTE_PREFIXES, runCommand, type Command, type VoiceCommandResult } from './commands'
 import { buildFleetCommands, displayOrderKey, type FleetCommandActions } from './fleetCommands.ts'
 import { KEYBINDINGS_REFRESH_EVENT, setKeybindingsStore } from './keybindingsStore.ts'
@@ -987,6 +988,9 @@ export function App() {
   useEffect(()=>setTransientDrawer(null),[projectId])
   const [xtermScrollback, setXtermScrollback] = useState(10000)
   const [terminalRenderer, setTerminalRenderer] = useState<TerminalRendererPreference>('auto')
+  // The configured family list, '' for the default stack; a string, so a re-publish of
+  // the same value is the same prop and TerminalPane's memo lets nothing through.
+  const [terminalFontFamily, setTerminalFontFamily] = useState('')
   const [claudeMaxColumns, setClaudeMaxColumns] = useState<number>(DEFAULT_CLAUDE_MAX_COLUMNS)
   // Whether the Action rail is drawn, per device class. Value-compared on update for
   // the same reason `windowsPty` below is: it feeds TerminalPane props, and a fresh
@@ -2003,6 +2007,7 @@ export function App() {
     applyRailDensity(config)
     setXtermScrollback(config.xterm_scrollback_lines)
     setTerminalRenderer(config.terminal_renderer)
+    setTerminalFontFamily(terminalFontFamilyFrom(config))
     setClaudeMaxColumns(claudeMaxColumnsFrom(config))
     // `!== false` so a daemon predating the keys keeps the rail on.
     setRailEnabled(current => {
@@ -7573,7 +7578,7 @@ export function App() {
         onRestart={isInactiveSession(session)&&session.backend==='shell'?()=>void resumeSession(session):canRestartCold(session)?()=>void relaunchSession(session):undefined}
         onOpenTranscript={hasHarnessTranscript(session.backend)?()=>showHistoryEntry(session.agent_run_id||session.id):undefined}
       />}
-      <TerminalPane session={session} onState={updateSession} startupOrigin={startupOrigins.current[session.id]} onStartupTiming={(milestone,elapsedMs)=>recordClientStartupTiming(session.id,milestone,elapsedMs)} broadcast={broadcast} scrollback={xtermScrollback} rendererPreference={terminalRenderer} windowsPty={windowsPty} mobileInput={mobileInput} uiScale={uiScale} visible={paneVisible} claudeMaxColumns={claudeMaxColumns} railEnabled={railEnabled} railHover={railHover} onRailHoverChange={next=>void persistRailHover(next)} onConfigureRail={openActionSettings} onBranch={()=>void branchSession(session)} />
+      <TerminalPane session={session} onState={updateSession} startupOrigin={startupOrigins.current[session.id]} onStartupTiming={(milestone,elapsedMs)=>recordClientStartupTiming(session.id,milestone,elapsedMs)} broadcast={broadcast} scrollback={xtermScrollback} rendererPreference={terminalRenderer} windowsPty={windowsPty} mobileInput={mobileInput} uiScale={uiScale} fontFamily={terminalFontFamily} visible={paneVisible} claudeMaxColumns={claudeMaxColumns} railEnabled={railEnabled} railHover={railHover} onRailHoverChange={next=>void persistRailHover(next)} onConfigureRail={openActionSettings} onBranch={()=>void branchSession(session)} />
     </section>
     if(insideStack)return terminalPane
     return <section data-tutorial="workspace-pane" class={`pane-stack singleton-stack ${forceVisible?'plugin-popup-stack':''}`}><OverflowRail className="stack-tabs" wrapperClassName="stack-tabs-rail" activeKey={id} stripProps={{'data-tutorial':'tab-strip',role:'tablist','aria-label':'Terminal tabs'}}>

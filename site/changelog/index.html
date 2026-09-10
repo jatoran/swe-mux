@@ -1092,7 +1092,21 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
         <h2><a href="https://github.com/jatoran/swe-mux/compare/v0.2.8...HEAD">Unreleased</a></h2>
         <span class="fill"></span>
       </div>
-      <p class="prose">Nothing yet.</p>
+      <div class="relgroups">
+        <div><span class="k">Added</span> <span class="sep">1 entry</span></div>
+        <div><span class="k">Changed</span> <span class="sep">1 entry</span></div>
+      </div>
+      <details class="relmore">
+        <summary>all 2 entries</summary>
+        <div class="changetype">Added</div>
+        <ul class="bullets">
+          <li><span><b>The terminal's font family is a setting.</b> Settings → Appearance → Terminal font takes a family list such as <code>JetBrainsMono Nerd Font</code>, which is what makes prompt-theme and agent-CLI icons render as glyphs rather than boxes. Whatever you enter is placed ahead of the default stack rather than replacing it, so a typo or a font the viewing device lacks falls back to the terminal you had. The field says whether each name is installed on the device you are typing on, since the setting is shared by every device and fonts are not. Saving re-fits every open terminal in place; nothing is restarted.</span></li>
+        </ul>
+        <div class="changetype">Changed</div>
+        <ul class="bullets">
+          <li><span>The note editor's font controls under Settings → Notes are now titled "Note editor typography" and say they apply to notes only. They were the only "Font family" field in Settings, and a terminal font typed there did nothing, before and after a restart.</span></li>
+        </ul>
+      </details>
     </div>
     <div class="rel">
       <div class="relhead">

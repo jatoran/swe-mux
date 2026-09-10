@@ -1195,11 +1195,45 @@ Its rules, and what each one is defending:
     Sound and notification behaviour genuinely differ per device; a row layout does not, and a
     second copy would only be a thing to keep in sync by hand.
   - Excluded from it entirely: only the note editor, whose typography is its own
-    `--continuity-*` setting under Notes. The terminal was excluded at first — it has its own
+    `--continuity-*` setting under Notes (its section is titled "Note editor typography" and
+    its placeholder says "notes only", because a terminal font typed there does nothing and a
+    restart does not change that). The terminal was excluded at first — it has its own
     font size and its cell grid feeds cross-device viewport arbitration
     (`features/terminal-input.md`) — but leaving the largest surface in the window at a fixed
     size while everything around it grew is not what the setting is asked for, and the
     arbitration consequence turned out to be the correct behaviour rather than the objection.
+- Appearance exposes the **terminal font family** (`terminal_font_family`, blank by default),
+  the one typography control the terminal has; size is the chrome scale's, and the note
+  editor's typography stays its own under Notes.
+  It exists for glyphs before looks: prompt themes and the agent CLIs' own spinners and status
+  marks draw from the Private Use Area that only a patched Nerd Font carries, and with the
+  default stack the browser falls back per glyph to whatever installed font has the codepoint,
+  which renders boxes at widths the grid arbitration cannot see.
+  - **A configured family is prepended to the default stack, never substituted for it**
+    (`terminalFont.ts`), so a typo, or a font installed on the desktop and not on the phone
+    viewing the same daemon, degrades to the terminal the app has always drawn.
+    Blank resolves to exactly the stack that used to be hardcoded, so installing the build
+    that added it changes nothing on screen.
+  - **It is a free-text field on purpose.** Browsers cannot enumerate installed fonts without
+    a permission API that exists in Chromium only, and a dropdown drawn on the phone would list
+    the phone's fonts for a setting the desktop also reads.
+    What the field does instead is say whether each name resolves *on this device*, measured
+    from a canvas as it is typed, because the Font Loading API reports an uninstalled system
+    font as available and the alternative is a terminal that looks exactly as it did before
+    with no explanation - which is the report this setting was built from.
+  - **It is applied live, the same way the scale is**: assignable on a running terminal from
+    its own effect, never a dependency of the construction effect, and through the ordinary
+    viewport pass, because a different face is a different cell width and the grid the
+    daemon holds for this device has to follow it.
+    The width-capped Claude host carries the same stack so its `ch` unit resolves against the
+    cells xterm draws.
+    A web font in the stack is waited for and re-fitted once it arrives; an installed font is
+    available to measurement synchronously and the first fit stands.
+  - The daemon bounds the value to 200 characters and refuses only what cannot be part of a
+    family name (semicolons, braces, control characters); every other string is the browser's
+    to resolve.
+    Its heading is mapped onto the Interface page in `settingsTabs.ts`, because a heading the
+    grouping does not know is slugged into a page Appearance never declares and renders nowhere.
 - Appearance also exposes **rail density** (`Comfortable | Compact | Dense`), stored per device
   class beside chrome scale and defaulting to Comfortable on both.
   It is a separate setting rather than another thing chrome scale multiplies, because scale is
