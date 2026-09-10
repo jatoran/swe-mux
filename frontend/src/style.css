@@ -1867,20 +1867,15 @@ body {
 
 /* Compact sidebar commands and project resource editing. */
 .sidebar-footer{justify-content:flex-start;gap:8px}
-.sidebar-footer :is(.configurator-trigger,.notify-trigger,.settings-trigger){width:auto!important;height:calc(28px*var(--ui-scale));flex:0 0 auto;display:flex;align-items:center;justify-content:center;padding:0 6px!important;border:0;background:transparent;color:#6f9277;cursor:pointer}
+.sidebar-footer :is(.configurator-trigger,.notify-trigger){width:auto!important;height:calc(28px*var(--ui-scale));flex:0 0 auto;display:flex;align-items:center;justify-content:center;padding:0 6px!important;border:0;background:transparent;color:#6f9277;cursor:pointer}
 .sidebar-footer .notify-trigger:hover{border:0;background:transparent;color:#a8eab3}
 .sidebar-footer .notify-trigger.off{color:#5a6470}
 .sidebar-footer .notify-trigger.off:hover{color:#8ee69a}
 .sidebar-footer .notify-trigger svg{display:block}
-.sidebar-footer .settings-trigger:hover{border:0;background:transparent;color:#a8eab3}
-.sidebar-footer .settings-trigger svg{display:block;width:15px;height:15px}
-/* A little more air between the two right-hand controls than the row's 8px gap gives,
-   so menu and Settings read as neighbours rather than one word with a gear on it. */
-.sidebar-footer .settings-trigger{margin-left:6px}
-:where(:root[data-workspace-layout="mobile"]) .sidebar-footer :is(.configurator-trigger,.notify-trigger,.settings-trigger){min-height:44px}
+:where(:root[data-workspace-layout="mobile"]) .sidebar-footer :is(.configurator-trigger,.notify-trigger){min-height:44px}
 /* The configurator launcher leads the bell in the footer's left control group.
-   Both are chromeless app-wide controls; the menu and Settings form the right
-   navigation group. */
+   Both are chromeless app-wide controls; the menu alone forms the right navigation
+   group (Settings is a row of that menu, not a footer control). */
 .sidebar-footer .configurator-trigger:hover:not(:disabled){border:0;background:transparent;color:#a8eab3}
 /* Disabled means a prerequisite is missing (no agent CLI, no Project), and the
    title says which. Dimmed rather than hidden: a control that vanishes teaches

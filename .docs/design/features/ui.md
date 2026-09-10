@@ -232,9 +232,9 @@ responsive controls.
   app menu is where every other app-wide surface is looked for.
 - The sidebar footer has two stable control groups.
   The left group is the configurator gear followed by the alerts bell.
-  The right group is `menu` followed by a Settings cog that opens the Settings panel directly.
-  Settings remains in the app menu and command registry for search, keyboard, and voice access;
-  the persistent cog is the direct pointer route to a primary app-wide surface.
+  The right group is `menu` alone.
+  Settings is reached through that menu's `Settings` row, the command registry (`settings.open`, for search, keyboard, and voice), and the setting links that open a named section.
+  The footer used to carry its own Settings cog beside `menu`; it went because it opened a surface the menu next to it already listed, and because a third gear in the sidebar - after the configurator's and the `PROJECTS` header's, each meaning something else - made the mark say nothing.
   The configurator gear starts an agent session about this install (`configurator.md`) rather
   than opening an existing surface.
   A plain press launches the default harness; right-click, shift-click, or alt-click opens a
@@ -367,6 +367,11 @@ Its rules, and what each one is defending:
 - **A Project menu row has to earn its place against the drawer.**
   Notes, Processes, the fleet queue, and Browse files each left it, because each is a drawer tab or a dialog that already opens on the *selected* Project - so right-clicking a Project row to reach them was a second route to a place one click away, and the two that stayed are the two with no such home.
   What stayed with them is what has nowhere else to be pressed: Reveal in Explorer, the Group, Rename, Project settings, Hide, and Remove.
+- **The Project menu's first row is `Run`, and it is the Run menu itself rather than a row about running.**
+  It carries the `MenuGroup` caret because it expands, and clicking it opens the ordinary `ProjectRunMenu` for that Project beside the row, overlapping the row's right edge the way a `MenuGroup` flyout overlaps its header (`openRunMenu(..., 'beside')` in `frontend/src/App.tsx`); the Project menu closes as the Run menu opens, the same hand-off every `▶` trigger performs.
+  It is not a `MenuGroup`: the Run menu has its own scrim, trust dialogs, input prompts and worktree form, none of which can live inside a flyout that collapses when the pointer leaves it, and the accordion presentation on touch would fold a menu of that size into a menu of nine rows.
+  It is not a backend shortcut either: the `New terminal` row that used to sit here started one backend and so split the affordance that Run already owned; `Run` is the same door, reached from the label rather than from the row's `▶`.
+  On mobile it appears in the same menu the `⋮` control and the top bar's Project name open, so a phone reaches the Run menu from the Project label as well as from the toolbar's `▶`.
   Collapse-in-sidebar went the same way (clicking a Project header is the fold), and so did Move Project up/down, which could only ever step one place at a time while long-press drag moves a Project anywhere (see the pointer-drag contract below).
   The rows that remain carry no trailing ellipsis either, for the reason the app menu's do not: nearly every row here opens something, so a mark meaning "this opens something" distinguished none of them.
   What the palette keeps, it keeps: `project.moveUp` and `project.moveDown` stay registered and bindable, the same way the removed layout rows did, so dropping a button never removes the keyboard route.
@@ -414,7 +419,7 @@ Its rules, and what each one is defending:
   header, beside the tree they act on. Per-Project actions — Project settings, files, notes, and
   Project-scoped Fleet Queue approval rows — live on the Project itself: right-click a
   sidebar row, or tap the Project title in the mobile top bar (both open the same menu).
-- Starting work is the Run menu's job alone (active-Project header, desktop pane tab rails, every Project row, mobile rail, and the empty workspace stage's own button).
+- Starting work is the Run menu's job alone (active-Project header, desktop pane tab rails, every Project row, mobile rail, the empty workspace stage's own button, and the Project context menu's `Run` row, which opens that same menu beside itself).
   Neither the app menu nor the Project context menu carries "New terminal": Run already
   offers the same backends plus the Project's imported tasks, and a second door only split the
   affordance.

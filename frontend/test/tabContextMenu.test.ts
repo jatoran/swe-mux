@@ -120,6 +120,13 @@ test('the Project menu acts on this Project, each row with its own mark',()=>{
   // Creating from here moves this Project into what it creates, or the row is a detour.
   assert.match(menu,/setGroupEdit\(\{name:'',adoptProjectId:target\.id\}\)/)
 
+  // Run is the Run menu itself, opened beside the row as a flyout - not a backend
+  // shortcut of its own (the "New terminal" row that split the affordance stays gone),
+  // and not a MenuGroup, whose hover-collapse could not host the Run menu's scrim,
+  // trust dialogs and worktree form.
+  assert.match(menu,/<button class="menu-row" aria-haspopup="menu"[^>]*onClick=\{event=>openRunMenu\(projectMenu\.project,event\.currentTarget,'project-menu','beside'\)\}>[^\n]*<span class="menu-row-label">Run<\/span><span class="menu-group-caret"/, 'the Run row must hand off to the Run menu, placed beside it')
+  assert.doesNotMatch(menu,/spawnTerminal|project\.newTerminal|MenuGroup id="project-run"/, 'the Project menu must not carry a backend shortcut or a nested copy of the Run menu')
+
   assert.match(menu,/>Rename</, 'the row says Rename; the menu already names the Project')
   assert.doesNotMatch(menu,/>Rename project</)
   // A trailing ellipsis on most of a menu says "this opens something" about rows that all

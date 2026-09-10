@@ -67,19 +67,22 @@ test('every class selector the tour spotlights exists in a component', () => {
   }
 })
 
-test('the sidebar footer keeps its two control groups and direct Settings route', () => {
+test('the sidebar footer keeps its two control groups, and Settings is reached through the menu', () => {
   const start = app.indexOf('<div class="sidebar-footer">')
   const end = app.indexOf('</div>', start)
   assert.ok(start >= 0 && end > start, 'the sidebar footer must render')
   const footer = app.slice(start, end)
-  const controls = ['configurator-trigger', 'notify-trigger', 'menu-trigger', 'settings-trigger']
+  const controls = ['configurator-trigger', 'notify-trigger', 'menu-trigger']
   let previous = -1
   for (const control of controls) {
     const position = footer.indexOf(control)
     assert.ok(position > previous, `${control} is out of order in the sidebar footer`)
     previous = position
   }
-  assert.match(footer, /class="settings-trigger"[^>]*onClick=\{\(\)=>openSettings\(\)\}/)
+  // The footer cog went: it opened a surface the menu beside it already listed. The menu
+  // row is now the pointer route, so it has to stay - the palette command alone is not one.
+  assert.doesNotMatch(footer, /settings-trigger|openSettings\(/, 'the sidebar footer must not carry its own Settings control')
+  assert.match(app, /class="menu-row" onClick=\{\(\) => runNamedCommand\('settings\.open'\)\}>[^\n]*<span class="menu-row-label">Settings<\/span>/, 'the app menu must carry the Settings row')
 })
 
 test('every Settings path the tour names resolves to a real tab', () => {

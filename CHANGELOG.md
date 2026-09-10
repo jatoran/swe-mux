@@ -25,6 +25,11 @@ The release procedure that maintains this file is [`RELEASING.md`](RELEASING.md)
 
 ### Changed
 
+- **The Project menu opens the Run menu.**
+  Right-clicking a Project in the sidebar (or tapping its `⋮`, or the Project name in the mobile top bar) now starts with a `Run` row that expands into the same Run menu the `▶` buttons open: harnesses and launch profiles, worktree sessions, plugin panes and the Project's tasks.
+- **The sidebar footer's Settings cog is gone.**
+  Settings opens from `menu → Settings`, the `settings.open` command, or any setting link; the cog duplicated the menu row beside it.
+
 - The note editor's font controls under Settings → Notes are now titled "Note editor typography" and say they apply to notes only.
   They were the only "Font family" field in Settings, and a terminal font typed there did nothing, before and after a restart.
 

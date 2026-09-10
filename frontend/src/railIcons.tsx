@@ -482,6 +482,13 @@ export const CheckIcon = () => <svg {...stroke}>
   <polyline points="4 12.5 9.5 18 20 6" />
 </svg>
 
+/** A play triangle: the Project menu's Run row, which opens the same Run menu every `▶`
+ *  trigger does. Outlined like its neighbours rather than the filled text glyph the
+ *  triggers use, so it sits in the icon column at the same weight as the rest. */
+export const RunIcon = () => <svg {...stroke}>
+  <path d="M7 4.6v14.8L19 12Z" />
+</svg>
+
 /** A shield struck through: stop standing in for the human on approvals here. */
 export const ShieldOffIcon = () => <svg {...stroke}>
   <path d="M5.5 6.4 12 3.5l6.5 2.9v5.2c0 3.4-2.5 6.4-6.5 8-1.3-.5-2.4-1.2-3.3-2" />

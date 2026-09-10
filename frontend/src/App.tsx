@@ -103,7 +103,7 @@ import {
   presentationWithTransientDrawerTab, transientDrawerTabForProject, type TransientDrawerTab,
 } from './drawerTransient'
 import { resolveProjectScope, type ProjectScope } from './processFleet'
-import { AlertsIcon, BroadcastIcon, CheckIcon, ClearIcon, ClipboardHistoryIcon, CloseIcon, CogIcon, CommandKeyIcon, CopyIcon, CopyPathIcon, DashboardIcon, DRAWER_TAB_ICONS, FilesIcon, GroupIcon, HelpIcon, HideIcon, HistoryIcon, MailIcon, NavPanelIcon, NotePencilIcon, PackageIcon, PlusIcon, PowerIcon, ProcessesIcon, PromptsIcon, QueueClockIcon, RefreshIcon, RenameIcon, ResumeIcon, RevealIcon, SearchIcon, ServerIcon, ShieldOffIcon, SidePanelIcon, SparkleIcon, SpeakerIcon, SpendIcon, TrashIcon, TrashSweepIcon, UnfoldLessIcon, UnfoldMoreIcon, WrenchIcon } from './railIcons'
+import { AlertsIcon, BroadcastIcon, CheckIcon, ClearIcon, ClipboardHistoryIcon, CloseIcon, CogIcon, CommandKeyIcon, CopyIcon, CopyPathIcon, DashboardIcon, DRAWER_TAB_ICONS, FilesIcon, GroupIcon, HelpIcon, HideIcon, HistoryIcon, MailIcon, NavPanelIcon, NotePencilIcon, PackageIcon, PlusIcon, PowerIcon, ProcessesIcon, PromptsIcon, QueueClockIcon, RefreshIcon, RenameIcon, ResumeIcon, RevealIcon, RunIcon, SearchIcon, ServerIcon, ShieldOffIcon, SidePanelIcon, SparkleIcon, SpeakerIcon, SpendIcon, TrashIcon, TrashSweepIcon, UnfoldLessIcon, UnfoldMoreIcon, WrenchIcon } from './railIcons'
 import {
   CLIPBOARD_CHANGED_EVENT, clearClipboardHistory, configureClipboardCapture,
 } from './clipboardHistory'
@@ -3892,9 +3892,16 @@ export function App() {
     setProjectMenu({project,x,y})
   }
 
-  const openRunMenu=(project:Project,element:HTMLElement,trigger?:string)=>{
+  // `placement` is where the menu lands relative to its trigger. Every button trigger
+  // drops it `below`. The Project menu's Run row opens it `beside`, overlapping the row's
+  // right edge the way a MenuGroup flyout overlaps its header, because that row belongs
+  // to a menu that closes as this one opens: dropping under a row that is about to
+  // vanish reads as the menu jumping, while a flyout from it reads as the row expanding.
+  const openRunMenu=(project:Project,element:HTMLElement,trigger?:string,placement:'below'|'beside'='below')=>{
     const rect=element.getBoundingClientRect()
-    setRunMenu({project,x:Math.max(6,Math.min(rect.left,window.innerWidth-306)),y:Math.min(rect.bottom+4,window.innerHeight-50),trigger})
+    const x=placement==='beside'?rect.right-4:rect.left
+    const y=placement==='beside'?rect.top-5:rect.bottom+4
+    setRunMenu({project,x:Math.max(6,Math.min(x,window.innerWidth-306)),y:Math.max(6,Math.min(y,window.innerHeight-50)),trigger})
     setProjectMenu(null);setMainMenuOpen(false)
   }
 
@@ -8348,10 +8355,12 @@ export function App() {
             if(opensChooser(event,configuratorOptions)){setConfiguratorMenu({x:event.clientX,y:event.clientY});return}
             void launchConfigurator()
           }}
-        ><svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="8" r="2.1"/><path d="M8 1.6v1.9M8 12.5v1.9M14.4 8h-1.9M3.5 8H1.6M12.5 3.5l-1.3 1.3M4.8 11.2l-1.3 1.3M12.5 12.5l-1.3-1.3M4.8 4.8 3.5 3.5"/></svg></button><button type="button" class={`notify-trigger ${alertsEnabled?'':'off'}`} aria-pressed={alertsEnabled} title={alertsEnabled?'Alerts on - click to mute sounds and push':'Alerts muted - click to restore sounds and push'} aria-label={alertsEnabled?'Mute alerts':'Enable alerts'} onClick={toggleAlerts}><svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 2c-2.2 0-3.6 1.6-3.6 3.9 0 2.7-1.2 3.6-1.2 4.6h9.6c0-1-1.2-1.9-1.2-4.6C11.6 3.6 10.2 2 8 2Z"/><path d="M6.6 12.6a1.5 1.5 0 0 0 2.8 0"/>{!alertsEnabled&&<line x1="2.6" y1="2.6" x2="13.4" y2="13.4"/>}</svg></button><button type="button" data-tutorial="menu" class="menu-trigger" aria-haspopup="menu" aria-expanded={mainMenuOpen} onClick={() => setMainMenuOpen(value => !value)}><span>:</span> menu</button><button type="button" class="settings-trigger" title="Settings" aria-label="Open Settings" onClick={()=>openSettings()}><CogIcon/></button>{/* App-wide controls form two stable groups: configurator and alerts on the left,
-            navigation on the right. Settings is direct because it is a primary app-wide
-            destination; the Projects registry stays in the PROJECTS header beside the tree
-            it edits. */}</div>
+        ><svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="8" r="2.1"/><path d="M8 1.6v1.9M8 12.5v1.9M14.4 8h-1.9M3.5 8H1.6M12.5 3.5l-1.3 1.3M4.8 11.2l-1.3 1.3M12.5 12.5l-1.3-1.3M4.8 4.8 3.5 3.5"/></svg></button><button type="button" class={`notify-trigger ${alertsEnabled?'':'off'}`} aria-pressed={alertsEnabled} title={alertsEnabled?'Alerts on - click to mute sounds and push':'Alerts muted - click to restore sounds and push'} aria-label={alertsEnabled?'Mute alerts':'Enable alerts'} onClick={toggleAlerts}><svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 2c-2.2 0-3.6 1.6-3.6 3.9 0 2.7-1.2 3.6-1.2 4.6h9.6c0-1-1.2-1.9-1.2-4.6C11.6 3.6 10.2 2 8 2Z"/><path d="M6.6 12.6a1.5 1.5 0 0 0 2.8 0"/>{!alertsEnabled&&<line x1="2.6" y1="2.6" x2="13.4" y2="13.4"/>}</svg></button><button type="button" data-tutorial="menu" class="menu-trigger" aria-haspopup="menu" aria-expanded={mainMenuOpen} onClick={() => setMainMenuOpen(value => !value)}><span>:</span> menu</button>{/* App-wide controls form two stable groups: configurator and alerts on the left,
+            the menu on the right. Settings is a row of that menu (and a palette command)
+            rather than a footer cog of its own: the cog sat beside `: menu` and opened a
+            surface the menu already listed, so the footer said "settings" twice and the
+            Projects header's cog made a third gear with a different meaning. The Projects
+            registry stays in the PROJECTS header beside the tree it edits. */}</div>
       </aside>
       {/* The collapsed strip keeps the sidebar's own controls reachable rather
           than forcing an expand round-trip for menu, projects, or status. */}
@@ -8705,9 +8714,16 @@ export function App() {
 
     {projectMenu && <div ref={el=>fitMenuInViewport(el)} class="context-menu" role="menu" aria-label={`Project actions for ${projectMenu.project.name}`} style={{ left: clampContextMenuLeft(projectMenu.x, innerWidth), top: Math.max(4, Math.min(projectMenu.y, innerHeight - 320)) }}>
       <div class="context-title"><strong>{projectMenu.project.name}</strong></div>
-      {/* Starting work belongs to the Run button (sidebar header, every Project row,
-          and the mobile rail), which offers the same backends plus Project tasks —
-          duplicating it here left two doors to one action. */}
+      {/* Run is the one row here that starts work, and it is the Run menu itself rather
+          than a second list of backends: the row hands off to `ProjectRunMenu`, opened
+          beside it as a flyout, so the Project menu offers everything the row's ▶ does
+          (backends, profiles, worktrees, plugin panes, Project tasks) without owning a
+          copy of it. It replaces "New terminal", which was a backend shortcut that split
+          the affordance; this is the same door, reached from the label. It carries the
+          MenuGroup caret because it expands, but is not a MenuGroup: the Run menu has its
+          own scrim, trust dialogs and worktree form, none of which can live inside a
+          flyout that the pointer leaving would collapse. */}
+      <button class="menu-row" aria-haspopup="menu" title={`Run in ${projectMenu.project.name}`} onClick={event=>openRunMenu(projectMenu.project,event.currentTarget,'project-menu','beside')}><span class="menu-row-icon" aria-hidden="true"><RunIcon/></span><span class="menu-row-label">Run</span><span class="menu-group-caret" aria-hidden="true">›</span></button>
       {/* One surface the app menu opens globally, prefiltered to this Project — and only
           one. The category headers went with the rest: a heading that labels three rows in
           a menu of nine is a fifth of the height spent saying what each icon now says.

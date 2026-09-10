@@ -287,7 +287,8 @@ The two refusals are separate codes because they are different problems: a missi
 
 ### The footer rule, restated
 
-The sidebar footer's rule was "app-wide switches, not navigation", which is why the gear that once sat beside the bell was removed: Settings is one click inside the menu, and a second permanent door to it saved nothing.
+The sidebar footer's rule is "app-wide switches, not navigation", which is why it carries no Settings cog: Settings is one click inside the menu, and a second permanent door to it saved nothing.
+A cog did sit beside `menu` for a while and was removed again on 2026-09-10 for the same reason, with the added cost that it made a third gear in one column after the configurator's and the `PROJECTS` header's.
 
 The configurator button is not a door. It starts an agent session about this install, and the footer is where a control belonging to the whole app rather than to the tree above it goes.
 The comment in `App.tsx` carries the restated rule so the next reader does not re-derive the old one and delete this.
