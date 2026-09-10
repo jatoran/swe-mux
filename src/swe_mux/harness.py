@@ -71,14 +71,13 @@ AdapterFamily = Literal["claude", "codex", "omp", "pi", "opencode"]
 # mid-turn, waiting on an approval, or already exited forks exactly as well as an
 # idle one. It is the only strategy that can branch from a *point*.
 #
-# `resume_child_thread` spawns a resume of the parent, which the CLI opens as a
-# child thread diverging from the still-live original. It can only ever fork from
-# now, because the CLI decides what the child inherits.
+# `cli_fork` uses the CLI's explicit fork command to create a new conversation.
+# It can only fork from now, because the CLI decides what the child inherits.
 #
 # `None` means mux has no implemented strategy and the server refuses the request
 # rather than reaching for a generic one: resuming a live conversation whose writer
 # is still attached would interleave two writers into one session file.
-BranchStrategy = Literal["transcript_fork", "resume_child_thread"]
+BranchStrategy = Literal["transcript_fork", "cli_fork"]
 MemoryInventoryKind = Literal["claude_project_markdown", "codex_feature_flag"]
 # What puts a TUI's *own* scroll viewport back on its newest output, for a pane that
 # can only track that viewport by dead reckoning (`trackAppTailDistance`).
@@ -1315,7 +1314,7 @@ HARNESSES: dict[str, HarnessDescriptor] = {
             id_prefixes=("gpt-", "o1", "o3", "o4", "codex-"),
             config_prefixes=("model=",),
         ),
-        branch_strategy="resume_child_thread",
+        branch_strategy="cli_fork",
         instruction_file_name="AGENTS.md",
         global_instruction_parts=_CODEX_GLOBAL_INSTRUCTIONS,
         memory_inventory=MemoryInventory(

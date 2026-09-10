@@ -10,7 +10,7 @@ from typing import Any, cast
 import pytest
 
 from swe_mux import app_keys as keys
-from swe_mux.adapters import ShellAdapter
+from swe_mux.adapters import CodexAdapter, ShellAdapter
 from swe_mux.git_projects import ProjectIdentity
 from swe_mux.models import SessionRecord
 from swe_mux.routes.terminal import session_startup_metrics
@@ -670,8 +670,10 @@ async def test_browser_startup_metrics_are_validated_and_persisted_once() -> Non
     assert emitted[0][0] == "session_startup_client_measured"
 
 
+@pytest.mark.parametrize("fork_parent", [None, "parent-conversation"])
 async def test_spawn_returns_live_session_before_durable_registration(
     monkeypatch: pytest.MonkeyPatch,
+    fork_parent: str | None,
 ) -> None:
     registration_started = asyncio.Event()
     release_registration = asyncio.Event()
@@ -715,8 +717,12 @@ async def test_spawn_returns_live_session_before_durable_registration(
         transcript_path=lambda _native, _cwd: None,
     )
     monkeypatch.setattr("swe_mux.session.PtyHost", FakePty)
+    backend = "codex" if fork_parent else "shell"
+    if fork_parent:
+        adapter = CodexAdapter()
+        monkeypatch.setattr(adapter, "transcript_path", lambda *_args: None)
     manager = SessionManager(
-        {"shell": cast(Any, adapter)},
+        {backend: cast(Any, adapter)},
         cast(Any, SimpleNamespace()),
         cast(Any, BlockingHistory()),
         cast(Any, SimpleNamespace(emit=lambda *_args, **_kwargs: asyncio.sleep(0))),
@@ -727,17 +733,24 @@ async def test_spawn_returns_live_session_before_durable_registration(
 
     session = await asyncio.wait_for(
         manager.spawn(
-            backend="shell",
+            backend=backend,
             name=None,
             cwd=".",
             project_id="project",
             project=project,
             initial_output=b"setup scrollback\r\n",
+            fork_native_id=fork_parent,
         ),
         timeout=0.25,
     )
     assert manager.sessions[session.record.id] is session
     assert session.record.pid == 123
+    if fork_parent:
+        assert session.record.args[-2:] == ["fork", fork_parent]
+        assert session.record.native_session_id == session.record.id
+        assert session.record.spawn_native_session_id == session.record.id
+        assert session.record.agent_run_id == session.record.id
+        assert session.record.spawn_agent_run_id is None
     assert "server_ready" in session.record.startup_timing_ms
     assert session.scrollback.bytes().startswith(b"setup scrollback\r\n")
     await asyncio.wait_for(registration_started.wait(), timeout=0.25)

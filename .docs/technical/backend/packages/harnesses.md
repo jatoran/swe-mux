@@ -29,6 +29,8 @@ The parser is declared per format rather than sniffed, because a parser that gue
 ## `adapters/`, `agent_launcher.py`, `hook_client.py`, `assets/omp_mux_hook.ts`
 
 Provider command, resume, and transcript normalization; additive Claude and Codex lifecycle-hook launch wiring; adapter-owned worktree trust preflight and primary-root access argv; the packaged OMP in-process lifecycle extension; authenticated hook delivery and spooling; and relaying a daemon-composed permission decision to the CLI's stdout.
+`BackendAdapter.fork_spec` is the explicit CLI-fork boundary: Codex builds `codex fork <parent-id>` through the same launcher, configuration, and hook wiring as resume.
+`SessionManager.spawn(fork_native_id=...)` gives that process its own placeholder identity and run; `resume_native_id` and inherited runs are incompatible with a fork.
 That extension also publishes the running process's live MCP tool inventory to `MUX_RUNTIME_URL`, on its own route rather than through hook ingress, because it is not a lifecycle event.
 
 `hook_client.py` also carries the Claude status-line tee (`Status`): it runs the user's own status-line command, named in the identity file, under the shell Claude would use, writes that command's stdout back unchanged, and only then posts the CLI's snapshot in one short-budget attempt with no retry and no spool.

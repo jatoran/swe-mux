@@ -221,12 +221,12 @@ and reattachable browser viewports.
   branches exactly as well as an idle one. The branch is a genuinely new conversation with its
   own history row, recorded as a `branch` lineage edge carrying the message and cut it was made
   at, because a fork is otherwise indistinguishable from two conversations that share a prefix.
-- **`resume_child_thread`** (Codex) asks the CLI instead: `codex resume` opens a child thread
-  with its own rollout, diverging from the still-live original. It can only fork from where the
-  conversation currently stands, so a request naming a point is refused (`branch_point_unsupported`)
-  rather than silently forked from the end. Because it reopens a conversation a live process is
-  still on, it keeps the readiness gate (`_branch_block_reason`: mid-turn, awaiting approval,
-  ended, or unsent composer text) and the spawn retry that a CLI-mediated fork needs.
+- **`cli_fork`** (Codex) uses `codex fork <source-id>` to create a new conversation with its own rollout.
+  `codex resume` continues the original conversation and fails when it already has an active writer.
+  A CLI fork starts with a fresh pane/run identity and a placeholder native id until its own hook or transcript discovery binds the new conversation.
+  The parent's id is only a command input; it must never seed the sibling's native id or inherited history row.
+  It can only fork from where the conversation currently stands, so a request naming a point is refused (`branch_point_unsupported`).
+  The readiness gate (`_branch_block_reason`: mid-turn, awaiting approval, ended, or unsent composer text) avoids branching an incomplete turn or leaving pending input behind.
 - **Where a fork may be cut is a per-point answer, not a per-harness one**
   (`transcript_view.conversation_cut_points`). Every cut lands on a message's own end offset, so
   a fork's last record is always a real conversational record rather than whichever housekeeping
@@ -258,10 +258,8 @@ and reattachable browser viewports.
   not an identity: branches at different depths of one tree can share a number, and nothing reads
   it back. Passing a name makes the pane `auto_named=False`, which is what stops the titler taking
   the name back the moment the branch says its first word.
-- The sibling is spawned and then **watched**, and one that exits inside the settle window is
-  discarded rather than attached. Whether to retry differs by strategy: a `transcript_fork`
-  sibling opens a conversation nothing has ever held, so a refusal will repeat and is reported at
-  once, while a `resume_child_thread` sibling is racing a live process and retries.
+- The sibling is spawned and then **watched**, and one that exits inside the settle window is discarded rather than attached.
+  Both strategies attempt once: neither races the parent's writer, and retrying a CLI fork could create orphan conversations.
 - **Handing back a pane that spawned dead is the defect, not a degraded success**
   (`spawn_probe.py`, shared by Branch and Resume). A CLI that refuses the conversation it was
   given does not fail its spawn: it starts, prints one line, and exits *after* the response that
@@ -272,9 +270,7 @@ and reattachable browser viewports.
   changes its wording or a harness mux has never seen refuses something.
   The window ends early on positive proof that the pane took what it was given (its own pid
   against the conversation in the CLI's state file); without such proof it is paid in full.
-  Whether to retry belongs to the caller: a Codex branch retries because it is racing a live
-  process the next attempt is further from, while a refusal that will repeat forever is reported
-  instead.
+  Retry policy belongs to the caller; Branch makes one attempt and reports its failure.
   This is a spawn check, not a health check — a pane that dies later is ordinary lifecycle and
   belongs to the watchdog.
 - Terminal environments are built from a scrubbed base (`spawn_contract.base_session_env`):

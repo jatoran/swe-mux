@@ -99,6 +99,10 @@ class BackendAdapter(Protocol):
 
     def spawn_spec(self, sid: str, opts: SpawnOptions) -> SpawnSpec: ...
     def resume_spec(self, native_id: str, opts: SpawnOptions) -> SpawnSpec: ...
+    def fork_spec(self, native_id: str, opts: SpawnOptions) -> SpawnSpec:
+        """Create a new conversation from a parent without resuming its writer."""
+        raise ValueError(f"{self.name} does not support CLI forks")
+
     def resume_continues_conversation(self, recorded_cwd: str, target_cwd: str) -> bool:
         """Whether resuming at ``target_cwd`` continues the recorded conversation.
 

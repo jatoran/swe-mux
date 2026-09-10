@@ -3007,6 +3007,7 @@ class SessionManager:
         exe: str | None = None,
         args: list[str] | None = None,
         resume_native_id: str | None = None,
+        fork_native_id: str | None = None,
         adopt_run_id: str | None = None,
         auto_named: bool | None = None,
         shell_profile_id: str | None = None,
@@ -3032,6 +3033,8 @@ class SessionManager:
             raise ValueError(f"unknown completion mode: {completion_mode}")
         if completion_mode == "one_shot" and backend != "shell":
             raise ValueError("one-shot completion is available only for shell sessions")
+        if fork_native_id and resume_native_id:
+            raise ValueError("a session cannot both fork and resume a conversation")
         # Inheriting a run means claiming an existing conversation's history row,
         # so it is only ever valid for the pane that is resuming that exact
         # conversation. Anything else would point two conversations at one row.
@@ -3079,11 +3082,19 @@ class SessionManager:
             hook_secret=hook_secret,
             hook_spool=hook_spool,
         )
-        spawn_spec = (
-            adapter.resume_spec(native_id, opts)
-            if resume_native_id
-            else adapter.spawn_spec(native_id, opts)
-        )
+        if fork_native_id:
+            spawn_spec = adapter.fork_spec(fork_native_id, opts)
+            log.info(
+                "session fork launching session=%s backend=%s parent=%s cwd=%s",
+                sid,
+                backend,
+                fork_native_id,
+                resolved_cwd,
+            )
+        elif resume_native_id:
+            spawn_spec = adapter.resume_spec(native_id, opts)
+        else:
+            spawn_spec = adapter.spawn_spec(native_id, opts)
         otel_args = provider_otel_args(
             backend,
             enabled=self.native_otel_enabled,
@@ -3336,12 +3347,9 @@ class SessionManager:
         transcript = adapter.transcript_path(native_id, resolved_cwd)
         if transcript is not None:
             # A pane must never start out tailing a file a live pane already
-            # follows: two sessions on one transcript is the cross-attribution the
-            # identity invariant forbids. Codex Branch is the real case — it
-            # deliberately resumes a *live* conversation to make the CLI fork a
-            # child thread, and now that a Codex conversation can be located by id,
-            # asking for the resumed id here answers with the original's rollout.
-            # Discovery picks up the child rollout once the fork writes it.
+            # follows: two sessions on one transcript violate the identity
+            # invariant. CLI forks start with a fresh placeholder; discovery
+            # binds their own rollout when the CLI reports the new conversation.
             _, claimed_paths = self._live_transcript_claims(session)
             if self._path_key(transcript) in claimed_paths:
                 transcript = None

@@ -228,7 +228,8 @@ The descriptor is the source of truth for all generic surfaces.
 - Every harness declares `publishes_cli_state`, `branch_strategy` (or `None`), `requires_direct_entrypoint`, `native_telemetry` (or `None`, measured against a real run before it is declared, including its `provides` capability set and whether it `exports_metrics`), `code_mode_tool` (or `None`), and `hook_reports_runtime_layer`.
   `transcript_fork` is the strategy where mux writes the forked conversation itself; declaring it obliges two dialect-keyed entries, both keyed on `transcript_dialect` rather than the harness name so two harnesses sharing a record format share one implementation: a cut-point scanner (`transcript_view._OPEN_TOOL_SCANNERS`, which answers what a cut at each record boundary would leave unanswered) and a fork writer (`transcript_fork._FORK_WRITERS`).
   A dialect present in neither is a dialect mux refuses to fork rather than one it forks blindly; adding both is the whole cost of making a new harness branchable from a point, and nothing in the server, the API, or the browser changes.
-  `resume_child_thread` obliges nothing beyond a CLI whose resume opens a child thread with its own conversation file.
+  `cli_fork` requires an adapter `fork_spec` that invokes the CLI's explicit fork command and creates a new conversation.
+  A normal resume must never substitute for a fork: it may reject an active writer or reopen the parent's transcript.
 - Every observed harness declares non-empty `normalized_events`, a record classifier, and replay fixtures meeting its derived-level corpus floor.
   Its own fixtures must produce every normalized event it declares, reach `working` and `idle`, reach `awaiting` with an `approval` sub-reason when it declares `approval_needed`, and produce an inferred reading plus a watchdog recovery when it declares a `pty` source (`test_status_matrix_is_covered_per_harness_not_just_corpus_wide`).
   The corpus-wide matrix is a union that Claude's fixtures largely satisfy alone, so per-harness coverage is asserted separately.
@@ -904,9 +905,8 @@ The guarded assertions themselves did not move: a real turn still has to produce
   71 minutes behind its newest record). Resumed Codex panes were therefore unobserved for their
   whole life unless a written turn happened to refresh the mtime — no Transcript tab, no tokens,
   no context, and a history row that reported no native transcript.
-- A pane never starts out following a transcript a live pane already holds, whatever named or
-  correlated evidence points at it. Codex Branch resumes a *live* conversation deliberately, to
-  make the CLI fork a child thread, and the fork's own rollout is what discovery then binds.
+- A pane never starts out following a transcript a live pane already holds, whatever named or correlated evidence points at it.
+  Codex Branch invokes `codex fork` with the parent id and starts with a fresh placeholder identity; its own hook or transcript discovery binds the fork's rollout.
 - Claude project directories use the CLI's current non-alphanumeric-to-hyphen cwd encoding.
   Codex reads the active `CODEX_HOME` (falling back to `~/.codex`). Child rollouts with
   `parent_thread_id` are excluded from promotion and external-history reconciliation.

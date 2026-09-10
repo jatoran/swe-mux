@@ -709,6 +709,29 @@ def test_codex_spawn_resume_and_notify_are_structured(tmp_path: Path) -> None:
     assert resumed.argv[-2:] == ("resume", "native-id")
 
 
+def test_codex_fork_uses_a_separate_command_with_the_full_launch_configuration(
+    tmp_path: Path,
+) -> None:
+    adapter = CodexAdapter(
+        "codex.exe",
+        notify=True,
+        default_args=["--profile", "work"],
+        command_resolver=lambda _command: ("node.exe", (r"C:\npm\codex.js",)),
+        mcp_url="http://127.0.0.1:9999/mcp",
+    )
+    opts = SpawnOptions(tmp_path, args=["--model", "o3 pro"])
+    forked = adapter.fork_spec("parent-id", opts)
+    resumed = adapter.resume_spec("parent-id", opts)
+
+    assert forked.executable == resumed.executable == "node.exe"
+    assert forked.argv[0] == r"C:\npm\codex.js"
+    assert forked.argv[-4:] == ("fork", "parent-id", "--model", "o3 pro")
+    assert resumed.argv[-4:] == ("resume", "parent-id", "--model", "o3 pro")
+    assert forked.argv[:-4] == resumed.argv[:-4]
+    assert 'mcp_servers.mux.url="http://127.0.0.1:9999/mcp"' in forked.argv
+    assert any(value.startswith("hooks.SessionStart=") for value in forked.argv)
+
+
 def test_codex_lifecycle_hooks_are_stable_and_preserve_explicit_event_config() -> None:
     first = codex_lifecycle_hook_args()
     second = codex_lifecycle_hook_args()

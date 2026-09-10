@@ -24,7 +24,6 @@ def _fast_branch_timings(monkeypatch: pytest.MonkeyPatch) -> None:
     sequencing, which is identical at any scale.
     """
     monkeypatch.setattr(branch_routes, "BRANCH_SIBLING_SETTLE_SECONDS", 0.05)
-    monkeypatch.setattr(branch_routes, "BRANCH_SIBLING_RETRY_BACKOFF_SECONDS", 0.0)
 
 
 class FakeBus:
@@ -221,10 +220,11 @@ class BranchHarness:
         return SimpleNamespace(
             record=SimpleNamespace(
                 id=f"pane-{index + 2}",
+                backend=kwargs["backend"],
                 state=state,
                 exit_code=1 if state == "crashed" else None,
                 agent_run_id=None,
-                native_session_id=kwargs.get("resume_native_id"),
+                native_session_id=kwargs.get("resume_native_id") or f"pane-{index + 2}",
                 snapshot=lambda: {},
             )
         )
@@ -514,6 +514,39 @@ async def test_a_harness_that_can_only_fork_from_now_refuses_a_point(tmp_path: P
 
     assert response.status == 422
     assert json.loads(response.body)["code"] == "branch_point_unsupported"
+
+
+@pytest.mark.parametrize("state", ["idle", "crashed"])
+async def test_codex_branch_forks_without_claiming_the_live_parent(
+    tmp_path: Path,
+    state: str,
+) -> None:
+    harness = BranchHarness(tmp_path, body={})
+    harness.record.backend = "codex"
+    harness.spawn_states = [state]
+    before = harness.source_path.read_bytes()
+
+    response = await harness.run()
+
+    assert len(harness.spawned) == 1
+    spawn = harness.spawned[0]
+    assert spawn["fork_native_id"] == harness.original
+    assert "resume_native_id" not in spawn
+    assert "adopt_run_id" not in spawn
+    assert harness.session.agent_lifecycle_id == harness.original
+    assert harness.source_path.read_bytes() == before
+    payload = json.loads(response.body)
+    if state == "idle":
+        assert response.status == 201
+        assert payload["strategy"] == "cli_fork"
+        assert harness.bus.emitted[0][1]["branch_id"] is None
+        assert harness.store.edges[0]["metadata"]["branch_conversation_id"] is None
+    else:
+        assert response.status == 503
+        assert payload["conversation_id"] is None
+        assert "reopen it from History" not in payload["error"]
+        assert harness.stopped == ["pane-2"]
+        assert not harness.store.edges
 
 
 async def test_a_harness_with_no_points_says_so_rather_than_offering_none(

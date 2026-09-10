@@ -78,16 +78,6 @@ def _branch_source_id(source: Any) -> str | None:
 BRANCH_SIBLING_SETTLE_SECONDS = 3.0
 
 
-# A `transcript_fork` sibling resumes a conversation nothing else has ever opened, so
-# there is no release to race and nothing a second attempt would be further from. A
-# `resume_child_thread` sibling reopens a conversation the source pane is still live
-# on, which is exactly the race a retry helps.
-BRANCH_SIBLING_ATTEMPTS = 3
-
-
-BRANCH_SIBLING_RETRY_BACKOFF_SECONDS = 1.5
-
-
 # Reading the conversation to list its branch points competes with nothing, but it
 # parses a whole transcript and must not be able to hold a request open.
 BRANCH_POINTS_TIMEOUT_SECONDS = 20.0
@@ -113,11 +103,10 @@ def _branch_cut_excerpt(text: str) -> str:
 
 
 def _branch_block_reason(session: Any) -> tuple[str, str] | None:
-    """Why forking this pane's conversation *through the CLI* would damage it.
+    """Whether this pane is ready to branch from its current conversation state.
 
-    Only `resume_child_thread` asks a live process to participate in the fork, so
-    only it owes the "is this pane ready" question. Mid-turn, waiting on an approval,
-    ended, or holding unsent composer text, the CLI is not in a state to be asked.
+    `cli_fork` has no chosen cut point, so keep the readiness gate to avoid
+    branching an incomplete turn or leaving a pending prompt out of the branch.
 
     A `transcript_fork` branch answers this question with the file system and is
     therefore not gated: nothing is typed, the source file is opened read-only, and a
@@ -141,15 +130,15 @@ def _branch_block_reason(session: Any) -> tuple[str, str] | None:
 
 
 async def _spawn_branch_sibling(
-    manager: Any, source_id: str, attempts: int, **spawn_kwargs: Any
+    manager: Any, source_id: str, **spawn_kwargs: Any
 ) -> tuple[Any, int, SpawnFailure | None]:
     """Spawn the sibling pane and prove it survived before handing it back.
 
     Verification is the load-bearing part and applies to both strategies: a CLI that
     refuses the conversation it was given starts, prints one line, and exits *after*
     the response that announced success, so an unverified branch reaches the operator
-    as a grey pane with no message. Whether to retry is the caller's, which is why
-    ``attempts`` is a parameter rather than a constant.
+    as a grey pane with no message. Neither strategy races the parent's writer.
+    A CLI fork is attempted once because retrying can create orphan conversations.
 
     Returns ``(session, attempts_used, failure)``.
     """
@@ -157,8 +146,8 @@ async def _spawn_branch_sibling(
         manager,
         flow=f"branch sibling for {source_id}",
         settle_seconds=BRANCH_SIBLING_SETTLE_SECONDS,
-        attempts=attempts,
-        retry_backoff_seconds=BRANCH_SIBLING_RETRY_BACKOFF_SECONDS,
+        attempts=1,
+        retry_backoff_seconds=0,
         **spawn_kwargs,
     )
 
@@ -587,11 +576,8 @@ async def branch_session(request: web.Request) -> web.Response:
     genuinely new and gets its own history row; the fork is recorded as a ``branch``
     lineage edge rather than inferred from a shared transcript.
 
-    ``resume_child_thread`` (Codex) asks the CLI: ``codex resume`` opens a child
-    thread with its own rollout, diverging from the still-live original. That is only
-    ever a fork from now, and because it reopens a conversation a live process is
-    still on, it keeps the readiness gate and the spawn retry that a CLI-mediated
-    fork needs.
+    ``cli_fork`` (Codex) uses ``codex fork`` to create a new conversation with its
+    own rollout. It can only fork from now and retains the readiness gate.
 
     Both prove the sibling survived before handing it back (`spawn_probe.py`). A CLI
     that refuses the conversation it was given exits *after* the response announcing
@@ -620,13 +606,12 @@ async def branch_session(request: web.Request) -> web.Response:
     if strategy != "transcript_fork" and body.get("from_message_id"):
         return json_response(
             {
-                "error": f"{record.backend} can only branch from where the conversation "
-                "stands now",
+                "error": f"{record.backend} can only branch from where the conversation stands now",
                 "code": "branch_point_unsupported",
             },
             422,
         )
-    if strategy == "resume_child_thread" and (blocked := _branch_block_reason(session)):
+    if strategy == "cli_fork" and (blocked := _branch_block_reason(session)):
         code, why = blocked
         log.info("branch refused for %s: %s (%s)", record.id, why, code)
         return json_response({"error": f"cannot branch while {why}", "code": code}, 409)
@@ -640,11 +625,9 @@ async def branch_session(request: web.Request) -> web.Response:
         if isinstance(outcome, web.Response):
             return outcome
         fork, seed_text = outcome
-        resume_id = fork["conversation_id"]
-        attempts_allowed = 1
+        spawn_identity = {"resume_native_id": fork["conversation_id"]}
     else:
-        resume_id = conversation
-        attempts_allowed = BRANCH_SIBLING_ATTEMPTS
+        spawn_identity = {"fork_native_id": conversation}
         log.info(
             "branch started session=%s backend=%s conversation=%s cwd=%s strategy=%s",
             record.id,
@@ -656,13 +639,12 @@ async def branch_session(request: web.Request) -> web.Response:
     session_new, attempts, failure = await _spawn_branch_sibling(
         manager,
         record.id,
-        attempts_allowed,
         backend=record.backend,
         name=body.get("name") or await _branch_pane_name(request.app, record),
         cwd=branch_cwd,
         project_id=record.project_id,
-        resume_native_id=resume_id,
         project_label=project.name,
+        **spawn_identity,
     )
     if session_new is None:
         detail = failure.describe() if failure is not None else "no failure recorded"
@@ -674,14 +656,20 @@ async def branch_session(request: web.Request) -> web.Response:
         )
         return json_response(
             {
-                "error": f"the branch was created but would not open ({detail}); "
-                "reopen it from History",
+                "error": (
+                    f"the branch was created but would not open ({detail}); reopen it from History"
+                    if fork is not None
+                    else f"the branch could not be opened ({detail})"
+                ),
                 "code": "branch_sibling_failed",
                 "attempts": attempts,
-                "conversation_id": resume_id,
+                "conversation_id": (fork or {}).get("conversation_id"),
             },
             503,
         )
+    # A CLI fork starts with a placeholder until its own hook/discovery binds it.
+    # The parent is only an input to the command, never the sibling's identity.
+    branch_id = _branch_source_id(session_new)
     await _record_branch_lineage(request, record, session_new, strategy, conversation, fork)
     if events is not None:
         events.emit_background(
@@ -690,7 +678,7 @@ async def branch_session(request: web.Request) -> web.Response:
             backend=record.backend,
             strategy=strategy,
             original=conversation,
-            branch_id=resume_id,
+            branch_id=branch_id,
             sibling_id=session_new.record.id,
             from_message_id=(fork or {}).get("from_message_id"),
             mode=(fork or {}).get("mode"),
@@ -702,7 +690,7 @@ async def branch_session(request: web.Request) -> web.Response:
         "branch completed session=%s original=%s branch=%s sibling=%s attempts=%d in %.1fs",
         record.id,
         conversation,
-        resume_id,
+        branch_id,
         session_new.record.id,
         attempts,
         time.monotonic() - started_at,
@@ -764,7 +752,7 @@ async def _record_branch_lineage(
                 "backend": record.backend,
                 "strategy": strategy,
                 "source_conversation_id": conversation,
-                "branch_conversation_id": branched.record.native_session_id,
+                "branch_conversation_id": _branch_source_id(branched),
                 "from_message_id": (fork or {}).get("from_message_id"),
                 "from_message_role": (fork or {}).get("from_message_role"),
                 "from_message_text": (fork or {}).get("from_message_text"),

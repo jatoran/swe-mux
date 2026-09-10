@@ -1203,15 +1203,19 @@ records_written, records_dropped, attachments_copied, bytes_written}`; `seed_tex
 carrying the cut and a bounded excerpt of the message it was made at. The
 refusals are all distinguishable, and none of them leaves a half-made pane behind:
 
+`strategy` is `transcript_fork` or `cli_fork`.
+A CLI fork may return before its native id is discovered: event `branch_id` and lineage `branch_conversation_id` are then null, never the parent's id.
+A failed CLI fork reports `branch_sibling_failed` with null `conversation_id`, because no new conversation has been confirmed.
+
 | Code | Status | Meaning |
 | --- | --- | --- |
 | `not_agent` | 422 | The backend has no observable transcript |
 | `branch_unsupported` | 422 | The harness declares no `branch_strategy` |
 | `branch_point_unsupported` | 422 | A point was named for a harness that can only fork from now |
 | `bad_mode` | 422 | `mode` was neither `before` nor `after` |
-| `source_busy` | 409 | `resume_child_thread` only: the pane is mid-turn or holding an approval dialog |
-| `source_not_live` | 409 | `resume_child_thread` only: the pane has ended |
-| `source_composer_dirty` | 409 | `resume_child_thread` only: unsent composer text would swallow the command |
+| `source_busy` | 409 | `cli_fork` only: the pane is mid-turn or holding an approval dialog |
+| `source_not_live` | 409 | `cli_fork` only: the pane has ended |
+| `source_composer_dirty` | 409 | `cli_fork` only: the pane has unsent composer text |
 | `native_id_missing` | 409 | No conversation id to fork from yet |
 | `no_transcript` / `unreadable` / `dialect_unsupported` / `no_messages` | 409 | Nothing forkable to read |
 | `branch_point_unknown` | 409 | The named message is not in the conversation's current window |

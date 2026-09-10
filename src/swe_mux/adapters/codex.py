@@ -231,6 +231,12 @@ class CodexAdapter(BackendAdapter):
         )
 
     def resume_spec(self, native_id: str, opts: SpawnOptions) -> SpawnSpec:
+        return self._conversation_spec("resume", native_id, opts)
+
+    def fork_spec(self, native_id: str, opts: SpawnOptions) -> SpawnSpec:
+        return self._conversation_spec("fork", native_id, opts)
+
+    def _conversation_spec(self, command: str, native_id: str, opts: SpawnOptions) -> SpawnSpec:
         deliver_project_skill(self.skill, opts)
         executable = opts.exe or self.default_exe
         resolved, prefix = (
@@ -241,7 +247,7 @@ class CodexAdapter(BackendAdapter):
             (
                 *prefix,
                 *self._args(
-                    ["resume", native_id, *opts.args],
+                    [command, native_id, *opts.args],
                     opts.worktree_project_root,
                 ),
             ),
@@ -259,9 +265,8 @@ class CodexAdapter(BackendAdapter):
         transcripts through it.
 
         This answers for the resume flow, which only ever resumes a conversation no
-        live pane holds (`409 conversation_live` otherwise). Resuming a *live* one is
-        Branch's trick for making the CLI fork a child thread
-        (``parent_thread_id``), and that pane keeps its own row. Either way the
+        live pane holds (`409 conversation_live` otherwise). Branch uses the explicit
+        ``codex fork`` command and starts with its own row and placeholder id. The
         inheritance is self-correcting: a pane that reports a conversation id other
         than the one it resumed goes through the ordinary rollover path, which retires
         the inherited row and mints a run of its own.
