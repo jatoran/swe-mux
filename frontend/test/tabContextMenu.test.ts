@@ -122,9 +122,14 @@ test('the Project menu acts on this Project, each row with its own mark',()=>{
 
   // Run is the Run menu itself, opened beside the row as a flyout - not a backend
   // shortcut of its own (the "New terminal" row that split the affordance stays gone),
-  // and not a MenuGroup, whose hover-collapse could not host the Run menu's scrim,
-  // trust dialogs and worktree form.
-  assert.match(menu,/<button class="menu-row" aria-haspopup="menu"[^>]*onClick=\{event=>openRunMenu\(projectMenu\.project,event\.currentTarget,'project-menu','beside'\)\}>[^\n]*<span class="menu-row-label">Run<\/span><span class="menu-group-caret"/, 'the Run row must hand off to the Run menu, placed beside it')
+  // and not a MenuGroup, whose hover-collapse could not host the Run menu's dialogs.
+  // It opens the way a MenuGroup does: on hover where the pointer can hover, on tap
+  // elsewhere, and the touch path is the plain hand-off that closes the Project menu.
+  const runRow=menu.slice(menu.indexOf('<button class="menu-row" aria-haspopup="menu"'),menu.indexOf('<span class="menu-row-label">Run</span><span class="menu-group-caret"'))
+  assert.ok(runRow.length>0,'the Project menu must carry the Run row with the MenuGroup caret')
+  assert.match(runRow,/onPointerEnter=\{event=>\{if\(runFlyoutCapable&&event\.pointerType!=='touch'\)scheduleRunFlyoutOpen\(projectMenu\.project,event\.currentTarget\)\}\}/, 'a hover-capable pointer must open the Run flyout on hover')
+  assert.match(runRow,/onPointerLeave=\{event=>\{if\(runFlyoutCapable&&event\.pointerType!=='touch'\)scheduleRunFlyoutClose\(\)\}\}/, 'leaving the row must schedule the flyout closed, not close it outright')
+  assert.match(runRow,/if\(!runFlyoutCapable\)\{openRunMenu\(projectMenu\.project,event\.currentTarget,'project-menu','beside'\);return\}/, 'touch must hand off to the ordinary Run menu')
   assert.doesNotMatch(menu,/spawnTerminal|project\.newTerminal|MenuGroup id="project-run"/, 'the Project menu must not carry a backend shortcut or a nested copy of the Run menu')
 
   assert.match(menu,/>Rename</, 'the row says Rename; the menu already names the Project')

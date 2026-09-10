@@ -39,7 +39,7 @@ import { isStaticPreview, previewLabel, type FleetSnapshot, type Preview } from 
 import { isPreviewableDocument } from './staticPreview'
 import { ResourceUsageSummary } from './ResourceUsage'
 import { ProjectsManager, type ProjectPatch } from './ProjectsManager'
-import { MenuGroup } from './MenuGroup'
+import { MenuGroup, useFlyoutCapable } from './MenuGroup'
 import { PreviewPane } from './PreviewPane'
 import type { NotificationData, UiNotification } from './Notifications'
 import { alertPreferences, setAlertPreferencesFor } from './alertPrefs'
@@ -428,7 +428,10 @@ type RenameTarget = { kind: 'session'; session: Session } | { kind: 'project'; p
 type NoteTarget={projectId:string;kind:'note'|'global-note'|'file'|'worktree-file';resourceId:string;worktree?:string}
 type StartupMilestone = 'pane_mounted' | 'socket_open' | 'replay_ready'
 type ClientStartupTiming = Partial<Record<'api_response' | StartupMilestone, number>>
-type RunMenuState={project:Project;x:number;y:number;trigger?:string}
+// `flyout` marks a Run menu opened out of the Project menu on a hover-capable pointer: the
+// Project menu stays open beneath it, the menu has no scrim, and leaving both closes only
+// the Run menu. Every other opening replaces whatever menu it came from.
+type RunMenuState={project:Project;x:number;y:number;trigger?:string;flyout?:boolean}
 type WorktreeSetupResult={status:'not_configured'|'succeeded'|'failed'|'timed_out'|'error';error?:string;exit_code?:number|null}
 type WorktreeSpawnResult={status:'not_requested'|'spawned'|'error';session_id?:string;session?:Session;error?:string;setup?:WorktreeSetupResult}
 
@@ -1648,6 +1651,12 @@ export function App() {
   // When the Run menu's scrim dismissed it, so the trigger's own click can tell
   // "reopen" from "the closing half of a toggle tap".
   const runMenuClosedAt = useRef(0)
+  // The Project menu's Run row: a hover flyout where MenuGroup would be one (fine pointer,
+  // hover, wide layout), a tap hand-off everywhere else. Same capability test as MenuGroup
+  // so the two rows of one menu never disagree about how they open.
+  const runFlyoutCapable = useFlyoutCapable()
+  const runFlyoutTimer = useRef(0)
+  const runMenuRef = useRef<RunMenuState|null>(null)
   // Set when an outside pointer-down closed a context menu, so the menu's focus
   // teardown knows not to reclaim focus from whatever that pointer landed on.
   const menuDismissedByPointer = useRef(false)
@@ -3897,13 +3906,52 @@ export function App() {
   // right edge the way a MenuGroup flyout overlaps its header, because that row belongs
   // to a menu that closes as this one opens: dropping under a row that is about to
   // vanish reads as the menu jumping, while a flyout from it reads as the row expanding.
-  const openRunMenu=(project:Project,element:HTMLElement,trigger?:string,placement:'below'|'beside'='below')=>{
+  const runMenuAnchor=(element:HTMLElement,placement:'below'|'beside')=>{
     const rect=element.getBoundingClientRect()
     const x=placement==='beside'?rect.right-4:rect.left
     const y=placement==='beside'?rect.top-5:rect.bottom+4
-    setRunMenu({project,x:Math.max(6,Math.min(x,window.innerWidth-306)),y:Math.max(6,Math.min(y,window.innerHeight-50)),trigger})
+    return {x:Math.max(6,Math.min(x,window.innerWidth-306)),y:Math.max(6,Math.min(y,window.innerHeight-50))}
+  }
+  const openRunMenu=(project:Project,element:HTMLElement,trigger?:string,placement:'below'|'beside'='below')=>{
+    setRunMenu({project,...runMenuAnchor(element,placement),trigger})
     setProjectMenu(null);setMainMenuOpen(false)
   }
+  // The Project menu's Run row on a hover-capable pointer. The Project menu stays open
+  // beneath the flyout, exactly as it does under a MenuGroup's, so a pointer that crosses
+  // Run on its way to Rename never loses the menu it was in. Open and close delays are
+  // MenuGroup's, for the same reasons (a diagonal into the flyout must not collapse it).
+  // The one MenuGroup does not have: the Group flyout is folded when this opens, because
+  // two flyouts off one menu read as a mistake.
+  runMenuRef.current=runMenu
+  const clearRunFlyoutTimer=()=>{if(runFlyoutTimer.current){window.clearTimeout(runFlyoutTimer.current);runFlyoutTimer.current=0}}
+  useEffect(()=>clearRunFlyoutTimer,[])
+  const openRunFlyout=(project:Project,element:HTMLElement)=>{
+    clearRunFlyoutTimer()
+    setMenuGroup(null)
+    setRunMenu({project,...runMenuAnchor(element,'beside'),trigger:'project-menu',flyout:true})
+  }
+  const scheduleRunFlyoutOpen=(project:Project,element:HTMLElement)=>{
+    clearRunFlyoutTimer()
+    runFlyoutTimer.current=window.setTimeout(()=>openRunFlyout(project,element),120)
+  }
+  // Leaving closes the flyout alone: the Project menu underneath is where the pointer is
+  // going. It is the only close that keeps the Project menu - every other way out of a
+  // flyout (Escape, ×, launching something) closes both, as it would for a MenuGroup.
+  const scheduleRunFlyoutClose=()=>{
+    clearRunFlyoutTimer()
+    runFlyoutTimer.current=window.setTimeout(()=>{if(runMenuRef.current?.flyout)setRunMenu(null)},250)
+  }
+  const closeRunMenu=()=>{
+    clearRunFlyoutTimer()
+    runMenuClosedAt.current=Date.now()
+    if(runMenuRef.current?.flyout)setProjectMenu(null)
+    setRunMenu(null)
+  }
+  // A flyout belongs to the Project menu it came out of: when that menu goes - an outside
+  // click, its own Escape level, another Project's menu replacing it - the flyout goes too.
+  useEffect(()=>{
+    if(runMenu?.flyout&&(!projectMenu||projectMenu.project.id!==runMenu.project.id))setRunMenu(null)
+  },[projectMenu,runMenu])
 
   // Toggle for the Run triggers that always target the active Project (mobile
   // toolbar, desktop header, collapsed rail): a second click collapses what the
@@ -6823,7 +6871,10 @@ export function App() {
       // A `[data-menu-toggle]` trigger owns its own open/close: dismissing here
       // would close on pointer-down and let the trigger's click reopen, which is
       // indistinguishable from "the menu never closes".
-      if (target instanceof Element && target.closest('.context-menu,.menu-trigger,[data-menu-toggle],.bucket-sort')) return
+      // The Run menu and its dialogs are here for the Project menu's hover flyout: a
+      // press inside them must not close the Project menu the flyout belongs to, or the
+      // flyout closes with it before the press becomes a click.
+      if (target instanceof Element && target.closest('.context-menu,.menu-trigger,[data-menu-toggle],.bucket-sort,.project-run-menu,.project-action-trust-layer,.project-action-source-layer,.project-action-inputs-layer')) return
       // This pointer, not the menu, decides where focus goes next.
       menuDismissedByPointer.current = true
       setContextMenu(null)
@@ -8597,7 +8648,7 @@ export function App() {
       </form>
     </div>}
 
-    {runMenu&&<ProjectRunMenu project={runMenu.project} profiles={profiles} plugins={commandPlugins} anchor={{x:runMenu.x,y:runMenu.y}} onClose={()=>{runMenuClosedAt.current=Date.now();setRunMenu(null)}} onLaunch={(backend,profileId)=>{const target=runMenu.project.id;setRunMenu(null);void spawnTerminal(target,false,profileId,undefined,'after',backend)}} onCustom={()=>{const target=runMenu.project.id;setRunMenu(null);openLauncher(target)}} onSessions={items=>void attachActionSessions(runMenu.project.id,items)} onWorktreeLaunch={draft=>startWorktreeSession(runMenu.project.id,draft)} onPluginPane={(pluginId,paneId)=>void openPluginPane(pluginId,paneId,runMenu.project.id)} onError={setError}/>}
+    {runMenu&&<ProjectRunMenu project={runMenu.project} profiles={profiles} plugins={commandPlugins} anchor={{x:runMenu.x,y:runMenu.y}} flyout={!!runMenu.flyout} onHoverEnter={clearRunFlyoutTimer} onHoverLeave={scheduleRunFlyoutClose} onClose={closeRunMenu} onLaunch={(backend,profileId)=>{const target=runMenu.project.id;closeRunMenu();void spawnTerminal(target,false,profileId,undefined,'after',backend)}} onCustom={()=>{const target=runMenu.project.id;closeRunMenu();openLauncher(target)}} onSessions={items=>void attachActionSessions(runMenu.project.id,items)} onWorktreeLaunch={draft=>startWorktreeSession(runMenu.project.id,draft)} onPluginPane={(pluginId,paneId)=>void openPluginPane(pluginId,paneId,runMenu.project.id)} onError={setError}/>}
 
     {/* Sits above the workspace and takes no focus: the sequence is still being
         typed, and moving focus would end it. Labels come from the live registry, so
@@ -8720,10 +8771,19 @@ export function App() {
           (backends, profiles, worktrees, plugin panes, Project tasks) without owning a
           copy of it. It replaces "New terminal", which was a backend shortcut that split
           the affordance; this is the same door, reached from the label. It carries the
-          MenuGroup caret because it expands, but is not a MenuGroup: the Run menu has its
-          own scrim, trust dialogs and worktree form, none of which can live inside a
-          flyout that the pointer leaving would collapse. */}
-      <button class="menu-row" aria-haspopup="menu" title={`Run in ${projectMenu.project.name}`} onClick={event=>openRunMenu(projectMenu.project,event.currentTarget,'project-menu','beside')}><span class="menu-row-icon" aria-hidden="true"><RunIcon/></span><span class="menu-row-label">Run</span><span class="menu-group-caret" aria-hidden="true">›</span></button>
+          MenuGroup caret and opens the way a MenuGroup does - on hover where there is a
+          hover, on tap elsewhere - but is not a MenuGroup: the Run menu has its own trust
+          dialogs, input prompts and worktree form, which suspend the hover-close for as
+          long as they are up, and on touch it is a full menu with a scrim rather than an
+          accordion folded into a menu of nine rows. */}
+      <button class="menu-row" aria-haspopup="menu" aria-expanded={!!runMenu?.flyout&&runMenu.project.id===projectMenu.project.id} title={`Run in ${projectMenu.project.name}`}
+        onPointerEnter={event=>{if(runFlyoutCapable&&event.pointerType!=='touch')scheduleRunFlyoutOpen(projectMenu.project,event.currentTarget)}}
+        onPointerLeave={event=>{if(runFlyoutCapable&&event.pointerType!=='touch')scheduleRunFlyoutClose()}}
+        onClick={event=>{
+          if(!runFlyoutCapable){openRunMenu(projectMenu.project,event.currentTarget,'project-menu','beside');return}
+          if(runMenu?.flyout&&runMenu.project.id===projectMenu.project.id){clearRunFlyoutTimer();setRunMenu(null);return}
+          openRunFlyout(projectMenu.project,event.currentTarget)
+        }}><span class="menu-row-icon" aria-hidden="true"><RunIcon/></span><span class="menu-row-label">Run</span><span class="menu-group-caret" aria-hidden="true">›</span></button>
       {/* One surface the app menu opens globally, prefiltered to this Project — and only
           one. The category headers went with the rest: a heading that labels three rows in
           a menu of nine is a fifth of the height spent saying what each icon now says.

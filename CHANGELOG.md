@@ -27,6 +27,7 @@ The release procedure that maintains this file is [`RELEASING.md`](RELEASING.md)
 
 - **The Project menu opens the Run menu.**
   Right-clicking a Project in the sidebar (or tapping its `⋮`, or the Project name in the mobile top bar) now starts with a `Run` row that expands into the same Run menu the `▶` buttons open: harnesses and launch profiles, worktree sessions, plugin panes and the Project's tasks.
+  With a mouse it opens on hover, beside the row, with the Project menu still open underneath; on touch, tapping it opens the Run menu.
 - **The sidebar footer's Settings cog is gone.**
   Settings opens from `menu → Settings`, the `settings.open` command, or any setting link; the cog duplicated the menu row beside it.
 

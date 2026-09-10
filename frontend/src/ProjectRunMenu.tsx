@@ -30,6 +30,15 @@ type Props={
   plugins:InstalledPlugin[]
   onPluginPane:(pluginId:string,paneId:string)=>void
   onError:(message:string)=>void
+  /** Opened out of the Project menu by hover. No scrim - the menu underneath stays live -
+   *  and the pointer entering and leaving this panel is reported so the host can hold the
+   *  flyout open while the pointer is here and fold it after the pointer has gone. Leaving
+   *  is *not* reported while a trust prompt, an input prompt, the actions editor or the
+   *  worktree form is up: those are the operator's, and a pointer drifting off a form must
+   *  not take the form with it. */
+  flyout?:boolean
+  onHoverEnter?:()=>void
+  onHoverLeave?:()=>void
 }
 
 const sourceLabel:Record<ProjectAction['source'],string>={
@@ -41,7 +50,7 @@ export type WorktreeLaunch={path:string;branch:string;startPoint:string;backend:
 type ActionsSource={path:string;exists:boolean;text:string;revision:string;starter:boolean}
 type ActionsSaved=ActionsSource&{diagnostics:string[];catalog:ProjectActionCatalog}
 
-export function ProjectRunMenu({project,profiles,anchor,onClose,onLaunch,onCustom,onSessions,onWorktreeLaunch,plugins,onPluginPane,onError}:Props){
+export function ProjectRunMenu({project,profiles,anchor,onClose,onLaunch,onCustom,onSessions,onWorktreeLaunch,plugins,onPluginPane,onError,flyout=false,onHoverEnter,onHoverLeave}:Props){
   const harnesses=promptDeliveryHarnesses()
   // A harness plus its launch profiles, so "Claude" and "Claude (plan)" sit together
   // rather than in a separate list where the relationship is lost.
@@ -224,9 +233,13 @@ export function ProjectRunMenu({project,profiles,anchor,onClose,onLaunch,onCusto
   const pluginPanes=projectPluginPanes(plugins)
   const left=Math.min(anchor.x,Math.max(6,window.innerWidth-306))
   const top=Math.min(anchor.y,Math.max(6,window.innerHeight-460))
+  // A sub-surface pins a flyout: the pointer is on a form or a dialog, not browsing rows.
+  const hoverLocked=worktreeOpen||!!pending||!!prompting||!!source
   return <>
-    <div class="run-menu-scrim" onPointerDown={onClose}/>
-    <section ref={el=>{panel.current=el;fitScrollingMenuInViewport(el)}} class="project-run-menu" role="menu" aria-label={`Run in ${project.name}`} style={{left,top}}>
+    {!flyout&&<div class="run-menu-scrim" onPointerDown={onClose}/>}
+    <section ref={el=>{panel.current=el;fitScrollingMenuInViewport(el)}} class={`project-run-menu${flyout?' run-menu-flyout':''}`} role="menu" aria-label={`Run in ${project.name}`} style={{left,top}}
+      onPointerEnter={event=>{if(flyout&&event.pointerType!=='touch')onHoverEnter?.()}}
+      onPointerLeave={event=>{if(flyout&&!hoverLocked&&event.pointerType!=='touch')onHoverLeave?.()}}>
       <header><div><span>RUN</span><strong>{project.name}</strong></div><button aria-label="Close Run menu" onClick={onClose}>×</button></header>
       {worktreeOpen?<form class="run-worktree-form" onSubmit={event=>void launchWorktree(event)}>
         <small>NEW WORKTREE SESSION</small>
