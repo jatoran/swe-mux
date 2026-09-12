@@ -14,6 +14,7 @@ import { Settings } from '../../src/Settings'
 import type { FirewallStatus, RemoteStatus } from '../../src/remoteConnection'
 import type { WslBridgeStatus } from '../../src/wslBridge'
 import { SETTINGS_CONFIG_FIXTURE } from './settingsConfigFixture'
+import { loadSettings } from '../../src/deviceSettings'
 import '../../src/deviceMode'
 import '../../src/style.css'
 
@@ -241,6 +242,8 @@ declare global {
   }
 }
 window.settingsCalls = []
+// Persist the fake device settings across reloads, as the daemon does.
+const deviceSettings=JSON.parse(sessionStorage.getItem('settings-harness-profiles')||'{"desktop":{},"mobile":{}}') as Record<string,Record<string,unknown>>
 
 window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const raw = typeof input === 'string' ? input : input instanceof URL ? input.pathname : input.url
@@ -256,7 +259,12 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       headers: { 'Content-Type': 'application/json' },
     })
   }
-  const body = path in RESPONSES ? RESPONSES[path] : {}
+  const profile=path.match(/^\/api\/settings\/(desktop|mobile)$/)?.[1]
+  if(profile&&init?.method==='PUT'){
+    deviceSettings[profile]={...deviceSettings[profile],...requestBody as Record<string,unknown>}
+    sessionStorage.setItem('settings-harness-profiles',JSON.stringify(deviceSettings))
+  }
+  const body = path==='/api/settings'?{profiles:deviceSettings}:path in RESPONSES ? RESPONSES[path] : {}
   return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } })
 }) as typeof fetch
 
@@ -279,4 +287,4 @@ function Host() {
   />
 }
 
-render(<Host />, document.querySelector('#root')!)
+void loadSettings().then(()=>render(<Host />, document.querySelector('#root')!))

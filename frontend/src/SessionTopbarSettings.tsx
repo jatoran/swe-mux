@@ -1,4 +1,5 @@
-import { useMemo, useState } from 'preact/hooks'
+import { useMemo, useRef, useState } from 'preact/hooks'
+import { currentProfile, type SettingsProfile } from './deviceSettings.ts'
 import { Dropdown } from './Dropdown.tsx'
 import { SessionTopbar } from './SessionTopbar.tsx'
 import {
@@ -16,7 +17,7 @@ import {
   unplacedSessionTopbarItems, type SessionTopbarActionId, type SessionTopbarConfig,
   type SessionTopbarItem, type SessionTopbarMetricStyle,
 } from './sessionTopbarConfig.ts'
-import { loadSessionTopbarConfig, saveSessionTopbarConfig } from './sessionTopbarPrefs.ts'
+import { hasMobileSessionTopbarConfig, inheritDesktopSessionTopbarConfig, saveSessionTopbarConfig, useSessionTopbarConfig } from './sessionTopbarPrefs.ts'
 import type { Session } from './types.ts'
 
 const PREVIEW_NOW=Math.floor(Date.now()/1000)
@@ -50,15 +51,31 @@ const METRIC_STYLE_OPTIONS:Partial<Record<RowFieldId,Array<{value:SessionTopbarM
 }
 
 export function SessionTopbarSettings(){
-  const [config,setConfig]=useState(loadSessionTopbarConfig)
+  const [profile,setProfile]=useState(currentProfile)
+  return <div class="session-topbar-settings">
+    <h3 data-setting="session_topbar">Session top bars</h3>
+    <div class="settings-profile-switch" role="group" aria-label="Editing session top bar layout">
+      {(['desktop','mobile'] as const).map(id=><button type="button" key={id} aria-pressed={profile===id} class={profile===id?'is-active':''} onClick={()=>setProfile(id)}>{id==='desktop'?'Desktop':'Mobile'}</button>)}
+    </div>
+    <SessionTopbarEditor key={profile} profile={profile}/>
+  </div>
+}
+
+function SessionTopbarEditor({profile}:{profile:SettingsProfile}){
+  const config=useSessionTopbarConfig(profile)
   const [error,setError]=useState('')
+  const request=useRef(0)
   const rowConfig=useSessionRowConfig()
   const facts=useMemo(()=>deriveRowFleetFacts([PREVIEW_SESSION],{[PREVIEW_SESSION.id]:2}),[])
 
-  const change=(next:SessionTopbarConfig)=>{
-    setConfig(next)
-    void saveSessionTopbarConfig(next).then(()=>setError('')).catch(()=>setError('Could not save the top bar layout. Try again after the daemon reconnects.'))
+  const save=(write:Promise<void>)=>{
+    const id=++request.current
+    setError('')
+    void write.then(()=>{if(id===request.current)setError('')}).catch(()=>{
+      if(id===request.current)setError('Could not save the top bar layout. Try again after the daemon reconnects.')
+    })
   }
+  const change=(next:SessionTopbarConfig)=>save(saveSessionTopbarConfig(next,profile))
   const actionLabel=(id:SessionTopbarActionId)=>{
     if(id==='approvals')return'appr:wait'
     const action=SESSION_TOPBAR_ACTIONS.find(item=>item.id===id)
@@ -87,20 +104,21 @@ export function SessionTopbarSettings(){
   }
 
   const unplaced=unplacedSessionTopbarItems(config)
-  return <div class="session-topbar-settings">
-    <h3 data-setting="session_topbar">Session top bars</h3>
+  const inherited=profile==='mobile'&&!hasMobileSessionTopbarConfig()
+  return <>
     <div class="session-topbar-preview-sticky">
-      <div class="session-row-preview-heading"><div><strong>Live preview</strong><small>One active session · updates before save completes</small></div></div>
+      <div class="session-row-preview-heading"><div><strong>{profile==='desktop'?'Desktop':'Mobile'} live preview</strong><small>One active session · updates before save completes</small></div></div>
       <div class="session-topbar-preview">
         <SessionTopbar preview session={PREVIEW_SESSION} config={config} rowConfig={rowConfig} facts={facts}
           renderAction={id=><button type="button" class={`pane-tool-label ${id==='approvals'?'approval-chip':`${id.slice('drawer:'.length)}-chip`}`}>{actionLabel(id)}</button>}
           menu={<button type="button" aria-label="More actions">⋯</button>}/>
       </div>
     </div>
+    <p class="topbar-profile-status">{profile==='desktop'?'Mobile follows this layout until edited separately.':inherited?'Using the desktop layout. Your first edit creates a separate mobile layout.':'Using a separate mobile layout. Desktop changes do not affect it.'}</p>
     <p>Arrange session metrics and shortcuts into one to three rows. Everything is removable, the title included; the overflow menu stays fixed so every pane keeps a recovery path even when nothing else is placed.</p>
     {error&&<p class="settings-inline-error" aria-live="polite">{error}</p>}
     <label>Row density<Dropdown value={config.density} onChange={value=>change({...config,density:value as SessionTopbarConfig['density']})} options={[{value:'compact',label:'Compact'},{value:'standard',label:'Standard'},{value:'comfortable',label:'Comfortable'}]}/></label>
-    <div class="theme-actions"><button type="button" onClick={()=>change(defaultSessionTopbarConfig())}>Reset to default</button></div>
+    <div class="theme-actions"><button type="button" onClick={()=>change(defaultSessionTopbarConfig())}>Reset to default</button>{profile==='mobile'&&!inherited&&<button type="button" onClick={()=>save(inheritDesktopSessionTopbarConfig())}>Use desktop layout</button>}</div>
 
     {config.rows.map((row,rowIndex)=><section key={rowIndex} class="topbar-row-editor">
       <header><h4>Row {rowIndex+1}</h4>{config.rows.length>1&&<button type="button" onClick={()=>change(removeSessionTopbarRow(config,rowIndex))}>Remove row</button>}</header>
@@ -112,5 +130,5 @@ export function SessionTopbarSettings(){
       </details>}
     </section>)}
     <button type="button" class="topbar-add-row" disabled={config.rows.length>=SESSION_TOPBAR_MAX_ROWS} onClick={()=>change(addSessionTopbarRow(config))}>Add row</button>
-  </div>
+  </>
 }

@@ -1971,7 +1971,8 @@ The app-wide answer to "what is this", and the recovery path for the tour.
   and the fixed `⋯` session menu.
   Every metric and optional shortcut can be moved or removed; the fixed menu cannot, so a pane
   always retains a recovery path.
-  The same configured header renders on desktop and in the mobile projection.
+  Mobile inherits the desktop header until separately edited in Appearance > Session top bars.
+  The editor's Desktop/Mobile switch configures either profile from any device.
 - The Queue tab's `auto:` line is a status as much as a control: on/off and the bounds
   actually in force (sends left, minutes left, quiet hours, why it is off), disclosing the
   toggle and the separate "accept agent messages armed" switch. Both are checked by default
@@ -1988,8 +1989,8 @@ The app-wide answer to "what is this", and the recovery path for the tour.
 - The pane header is the configured `sessionTopbar` layout (`session-topbars.md`).
   Each persistent row is a no-wrap left/right pair, with the fixed overflow menu at the first
   row's right edge.
-  Desktop and mobile read the same rows; width pressure ellipsizes values rather than wrapping
-  configured items into an unrequested row.
+  The interaction profile selects desktop or mobile rows, with mobile falling back to desktop until edited.
+  Width pressure ellipsizes values rather than wrapping configured items into an unrequested row.
 - The header's first field is the session's display name (`sessionNames.ts`), not its status.
   State is already carried by the tab, the sidebar row, and the terminal being read, while the name is the field those surfaces crop: a tab is only as wide as its strip allows.
   The configured title metric keeps a bounded container-relative width, because a sentence-length generated title must yield before shortcuts do.

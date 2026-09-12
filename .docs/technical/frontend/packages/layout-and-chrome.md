@@ -223,9 +223,10 @@ The stylesheet is the only consumer of the *property* but not the only consumer 
 `sessionTopbarConfig.ts` owns the browser-free one-to-three-row layout, the combined metric and drawer-shortcut catalog, normalization, placement, and row removal with rehoming.
 It also owns the version stamp that makes a removed title a kept choice rather than a repaired defect (`SESSION_TOPBAR_VERSION`, `sessionTopbarHasTitle`), and the per-item context rendering (`sessionTopbarRowConfig`), which is the one place a top-bar metric's row configuration differs from the sidebar's.
 `SessionTopbar.tsx` takes the pane's `title` and its `fault` marker separately, because the marker is drawn beside the title while one is placed and alone at the head of the first row when none is.
-`sessionTopbarPrefs.ts` pins the shared layout to the canonical desktop profile and republishes settings changes.
+`sessionTopbarPrefs.ts` resolves the active device profile, falling back from an absent or empty mobile domain to desktop, and republishes settings and profile changes.
+Writes target only the edited profile; clearing mobile to `{}` resumes inheritance.
 `SessionTopbar.tsx` combines the shared session-row metric engine with target-aware actions supplied by `App.tsx`.
-`SessionTopbarSettings.tsx` owns the dedicated Appearance page and sticky realtime preview.
+`SessionTopbarSettings.tsx` owns the dedicated Appearance page, Desktop/Mobile editor switch, inheritance status, and sticky realtime preview.
 The session-row and top-bar previews derive width from the current device instead of maintaining inspection-only slider state.
 The fixed overflow menu is outside the model by design.
 CSS gives `.terminal-pane` an intrinsic header track followed by the flexible terminal surface, so persistent row count is the only top-bar edit that changes terminal height.

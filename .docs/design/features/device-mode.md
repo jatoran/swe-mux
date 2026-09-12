@@ -33,7 +33,7 @@ Other browsers and devices retain their own choice.
 Unknown stored values resolve to Auto.
 If storage is blocked, the current page still applies the choice and the control reports that it cannot persist it.
 
-The profile selects mobile or desktop settings for scale, rail configuration, density, sounds, alerts, and notification presence.
+The profile selects mobile or desktop settings for scale, rail configuration, session top bars, density, sounds, alerts, and notification presence.
 Presence reports immediately when the policy changes, and terminal input claims read the current profile rather than a mount-time copy.
 
 ## Input and rendering

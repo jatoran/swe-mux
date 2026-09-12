@@ -4,12 +4,17 @@
 
 Each live terminal pane has a session top bar above its terminal surface.
 Settings → Appearance → Session top bars controls its metrics, shortcuts, alignment, density, and one-to-three-row layout.
-The same layout is used on desktop and mobile.
+Desktop defines the default layout; mobile inherits it until its first separate edit.
 
 ## Layout model
 
-`SessionTopbarConfig` is stored in the browser-owned `sessionTopbar` device-settings domain under the canonical `desktop` profile.
+`SessionTopbarConfig` is stored in the browser-owned `sessionTopbar` device-settings domain under the `desktop` and `mobile` profiles.
 The daemon stores the document opaquely.
+An absent or empty mobile domain inherits the current desktop configuration, including future desktop edits.
+The first mobile edit writes a complete independent configuration, preserving the inherited items, styles, density, and rows except for that edit.
+An explicit mobile configuration remains independent even when it happens to equal desktop.
+Existing desktop configurations need no migration and remain the default for every device without a mobile override.
+The live renderer selects the interaction profile from `deviceMode.ts`, independently of viewport width, and updates on settings or device-mode changes.
 
 - A layout contains one to three rows.
 - Every row has ordered left and right sections plus a separator.
@@ -61,11 +66,22 @@ The overflow menu stays at the first row's right edge on every layout.
 ## Settings and navigation
 
 The editor has its own Appearance subpage and a sticky live preview on desktop and mobile.
+The Desktop/Mobile switch selects which profile to edit and initially selects the current device's profile.
+Switching profiles only reads settings and never creates an override.
+Mobile reports whether it inherits desktop or uses its own configuration.
+**Use desktop layout** clears the mobile domain to `{}` and resumes inheritance.
+**Reset to default** writes the shipped default into the selected profile; on mobile this remains an independent layout.
 The preview fills the current device's available Settings width and has no separate width control.
 The preview renders one hypothetical active session and updates from local editor state before persistence finishes.
 A removed title is offered again under the row's add controls, so the removal is reversible from the same editor.
 Right-clicking a pane top bar and choosing **Configure appearance** deep-links to this page.
 The same row from sidebar, tab, and mobile session menus continues to target Appearance → Session rows.
+
+## Diagnostics
+
+`mux.session-topbar-diagnostics.v1` retains the latest 64 browser-local save-started, save-completed, and save-failed records.
+Each record carries an ISO timestamp, severity, component, profile, page identifier, operation sequence, inheritance state, row count, and density without session content.
+Failed saves remain visible in the editor and produce console warnings.
 
 ## Key files
 
@@ -75,4 +91,4 @@ The same row from sidebar, tab, and mobile session menus continues to target App
 - Editor and preview: `frontend/src/SessionTopbarSettings.tsx`
 - Shared metrics: `frontend/src/sessionRowFields.ts`, `frontend/src/SessionRowBody.tsx`
 - Geometry and appearance: `frontend/src/style.css`
-- Tests: `frontend/test/sessionTopbarConfig.test.ts`, `frontend/test/renderer/pane-layout.spec.ts`, `frontend/test/renderer/settings-layout.spec.ts`
+- Tests: `frontend/test/sessionTopbarConfig.test.ts`, `frontend/test/renderer/pane-layout.spec.ts`, `frontend/test/renderer/settings-layout.spec.ts`, `frontend/test/renderer/session-topbar-profiles.spec.ts`
