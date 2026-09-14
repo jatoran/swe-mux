@@ -287,11 +287,22 @@ per-phase lines that precede it:
 
 ```
 startup_phase name=static-precompress elapsed=0.03s total=0.0s
+startup_phase name=predecessor-drain elapsed=0.00s total=0.0s
 startup_phase name=database-integrity elapsed=11.52s total=11.5s
 startup_phase name=stores elapsed=0.31s total=11.8s
 startup_phase name=supervisor-connect elapsed=0.04s total=11.9s
 startup_phase name=session-reattach elapsed=2.41s total=14.3s
 ```
+
+`predecessor-drain` is the wait for the previous daemon's process to exit after a restart, up to
+60s, and is zero on a cold start. It is a phase rather than a pre-bind sleep (which is what it was
+until 2026-09-14) so that it is reported and so that it runs on *every* start: the tray's restart
+path spawns without `--relaunch-wait`, and that successor opened its stores against a predecessor
+that was still writing.
+
+`stores` opens every store in a worker thread and logs `store_opened name=... elapsed_s=...` at
+WARNING for any open over a second. **A `stores` phase over a second is a defect to name, not a
+size to accept.** The 2026-09-14 incident below is what an unnamed one costs.
 
 `static-precompress` is first and is normally the cheapest thing on the path: it is the phase that
 makes the gzip sidecars the static tree is served from, and a tree that already has current ones
@@ -364,6 +375,32 @@ exactly that, so the first reboot after it shipped produced an 85.7s start that 
   reason attached and read as working-as-intended, because the doc above said it was. What
   actually surfaced it was the operator saying the app took minutes to start.
 
+**The 2026-09-14 restart storm, because it is the failure the second fix left standing.** Every
+start's `stores` phase took 60-76s and the total of the phase was the only line that said so. The
+cost was one statement: `OperationalTelemetryStore._repair_duplicate_process_ownership`, a
+correlated `EXISTS` self-join on `process_evidence` by `(pid, creation_time)` with no index over
+those columns, run on every open. Against 493,845 rows (a month of process evidence) the predicate
+measured **69.6s read-only**; with a partial index over the ~500 live rows it is 0.001s. Three
+things followed from those 70s that were worse than the 70s:
+
+- The store was constructed *on the loop* (`HistoryIndex.__init__` blocks on its worker's
+  connect), so health could not answer 503 and the phase watchdog could not print
+  `startup_phase_running` - the mechanism above was defeated by the exact shape it was built for.
+- The listener was already open. The tray's probes connected, timed out and reset, and when the
+  loop resumed the first accept completion failed with `WinError 64`, on which asyncio's Windows
+  proactor **closes the listening socket for good**. The daemon then ran healthy on its Tailscale
+  address and unreachable on loopback (`listener_guard.py` is the answer).
+- The statement holds the writer slot for its whole run, so on a restart every write the
+  predecessor attempted during its drain came back `database is locked`.
+
+Three rules it adds. **A per-open repair is a per-start cost and is timed as one**
+(`process_ownership_repair elapsed_s=` at WARNING over a second). **A statement that joins a
+table to itself needs the index that join uses, pinned by a query-plan test**
+(`test_the_startup_ownership_repair_is_served_by_the_live_fingerprint_index`), because the table
+only grows and the scan is invisible until it is not. And **the first two fixes were necessary
+and were not sufficient**: the integrity check moved off the path on 2026-08-30 and the phase
+reporting exists, and neither could see a cost that blocked the loop that reports.
+
 Four rules this path earns:
 
 - **Nothing may run unlogged for minutes.** A phase is named and timed, and a phase still running
@@ -421,6 +458,16 @@ with the longest history of subtle identity bugs in this repository.
 - **A directory walk that stats separately pays twice.** Windows fills `DirEntry` stat fields
   during enumeration; `Path.glob` plus `path.stat()` spends a syscall per file to re-fetch what
   the walk already read.
+- **A per-session filesystem read on a loop tick multiplies by the fleet, on the loop.** The
+  transcript discovery loop ran `adapter.recent_transcripts` (glob + stat, 836 files) every 0.5s
+  per session waiting for its CLI's first record, and the switch watcher resolved every live
+  session's cwd (`realpath`) per tick per session. Idle, 22ms; with seven CLIs starting in one
+  directory, 5.4s per call (2026-09-14), and p99 loop lag crossed the tray's probe timeout.
+  `transcript_scan.TranscriptScanCache` runs the scan in a worker and shares one listing per
+  `(backend, cwd)` for a second across every session in that directory; `resolve_path_cached`
+  remembers a resolved path for 30s. Both are counted on `/api/diagnostics/background`
+  (`transcript_scans`), and a scan over a second is `transcript_scan_slow` at WARNING. The rule:
+  a reading taken per session must be shared per *thing read*, and never taken on the loop.
 - **An unchanged arbitration is silence.** Several subsystems broadcast only on change, so
   "nothing was reported" is not evidence that nothing is wrong.
 - **`asyncio.to_thread` cannot be cancelled, and the loop joins what you abandon.** Cancelling

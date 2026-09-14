@@ -71,8 +71,26 @@ A kernel-owned file lock fences automatic termination against local PTY creation
 The desktop verifies the current supervisor with a read-only handshake before replacing a persistently hung daemon.
 `server.py` registers and marks ready; `SessionManager.before_local_pty` revokes forced recovery before local spawning; `lifecycle.planned_handoff` records intentional transitions.
 `desktop.py` owns the monitor thread, launch callback, and manual-action coordination.
+The hang threshold is decided with the daemon's heartbeat (`lifecycle.read_heartbeat`): a stale heartbeat is a stopped loop and earns `HANG_SECONDS`, a fresh one is a loop that is running and earns `UNREACHABLE_SECONDS`.
+`register_daemon` returns `False` rather than overwrite a record naming a live generation with no planned handoff.
 
 **Not:** the PTY supervisor, standalone service management, or uninterrupted terminal transport.
+
+### `listener_guard.py`
+
+Watches every bound `TCPSite` and re-creates one whose listening socket asyncio closed after a failed accept (`fileno() == -1` is the only trace).
+Armed by `__main__.serve` after the sites bind and published as `keys.LISTENER_GUARD` for the diagnostics endpoint; every finding goes to `daemon.log` and `lifecycle.log`.
+Contracts: `../../../design/features/daemon-resilience.md`.
+
+**Not:** the bind itself (that stays in `__main__.serve`, which decides which address is fatal to lose), or anything that reads the socket.
+
+### `transcript_scan.py`
+
+The shared, off-loop transcript directory scan (`TranscriptScanCache`) and the cached path resolver (`resolve_path_cached`) the session manager's discovery, promotion and switch-watch loops read through.
+One listing per `(backend, cwd)` serves every session standing in that directory for `TRANSCRIPT_SCAN_CACHE_SECONDS`; concurrent askers join one in-flight scan; a scan over `SLOW_SCAN_WARN_SECONDS` is `transcript_scan_slow` at WARNING; counters are `transcript_scans` on `/api/diagnostics/background`.
+Why: `development/PERFORMANCE_RUNBOOK.md` § Traps.
+
+**Not:** any adapter's notion of what a transcript is - it calls `adapter.recent_transcripts` and narrows the answer by the same `created_at` rule every adapter applies first.
 
 ### `process_priority.py`
 
@@ -169,9 +187,16 @@ Its callers are the composition root (the watch loop) and every route that write
   (Since 2026-08-30 the successor's integrity hold is milliseconds on *every* start, because the full check runs behind the ready daemon rather than on the startup path — `technical/backend/sqlite.md`.)
   The drain below stays at its measured budget anyway.
   The successor still does schema work under the file, and the background check can be walking it minutes later, which is a second reader on `mux.db` that did not exist before.
-  So the successor's start gate has two halves (`__main__.wait_for_port_free`, then `wait_for_predecessor_exit`, which reads the pid off the heartbeat record and waits up to 20s, bounded, warning rather than refusing);
-  and `_teardown_runtime` opens with `sqlite_store.begin_shutdown_drain()`, which widens the busy timeout for whatever is left of an 8s budget and makes any write still lost to a lock log `sqlite_write_lost` naming the store and the method (`technical/backend/sqlite.md`).
+  So the successor's start gate has two halves: `__main__.wait_for_port_free` before the bind (relaunch successors only), then the `predecessor-drain` startup phase (`server.wait_for_predecessor_drain`) on *every* start, which reads the pid off the heartbeat record and waits up to 60s behind the open listener, awaited rather than slept, bounded, warning rather than refusing.
+  It moved out of `__main__` on 2026-09-14 because the tray's restart path spawns without `--relaunch-wait`, so that successor opened its stores against a predecessor still writing; and because a wait taken before the loop exists is one no health answer can report.
+  `_teardown_runtime` opens with `sqlite_store.begin_shutdown_drain()`, which widens the busy timeout for whatever is left of an 8s budget and makes any write still lost to a lock log `sqlite_write_lost` naming the store and the method (`technical/backend/sqlite.md`).
   The ordering fix is the real one; the drain is the second line for the redeploy path, where the predecessor is terminated about three seconds after health stops answering and does not get to choose how long it lives.
+- **Every store is opened in a worker thread** (`_open_store`, which times each open and names a slow one at WARNING).
+  A store constructor connects, runs its schema script and migrations, and takes the writer slot for whatever repairs it carries; done on the loop that was 62-76s of a blocked loop per start on 2026-09-14, during which health could not answer, the phase watchdog could not report, and the first accept completion after the loop resumed closed the loopback listener.
+  The cost itself was `OperationalTelemetryStore._repair_duplicate_process_ownership` scanning 493,845 `process_evidence` rows per live row, now an index lookup (`idx_process_evidence_live_fingerprint`), but the rule stands regardless of the cost: blocking work on the startup path goes in a thread.
+- **A listener asyncio closed is rebound** (`listener_guard.py`, armed by `__main__.serve` after the sites bind, published as `keys.LISTENER_GUARD`).
+  The Windows proactor closes a listening socket after one failed accept completion, which is what a client timing out against a blocked loop produces; the daemon then stays alive and unreachable on loopback.
+  The guard reads `fileno() == -1` off each site's server sockets every two seconds, stops and re-creates a dead site, and reports on `daemon.log`, `lifecycle.log` and `/api/diagnostics/background` (`design/features/daemon-resilience.md`).
 - The middleware chain is `correlation → error → security → starting → compression`.
   `correlation_middleware` is outermost so that the two refusals that never reach a handler - `unsupported Host` and `daemon_starting` - carry a request id too, and so that anything the middlewares below it log is correlated with it.
   It binds a contextvar rather than passing an argument down, because `asyncio.create_task` and `asyncio.to_thread` both inherit the context: the background work a handler starts stays correlated after the response has been written, which is the span an incident covers.

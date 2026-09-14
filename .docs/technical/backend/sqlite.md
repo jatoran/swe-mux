@@ -56,7 +56,7 @@ store's every operation passes through.
 a missing table and how `history.py` surfaces an interrupted query, and treating either as a lock
 would wait on something that will never succeed.
 
-The ordering fix that makes both of these rare is in `__main__.wait_for_predecessor_exit`
+The ordering fix that makes both of these rare is the `predecessor-drain` startup phase (`server.wait_for_predecessor_drain`, on every start since 2026-09-14)
 (`packages/daemon-runtime.md`): the successor waits for the predecessor *process*, not just for
 its port.
 
@@ -159,11 +159,11 @@ its port.
   2026-08-30). `VACUUM` is the only way to return freed pages to the filesystem and SQLite has no
   online form of it; a cross-file table move has the same requirement. No running daemon can give
   that, and stopping swe-mux to get it reaps every live session.
-  The window that does exist is the *successor's own start*: `__main__.wait_for_predecessor_exit`
+  The window that does exist is the *successor's own start*: `server.wait_for_predecessor_drain`
   waits for the predecessor process rather than just its port - and the PTY supervisor has the
   sessions throughout, so nothing the operator is running dies for it.
   **That wait is bounded and is not a guarantee, which the feature shipped assuming it was.** The
-  timeout is 20s and expiring it is deliberately a warning rather than a refusal, because a wedged
+  timeout is 60s and expiring it is deliberately a warning rather than a refusal, because a wedged
   predecessor must not stop a restart; the warning even says "its last writes may be lost to a
   database lock". The first real `compact-db` run hit exactly that - the gate gave up on pid 49276,
   the maintenance phase ran 74ms later, and `VACUUM` failed `database is locked` because it must be
