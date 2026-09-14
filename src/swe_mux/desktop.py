@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any, TextIO
 
 from .config import Config, load_config
-from .daemon_recovery import DaemonRecovery, recovery_lock
+from .daemon_recovery import PROBE_TIMEOUT_SECONDS, DaemonRecovery, recovery_lock
 from .desktop_permissions import WebviewMicrophoneGrant
 from .desktop_window_state import (
     DEFAULT_WINDOW_HEIGHT,
@@ -499,7 +499,9 @@ class DesktopRuntime:
         recovery = DaemonRecovery(
             self.config.data_dir,
             self.token,
-            health=lambda: health_snapshot(self.url) is not None,
+            # A longer probe than the window's: this one decides whether to kill
+            # the daemon, and a loaded loop that answers in 1.5s is not hung.
+            health=lambda: health_snapshot(self.url, timeout=PROBE_TIMEOUT_SECONDS) is not None,
             spawn=self._spawn_recovery_daemon,
             stop=self.stop,
             pause=self.recovery_pause,

@@ -83,7 +83,7 @@ def test_a_resumed_pane_binds_the_rollout_its_id_owns(
     session = resumed_session(cwd)
     manager = manager_with(session)
 
-    assert manager._named_conversation_transcript(session, cwd) == rollout
+    assert asyncio.run(manager._named_conversation_transcript(session, cwd)) == rollout
     # The same answer through the discovery loop, which is what the observer uses:
     # exact, so it binds everything rather than staying provisional.
     found = asyncio.run(
@@ -106,7 +106,7 @@ def test_a_fresh_pane_asks_nothing_about_its_placeholder_id(
     session = resumed_session(cwd, native_id=PANE)
     manager = manager_with(session)
 
-    assert manager._named_conversation_transcript(session, cwd) is None
+    assert asyncio.run(manager._named_conversation_transcript(session, cwd)) is None
 
 
 def test_a_conversation_a_live_pane_owns_is_never_taken_over(
@@ -126,7 +126,7 @@ def test_a_conversation_a_live_pane_owns_is_never_taken_over(
     owner.transcript_path = rollout
     manager = manager_with(branching, owner)
 
-    assert manager._named_conversation_transcript(branching, cwd) is None
+    assert asyncio.run(manager._named_conversation_transcript(branching, cwd)) is None
 
 
 def relocated_claude_session(tmp_path: Path) -> tuple[Any, Any, Path, Path]:
@@ -223,4 +223,4 @@ def test_a_conversation_this_pane_has_disowned_is_not_rebound(
     session.ignored_detection_runs.add(("codex", CONVERSATION))
     manager = manager_with(session)
 
-    assert manager._named_conversation_transcript(session, cwd) is None
+    assert asyncio.run(manager._named_conversation_transcript(session, cwd)) is None

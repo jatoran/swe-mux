@@ -789,7 +789,19 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
     predecessor_died_uncleanly = daemon_started(config.data_dir, log)
     from .daemon_recovery import register_daemon
 
-    await asyncio.to_thread(register_daemon, config.data_dir, app.get(keys.DESKTOP_CONTROL_TOKEN))
+    registered = await asyncio.to_thread(
+        register_daemon, config.data_dir, app.get(keys.DESKTOP_CONTROL_TOKEN)
+    )
+    if not registered:
+        # Another live daemon owns the record and was never asked to stop, so
+        # this process is almost certainly a duplicate about to lose the port
+        # bind. Said here because the bind failure that follows says only
+        # "another daemon may already be running".
+        log.warning(
+            "this daemon (pid %d) is not registered for desktop recovery: another live "
+            "daemon holds the record with no planned handoff (lifecycle.log names it)",
+            os.getpid(),
+        )
     app[keys.PREDECESSOR_PID] = predecessor_pid
     timeline = StartupTimeline(log, ledger=lambda message: ledger(config.data_dir, message))
     app[keys.STARTUP] = timeline
@@ -953,6 +965,111 @@ async def _restore_durable_sessions(
         log.exception("could not sweep orphan recovery directories")
 
 
+#: A store whose constructor takes longer than this is reported at WARNING with
+#: its name, so the next slow `stores` phase names the store rather than the
+#: phase. Well above the milliseconds a warm open costs and below the 15s at
+#: which the phase watchdog starts reporting.
+SLOW_STORE_OPEN_SECONDS = 1.0
+
+
+async def _open_store[T](name: str, factory: Callable[[], T]) -> T:
+    """Construct one store in a worker thread, timed and named.
+
+    Store constructors are synchronous by design (each confines its connection
+    to its own worker and opens it there), which makes them safe to build off
+    the loop and wrong to build on it: `HistoryIndex.__init__` blocks on its
+    worker's connect, and a connect that waits on `busy_timeout` behind another
+    process's writer holds the loop for the whole wait.
+    """
+    started = time.perf_counter()
+    store = await asyncio.to_thread(factory)
+    elapsed = time.perf_counter() - started
+    log.log(
+        logging.WARNING if elapsed >= SLOW_STORE_OPEN_SECONDS else logging.DEBUG,
+        "store_opened name=%s elapsed_s=%.2f",
+        name,
+        elapsed,
+        extra={"store": name, "store_open_s": round(elapsed, 3)},
+    )
+    return store
+
+
+#: How long a successor waits for its predecessor to finish draining before it
+#: opens the first store. Sized against the predecessor's teardown, which stops
+#: ~30 services and closes thirteen store connections; measured 2026-09-14 at
+#: 64s for a 54-session fleet *while contending with the successor* for the
+#: writer slot, which this wait removes. A timeout is a warning, not a refusal:
+#: a wedged predecessor must never stop a restart, and `sqlite_store`'s drain
+#: widening is the second line for exactly that case.
+PREDECESSOR_DRAIN_TIMEOUT_SECONDS = 60.0
+PREDECESSOR_DRAIN_REPORT_SECONDS = 10.0
+
+
+async def wait_for_predecessor_drain(
+    predecessor_pid: int,
+    *,
+    timeout_seconds: float = PREDECESSOR_DRAIN_TIMEOUT_SECONDS,
+    report_seconds: float = PREDECESSOR_DRAIN_REPORT_SECONDS,
+    running: Callable[[int], bool] = pid_running,
+) -> bool:
+    """The `predecessor-drain` phase: let the previous daemon finish writing.
+
+    Freeing the port is not the end of a daemon's life. `runner.cleanup()` closes
+    the listener *first* and only then runs `_teardown_runtime`, which is where
+    the last durable writes happen - the terminal ledger, the recovery rows, the
+    telemetry and notification-decision rows that describe the restart itself.
+    A successor that opened its stores the moment the port freed spent that
+    whole window contending for `mux.db`'s single writer slot: the predecessor's
+    writes came back `database is locked` and were dropped (ten of them across
+    a 2026-08-23 restart), and on 2026-09-14 the successor's own store phase
+    blocked the event loop for 62s behind the same contention, which is what
+    closed its loopback listener (`listener_guard.py`).
+
+    This used to be `__main__.wait_for_predecessor_exit`, run only for a
+    `--relaunch-wait` successor and on the main thread before the loop existed.
+    Both were wrong: the desktop tray's restart path spawns without the flag, and
+    a wait taken before the listener is bound is a wait nobody can observe. It is
+    a startup phase now - after the listener is open, so health answers 503
+    naming it, and awaited rather than slept, so the loop keeps serving.
+
+    Returns True when the predecessor is gone (or there never was one), False on
+    timeout. The caller continues either way.
+    """
+    if predecessor_pid <= 0 or not running(predecessor_pid):
+        return True
+    log.info(
+        "waiting up to %.0fs for predecessor daemon pid %d to finish its shutdown drain",
+        timeout_seconds,
+        predecessor_pid,
+    )
+    started = time.monotonic()
+    deadline = started + timeout_seconds
+    reported = started
+    while time.monotonic() < deadline:
+        if not running(predecessor_pid):
+            log.info(
+                "predecessor daemon pid %d has exited after %.1fs; continuing startup",
+                predecessor_pid,
+                time.monotonic() - started,
+            )
+            return True
+        if time.monotonic() - reported >= report_seconds:
+            reported = time.monotonic()
+            log.info(
+                "still waiting for predecessor daemon pid %d to exit (%.0fs left)",
+                predecessor_pid,
+                deadline - time.monotonic(),
+            )
+        await asyncio.sleep(0.25)
+    log.warning(
+        "predecessor daemon pid %d has not exited after %.0fs; starting anyway "
+        "(its last writes may be lost to a database lock)",
+        predecessor_pid,
+        timeout_seconds,
+    )
+    return False
+
+
 async def _wait_for_exclusive_database(
     config: Config,
     predecessor_pid: int,
@@ -963,7 +1080,7 @@ async def _wait_for_exclusive_database(
     """Wait for the predecessor to release `mux.db`. True when it is ours.
 
     Separate from the ordinary startup gate on purpose, and much more patient
-    than it. `wait_for_predecessor_exit` bounds its wait at 20s because a wedged
+    than it. `wait_for_predecessor_drain` bounds its wait at 60s because a wedged
     predecessor must never stop a restart; that is the right trade for every
     start except this one, where an operator has explicitly asked for work that
     cannot run without exclusive ownership and is already expecting the daemon
@@ -1070,8 +1187,8 @@ async def _run_pending_maintenance(config: Config, predecessor_pid: int = -1) ->
     phase costs a single failed file read.
 
     **This start is not guaranteed to own the database, and the first version of
-    this assumed it did.** `wait_for_predecessor_exit` waits for the predecessor
-    process, but the wait is bounded at 20s and a timeout is deliberately a
+    this assumed it did.** `wait_for_predecessor_drain` waits for the predecessor
+    process, but the wait is bounded at 60s and a timeout is deliberately a
     warning rather than a refusal - a wedged predecessor must not stop a
     restart. Against the real `mux.db` the gate gave up, this ran 74ms later,
     and `VACUUM` failed with `database is locked` because it must be the only
@@ -1094,7 +1211,7 @@ async def _run_pending_maintenance(config: Config, predecessor_pid: int = -1) ->
     if request is None:
         return
     # The predecessor must be gone before this can work, and on this machine it
-    # routinely is not: `wait_for_predecessor_exit` gives up at 20s and starts
+    # routinely is not: `wait_for_predecessor_drain` gives up at 60s and starts
     # anyway (correctly - a wedged predecessor must not block a restart), and
     # both real `compact-db` runs then found the file locked.
     #
@@ -1301,6 +1418,12 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
         raise_process_priority(config.daemon_process_priority),
     )
     await asyncio.to_thread(_precompress_frontend, app[keys.FRONTEND_DIR])
+    # Every phase from here on touches `mux.db`, and a predecessor that is still
+    # draining is still writing to it. Waiting here - behind the open listener,
+    # on the loop, named - is what keeps the two daemons from contending for the
+    # writer slot (`wait_for_predecessor_drain` carries the measurements).
+    timeline.mark("predecessor-drain")
+    await wait_for_predecessor_drain(app.get(keys.PREDECESSOR_PID, -1))
     # `PRAGMA quick_check` reads every page of the database and eleven stores
     # share `mux.db`, so this used to be paid eleven times, on the event loop,
     # inside whichever store constructor happened to touch the file first: 11.5s
@@ -1317,9 +1440,9 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
     # answering a question the storage layer had already answered.
     # Before the integrity probe and before any store opens the file, because
     # this is the one moment the daemon owns it exclusively: the predecessor
-    # process has exited (`__main__.wait_for_predecessor_exit`) and no store has
-    # connected yet. `VACUUM` and a cross-file table move both need that, and no
-    # running daemon can ever provide it.
+    # process has exited (`wait_for_predecessor_drain`, the phase just above)
+    # and no store has connected yet. `VACUUM` and a cross-file table move both
+    # need that, and no running daemon can ever provide it.
     #
     # This deliberately puts minutes of work on the startup path, against the
     # rule the rest of this function now follows. The exception is narrow and
@@ -1375,18 +1498,33 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
             ),
         )
     timeline.mark("stores")
-    history = HistoryIndex(config.database_path)
+    # Every store is opened in a worker thread (`_open_store`). A constructor
+    # connects, runs the schema script and its migrations, and - for the history
+    # index - drops and recreates its search triggers, all of which take SQLite's
+    # writer slot and wait on `busy_timeout` when another process holds it. Done
+    # inline, that wait blocked the loop for 62.5s on 2026-09-14 with the
+    # listener already open: health could not answer, the phase watchdog could
+    # not report, and the first accept completion after the loop resumed closed
+    # the loopback listener. Off the loop, the same wait is a 503 naming this
+    # phase and a `startup_phase_running` line every 15s.
+    history = await _open_store("HistoryIndex", lambda: HistoryIndex(config.database_path))
     events = EventBus(history.append_event)
-    telemetry = OperationalTelemetryStore(
-        config.database_path,
-        retention_days=config.operational_telemetry_retention_days,
-        process_retention_days=config.process_evidence_retention_days,
+    telemetry = await _open_store(
+        "OperationalTelemetryStore",
+        lambda: OperationalTelemetryStore(
+            config.database_path,
+            retention_days=config.operational_telemetry_retention_days,
+            process_retention_days=config.process_evidence_retention_days,
+        ),
     )
     # Shadow canonical ledger. It has its own monthly segment files so durable
     # analytics never depend on the capped WebSocket event history or inflate the
     # already multi-gigabyte application database. The legacy store stays live
     # until corpus reconciliation proves the replacement's per-harness coverage.
-    canonical_telemetry = CanonicalTelemetryService(config.data_dir / "telemetry")
+    canonical_telemetry = await _open_store(
+        "CanonicalTelemetryService",
+        lambda: CanonicalTelemetryService(config.data_dir / "telemetry"),
+    )
     # Retention is housekeeping and belongs to `TELEMETRY_RETENTION_LOOP`, which
     # runs it 5s after start and hourly after that. The identity repair below is
     # not: it hides false runs that would otherwise be served as history from the
@@ -1413,11 +1551,18 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
         )
     # Pruned by `RETENTION_LOOP` a minute after start, not here.
     timeline.mark("stores")
-    tier0 = Tier0Store(config.database_path, retention_days=config.process_evidence_retention_days)
+    tier0 = await _open_store(
+        "Tier0Store",
+        lambda: Tier0Store(
+            config.database_path, retention_days=config.process_evidence_retention_days
+        ),
+    )
     # Phase 7.9 structural graph, maintained off the same Tier 0 file_write stream
     # by the deterministic consumer and read by the blast-radius/navigation MCP
     # tools and the per-session change map. Shares mux.db.
-    code_graph_store = CodeGraphStore(config.database_path)
+    code_graph_store = await _open_store(
+        "CodeGraphStore", lambda: CodeGraphStore(config.database_path)
+    )
     publish(app, {keys.CODE_GRAPH: code_graph_store})
     # Durable per-session detection timeline: every ledger entry survives
     # daemon restarts and session ends so status incidents stay investigable
@@ -1425,17 +1570,23 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
     # The durable registry is always present because an explicit inactive session
     # must survive even when unexpected-crash recovery is disabled. That switch
     # controls only cold restoration and terminal checkpoint capture.
-    session_recovery = SessionRecoveryStore(
-        config.database_path,
-        config.data_dir / "recovery",
-        checkpoint_bytes=(
-            config.session_recovery_checkpoint_bytes if config.session_recovery_enabled else 0
+    session_recovery = await _open_store(
+        "SessionRecoveryStore",
+        lambda: SessionRecoveryStore(
+            config.database_path,
+            config.data_dir / "recovery",
+            checkpoint_bytes=(
+                config.session_recovery_checkpoint_bytes if config.session_recovery_enabled else 0
+            ),
+            retention_days=config.session_recovery_retention_days,
+            max_cold_sessions=config.session_recovery_max_sessions,
         ),
-        retention_days=config.session_recovery_retention_days,
-        max_cold_sessions=config.session_recovery_max_sessions,
     )
-    status_timeline = StatusTimelineStore(
-        config.database_path, retention_days=config.status_timeline_retention_days
+    status_timeline = await _open_store(
+        "StatusTimelineStore",
+        lambda: StatusTimelineStore(
+            config.database_path, retention_days=config.status_timeline_retention_days
+        ),
     )
     timeline.mark("projects")
     projects = ProjectManager(history)

@@ -550,7 +550,7 @@ def switch_fixture(tmp_path: Path) -> tuple[Any, Any, Path, Path]:
     return manager, session, current, fresh
 
 
-def test_a_sibling_still_writing_its_own_transcript_no_longer_blocks(
+async def test_a_sibling_still_writing_its_own_transcript_no_longer_blocks(
     tmp_path: Path,
 ) -> None:
     # The old blanket rule made a `/clear` unfollowable in any project with two
@@ -564,18 +564,18 @@ def test_a_sibling_still_writing_its_own_transcript_no_longer_blocks(
     manager.sessions["sibling"] = sibling(
         tmp_path, transcript=sibling_path, last_activity_ts=time.time()
     )
-    assert SessionManager._transcript_switch_candidate(manager, session, current) == fresh
+    assert await SessionManager._transcript_switch_candidate(manager, session, current) == fresh
 
 
-def test_a_sibling_whose_pty_was_silent_no_longer_blocks(tmp_path: Path) -> None:
+async def test_a_sibling_whose_pty_was_silent_no_longer_blocks(tmp_path: Path) -> None:
     manager, session, current, fresh = switch_fixture(tmp_path)
     manager.sessions["sibling"] = sibling(
         tmp_path, transcript=None, last_activity_ts=time.time() - 600
     )
-    assert SessionManager._transcript_switch_candidate(manager, session, current) == fresh
+    assert await SessionManager._transcript_switch_candidate(manager, session, current) == fresh
 
 
-def test_a_quiet_sibling_that_was_also_talking_still_blocks(tmp_path: Path) -> None:
+async def test_a_quiet_sibling_that_was_also_talking_still_blocks(tmp_path: Path) -> None:
     # Its transcript went quiet and its PTY did not: indistinguishable from a
     # sibling that just cleared. Uncertainty keeps the conservative answer.
     manager, session, current, _fresh = switch_fixture(tmp_path)
@@ -586,10 +586,10 @@ def test_a_quiet_sibling_that_was_also_talking_still_blocks(tmp_path: Path) -> N
     manager.sessions["sibling"] = sibling(
         tmp_path, transcript=quiet, last_activity_ts=time.time()
     )
-    assert SessionManager._transcript_switch_candidate(manager, session, current) is None
+    assert await SessionManager._transcript_switch_candidate(manager, session, current) is None
 
 
-def test_an_unpromoted_shell_launching_an_agent_still_blocks_everything(
+async def test_an_unpromoted_shell_launching_an_agent_still_blocks_everything(
     tmp_path: Path,
 ) -> None:
     manager, session, current, _fresh = switch_fixture(tmp_path)
@@ -597,7 +597,7 @@ def test_an_unpromoted_shell_launching_an_agent_still_blocks_everything(
     shell.record.backend = "shell"
     shell.pending_agent_backends = {"claude"}
     manager.sessions["shell"] = shell
-    assert SessionManager._transcript_switch_candidate(manager, session, current) is None
+    assert await SessionManager._transcript_switch_candidate(manager, session, current) is None
 
 
 # ------------------------------------------------------------- failing closed
@@ -1081,7 +1081,7 @@ async def test_a_quiet_abandoned_transcript_keeps_its_claim(tmp_path: Path) -> N
     manager.events.emit.assert_not_awaited()
 
 
-def test_the_switch_watcher_will_not_retarget_a_growing_transcript(
+async def test_the_switch_watcher_will_not_retarget_a_growing_transcript(
     tmp_path: Path,
 ) -> None:
     # "The file we follow has gone quiet" is the precondition for retargeting at all.
@@ -1091,13 +1091,13 @@ def test_the_switch_watcher_will_not_retarget_a_growing_transcript(
     manager, session, current, fresh = switch_fixture(tmp_path)
     frozen = time.time() - 4000
     os.utime(current, (frozen, frozen))
-    assert SessionManager._transcript_switch_candidate(manager, session, current) == fresh
+    assert await SessionManager._transcript_switch_candidate(manager, session, current) == fresh
 
     session.transcript_growth_ts = time.time()
-    assert SessionManager._transcript_switch_candidate(manager, session, current) is None
+    assert await SessionManager._transcript_switch_candidate(manager, session, current) is None
 
 
-def test_a_sibling_growing_a_frozen_transcript_still_blocks(tmp_path: Path) -> None:
+async def test_a_sibling_growing_a_frozen_transcript_still_blocks(tmp_path: Path) -> None:
     # The mirror of the rule above, on a sibling: its own growth reading is what
     # clears it of having written the candidate, and a frozen mtime hides exactly
     # that.
@@ -1109,10 +1109,10 @@ def test_a_sibling_growing_a_frozen_transcript_still_blocks(tmp_path: Path) -> N
     other = sibling(tmp_path, transcript=sibling_path, last_activity_ts=time.time())
     manager.sessions["sibling"] = other
 
-    assert SessionManager._transcript_switch_candidate(manager, session, current) is None
+    assert await SessionManager._transcript_switch_candidate(manager, session, current) is None
 
     other.transcript_growth_ts = time.time() + 2
-    assert SessionManager._transcript_switch_candidate(manager, session, current) is not None
+    assert await SessionManager._transcript_switch_candidate(manager, session, current) is not None
 
 
 def test_re_tailing_the_same_transcript_keeps_its_growth_evidence(

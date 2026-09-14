@@ -34,6 +34,21 @@ The release procedure that maintains this file is [`RELEASING.md`](RELEASING.md)
 - The note editor's font controls under Settings → Notes are now titled "Note editor typography" and say they apply to notes only.
   They were the only "Font family" field in Settings, and a terminal font typed there did nothing, before and after a restart.
 
+### Fixed
+
+- **A large fleet no longer makes the daemon read as hung when several agents start at once.**
+  Every session waiting for its CLI's first transcript record used to walk that project's transcript directory on the event loop twice a second, and every switch-watch tick resolved every live session's working directory the same way; seven fresh Claude sessions in an 836-file directory pushed request latency past the desktop app's health probe for 45 seconds, and the app terminated a daemon that was serving traffic.
+  The walk now runs in a worker thread and one listing serves every session in that directory for a second; path resolution is cached.
+  `/api/diagnostics/background` reports the scan cache (`transcript_scans`), and a walk slower than a second is a WARNING in `daemon.log` naming the directory.
+- **A daemon whose local listener died is repaired instead of abandoned.**
+  On Windows, one connection reset during a blocked event loop made asyncio close the loopback listening socket for good: the daemon stayed alive and answered on its Tailscale address while nothing on the machine could reach it, for as long as the desktop app's restart budget was spent.
+  A guard now checks every listener every two seconds and rebinds one whose socket closed, with an ERROR in `daemon.log`, a line in `lifecycle.log`, and counters under `listener_guard` on `/api/diagnostics/background`.
+- **A restart no longer opens the database against the daemon it is replacing.**
+  The successor's store phase used to run on the event loop and, on a restart started from the tray, without waiting for the previous daemon to finish writing; measured at 62 seconds of a blocked loop behind a 54-session predecessor, during which health could not answer and the listener above was lost.
+  Every start now has a `predecessor-drain` phase that waits, off the loop and reported like every other phase, for the previous daemon to exit (up to 60 seconds), and the stores open in a worker thread with each slow open named in `daemon.log`.
+- **The desktop app no longer kills a slow daemon as if it were hung.**
+  Its recovery monitor now reads the daemon's heartbeat: a daemon whose event loop is still turning gets three minutes of missed probes before it is replaced, the probe itself waits five seconds rather than one, a replacement that stays healthy for two minutes restores the restart budget, and a daemon that starts while another live one still holds the recovery record no longer takes it over (which is what turned one slow start into three failed replacements and an exhausted budget).
+
 ## [0.2.8] - 2026-09-09
 
 ### Added

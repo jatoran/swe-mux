@@ -11,11 +11,13 @@ from pathlib import Path
 
 from aiohttp import web
 
+from . import app_keys as keys
 from .cli import invoked_as
 from .config import LOOPBACK_HOSTS, Config, load_config
 from .host_platform import IS_WINDOWS
 from .http_support import ACCESS_LOG_FORMAT
-from .lifecycle import heartbeat_pid, ledger, pid_running
+from .lifecycle import ledger
+from .listener_guard import ListenerGuard, ledger_writer
 from .logsetup import enable_crash_tracebacks, setup_daemon_logging
 from .process_reaper import process_in_job
 from .server import create_app, wait_runtime_ready
@@ -172,6 +174,15 @@ async def serve(
     await runner.setup()
     sites: list[web.TCPSite] = []
     log = logging.getLogger(__name__)
+    # Re-binds a listener asyncio closed after a failed accept, which on Windows
+    # is what a client timing out against a blocked loop produces. Without it
+    # the daemon stays alive and unreachable on loopback (`listener_guard.py`).
+    guard = ListenerGuard(
+        make_site=lambda host, port: web.TCPSite(runner, host=host, port=port),
+        ledger=ledger_writer(config.data_dir),
+    )
+    app[keys.LISTENER_GUARD] = guard
+    guard_task: asyncio.Task[None] | None = None
     try:
         for index, host in enumerate(hosts):
             site = web.TCPSite(runner, host=host, port=config.port)
@@ -197,13 +208,18 @@ async def serve(
                 )
                 continue
             sites.append(site)
+            guard.watch(host, config.port, site)
             rendered_host = f"[{host}]" if ":" in host else host
             log.info("listening on http://%s:%s", rendered_host, config.port)
+        guard_task = asyncio.create_task(guard.run(shutdown_event), name="listener-guard")
         _announce(config, browser=browser)
         if config.tailnet_enabled:
             asyncio.create_task(_auto_enable_mobile_voice(app, config.port))
         await shutdown_event.wait()
     finally:
+        if guard_task is not None:
+            guard_task.cancel()
+            await asyncio.gather(guard_task, return_exceptions=True)
         await runner.cleanup()
 
 
@@ -303,52 +319,6 @@ def wait_for_port_free(host: str, port: int, timeout_seconds: float = 90.0) -> N
     logging.getLogger(__name__).warning(
         "predecessor daemon still holds port %d after %.0fs; attempting startup anyway",
         port,
-        timeout_seconds,
-    )
-
-
-#: How long a successor waits for its predecessor to finish draining before it
-#: starts its own database work. Sized against the predecessor's teardown, which
-#: stops ~30 services and closes thirteen store connections; well under the 90s
-#: this gate already tolerates for the port itself.
-PREDECESSOR_DRAIN_TIMEOUT_SECONDS = 20.0
-
-
-def wait_for_predecessor_exit(
-    data_dir: Path, timeout_seconds: float = PREDECESSOR_DRAIN_TIMEOUT_SECONDS
-) -> None:
-    """Second half of the successor start gate: let the predecessor finish writing.
-
-    Freeing the port is not the end of a daemon's life. `runner.cleanup()` closes
-    the listener *first* and only then runs `_teardown_runtime`, which is where
-    the last durable writes happen - the terminal ledger, the recovery rows, the
-    telemetry and notification-decision rows that describe the restart itself.
-    A successor that started the moment the port opened spent that whole window
-    holding `mux.db` for its own integrity check and schema work, and the
-    predecessor's writes came back `database is locked` and were dropped
-    (measured across a 2026-08-23 restart: ten of them, in four subsystems,
-    silently).
-
-    So the successor waits for the predecessor *process*, which the heartbeat
-    record names, rather than for its socket. Bounded, and a timeout is a
-    warning and not a refusal: a wedged predecessor must not stop a restart, and
-    `sqlite_store`'s drain widening is the second line for exactly that case.
-    """
-    log = logging.getLogger(__name__)
-    pid = heartbeat_pid(data_dir)
-    if pid <= 0 or pid == os.getpid() or not pid_running(pid):
-        return
-    log.info("waiting for predecessor daemon pid %d to finish its shutdown drain", pid)
-    deadline = time.monotonic() + timeout_seconds
-    while time.monotonic() < deadline:
-        if not pid_running(pid):
-            log.info("predecessor daemon pid %d has exited; continuing startup", pid)
-            return
-        time.sleep(0.25)
-    log.warning(
-        "predecessor daemon pid %d has not exited after %.0fs; starting anyway "
-        "(its last writes may be lost to a database lock)",
-        pid,
         timeout_seconds,
     )
 
@@ -463,8 +433,11 @@ def main(argv: Sequence[str] | None = None) -> None:
     _print_path_hint(config)
     if args.relaunch_wait:
         wait_for_port_free(config.host, config.port)
-        # Then for the predecessor's *drain*, which happens after the port frees.
-        wait_for_predecessor_exit(config.data_dir)
+        # The predecessor's *drain*, which happens after the port frees, is
+        # waited for by the `predecessor-drain` startup phase on every start
+        # (`server.wait_for_predecessor_drain`) - not only here, because the
+        # tray's restart path spawns without this flag and used to open the
+        # stores against a predecessor still writing.
     token = os.environ.get("SWE_MUX_DESKTOP_CONTROL_TOKEN") or None
     try:
         asyncio.run(

@@ -176,8 +176,7 @@ def _live_state_log_payload(
             "contention": session.record.console_contention,
             "agent_launch_pending": list(session.record.agent_launch_pending),
             "census": (
-                console_census
-                or ConsoleCensus(None, None, None, None, error="not_measured")
+                console_census or ConsoleCensus(None, None, None, None, error="not_measured")
             ).snapshot(),
         },
         "status_health": session.status_health(now),
@@ -440,6 +439,16 @@ async def get_background_health(request: web.Request) -> web.Response:
             # GIL-free dump the loop arms itself. `loop_lag` says how long; this says
             # what, and whether a starved canary thread makes it a native-code stall.
             "stall_watchdog": request.app[keys.STALL_WATCHDOG].snapshot(),
+            # The shared off-loop transcript directory scans (`transcript_scan.py`).
+            # A cache that stops sharing reads as misses climbing with the fleet
+            # and `slow_scans` counting; the loop_lag above is where that lands.
+            "transcript_scans": request.app[keys.SESSIONS].transcript_scans.snapshot(),
+            # Whether each bound listener still has its socket, and how many times
+            # one had to be re-created (`listener_guard.py`). Absent on a daemon
+            # started without `__main__.serve` (tests build the app directly).
+            "listener_guard": (
+                guard.snapshot() if (guard := request.app.get(keys.LISTENER_GUARD)) else None
+            ),
             # What the inspector has lowered to keep the fleet below this process.
             "process_priority": request.app[keys.PROCESS_INSPECTOR].priority_stats(),
             "event_bus": events.drop_stats(),
@@ -579,9 +588,7 @@ async def diagnostics_export(request: web.Request) -> web.Response:
     remote = await tailscale_status(config.port, tailnet_enabled=config.tailnet_enabled)
     firewall: dict[str, object] = {"supported": False}
     if firewall_supported():
-        serve_active = bool(
-            remote.get("serve_configured") or remote.get("mobile_voice_configured")
-        )
+        serve_active = bool(remote.get("serve_configured") or remote.get("mobile_voice_configured"))
         firewall = await inspect_firewall(
             config.port, await tailscale_ipv4(), serve_active=serve_active
         )
@@ -688,16 +695,12 @@ async def _doctor_report(app: web.Application) -> dict[str, Any]:
         "live_sessions": live,
         "ui_build_id": await ui_build_id_cached(app[keys.FRONTEND_DIR]),
         "supervisor_state": supervisor_state,
-        "supervisor_unadopted": int(
-            getattr(sessions, "unadopted_supervisor_sessions", 0) or 0
-        ),
+        "supervisor_unadopted": int(getattr(sessions, "unadopted_supervisor_sessions", 0) or 0),
     }
     remote = await tailscale_status(config.port, tailnet_enabled=config.tailnet_enabled)
     firewall: dict[str, Any] = {"supported": False}
     if firewall_supported():
-        serve_active = bool(
-            remote.get("serve_configured") or remote.get("mobile_voice_configured")
-        )
+        serve_active = bool(remote.get("serve_configured") or remote.get("mobile_voice_configured"))
         firewall = await inspect_firewall(
             config.port, await tailscale_ipv4(), serve_active=serve_active
         )

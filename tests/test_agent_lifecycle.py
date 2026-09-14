@@ -152,39 +152,39 @@ def _switch_fixture(tmp_path: Path) -> tuple[Any, Any, Path, Path]:
     return manager, session, current, fresh
 
 
-def test_transcript_switch_targets_fresh_unowned_transcript(tmp_path: Path) -> None:
+async def test_transcript_switch_targets_fresh_unowned_transcript(tmp_path: Path) -> None:
     manager, session, current, fresh = _switch_fixture(tmp_path)
-    assert SessionManager._transcript_switch_candidate(manager, session, current) == fresh
+    assert await SessionManager._transcript_switch_candidate(manager, session, current) == fresh
 
 
-def test_transcript_switch_skips_while_current_transcript_active(tmp_path: Path) -> None:
+async def test_transcript_switch_skips_while_current_transcript_active(tmp_path: Path) -> None:
     manager, session, current, _fresh = _switch_fixture(tmp_path)
     now = time.time()
     os.utime(current, (now, now))
-    assert SessionManager._transcript_switch_candidate(manager, session, current) is None
+    assert await SessionManager._transcript_switch_candidate(manager, session, current) is None
 
 
-def test_transcript_switch_never_steals_another_sessions_transcript(tmp_path: Path) -> None:
+async def test_transcript_switch_never_steals_another_sessions_transcript(tmp_path: Path) -> None:
     manager, session, current, fresh = _switch_fixture(tmp_path)
     other = SimpleNamespace(record=agent_record("claude", str(tmp_path)), transcript_path=fresh)
     manager.sessions["other"] = other
-    assert SessionManager._transcript_switch_candidate(manager, session, current) is None
+    assert await SessionManager._transcript_switch_candidate(manager, session, current) is None
 
 
-def test_transcript_switch_ignores_explicitly_ended_runs(tmp_path: Path) -> None:
+async def test_transcript_switch_ignores_explicitly_ended_runs(tmp_path: Path) -> None:
     manager, session, current, _fresh = _switch_fixture(tmp_path)
     session.ignored_detection_runs.add(("claude", "native-new"))
-    assert SessionManager._transcript_switch_candidate(manager, session, current) is None
+    assert await SessionManager._transcript_switch_candidate(manager, session, current) is None
 
 
-def test_transcript_switch_requires_actively_written_candidate(tmp_path: Path) -> None:
+async def test_transcript_switch_requires_actively_written_candidate(tmp_path: Path) -> None:
     manager, session, current, fresh = _switch_fixture(tmp_path)
     stale = time.time() - 30
     os.utime(fresh, (stale, stale))
-    assert SessionManager._transcript_switch_candidate(manager, session, current) is None
+    assert await SessionManager._transcript_switch_candidate(manager, session, current) is None
 
 
-def test_transcript_switch_blocked_by_any_sibling_in_same_cwd(tmp_path: Path) -> None:
+async def test_transcript_switch_blocked_by_any_sibling_in_same_cwd(tmp_path: Path) -> None:
     # A sibling agent in the same directory makes a fresh transcript ambiguous even
     # when the sibling does not own the candidate file: switching could still be
     # grabbing the sibling's just-created conversation. Never switch here.
@@ -194,10 +194,10 @@ def test_transcript_switch_blocked_by_any_sibling_in_same_cwd(tmp_path: Path) ->
         transcript_path=tmp_path / "unrelated.jsonl",
     )
     manager.sessions["sibling"] = sibling
-    assert SessionManager._transcript_switch_candidate(manager, session, current) is None
+    assert await SessionManager._transcript_switch_candidate(manager, session, current) is None
 
 
-def test_transcript_switch_allowed_when_sibling_is_in_a_different_cwd(tmp_path: Path) -> None:
+async def test_transcript_switch_allowed_when_sibling_is_in_a_different_cwd(tmp_path: Path) -> None:
     manager, session, current, fresh = _switch_fixture(tmp_path)
     other_dir = tmp_path / "other"
     elsewhere = SimpleNamespace(
@@ -205,15 +205,15 @@ def test_transcript_switch_allowed_when_sibling_is_in_a_different_cwd(tmp_path: 
         transcript_path=other_dir / "e.jsonl",
     )
     manager.sessions["elsewhere"] = elsewhere
-    assert SessionManager._transcript_switch_candidate(manager, session, current) == fresh
+    assert await SessionManager._transcript_switch_candidate(manager, session, current) == fresh
 
 
-def test_transcript_switch_ignores_ended_sibling_in_same_cwd(tmp_path: Path) -> None:
+async def test_transcript_switch_ignores_ended_sibling_in_same_cwd(tmp_path: Path) -> None:
     manager, session, current, fresh = _switch_fixture(tmp_path)
     dead = agent_record("claude", str(tmp_path))
     dead.state = "exited"
     manager.sessions["dead"] = SimpleNamespace(record=dead, transcript_path=None)
-    assert SessionManager._transcript_switch_candidate(manager, session, current) == fresh
+    assert await SessionManager._transcript_switch_candidate(manager, session, current) == fresh
 
 
 def _lifecycle_manager(record: SessionRecord) -> tuple[Any, Session]:
@@ -599,7 +599,7 @@ async def test_supervisor_adoption_repairs_legacy_identity_and_persists_it(
 # ---- transcript adoption / switch: non-mux writers ---------------------------
 
 
-def test_transcript_switch_refuses_a_transcript_this_pty_did_not_write(
+async def test_transcript_switch_refuses_a_transcript_this_pty_did_not_write(
     tmp_path: Path,
 ) -> None:
     """A VS Code Claude extension or a plain-terminal `claude` in the same repo
@@ -610,18 +610,18 @@ def test_transcript_switch_refuses_a_transcript_this_pty_did_not_write(
     # This session's PTY has been silent since well before the candidate appeared,
     # so its CLI cannot be the one writing it.
     session.record.last_activity_ts = time.time() - 600
-    assert SessionManager._transcript_switch_candidate(manager, session, current) is None
+    assert await SessionManager._transcript_switch_candidate(manager, session, current) is None
 
 
-def test_transcript_switch_allows_a_transcript_this_pty_was_active_for(
+async def test_transcript_switch_allows_a_transcript_this_pty_was_active_for(
     tmp_path: Path,
 ) -> None:
     manager, session, current, fresh = _switch_fixture(tmp_path)
     session.record.last_activity_ts = time.time()
-    assert SessionManager._transcript_switch_candidate(manager, session, current) == fresh
+    assert await SessionManager._transcript_switch_candidate(manager, session, current) == fresh
 
 
-def test_transcript_switch_blocked_by_an_unpromoted_shell_launching_this_backend(
+async def test_transcript_switch_blocked_by_an_unpromoted_shell_launching_this_backend(
     tmp_path: Path,
 ) -> None:
     """A shim-less `claude` in a sibling shell races detection.
@@ -636,10 +636,10 @@ def test_transcript_switch_blocked_by_an_unpromoted_shell_launching_this_backend
         pending_agent_backends={"claude"},
     )
     manager.sessions["shell"] = shell
-    assert SessionManager._transcript_switch_candidate(manager, session, current) is None
+    assert await SessionManager._transcript_switch_candidate(manager, session, current) is None
 
 
-def test_transcript_switch_ignores_a_plain_shell_with_no_agent_launch(
+async def test_transcript_switch_ignores_a_plain_shell_with_no_agent_launch(
     tmp_path: Path,
 ) -> None:
     """A shell that has never echoed an agent name is not a blocking sibling."""
@@ -650,7 +650,7 @@ def test_transcript_switch_ignores_a_plain_shell_with_no_agent_launch(
         pending_agent_backends=set(),
     )
     manager.sessions["shell"] = shell
-    assert SessionManager._transcript_switch_candidate(manager, session, current) == fresh
+    assert await SessionManager._transcript_switch_candidate(manager, session, current) == fresh
 
 
 def test_sole_candidate_is_refused_when_the_spawn_named_the_conversation(

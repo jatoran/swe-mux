@@ -32,7 +32,6 @@ from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
 from swe_mux import lifecycle
-from swe_mux.__main__ import wait_for_predecessor_exit
 from swe_mux.errors import NotFound
 from swe_mux.http_support import ACCESS_LOG_FORMAT, REQUEST_ID_HEADER, request_id
 from swe_mux.logsetup import (
@@ -45,7 +44,7 @@ from swe_mux.logsetup import (
     setup_daemon_logging,
     valid_request_id,
 )
-from swe_mux.server import correlation_middleware, error_middleware
+from swe_mux.server import correlation_middleware, error_middleware, wait_for_predecessor_drain
 from swe_mux.sqlite_store import (
     begin_shutdown_drain,
     database_operation_lock,
@@ -60,8 +59,13 @@ from swe_mux.sqlite_store import (
 
 def record(message: str = "hello", **fields: object) -> logging.LogRecord:
     made = logging.LogRecord(
-        name="swe_mux.test", level=logging.INFO, pathname=__file__, lineno=1, msg=message,
-        args=(), exc_info=None,
+        name="swe_mux.test",
+        level=logging.INFO,
+        pathname=__file__,
+        lineno=1,
+        msg=message,
+        args=(),
+        exc_info=None,
     )
     for name, value in fields.items():
         setattr(made, name, value)
@@ -107,7 +111,7 @@ def test_extras_round_trip_back_into_the_values_they_came_from() -> None:
     # (it holds a space and a backslash) and decodes back to exactly itself.
     assert parsed["code"] == "128"
     assert parsed["ok"] == "false"
-    quoted = line[line.index('root=') + len("root=") :]
+    quoted = line[line.index("root=") + len("root=") :]
     assert json.loads(quoted[: quoted.index('" ') + 1]) == fields["root"]
 
 
@@ -119,7 +123,7 @@ def test_a_structured_value_is_serialized_rather_than_repred() -> None:
 def test_an_oversized_value_is_truncated_rather_than_flooding_the_file() -> None:
     line = rendered("event", output="x" * (MAX_EXTRA_VALUE_CHARS * 3))
     assert len(line) < MAX_EXTRA_VALUE_CHARS + 100
-    assert line.endswith('...')
+    assert line.endswith("...")
 
 
 def test_the_traceback_stays_after_the_fields_not_before_them() -> None:
@@ -144,8 +148,13 @@ def test_formatting_a_record_twice_does_not_double_the_fields() -> None:
 
 def test_percent_style_arguments_still_interpolate_alongside_fields() -> None:
     made = logging.LogRecord(
-        name="swe_mux.test", level=logging.INFO, pathname=__file__, lineno=1,
-        msg="ready in %.1fs", args=(1.25,), exc_info=None,
+        name="swe_mux.test",
+        level=logging.INFO,
+        pathname=__file__,
+        lineno=1,
+        msg="ready in %.1fs",
+        args=(1.25,),
+        exc_info=None,
     )
     made.session = "s1"
     assert StructuredFormatter("%(message)s").format(made) == "ready in 1.2s session=s1"
@@ -569,26 +578,35 @@ def test_a_non_lock_operational_error_is_not_mistaken_for_one() -> None:
     assert is_locked_error(sqlite3.OperationalError("database is locked"))
 
 
-def test_the_successor_waits_for_a_live_predecessor_and_not_for_a_dead_one(
-    tmp_path: Path,
-) -> None:
+async def test_the_successor_waits_for_a_live_predecessor_and_not_for_a_dead_one() -> None:
     dead = 4_000_000_000  # far outside any real pid range
-    (tmp_path / lifecycle.HEARTBEAT_NAME).write_text(
-        json.dumps({"pid": dead, "started_at": 1.0, "heartbeat_at": 2.0, "clean_exit": False}),
-        encoding="utf-8",
-    )
     started = time.monotonic()
-    wait_for_predecessor_exit(tmp_path, timeout_seconds=5.0)
+    assert await wait_for_predecessor_drain(dead, timeout_seconds=5.0) is True
     assert time.monotonic() - started < 1.0
+    # No predecessor at all is the same answer, immediately.
+    assert await wait_for_predecessor_drain(-1, timeout_seconds=5.0) is True
 
-    # A live pid is waited for, and the wait is bounded rather than a hang.
-    lifecycle.daemon_started(tmp_path, logging.getLogger("test"))
-    record = lifecycle.read_heartbeat(tmp_path) or {}
-    record["pid"] = os.getppid()  # a real, live, foreign pid
-    (tmp_path / lifecycle.HEARTBEAT_NAME).write_text(json.dumps(record), encoding="utf-8")
+    # A live pid is waited for, and the wait is bounded rather than a hang: the
+    # answer is False so the caller can say the database may still be shared.
     started = time.monotonic()
-    wait_for_predecessor_exit(tmp_path, timeout_seconds=0.5)
+    assert await wait_for_predecessor_drain(os.getppid(), timeout_seconds=0.5) is False
     assert 0.4 < time.monotonic() - started < 5.0
+
+
+async def test_the_successor_stops_waiting_the_moment_the_predecessor_exits() -> None:
+    # The wait is a poll, not a sleep-then-check: a predecessor that exits early
+    # releases the start early, and the wait reports how long it took.
+    polls = 0
+
+    def running(pid: int) -> bool:
+        nonlocal polls
+        polls += 1
+        return polls < 3
+
+    started = time.monotonic()
+    assert await wait_for_predecessor_drain(12345, timeout_seconds=30.0, running=running) is True
+    assert time.monotonic() - started < 5.0
+    assert polls == 3
 
 
 # -------------------------------------------- planned-restart lifecycle truth

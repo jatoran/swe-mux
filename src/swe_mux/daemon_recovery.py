@@ -26,16 +26,42 @@ from typing import Any
 import psutil
 
 from .bundle_locks import REDEPLOY_LOCK_NAME, live_redeploy_lock_pid
-from .lifecycle import ledger
+from .lifecycle import ledger, read_heartbeat
 
 RECORD_NAME = "daemon-recovery.json"
 LOCK_NAME = "daemon-recovery.lock"
 POLL_SECONDS = 2.0
 DEAD_GRACE_SECONDS = 4.0
+#: Missed probes before a daemon whose event loop has *stopped* (stale
+#: heartbeat) is terminated.
 HANG_SECONDS = 45.0
+#: Missed probes before a daemon whose loop is demonstrably running (fresh
+#: heartbeat) is terminated anyway. Much longer than `HANG_SECONDS` on purpose:
+#: a live loop that cannot answer within the probe timeout is a loaded daemon
+#: (2026-09-14: fifty sessions, p99 loop lag 1.07s against a 1s probe) or one
+#: whose loopback listener died and is being rebound (`listener_guard.py`), and
+#: killing either costs a 70-110s restart to fix a slowness. It still ends,
+#: because a listener that cannot be rebound leaves nothing else that can.
+UNREACHABLE_SECONDS = 180.0
+#: A heartbeat older than this reads as a stopped loop. The daemon writes it
+#: every `lifecycle.HEARTBEAT_INTERVAL_SECONDS` (10s) from the loop itself, so
+#: three missed writes is a loop that has not turned for half a minute.
+HEARTBEAT_STALE_SECONDS = 30.0
+#: How long the monitor's own health probe waits. The daemon's health route is
+#: served from the loop, so this is a bound on loop lag rather than on work; 1s
+#: was crossed by ordinary load and read as a hang.
+PROBE_TIMEOUT_SECONDS = 5.0
 HANDOFF_SECONDS = 300.0
 RETRY_WINDOW_SECONDS = 600.0
 MAX_RESTARTS = 3
+#: A replacement that has answered health continuously for this long has
+#: recovered, and the attempts that produced it no longer count against the
+#: budget. Long enough that a daemon crash-looping on startup (up, one probe,
+#: down) never clears its own budget; short enough that a recovered daemon does
+#: not enter its next outage with a spent one. Today's case: three spawns that
+#: died at bind in one minute left the budget empty for the real hang that
+#: followed.
+RECOVERED_STABLE_SECONDS = 120.0
 
 
 @contextmanager
@@ -93,8 +119,37 @@ def token_digest(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
-def register_daemon(data_dir: Path, token: str | None) -> None:
+def register_daemon(data_dir: Path, token: str | None) -> bool:
+    """Name this process as the daemon generation the desktop follows.
+
+    Refused, and False, when the record already names a *live* generation that
+    has not been asked to stop: that daemon is starting or serving, and this
+    process is a second copy that is about to fail its bind. Overwriting the
+    record here is what turned a slow start into a restart storm on
+    2026-09-14 - a tray restart spawned a second daemon while the first was
+    still building its runtime; the second registered, died at bind, and the
+    monitor then saw a record naming a dead pid and spawned two more, each of
+    which did the same, spending the whole retry budget in 25 seconds against a
+    first daemon that was fine and came up 15 seconds later unregistered.
+
+    A planned handoff sets `intent` before the successor is spawned, so the
+    successor still takes the record; a crashed or terminated predecessor is
+    not alive, so it does too.
+    """
     with recovery_lock(data_dir):
+        existing = read_record(data_dir)
+        if (
+            existing
+            and existing.get("pid") != os.getpid()
+            and existing.get("intent") is None
+            and process_state(existing) == "alive"
+        ):
+            ledger(
+                data_dir,
+                f"daemon pid {os.getpid()} not registered for recovery: the record names "
+                f"live daemon pid {existing.get('pid')} with no planned handoff",
+            )
+            return False
         _write_record(
             data_dir,
             {
@@ -108,6 +163,7 @@ def register_daemon(data_dir: Path, token: str | None) -> None:
                 "intent_at": None,
             },
         )
+        return True
 
 
 def update_daemon(data_dir: Path, **fields: Any) -> None:
@@ -225,6 +281,7 @@ class DaemonRecovery:
         stop: threading.Event,
         pause: threading.Event | None = None,
         monotonic: Callable[[], float] = time.monotonic,
+        wall_clock: Callable[[], float] = time.time,
     ) -> None:
         self.data_dir = data_dir
         self.owner = token_digest(token)
@@ -233,11 +290,37 @@ class DaemonRecovery:
         self.stop = stop
         self.pause = pause or threading.Event()
         self.clock = monotonic
+        self.wall_clock = wall_clock
         self._generation: tuple[Any, Any] | None = None
         self._missed_since: float | None = None
         self._attempts: deque[float] = deque()
         self._last_state: tuple[str, Any] | None = None
         self._pending: dict[str, Any] | None = None
+        # When the current run of successful probes began; None while probes
+        # fail. A replacement that stays healthy past `RECOVERED_STABLE_SECONDS`
+        # clears the attempts that produced it.
+        self._healthy_since: float | None = None
+
+    def heartbeat_age(self) -> float | None:
+        """Seconds since the daemon's loop last wrote its heartbeat, or None.
+
+        Read off `daemon-heartbeat.json`, which the daemon writes every
+        `lifecycle.HEARTBEAT_INTERVAL_SECONDS` from its event loop. None when
+        there is no readable record, which fails toward the *shorter* hang
+        threshold: an unknown loop is treated as a stopped one.
+        """
+        record = read_heartbeat(self.data_dir)
+        if not record:
+            return None
+        at = record.get("heartbeat_at")
+        if not isinstance(at, (int, float)) or not math.isfinite(at):
+            return None
+        return max(0.0, self.wall_clock() - float(at))
+
+    def loop_alive(self) -> bool:
+        """Whether the daemon's event loop has turned recently."""
+        age = self.heartbeat_age()
+        return age is not None and age < HEARTBEAT_STALE_SECONDS
 
     def _state(self, state: str, pid: Any = None) -> None:
         if self._last_state != (state, pid):
@@ -261,8 +344,18 @@ class DaemonRecovery:
         if self.health():
             self._missed_since = None
             self._pending = None
+            if self._healthy_since is None:
+                self._healthy_since = now
+            elif self._attempts and now - self._healthy_since >= RECOVERED_STABLE_SECONDS:
+                ledger(
+                    self.data_dir,
+                    f"daemon_recovery budget reset: healthy for {RECOVERED_STABLE_SECONDS:.0f}s "
+                    f"after {len(self._attempts)} replacement attempt(s)",
+                )
+                self._attempts.clear()
             self._state("healthy")
             return
+        self._healthy_since = None
         with recovery_lock(self.data_dir, timeout=0):
             record = read_record(self.data_dir)
             if not record or record.get("owner") != self.owner:
@@ -298,9 +391,23 @@ class DaemonRecovery:
             if state == "alive" and record.get("ready") is not True:
                 self._state("starting", pid)
                 return  # Slow startup/maintenance is never force-terminated.
-            threshold = HANG_SECONDS if state == "alive" else DEAD_GRACE_SECONDS
+            loop_alive = state == "alive" and self.loop_alive()
+            if state != "alive":
+                threshold = DEAD_GRACE_SECONDS
+            elif loop_alive:
+                # The loop is turning: a probe that times out is load or a dead
+                # listener being rebound, and a kill would cost a full restart to
+                # cure a slowness. Wait much longer before deciding.
+                threshold = UNREACHABLE_SECONDS
+            else:
+                threshold = HANG_SECONDS
             if elapsed < threshold:
-                self._state("unresponsive" if state == "alive" else "exited", pid)
+                if state != "alive":
+                    self._state("exited", pid)
+                elif loop_alive:
+                    self._state("unresponsive", pid)
+                else:
+                    self._state("unresponsive_loop_stalled", pid)
                 return
             while self._attempts and now - self._attempts[0] >= RETRY_WINDOW_SECONDS:
                 self._attempts.popleft()

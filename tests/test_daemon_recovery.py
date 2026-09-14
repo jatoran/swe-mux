@@ -36,6 +36,7 @@ class Fleet:
             spawn=self.spawn,
             stop=self.stop,
             monotonic=lambda: self.now,
+            wall_clock=lambda: self.now,
         )
         monkeypatch.setattr(
             recovery, "process_state", lambda r: self.states.get(r["pid"], "unknown")
@@ -70,6 +71,15 @@ class Fleet:
     def step(self, seconds: float = 0) -> None:
         self.now += seconds
         self.monitor.step()
+
+    def heartbeat(self, age: float = 0.0) -> None:
+        """Leave a daemon heartbeat `age` seconds old, as the daemon's loop would."""
+        (self.path / lifecycle.HEARTBEAT_NAME).write_text(
+            json.dumps({"pid": 123, "heartbeat_at": self.now - age, "clean_exit": False})
+        )
+
+    def ledger(self) -> str:
+        return (self.path / "lifecycle.log").read_text()
 
 
 @pytest.fixture
@@ -196,6 +206,105 @@ def test_corrupt_record_does_not_authorize_recovery(fleet: Fleet) -> None:
     fleet.step()
     fleet.step(1000)
     assert not fleet.spawned
+
+
+def test_a_daemon_whose_loop_still_turns_is_given_the_longer_window(fleet: Fleet) -> None:
+    # 2026-09-14: a fifty-session daemon answered every request, just not within
+    # the 1s probe, and was killed at 45s for a 111s restart. A fresh heartbeat
+    # proves the loop is running, so the probe miss is load (or a dead listener
+    # being rebound) and the kill is deferred to the unreachable window.
+    fleet.states[123] = "alive"
+    fleet.heartbeat()
+    fleet.step()
+    # The loop keeps writing its heartbeat while the probes keep missing.
+    while fleet.now < 100.0 + recovery.HANG_SECONDS + 1:
+        fleet.heartbeat()
+        fleet.step(10)
+    assert not fleet.terminated
+    assert "state=unresponsive pid=123" in fleet.ledger()
+    assert "loop_stalled" not in fleet.ledger()
+    # A live loop that stays unreachable long enough is still replaced: a
+    # listener that could not be rebound leaves nothing else that can.
+    while fleet.now < 100.0 + recovery.UNREACHABLE_SECONDS:
+        fleet.heartbeat()
+        fleet.step(10)
+    assert fleet.terminated == [123]
+    assert fleet.spawned == [456]
+
+
+def test_a_stale_heartbeat_keeps_the_short_hang_window(fleet: Fleet) -> None:
+    fleet.states[123] = "alive"
+    fleet.heartbeat(age=recovery.HEARTBEAT_STALE_SECONDS + 1)
+    fleet.step()
+    fleet.step(recovery.HANG_SECONDS - 1)
+    assert not fleet.terminated
+    assert "state=unresponsive_loop_stalled pid=123" in fleet.ledger()
+    fleet.step(1)
+    assert fleet.terminated == [123]
+
+
+def test_a_recovered_replacement_restores_the_retry_budget(fleet: Fleet) -> None:
+    # Three replacements that died at bind within a minute used to leave the
+    # budget spent for the real outage that followed minutes later.
+    fleet.states[456] = "gone"
+    fleet.step()
+    for _ in range(recovery.MAX_RESTARTS + 1):
+        fleet.step(recovery.DEAD_GRACE_SECONDS)
+    assert len(fleet.spawned) == recovery.MAX_RESTARTS
+    assert "state=retry_limit" in fleet.ledger()
+    # The replacement comes up and stays up.
+    fleet.write(pid=456, created_at=2.0)
+    fleet.states[456] = "alive"
+    fleet.healthy = True
+    fleet.step()
+    fleet.step(recovery.RECOVERED_STABLE_SECONDS - 1)
+    # Not yet: a daemon that answers one probe and dies must not clear its budget.
+    fleet.healthy = False
+    fleet.states[456] = "gone"
+    fleet.step()
+    fleet.step(recovery.DEAD_GRACE_SECONDS)
+    assert len(fleet.spawned) == recovery.MAX_RESTARTS
+    fleet.write(pid=456, created_at=2.0)
+    fleet.states[456] = "alive"
+    fleet.healthy = True
+    fleet.step()
+    fleet.step(recovery.RECOVERED_STABLE_SECONDS)
+    assert "daemon_recovery budget reset" in fleet.ledger()
+    fleet.healthy = False
+    fleet.states[456] = "gone"
+    fleet.step()
+    fleet.step(recovery.DEAD_GRACE_SECONDS)
+    assert len(fleet.spawned) == recovery.MAX_RESTARTS + 1
+
+
+def test_registration_never_clobbers_a_live_generation_with_no_handoff(tmp_path: Path) -> None:
+    # A second daemon spawned while the first is still building its runtime
+    # used to take the record, die at bind, and leave the monitor restarting a
+    # daemon that was fine. The parent process stands in for the live daemon.
+    live = {
+        "pid": os.getppid(),
+        "created_at": psutil.Process(os.getppid()).create_time(),
+        "owner": None,
+        "ready": False,
+        "local_pty": False,
+        "supervisor": None,
+        "intent": None,
+        "intent_at": None,
+    }
+    (tmp_path / recovery.RECORD_NAME).write_text(json.dumps(live))
+    assert recovery.register_daemon(tmp_path, "token") is False
+    assert recovery.read_record(tmp_path)["pid"] == os.getppid()
+    assert "not registered for recovery" in (tmp_path / "lifecycle.log").read_text()
+    # A planned handoff hands the record over while the predecessor is alive.
+    live["intent"] = "detach"
+    (tmp_path / recovery.RECORD_NAME).write_text(json.dumps(live))
+    assert recovery.register_daemon(tmp_path, "token") is True
+    assert recovery.read_record(tmp_path)["pid"] == os.getpid()
+    # And a dead generation is simply replaced.
+    dead = {**live, "pid": 4_000_000_000, "intent": None}
+    (tmp_path / recovery.RECORD_NAME).write_text(json.dumps(dead))
+    assert recovery.register_daemon(tmp_path, "token") is True
+    assert recovery.read_record(tmp_path)["pid"] == os.getpid()
 
 
 def test_supervisor_probe_accepts_a_large_inventory_and_verifies_its_pid(

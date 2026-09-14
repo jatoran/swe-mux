@@ -94,7 +94,7 @@ async def test_claude_watcher_never_consults_the_switch_heuristic(
     session = real_session(record, tmp_path)
     current = tmp_path / f"{OWN}.jsonl"
     current.write_text("{}\n", encoding="utf-8")
-    manager._transcript_switch_candidate = lambda *_: (tmp_path / "fresh.jsonl")
+    manager._transcript_switch_candidate = AsyncMock(return_value=tmp_path / "fresh.jsonl")
     manager._note_transcript_staleness = AsyncMock()
     stop_event = asyncio.Event()
     observe_task = asyncio.create_task(asyncio.sleep(0.05))
@@ -115,7 +115,7 @@ async def test_codex_watcher_still_uses_the_switch_heuristic(
     record = agent_record("codex-root", backend="codex", cwd=str(tmp_path))
     session = real_session(record, tmp_path)
     fresh = tmp_path / "fresh.jsonl"
-    manager._transcript_switch_candidate = lambda *_: fresh
+    manager._transcript_switch_candidate = AsyncMock(return_value=fresh)
     manager._note_transcript_staleness = AsyncMock()
     stop_event = asyncio.Event()
     observe_task = asyncio.create_task(asyncio.sleep(5))

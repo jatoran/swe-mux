@@ -2,7 +2,7 @@
 
 `VACUUM` and a cross-file table move both require that nothing else holds the
 database, which a running daemon can never give. The window that does exist is
-the successor daemon's own startup: `__main__.wait_for_predecessor_exit` waits
+the successor daemon's own startup: `server.wait_for_predecessor_drain` waits
 for the predecessor *process*, not just its port, so by the time the runtime is
 built this process is the only one holding `mux.db` - and the PTY supervisor
 owns the sessions throughout, so nothing the operator is running dies for it.
@@ -65,8 +65,8 @@ BACKUP_SUFFIX = ".pre-compact"
 # How long to wait for a database another process still holds.
 #
 # The startup window is *not* guaranteed exclusive, which is the correction this
-# constant exists for. `__main__.wait_for_predecessor_exit` waits for the
-# predecessor process, but the wait is bounded (20s) and a timeout is
+# constant exists for. `server.wait_for_predecessor_drain` waits for the
+# predecessor process, but the wait is bounded (60s) and a timeout is
 # deliberately a warning rather than a refusal - a wedged predecessor must not
 # stop a restart. It even says so: "its last writes may be lost to a database
 # lock". The first run of `compact-db` against the real `mux.db` hit exactly

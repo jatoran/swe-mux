@@ -198,6 +198,13 @@ CREATE INDEX IF NOT EXISTS idx_process_evidence_owner
   ON process_evidence(session_id,state,last_seen DESC);
 CREATE INDEX IF NOT EXISTS idx_process_evidence_retention
   ON process_evidence(last_seen,state);
+-- Partial, over the live rows only (~500 of ~500,000 on a month-old install):
+-- the startup ownership repair joins live rows to live rows by OS fingerprint,
+-- and without this it is a correlated scan of the whole table per live row -
+-- measured at 69.6s against 493,845 rows on 2026-09-14, on the event loop,
+-- holding the writer slot, on every start.
+CREATE INDEX IF NOT EXISTS idx_process_evidence_live_fingerprint
+  ON process_evidence(pid,creation_time) WHERE exited_at IS NULL;
 
 CREATE TABLE IF NOT EXISTS quota_samples (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -586,8 +593,16 @@ class OperationalTelemetryStore:
             )
 
     def _repair_duplicate_process_ownership(self) -> None:
-        """Retire every live claim when one OS process fingerprint has multiple owners."""
+        """Retire every live claim when one OS process fingerprint has multiple owners.
+
+        Runs on every open, so its cost is startup cost. Both sides of the join
+        are restricted to `exited_at IS NULL` and served by
+        `idx_process_evidence_live_fingerprint`; without that index this was the
+        whole of a 60-76s `stores` phase (2026-09-14), and it is timed here so
+        the next regression of that kind names itself.
+        """
         now = time.time()
+        started = time.perf_counter()
         cursor = self._db.execute(
             "UPDATE process_evidence SET state='stale',"
             " reason='duplicate_fingerprint_ownership',confidence='high',"
@@ -599,6 +614,14 @@ class OperationalTelemetryStore:
             "AND other.identity_id<>process_evidence.identity_id "
             "AND other.exited_at IS NULL)",
             (now, now),
+        )
+        elapsed = time.perf_counter() - started
+        log.log(
+            logging.WARNING if elapsed >= 1.0 else logging.DEBUG,
+            "process_ownership_repair retired=%d elapsed_s=%.3f",
+            cursor.rowcount,
+            elapsed,
+            extra={"retired": cursor.rowcount, "repair_elapsed_s": round(elapsed, 3)},
         )
         if cursor.rowcount:
             log.warning(

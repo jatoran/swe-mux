@@ -168,6 +168,46 @@ async def test_duplicate_live_process_owners_are_retired_on_reopen(
     reopened.close()
 
 
+def test_the_startup_ownership_repair_is_served_by_the_live_fingerprint_index(
+    phase2_path: Path,
+) -> None:
+    """Both sides of the repair's join read the partial index, never the table.
+
+    The statement runs on every open. Against 493,845 evidence rows it was a
+    correlated table scan per live row - 69.6s on the event loop, holding the
+    writer slot, on every daemon start (2026-09-14) - and nothing but the phase
+    total said so. The plan is pinned because the table only grows.
+    """
+    store = OperationalTelemetryStore(phase2_path)
+    store.close()
+    db = sqlite3.connect(phase2_path)
+    try:
+        indexes = {
+            row[0]
+            for row in db.execute(
+                "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='process_evidence'"
+            )
+        }
+        assert "idx_process_evidence_live_fingerprint" in indexes
+        plan = " ".join(
+            str(row[3])
+            for row in db.execute(
+                "EXPLAIN QUERY PLAN UPDATE process_evidence SET state='stale' "
+                "WHERE exited_at IS NULL AND EXISTS ("
+                "SELECT 1 FROM process_evidence other WHERE other.pid=process_evidence.pid "
+                "AND other.creation_time=process_evidence.creation_time "
+                "AND other.identity_id<>process_evidence.identity_id "
+                "AND other.exited_at IS NULL)"
+            )
+        )
+    finally:
+        db.close()
+    assert plan.count("idx_process_evidence_live_fingerprint") == 2, plan
+    assert "SCAN process_evidence" not in plan.replace(
+        "SCAN process_evidence USING INDEX idx_process_evidence_live_fingerprint", ""
+    ), plan
+
+
 async def test_identity_repair_resets_rebuildable_provider_telemetry(
     phase2_path: Path,
 ) -> None:

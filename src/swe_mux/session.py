@@ -94,6 +94,7 @@ from .supervisor_client import (
 from .telemetry_otlp import provider_otel_args, provider_otel_env
 from .terminal_arbitration import OwnerState, effective_geometry, release_owner
 from .transcript_repair import resolve_row_transcript
+from .transcript_scan import TranscriptScanCache, resolve_path_cached
 from .transcript_view import conversation_is_readable
 
 log = logging.getLogger(__name__)
@@ -333,9 +334,9 @@ def fleet_status_health(sessions: Any, *, now: float | None = None) -> dict[str,
             continue
         if record.state not in {"exited", "crashed"}:
             if record.native_session_id:
-                native_claims.setdefault(
-                    (record.backend, record.native_session_id), []
-                ).append(record.id)
+                native_claims.setdefault((record.backend, record.native_session_id), []).append(
+                    record.id
+                )
             transcript_path = getattr(session, "transcript_path", None)
             if transcript_path:
                 path_claims.setdefault(
@@ -922,9 +923,7 @@ def settle_running_work_anchor(record: Any) -> bool:
     """
     if record.running_work_since is None:
         return False
-    if any(
-        activity.kind in RUNNING_ACTIVITY_KINDS for activity in record.standing_activity
-    ):
+    if any(activity.kind in RUNNING_ACTIVITY_KINDS for activity in record.standing_activity):
         return False
     record.running_work_since = None
     return True
@@ -1033,9 +1032,7 @@ def expire_standing_activity(session: Any, *, now: float | None = None) -> list[
         record.standing_activity.remove(activity)
         _standing_activity_ledger(session, "expired", activity, now)
         if counters is not None:
-            counters["standing_activity_expired"] = (
-                counters.get("standing_activity_expired", 0) + 1
-            )
+            counters["standing_activity_expired"] = counters.get("standing_activity_expired", 0) + 1
     return [activity.kind for activity in expired]
 
 
@@ -1302,9 +1299,7 @@ PTY_RULES: tuple[ScreenRule, ...] = (
         "viewer.omp_model_picker",
         "uninformative",
         bottom_non_empty_lines(12),
-        re.compile(
-            r"(?is)all available models.*enter assign roles.*type to search.*esc close"
-        ),
+        re.compile(r"(?is)all available models.*enter assign roles.*type to search.*esc close"),
     ),
     ScreenRule(
         "viewer.omp_session_tree",
@@ -1556,9 +1551,7 @@ def pty_tail_explain(
     cli_state_arbitrates = backend is None or publishes_cli_state(backend)
     cli_waiting = cli_state_arbitrates and normalized_cli_status == "waiting"
     cli_busy_overrides_idle = (
-        cli_state_arbitrates
-        and normalized_cli_status == "busy"
-        and screen_outcome == "idle"
+        cli_state_arbitrates and normalized_cli_status == "busy" and screen_outcome == "idle"
     )
     if cli_waiting:
         outcome = "approval"
@@ -1583,8 +1576,7 @@ def pty_tail_waiting_on_background(tail: str, *, backend: str | None = None) -> 
     """True when the live frame shows the CLI waiting on background work."""
     explanation = pty_tail_explain(tail, backend=backend)
     return any(
-        item["matched"] and item["state"] == "background_wait"
-        for item in explanation["rules"]
+        item["matched"] and item["state"] == "background_wait" for item in explanation["rules"]
     )
 
 
@@ -1710,11 +1702,7 @@ def watchdog_decision(
             and (startup_dialog_seconds or 0.0) >= STATE_WATCHDOG_STARTUP_DIALOG_SECONDS
         ):
             return "startup_dialog_block"
-        if (
-            state == "awaiting"
-            and startup_dialog_raised
-            and pty_state in {"working", "idle"}
-        ):
+        if state == "awaiting" and startup_dialog_raised and pty_state in {"working", "idle"}:
             return "startup_dialog_clear"
     if state not in {"working", "awaiting"}:
         return "none"
@@ -2896,6 +2884,22 @@ class SessionManager:
         # Claude's own per-process side state, polled on the watchdog cadence.
         # Corroboration only in this phase — it never drives SessionState.
         self.cli_state_monitor = CliStateMonitor(claude_data_home() / "sessions")
+        # Transcript directory listings, scanned in a worker thread and shared by
+        # every session standing in the same cwd (`transcript_scan.py`). The
+        # discovery and switch-watch loops read through this rather than calling
+        # the adapter on the loop, which at seven fresh sessions in one 836-file
+        # directory was the load that made the daemon read as hung (2026-09-14).
+        self.transcript_scans = TranscriptScanCache()
+
+    async def _recent_transcripts(
+        self, adapter: BackendAdapter, cwd: Path, created_at: float
+    ) -> list[tuple[float, Path, str]]:
+        """`adapter.recent_transcripts`, off the loop and shared per directory."""
+        scans: TranscriptScanCache | None = getattr(self, "transcript_scans", None)
+        if scans is None:
+            # Managers built with `__new__` in tests never ran `__init__`.
+            scans = self.transcript_scans = TranscriptScanCache()
+        return await scans.recent(adapter, cwd, created_at)
 
     def conversation_holder(self, backend: str, native_id: str) -> ConversationHolder | None:
         """The live CLI process already holding ``native_id``, if there is one.
@@ -3658,10 +3662,10 @@ class SessionManager:
 
     @staticmethod
     def _path_key(path: Path | str) -> str:
-        try:
-            return str(Path(path).resolve()).casefold()
-        except OSError:
-            return str(path).casefold()
+        # Cached: `_live_transcript_claims` asks this for every live session's
+        # transcript on every discovery tick, and a realpath syscall per session
+        # per tick per caller is what a fifty-session fleet spends its loop on.
+        return resolve_path_cached(path).casefold()
 
     def _live_transcript_claims(
         self, exclude: Session | None = None
@@ -3699,7 +3703,7 @@ class SessionManager:
                 distinct[key] = item
         return list(distinct.values())
 
-    def _named_conversation_transcript(self, session: Session, cwd: Path) -> Path | None:
+    async def _named_conversation_transcript(self, session: Session, cwd: Path) -> Path | None:
         """This pane's own conversation file, when the adapter can name it outright.
 
         Only for an id mux did not invent: a backend that mints its own conversation
@@ -3723,7 +3727,11 @@ class SessionManager:
             return None
         try:
             path = session.adapter.transcript_path(record.native_session_id, cwd)
-            if path is None or not path.is_file():
+            if path is None:
+                return None
+            # The one syscall here, in a thread: this runs on the 0.5s discovery
+            # tick of every session waiting for its CLI's first record.
+            if not await asyncio.to_thread(path.is_file):
                 return None
         except OSError:
             return None
@@ -3789,18 +3797,16 @@ class SessionManager:
         while not stop_event.is_set():
             cwd = Path(session.record.run_cwd or session.record.cwd)
             started = session.record.agent_run_started_at or session.record.created_at
-            direct = self._named_conversation_transcript(session, cwd)
+            direct = await self._named_conversation_transcript(session, cwd)
             if direct is not None:
                 return direct, False
             try:
                 candidates = self._unclaimed_transcripts(
-                    session, session.adapter.recent_transcripts(cwd, started)
+                    session, await self._recent_transcripts(session.adapter, cwd, started)
                 )
             except OSError:
                 candidates = []
-            exact = [
-                item for item in candidates if item[2] == session.record.native_session_id
-            ]
+            exact = [item for item in candidates if item[2] == session.record.native_session_id]
             if exact:
                 return max(exact)[1], False
             # Every candidate above was read out of the directory the *spawn* cwd
@@ -3963,9 +3969,7 @@ class SessionManager:
         if backend not in AGENT_BACKENDS:
             return None
         adapter = self.adapters[backend]
-        claimed_ids, claimed_paths = self._adoption_transcript_claims(
-            records, metas, record.id
-        )
+        claimed_ids, claimed_paths = self._adoption_transcript_claims(records, metas, record.id)
         current_raw = meta.get("transcript_path")
         current = Path(current_raw) if isinstance(current_raw, str) and current_raw else None
         if current is not None and record.backend == backend and current.is_file():
@@ -3985,9 +3989,7 @@ class SessionManager:
         # After a conversation rollover the spawn id names a retired conversation;
         # the live native id is what this run is expected to be writing.
         expected = (
-            record.native_session_id
-            if record.agent_run_seq > 0
-            else record.spawn_native_session_id
+            record.native_session_id if record.agent_run_seq > 0 else record.spawn_native_session_id
         )
         # A conversation the adapter can name outright needs no correlation. This is
         # what re-binds a resumed pane across a daemon restart that lost its mirrored
@@ -4012,8 +4014,7 @@ class SessionManager:
         unclaimed = [
             (modified, path, native_id)
             for modified, path, native_id in candidates
-            if (backend, native_id) not in claimed_ids
-            and self._path_key(path) not in claimed_paths
+            if (backend, native_id) not in claimed_ids and self._path_key(path) not in claimed_paths
         ]
         exact = [item for item in unclaimed if item[2] == expected]
         if exact:
@@ -4107,9 +4108,7 @@ class SessionManager:
         if backend == "shell":
             if record.backend not in AGENT_BACKENDS:
                 return current_path, None, None
-            claimed_ids, claimed_paths = self._adoption_transcript_claims(
-                records, metas, record.id
-            )
+            claimed_ids, claimed_paths = self._adoption_transcript_claims(records, metas, record.id)
             current_claimed = (record.backend, record.native_session_id) in claimed_ids or (
                 current_path is not None and self._path_key(current_path) in claimed_paths
             )
@@ -4146,9 +4145,7 @@ class SessionManager:
         transcript = self._adoption_transcript(record, meta, records, metas)
         adapter = self.adapters[backend]
         transcript_native = adapter.transcript_native_id(transcript) if transcript else None
-        claimed_ids, claimed_paths = self._adoption_transcript_claims(
-            records, metas, record.id
-        )
+        claimed_ids, claimed_paths = self._adoption_transcript_claims(records, metas, record.id)
         current_claimed = (record.backend, record.native_session_id) in claimed_ids or (
             current_path is not None and self._path_key(current_path) in claimed_paths
         )
@@ -4187,8 +4184,7 @@ class SessionManager:
             or (
                 current_path is not None
                 and (
-                    transcript is None
-                    or self._path_key(current_path) != self._path_key(transcript)
+                    transcript is None or self._path_key(current_path) != self._path_key(transcript)
                 )
             )
         )
@@ -4210,9 +4206,7 @@ class SessionManager:
         )
         record.backend = backend
         fallback_native_id = (
-            record.native_session_id
-            if rolled
-            else (record.spawn_native_session_id or record.id)
+            record.native_session_id if rolled else (record.spawn_native_session_id or record.id)
         )
         record.native_session_id = transcript_native or fallback_native_id
         record.agent_run_id = expected_run_id
@@ -4299,8 +4293,8 @@ class SessionManager:
                 client.unregister_host(host)
                 self.unadopted_supervisor_sessions += 1
                 continue
-            transcript_path, bad_run_id, previous_identity = (
-                self._reconcile_adopted_root_identity(record, meta, records, metas)
+            transcript_path, bad_run_id, previous_identity = self._reconcile_adopted_root_identity(
+                record, meta, records, metas
             )
             # The preflight maps are also consulted by sessions adopted later in
             # this pass. Replace stale ownership evidence immediately so a
@@ -4335,9 +4329,7 @@ class SessionManager:
                 and not isinstance(raw_hook_sequence_duplicates, bool)
                 and raw_hook_sequence_duplicates >= 0
             ):
-                session.observation_state["hook_sequence_duplicates"] = (
-                    raw_hook_sequence_duplicates
-                )
+                session.observation_state["hook_sequence_duplicates"] = raw_hook_sequence_duplicates
             raw_approval_candidate = meta.get("approval_candidate")
             if isinstance(raw_approval_candidate, dict):
                 raw_candidate_started_at = raw_approval_candidate.get("started_at")
@@ -4356,9 +4348,7 @@ class SessionManager:
                         "evidence": str(
                             raw_approval_candidate.get("evidence") or "approval:restored"
                         ),
-                        "detail": str(
-                            raw_approval_candidate.get("detail") or "Approval needed"
-                        ),
+                        "detail": str(raw_approval_candidate.get("detail") or "Approval needed"),
                     }
             if previous_identity is not None:
                 # The candidate belonged to the disputed run. Identity repair
@@ -4827,12 +4817,12 @@ class SessionManager:
                     pass
                 continue
             try:
+                detection_cwd = Path(session.record.runtime_cwd or session.record.cwd)
                 candidates = [
                     (modified, adapter.name, path, native_id)
                     for adapter in launched
-                    for modified, path, native_id in adapter.recent_transcripts(
-                        Path(session.record.runtime_cwd or session.record.cwd),
-                        detection_started_at,
+                    for modified, path, native_id in await self._recent_transcripts(
+                        adapter, detection_cwd, detection_started_at
                     )
                     if (adapter.name, native_id) not in session.ignored_detection_runs
                 ]
@@ -5263,9 +5253,7 @@ class SessionManager:
             return False
         adapter = self.adapters.get(record.backend)
         if transcript is None and adapter is not None:
-            transcript = adapter.transcript_path(
-                native_id, Path(record.run_cwd or record.cwd)
-            )
+            transcript = adapter.transcript_path(native_id, Path(record.run_cwd or record.cwd))
         # Stop first: an in-flight observer would otherwise re-bind the retired
         # conversation id from the file it is still tailing.
         await self._stop_observer(session)
@@ -5480,7 +5468,7 @@ class SessionManager:
                 )
                 return relocated
             candidate = (
-                self._transcript_switch_candidate(session, current) if heuristic else None
+                await self._transcript_switch_candidate(session, current) if heuristic else None
             )
             if candidate is not None:
                 await self.events.emit(
@@ -5834,8 +5822,7 @@ class SessionManager:
                 getattr(session, "observation_stale_reason", None)
                 in {"transcript_stale", "transcript_missing"}
                 and session.last_turn_hook_ts > 0.0
-                and session.last_turn_hook_ts
-                <= last_write + TRANSCRIPT_SWITCH_QUIET_SECONDS
+                and session.last_turn_hook_ts <= last_write + TRANSCRIPT_SWITCH_QUIET_SECONDS
             )
             if corroborates_latest_turn:
                 await self._clear_transcript_staleness(
@@ -5899,17 +5886,14 @@ class SessionManager:
 
     @staticmethod
     def _resolved_cwd(record: SessionRecord) -> Path:
-        cwd = Path(record.run_cwd or record.cwd)
-        try:
-            return cwd.resolve()
-        except OSError:
-            return cwd
+        # Cached (`transcript_scan.resolve_path_cached`): this runs once per live
+        # session per `_same_cwd_siblings` call, which the switch watcher makes
+        # every two seconds per session, and every stall dump of 2026-09-14 had
+        # the loop inside this realpath.
+        return Path(resolve_path_cached(record.run_cwd or record.cwd))
 
     def _same_cwd_siblings(self, session: Session, cwd: Path) -> list[Session]:
-        try:
-            key = cwd.resolve()
-        except OSError:
-            key = cwd
+        key = Path(resolve_path_cached(cwd))
         return [
             other
             for other in self.sessions.values()
@@ -5933,9 +5917,7 @@ class SessionManager:
             for other in self._same_cwd_siblings(session, cwd)
         )
 
-    def _unresolved_transcript_sibling(
-        self, session: Session, cwd: Path, created: float
-    ) -> bool:
+    def _unresolved_transcript_sibling(self, session: Session, cwd: Path, created: float) -> bool:
         """True when a same-backend sibling here cannot be excluded as the writer.
 
         The blanket "any sibling in this cwd blocks the switch" rule was correct
@@ -5972,7 +5954,13 @@ class SessionManager:
             return True
         return False
 
-    def _transcript_switch_candidate(self, session: Session, current: Path) -> Path | None:
+    async def _transcript_switch_candidate(self, session: Session, current: Path) -> Path | None:
+        """The transcript the agent appears to have moved to, by mtime and ownership.
+
+        The directory listing comes through the shared off-loop scan and the
+        per-candidate creation-time stats run in one worker call; the ownership
+        analysis stays on the loop because it reads live session state.
+        """
         record = session.record
         now = time.time()
         # "The file we follow has gone quiet" is the precondition for retargeting at
@@ -6005,9 +5993,10 @@ class SessionManager:
         }
         best: tuple[float, Path] | None = None
         try:
-            candidates = session.adapter.recent_transcripts(cwd, started)
+            candidates = await self._recent_transcripts(session.adapter, cwd, started)
         except OSError:
             return None
+        plausible: list[tuple[float, Path]] = []
         for modified, path, native_id in candidates:
             if path == current or str(path) in other_paths:
                 continue
@@ -6017,9 +6006,18 @@ class SessionManager:
                 continue
             if now - modified > TRANSCRIPT_SWITCH_FRESH_SECONDS:
                 continue
-            if not self._session_could_have_written(session, path):
+            plausible.append((modified, path))
+        if not plausible:
+            return None
+        # One worker call for every candidate's creation time, rather than a stat
+        # on the loop per candidate (`_session_could_have_written` needs the same
+        # reading, so it takes it as an argument instead of stat-ing again).
+        created_ats = await asyncio.to_thread(
+            lambda: [file_created_at(path) for _, path in plausible]
+        )
+        for (modified, path), created in zip(plausible, created_ats, strict=True):
+            if not self._session_could_have_written(session, path, created):
                 continue
-            created = file_created_at(path)
             if created is None or self._unresolved_transcript_sibling(session, cwd, created):
                 continue
             if best is None or modified > best[0]:
@@ -6027,7 +6025,9 @@ class SessionManager:
         return best[1] if best else None
 
     @staticmethod
-    def _session_could_have_written(session: Session, candidate: Path) -> bool:
+    def _session_could_have_written(
+        session: Session, candidate: Path, created: float | None = None
+    ) -> bool:
         """Corroborate that *this* PTY produced the candidate transcript.
 
         The candidate pool is the backend's shared per-cwd transcript directory,
@@ -6040,8 +6040,12 @@ class SessionManager:
         The corroboration is cheap and hard to fake: if this session's CLI wrote
         the file, this session's PTY produced output while the file was being
         written. An outside CLI leaves our PTY silent.
+
+        `created` is the candidate's creation time when the caller already read
+        it; otherwise it is read here.
         """
-        created = file_created_at(candidate)
+        if created is None:
+            created = file_created_at(candidate)
         if created is None:
             return False
         last_output = session.record.last_activity_ts
@@ -6182,9 +6186,7 @@ class SessionManager:
             return False
         if (record.backend, native_id) in session.ignored_detection_runs:
             return False
-        await self._heal_minted_identity(
-            session, disputed, trigger="own_conversation_hook"
-        )
+        await self._heal_minted_identity(session, disputed, trigger="own_conversation_hook")
         return record.native_session_id == native_id
 
     async def _heal_minted_identity(
@@ -6258,9 +6260,7 @@ class SessionManager:
             evidence="identity_reconciled",
             force=True,
         )
-        transcript = session.adapter.transcript_path(
-            anchor, Path(record.run_cwd or record.cwd)
-        )
+        transcript = session.adapter.transcript_path(anchor, Path(record.run_cwd or record.cwd))
         run_id = record.agent_run_id or record.id
         if bad_run_id:
             await self.history.quarantine_misattributed_agent_run(
@@ -6444,9 +6444,7 @@ class SessionManager:
         # The unwitnessed pair runs before the active-state gate below, because it
         # is the only rule here that reads an `idle` session — the state a fresh
         # Codex pane is stranded in for its whole first turn.
-        if session_is_unwitnessed(session) and await self._check_unwitnessed_pty_turn(
-            session, now
-        ):
+        if session_is_unwitnessed(session) and await self._check_unwitnessed_pty_turn(session, now):
             return
         # Startup dialogs also read idle sessions: a trust/update dialog blocks
         # before any turn has ever run while hook-sourced idle wins the display.
@@ -6456,9 +6454,7 @@ class SessionManager:
             dialog_pty_explanation = self._pty_tail_explanation(session)
             dialog_pty_state = cast(PtyTailState, dialog_pty_explanation["outcome"])
             self._note_pty_tail_readings(session, dialog_pty_explanation, now=now)
-            no_turn, dialog_seconds = startup_dialog_observation(
-                session, dialog_pty_state, now
-            )
+            no_turn, dialog_seconds = startup_dialog_observation(session, dialog_pty_state, now)
             if no_turn:
                 dialog_action = watchdog_decision(
                     record.state,
@@ -6533,9 +6529,7 @@ class SessionManager:
                 if now - mtime < STATE_WATCHDOG_TRANSCRIPT_QUIET_SECONDS:
                     # The transcript is still moving; the live observer owns it.
                     return
-                verdict = await asyncio.to_thread(
-                    transcript_tail_turn_state, record.backend, path
-                )
+                verdict = await asyncio.to_thread(transcript_tail_turn_state, record.backend, path)
         # Re-derive after the await. `stalled`/`pty_state`/`record.state` were
         # captured before a threaded tail read that can take real time, and an
         # approval raised inside that window would otherwise be judged against
@@ -6604,11 +6598,7 @@ class SessionManager:
         self._note_pty_tail_readings(session, explanation, now=now)
         if outcome == "authentication":
             if session.record.runtime_boundary != "remote":
-                matched = {
-                    str(item["id"])
-                    for item in explanation["rules"]
-                    if item["matched"]
-                }
+                matched = {str(item["id"]) for item in explanation["rules"] if item["matched"]}
                 if matched & {
                     "ssh.authentication.host_key",
                     "ssh.authentication.password",
@@ -6637,11 +6627,7 @@ class SessionManager:
                 )
             return True
 
-        matched = {
-            str(item["id"])
-            for item in explanation["rules"]
-            if item["matched"]
-        }
+        matched = {str(item["id"]) for item in explanation["rules"] if item["matched"]}
         strong_transport_evidence = bool(
             matched
             & {
@@ -6652,9 +6638,7 @@ class SessionManager:
         if session.record.runtime_boundary != "remote" and not strong_transport_evidence:
             return False
         if session.record.runtime_boundary != "remote":
-            SessionManager._accept_remote_boundary(
-                self, session, "unknown", source="ssh-transport"
-            )
+            SessionManager._accept_remote_boundary(self, session, "unknown", source="ssh-transport")
         if not session.observation_state.get("ssh_transport_ended"):
             session.observation_state["ssh_transport_ended"] = now
             session.record.remote_transport_state = "ended"
@@ -6686,9 +6670,7 @@ class SessionManager:
             pty_state=self._pty_tail_state(session),
             awaiting_reason=record.awaiting_reason,
             unwitnessed=True,
-            unwitnessed_turn_armed=bool(
-                session.observation_state.get("unwitnessed_turn_armed")
-            ),
+            unwitnessed_turn_armed=bool(session.observation_state.get("unwitnessed_turn_armed")),
         )
         if action not in {"begin_pty_turn", "end_pty_turn"}:
             return False
@@ -7419,14 +7401,17 @@ class SessionManager:
                 record.remote_transport_state = "connected"
                 getattr(session, "observation_state", {}).pop("ssh_transport_ended", None)
             if source == "osc7" and record.backend == "shell":
-                changed = apply_state_transition(
-                    session,
-                    "idle",
-                    "Remote shell prompt",
-                    source="daemon",
-                    evidence="remote_shell_prompt",
-                    force=True,
-                ) or changed
+                changed = (
+                    apply_state_transition(
+                        session,
+                        "idle",
+                        "Remote shell prompt",
+                        source="daemon",
+                        evidence="remote_shell_prompt",
+                        force=True,
+                    )
+                    or changed
+                )
             if changed:
                 session.publish_update()
             return

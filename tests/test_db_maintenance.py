@@ -387,7 +387,7 @@ async def test_a_live_predecessor_that_never_exits_keeps_the_request(
 ) -> None:
     """The bug this feature shipped with, asserted.
 
-    `wait_for_predecessor_exit` is bounded at 20s and a timeout is deliberately
+    `wait_for_predecessor_drain` is bounded at 60s and a timeout is deliberately
     a warning rather than a refusal, so the startup window is *not* guaranteed
     exclusive - on the development host the predecessor exceeded that gate on
     every measured restart, and `VACUUM` then failed `database is locked`. The

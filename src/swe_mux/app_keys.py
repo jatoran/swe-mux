@@ -57,6 +57,7 @@ if TYPE_CHECKING:
     from .history_scan import HistoryScanManager
     from .land_queue import LandQueueService
     from .land_store import LandStore
+    from .listener_guard import ListenerGuard
     from .llm_endpoint import CapabilityStore, LlmReadiness
     from .loop_lag import LoopLagMonitor
     from .mcp import McpService
@@ -159,6 +160,8 @@ REAPER: web.AppKey[ProcessReaper] = web.AppKey("reaper")
 MCP: web.AppKey[McpService] = web.AppKey("mcp")
 LOOP_LAG: web.AppKey[LoopLagMonitor] = web.AppKey("loop_lag")
 STALL_WATCHDOG: web.AppKey[StallWatchdog] = web.AppKey("stall_watchdog")
+#: Set by `__main__.serve` once the sites are bound; a minimal app has none.
+LISTENER_GUARD: web.AppKey[ListenerGuard] = web.AppKey("listener_guard")
 
 # --- stores and services -----------------------------------------------------
 

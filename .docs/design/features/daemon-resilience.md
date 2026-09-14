@@ -30,22 +30,39 @@ It follows the current daemon generation through `daemon-recovery.json`, includi
 The record's desktop-token digest must match this desktop installation.
 Unmanaged daemons and old builds without the record are observed without automatic intervention.
 
+The probe is `GET /api/health` with a five-second timeout.
+Whether a run of failed probes means a hang is decided with the daemon's heartbeat (`daemon-heartbeat.json`, written from the event loop every ten seconds): a heartbeat older than thirty seconds is a stopped loop, a fresh one is a loop that is running but cannot answer in time.
+
 | Observed condition | Behavior |
 | --- | --- |
 | Successful health probe | Clear the outage and pending replacement state. |
 | Confirmed dead generation | Launch a replacement after four seconds of failed probes. |
-| Previously ready process alive but unresponsive for 45 seconds | Recheck health and protected-session evidence, then terminate only that daemon and launch its replacement. |
+| Previously ready process alive, heartbeat stale, unresponsive for 45 seconds | Recheck health and protected-session evidence, then terminate only that daemon and launch its replacement (`unresponsive_loop_stalled`). |
+| Previously ready process alive, heartbeat fresh, unresponsive for 180 seconds | The same replacement, three minutes later (`unresponsive`). A live loop that misses probes is load or a listener being rebound, and a kill costs a 70-110s restart to cure a slowness. |
 | Process still starting | Wait without terminating it, including slow database maintenance. |
 | Unknown process identity, local PTY allocation, or unavailable/changed supervisor | Refuse forced termination. |
 | Intentional quit or live redeploy | Suppress automatic recovery. |
 | Planned detach/restart | Allow five minutes for the handoff; recover a failed handoff afterward under the ordinary protection gates. |
 | Three attempted replacements within ten minutes | Suppress further attempts until the rolling window permits another. |
+| Replacement healthy for two minutes | Forget the attempts that produced it; the budget is for crash loops, not for the next outage. |
 
 Thresholds exclude probe time and replacement startup time.
 A spawned replacement is tracked before it publishes its startup record, preventing duplicate launches during a slow process start.
+A daemon that starts while the record names a live generation with no planned handoff does not take the record (`register_daemon` returns `False` and says so in `lifecycle.log`): it is a duplicate about to lose its port bind, and taking the record made the monitor restart a daemon that was fine.
 Manual tray restart pauses and fences the monitor; tray Quit stops it before requesting shutdown.
 Recovery never invokes supervisor shutdown, kills a process tree, or rebuilds a bundle.
 Every recovery state transition and failure goes to the rotating `lifecycle.log`.
+
+## Listener guard
+
+On Windows the proactor event loop closes a *listening* socket when one accept completion fails with `OSError`, and never listens on it again.
+The ordinary way to produce that is a client whose connect timed out against a blocked loop: its half-open connection is reset, and the queued accept fails with `WinError 64` when the loop resumes.
+The daemon is then alive, answering on every other interface, and unreachable on loopback, which is the address every local client uses.
+
+`listener_guard.ListenerGuard` checks every bound site every two seconds.
+A closed listening socket is one whose `fileno()` reads -1, the only trace asyncio leaves; the site is stopped and a new one bound on the same host and port.
+Each finding is an ERROR in `daemon.log`, a line in `lifecycle.log`, and a counter under `listener_guard` on `/api/diagnostics/background`; a rebind that fails is retried every tick and logged at most every thirty seconds.
+A site that never started has no sockets and is not reported dead, because that is the startup path's failure to report.
 
 ## Session protection and durable authority
 
