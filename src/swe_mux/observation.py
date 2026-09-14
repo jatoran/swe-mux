@@ -3395,7 +3395,11 @@ def _same_directory(left: str, right: str) -> bool:
 
 
 def conversation_rollover_decision(
-    session: Session, event_type: str, payload: dict[str, Any]
+    session: Session,
+    event_type: str,
+    payload: dict[str, Any],
+    *,
+    codex_root_process_verified: bool = False,
 ) -> RolloverDecision:
     """The new conversation id when this hook proves the CLI replaced its own.
 
@@ -3410,11 +3414,9 @@ def conversation_rollover_decision(
     wiring and reports itself over the same channel. Two facts separate it from
     the CLI replacing its own conversation, and both refuse the roll:
 
-    - ``source == "startup"`` is a fresh process announcing itself. An in-place
-      replacement (`/clear`, in-CLI `/resume`) reports ``clear``/``resume``;
-      `compact` keeps the id and never reaches the comparison. A bound session's
-      own CLI cannot fire a root ``startup`` — its process-level restarts go
-      through daemon lifecycle (demote/promote), never this hook.
+    - Claude's ``source == "startup"`` announces a fresh process. Codex also
+      uses it for in-process replacements, which require separately verified
+      PTY process ownership and a CLI-root transcript before overriding the guard.
     - A cwd that is not this session's. Replacing a conversation cannot move the
       CLI's working directory; a child probing from a scratch dir cannot fake it.
 
@@ -3455,7 +3457,14 @@ def conversation_rollover_decision(
     if session.agent_lifecycle_id == native_id:
         return nothing
     source = str(payload.get("source") or "")
-    if source == "startup":
+    if source == "startup" and (session.record.backend, native_id) in getattr(
+        session, "ignored_detection_runs", set()
+    ):
+        return RolloverDecision(refused=native_id, refusal_reason="retired_conversation")
+    if source == "startup" and not (
+        descriptor(session.record.backend).startup_rollover_proof == "codex_process"
+        and codex_root_process_verified
+    ):
         return RolloverDecision(refused=native_id, refusal_reason="foreign_process_startup")
     hook_cwd = str(payload.get("cwd") or "")
     # Both directories this session is known to stand in. The spawn/run cwd is where
@@ -3472,6 +3481,58 @@ def conversation_rollover_decision(
     if hook_cwd and present and not any(_same_directory(hook_cwd, cwd) for cwd in present):
         return RolloverDecision(refused=native_id, refusal_reason="cwd_mismatch")
     return RolloverDecision(roll_to=native_id)
+
+
+async def resolve_conversation_rollover(
+    session: Session, event_type: str, payload: dict[str, Any], events: EventBus
+) -> RolloverDecision:
+    """Apply the same process-backed Codex exception to live and spooled hooks."""
+    decision = conversation_rollover_decision(session, event_type, payload)
+    if (
+        descriptor(session.record.backend).startup_rollover_proof != "codex_process"
+        or decision.refusal_reason != "foreign_process_startup"
+    ):
+        return decision
+    from .codex_process_identity import PROCESS_FIELD, verify_codex_root_process
+
+    proof = await asyncio.to_thread(
+        verify_codex_root_process, payload, session.record.pid, session.record.root_started_at
+    )
+    reported = payload.get(PROCESS_FIELD)
+    identity = (
+        {key: reported[key] for key in ("pid", "started_at") if key in reported}
+        if isinstance(reported, dict)
+        else None
+    )
+    evidence = {
+        "native_session_id": decision.refused,
+        "previous_native_session_id": session.record.native_session_id,
+        "verified": proof.verified,
+        "reason": proof.reason,
+        "process": identity,
+        "pty_pid": session.record.pid,
+    }
+    session.state_transitions.append(
+        {"ts": time.time(), "kind": "codex_conversation_identity_checked", **evidence}
+    )
+    await events.emit(
+        "codex_conversation_identity_checked",
+        session_id=session.record.id,
+        source="hook",
+        **evidence,
+    )
+    log.info(
+        "Codex conversation identity session=%s candidate=%s verified=%s reason=%s",
+        session.record.id,
+        decision.refused,
+        proof.verified,
+        proof.reason,
+    )
+    if proof.verified:
+        return conversation_rollover_decision(
+            session, event_type, payload, codex_root_process_verified=True
+        )
+    return decision
 
 
 def foreign_conversation_hook_id(session: Session, payload: dict[str, Any]) -> str | None:

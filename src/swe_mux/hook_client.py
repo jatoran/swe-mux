@@ -338,6 +338,14 @@ def main() -> None:
         payload = {"raw": raw}
     if event == "codex_notify" and isinstance(payload, dict) and payload.get("type"):
         event = str(payload["type"])
+    if event == "SessionStart" and isinstance(payload, dict):
+        from .codex_process_identity import PROCESS_FIELD, capture_codex_process
+
+        # Derived here, never trusted from stdin or an inherited environment.
+        payload.pop(PROCESS_FIELD, None)
+        process_identity = capture_codex_process()
+        if process_identity is not None:
+            payload[PROCESS_FIELD] = process_identity
     body = json.dumps({"event": event, "payload": payload}).encode()
     if event in _DECISION_EVENTS:
         delivered, decision = _post_for_decision(url, secret, body)

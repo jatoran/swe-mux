@@ -6736,7 +6736,11 @@ class SessionManager:
         path = self._hook_spool_path(session.record.id)
         if path is None:
             return
-        from .observation import apply_hook_observation, foreign_conversation_hook_id
+        from .observation import (
+            apply_hook_observation,
+            foreign_conversation_hook_id,
+            resolve_conversation_rollover,
+        )
 
         record = session.record
         if record.state in TERMINAL_STATES:
@@ -6801,9 +6805,7 @@ class SessionManager:
             if not event_type or not isinstance(payload, dict):
                 continue
             raw_spooled_at = item.get("spooled_at")
-            spooled_at = (
-                float(raw_spooled_at) if isinstance(raw_spooled_at, int | float) else None
-            )
+            spooled_at = float(raw_spooled_at) if isinstance(raw_spooled_at, int | float) else None
             if spooled_at is not None and spooled_at < floor:
                 session.state_transitions.append(
                     {
@@ -6819,6 +6821,40 @@ class SessionManager:
             # conversation heals a stolen binding, and a foreign conversation's
             # spooled event neither refreshes liveness nor drives state (the
             # observation layer ledgers and drops it).
+            decision = await resolve_conversation_rollover(
+                session, event_type, payload, self.events
+            )
+            if decision.refused is not None:
+                await self.events.emit(
+                    "conversation_rollover_refused",
+                    session_id=record.id,
+                    source="hook-spool",
+                    backend=record.backend,
+                    native_session_id=decision.refused,
+                    reason=decision.refusal_reason,
+                )
+                continue
+            if decision.roll_to is not None:
+                reported = payload.get("transcript_path")
+                try:
+                    await self.roll_agent_conversation(
+                        record.id,
+                        native_id=decision.roll_to,
+                        reason="conversation_rolled",
+                        source="hook-spool",
+                        transcript=Path(reported)
+                        if isinstance(reported, str) and reported
+                        else None,
+                    )
+                except Exception:
+                    log.exception("spooled conversation rollover failed for session %s", record.id)
+                    record.observation_stale_since = time.time()
+                    record.observation_diagnostic = (
+                        "the CLI reported a new conversation that could not be adopted"
+                    )
+                    session.observation_stale_reason = "rollover_adoption_failed"
+                    session.publish_update()
+                    continue
             await self.maybe_heal_from_own_conversation_hook(session, payload)
             if foreign_conversation_hook_id(session, payload) is None:
                 session.last_hook_ts = time.time()

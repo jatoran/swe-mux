@@ -24,8 +24,8 @@ from ..http_support import json_response
 from ..mcp import McpAuthError, McpService
 from ..observation import (
     apply_hook_observation,
-    conversation_rollover_decision,
     foreign_conversation_hook_id,
+    resolve_conversation_rollover,
     session_hook_event_scope,
 )
 from ..telemetry_otlp import PARSER_VERSION, otlp_reduction
@@ -316,7 +316,9 @@ async def hook_ingress(request: web.Request) -> web.Response:
     # — but it must not degrade to the old silent-swap behaviour either. Failing
     # closed marks observation stale, which is exactly true: we know the
     # conversation moved and we did not manage to follow it.
-    decision = conversation_rollover_decision(session, event_type, payload)
+    decision = await resolve_conversation_rollover(
+        session, event_type, payload, request.app[keys.EVENTS]
+    )
     if decision.roll_to is not None:
         reported_transcript = (
             str(payload.get("transcript_path") or "")

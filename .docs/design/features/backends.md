@@ -753,9 +753,9 @@ The guarded assertions themselves did not move: a real turn still has to produce
   conversation**: the ingress and the secret authenticate the *session*, not the process,
   and a nested `claude` launched by the session's own tool call inherits the hook wiring
   and speaks over the same channel. Two facts separate the two, and either refuses the roll
-  (ledgered and emitted as `conversation_rollover_refused`): `source: "startup"` is a fresh
-  process announcing itself — an in-place replacement reports `clear`/`resume`, while
-  `compact` keeps the id and never reaches the comparison — and a hook `cwd` that is not
+  (ledgered and emitted as `conversation_rollover_refused`): Claude's `source: "startup"` is a fresh
+  process announcing itself - its in-place replacement reports `clear`/`resume`, while
+  `compact` keeps the id and never reaches the comparison - and a hook `cwd` that is not
   the session's, because replacing a conversation cannot move the CLI's working directory.
   (Measured live 2026-07-31 before the guard: a session whose task spawned probe children
   rolled onto their conversations 14 times and spent most of its life showing their
@@ -778,6 +778,16 @@ The guarded assertions themselves did not move: a real turn still has to produce
   conversation in a shared cwd). **The transcript-switch watcher** remains enabled for Codex as
   a fallback when lifecycle hooks are disabled, untrusted, or unavailable: a quiet observed
   transcript plus a freshly written, unclaimed, PTY-corroborated replacement in the same run cwd.
+- **Codex `startup` describes a new thread, not necessarily a new process.**
+  The registry's `startup_rollover_proof="codex_process"` permits its authenticated `SessionStart` to replace a bound conversation when `codex_process_identity.py` proves that the emitting CLI is the outermost Codex process inside this pane's PTY ancestry.
+  The hook helper captures the nearest Codex ancestor's PID and OS creation time in `mux_codex_process`; the daemon revalidates that fingerprint, every parent link's creation order, and the PTY root's recorded creation time.
+  Another Codex ancestor identifies a nested CLI and refuses the replacement.
+  A matching transcript header with `source: "cli"` is also required because native subagents can share the root's process.
+  Missing, inaccessible, recycled, or ambiguous evidence never overrides the startup guard.
+  Verification runs off the event loop and records `codex_conversation_identity_checked` with its verdict and reason in the durable event log and session state ledger.
+  Live ingress and durable hook replay use the same resolver, so a replacement during daemon restart still retires the previous run and persists the successor's conversation and transcript for Resume.
+  A delayed `startup` for a retired conversation cannot roll the pane backward.
+  The hook helper's fingerprint names the CLI rather than the helper, so it remains verifiable after the helper has exited.
 - For Codex, if the observed transcript goes quiet while another transcript for the same run
   cwd is being actively written and is not owned by another live session, observation
   retargets to it and re-enters historical catch-up as part of that rollover. "Quiet" is

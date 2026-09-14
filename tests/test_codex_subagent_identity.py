@@ -90,8 +90,7 @@ def codex_pane(native_id: str = PANE) -> Any:
 
 
 def start(conversation: str = ROOT) -> dict[str, Any]:
-    """Codex's root SessionStart. It always reports `startup`: the CLI has no
-    in-place conversation replacement to report anything else for."""
+    """Codex reports `startup` for both the first thread and replacements."""
     return {"session_id": conversation, "source": "startup", "cwd": "."}
 
 
@@ -127,9 +126,8 @@ async def test_a_fresh_codex_pane_binds_from_its_own_session_start() -> None:
 
 
 def test_a_bound_pane_still_refuses_a_foreign_startup() -> None:
-    # The rule the gate was written for survives the fix: once bound, a root
-    # `startup` naming a different conversation is another process announcing
-    # itself, and adopting it hands this pane's identity to a child.
+    # Startup alone cannot prove a replacement. The live/spooled ingress must
+    # corroborate the CLI's process ownership before overriding this refusal.
     session = codex_pane(native_id=ROOT)
     decision = conversation_rollover_decision(session, "SessionStart", start(CHILD))
     assert decision.roll_to is None

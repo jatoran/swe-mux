@@ -64,6 +64,14 @@ It refuses a source that is too large, a cut at byte zero, and an id that alread
 
 ## Observation and approvals
 
+### `codex_process_identity.py`
+
+Captures the nearest Codex process fingerprint in the startup hook helper and verifies the emitting CLI against the PTY root's birth-checked ancestry and a matching CLI-root transcript header.
+The bounded read runs off the daemon event loop through `observation.resolve_conversation_rollover`, shared by live ingress and hook-spool replay.
+Nested CLIs, native subagent transcripts, stale PIDs, and unavailable evidence cannot authorize a conversation replacement.
+
+**Not:** conversation mutation, process termination, command-line collection, or transcript discovery.
+
 ### `observation.py`
 
 Provider hook and transcript normalization, root-turn state, supervisor-resumable 5 s approval stabilization with immediate delivery blocking, first and latest user-request capture, immediate `transcript_message` fanout, and standing-activity evidence including the three carriers one background-task completion rides, closed idempotently per task.

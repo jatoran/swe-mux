@@ -777,6 +777,10 @@ class HarnessDescriptor:
     mcp_tool_source: McpToolSource
     hook_events: tuple[str, ...]
 
+    # Some CLIs use SessionStart/startup for an in-process conversation change.
+    # The named proof is required before the generic foreign-startup guard yields.
+    startup_rollover_proof: Literal["codex_process"] | None = None
+
     def __post_init__(self) -> None:
         if not self.name or not self.display_name:
             raise ValueError("harness identity fields must not be empty")
@@ -1258,6 +1262,7 @@ HARNESSES: dict[str, HarnessDescriptor] = {
     "codex": HarnessDescriptor(
         name="codex",
         display_name="Codex",
+        startup_rollover_proof="codex_process",
         executable="codex.exe",
         default_args=(),
         data_home=_codex_data_home,

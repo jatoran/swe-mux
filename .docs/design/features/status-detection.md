@@ -822,8 +822,8 @@ unwitnessed session is exempt by construction (its state *came* from the screen)
 The hook ingress authenticates the *session*, not the process: a nested child CLI
 launched by the session's own tool call inherits the hook wiring and speaks over the same
 channel with its own conversation id. Identity is guarded at the rollover decision
-(`backends.md` — a bound session rolls only on an in-place replacement: not
-`source: "startup"`, not another cwd), and state is guarded here: once a Claude or Codex session is
+(`backends.md` - a bound session rolls only on an in-place replacement in its known cwd;
+Codex `startup` requires independently verified root-process ownership and a CLI-root transcript), and state is guarded here: once a Claude or Codex session is
 bound, `apply_hook_observation` drops any hook naming a different conversation before it
 can move state — a child's `PermissionRequest` must not raise an "awaiting approval" no
 screen shows. Drops are ledgered (`foreign_conversation_hook_ignored`) and counted in

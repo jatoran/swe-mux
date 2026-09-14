@@ -96,6 +96,7 @@ _FUNCTION_ALLOWLIST: dict[str, str] = {
     "agent_skills.py::_scan_skill_root": "two measured naming deviations, stated in its docstring",
     "observation.py::_claude": "one harness's own record classifier",
     "observation.py::_codex": "one harness's own record classifier",
+    "codex_process_identity.py::_is_codex": "native Codex executable names for OS ancestry proof",
     "observation.py::_omp": "one dialect's record classifier",
     "agent_context.py::AgentContextService._claude_provider": "one harness's memory provider",
     "agent_context.py::AgentContextService._codex_provider": "one harness's memory provider",

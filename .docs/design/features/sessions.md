@@ -448,11 +448,10 @@ and reattachable browser viewports.
   conversation (same rule as a rolled conversation, same fallback to the pane's own anchor).
   And a run id repaired away this way is *dropped, never quarantined* — it names the resumed
   conversation's own row, so quarantining it would delete a conversation's real history over a
-  dispute about which conversation this PTY is on. The pane's ownership evidence is unchanged
-  by any of this: an unrolled resume still proves its claim through its spawn id, so the sweep
-  still never heals it off the conversation it was spawned to continue. Codex mints a new
-  rollout id on resume, so there the pane starts a genuinely new conversation and run.
-  Before that new run is created, resume resolves the source row's effective visible name: a manual name remains pinned, while an auto-generated title becomes the new pane's initial auto-nameable name instead of falling back to `codex-<id>`.
+  dispute about which conversation this PTY is on.
+  An unrolled resume still proves its claim through its spawn id, so the sweep never heals it off the conversation it was spawned to continue.
+  Codex resolves resume by thread ID and reopens the original rollout, preserving its run even across working directories (`history.md`).
+  Resume resolves the source row's effective visible name: a manual name remains pinned, while an auto-generated title becomes the new pane's initial auto-nameable name instead of falling back to `codex-<id>`.
 - **A rollover onto a conversation a live sibling owns is refused outright.** The collision is
   prevented rather than repaired, because repair does not work here: a rollover moves
   `agent_lifecycle_id`, so a pane that followed an in-CLI `/resume` onto a sibling's live
