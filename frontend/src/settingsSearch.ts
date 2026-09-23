@@ -53,6 +53,13 @@ export type SettingsSearchEntry = {
   key: string
   /** Everything else worth matching on: heading, help text, option labels, placeholders. */
   keywords: string
+  /**
+   * Other names for this entry, normalized: "dark mode" for Theme. Scored like a
+   * second label rather than folded into `keywords`, so typing an alias ranks its
+   * target the way typing the real name would. Attached from the curated table in
+   * `settingsSearchAliases.ts`; the walk itself never sets any.
+   */
+  aliases: string[]
   kind: SettingsEntryKind
   /** Which same-`key` element of this `kind` in this tab, in document order. */
   occurrence: number
@@ -89,6 +96,26 @@ const HELP_TAGS = new Set(['p', 'small'])
 const TEXT_PROPS = ['placeholder', 'title', 'aria-label', 'alt'] as const
 
 /**
+ * The opt-out a subtree carries when the panel-wide search should not index it:
+ *
+ * - `skip`: nothing inside is indexed. For long generated tables that already have
+ *   their own filter beside them (the app's keyboard shortcuts, the note editor's
+ *   chords): one row per command, times three buttons each, is hundreds of entries
+ *   that drowned every real setting a query also matched.
+ * - `no-options`: controls inside keep their labels but not their `Dropdown` option
+ *   labels. For pickers whose options are the whole command catalogue: every touch
+ *   gesture slot listed every command, so "palette" matched each of them.
+ *
+ * An attribute rather than a selector list here, so the exclusion travels with the
+ * markup it describes and holds for both the vnode walk and the live-DOM harvest.
+ */
+export const SEARCH_MARK = 'data-settings-search'
+export type SearchMark = 'skip' | 'no-options'
+const markOf = (props: Record<string, unknown> | null | undefined): unknown => props?.[SEARCH_MARK]
+const isAriaHidden = (props: Record<string, unknown> | null | undefined): boolean =>
+  props?.['aria-hidden'] === true || props?.['aria-hidden'] === 'true'
+
+/**
  * A `Dropdown`'s rows live in its `options` prop rather than as `<option>` children, so the
  * walk below cannot see them the way it saw a `<select>`'s. Harvesting the labels keeps every
  * choice searchable: "Tokyo Night" and "DEBUG" and "Kokoro" are exactly the words a person
@@ -112,21 +139,27 @@ const childrenOf = (node: { props?: Record<string, unknown> | null }): unknown =
   node.props && typeof node.props === 'object' ? (node.props as { children?: unknown }).children : undefined
 
 /** Every text run under `node`, in document order. */
-function collectText(node: unknown, out: string[], withProps: boolean): void {
+function collectText(node: unknown, out: string[], withProps: boolean, withOptions = withProps): void {
   if (node === null || node === undefined || typeof node === 'boolean') return
-  if (Array.isArray(node)) { for (const child of node) collectText(child, out, withProps); return }
+  if (Array.isArray(node)) { for (const child of node) collectText(child, out, withProps, withOptions); return }
   if (typeof node === 'string') { if (node.trim()) out.push(node.trim()); return }
   if (typeof node === 'number') { out.push(String(node)); return }
   if (!isVNode(node)) return
   const props = node.props
+  const mark = markOf(props)
+  // Hidden from assistive tech means decoration or a duplicate, never words a reader
+  // has to find: a glyph, or a `Dropdown`'s width sizer, which carries its *widest*
+  // option and so filed one arbitrary command under every gesture picker.
+  if (mark === 'skip' || isAriaHidden(props)) return
+  const options = withOptions && mark !== 'no-options'
   if (withProps && props) {
     for (const name of TEXT_PROPS) {
       const value = props[name]
       if (typeof value === 'string' && value.trim()) out.push(value.trim())
     }
-    collectOptionLabels(props, out)
+    if (options) collectOptionLabels(props, out)
   }
-  collectText(childrenOf(node), out, withProps)
+  collectText(childrenOf(node), out, withProps, options)
 }
 
 const textOf = (node: unknown): string => { const out: string[] = []; collectText(node, out, true); return out.join(' ') }
@@ -184,7 +217,7 @@ function emit(state: Harvest, tab: string, tabLabel: string, tabIndex: number, k
   const path = [...state.path]
   const entry: SettingsSearchEntry = {
     tab, tabLabel, tabIndex, path, section: path.join(SECTION_SEPARATOR), label, key,
-    keywords: normalizeSearchText(`${path.join(' ')} ${textOf(node)}`), kind, occurrence,
+    keywords: normalizeSearchText(`${path.join(' ')} ${textOf(node)}`), aliases: [], kind, occurrence,
   }
   state.entries.push(entry)
   state.last = entry
@@ -194,6 +227,7 @@ function walk(node: unknown, state: Harvest, tab: string, tabLabel: string, tabI
   if (node === null || node === undefined || typeof node === 'boolean' || typeof node === 'string' || typeof node === 'number') return
   if (Array.isArray(node)) { for (const child of node) walk(child, state, tab, tabLabel, tabIndex, ancestors); return }
   if (!isVNode(node)) return
+  if (markOf(node.props) === 'skip') return
   const type = node.type
   // Fragments and child components: nothing of our own to emit, but their JSX
   // children (if any were passed in) still belong to this tab.
@@ -268,7 +302,7 @@ export function harvestSettings(node: unknown, tab: string, tabLabel: string, ta
  */
 export function domVNode(element: Element): VNodeLike {
   const props: Record<string, unknown> = {}
-  for (const name of TEXT_PROPS) {
+  for (const name of [...TEXT_PROPS, SEARCH_MARK, 'aria-hidden']) {
     const value = element.getAttribute(name)
     if (value) props[name] = value
   }
@@ -283,10 +317,27 @@ export function domVNode(element: Element): VNodeLike {
  */
 export const tabEntry = (tab: string, tabLabel: string, tabIndex: number): SettingsSearchEntry => ({
   tab, tabLabel, tabIndex, path: [], section: '', label: tabLabel, key: normalizeSearchText(tabLabel),
-  keywords: normalizeSearchText(tabLabel), kind: 'section', occurrence: 0,
+  keywords: normalizeSearchText(tabLabel), aliases: [], kind: 'section', occurrence: 0,
 })
 
 const KIND_BONUS: Record<SettingsEntryKind, number> = { field: 50, action: 10, section: 20 }
+/**
+ * What an alias gives up against the real name. Enough to break a tie in the real
+ * name's favour (an alias exists to reach a setting, never to outrank one that is
+ * literally called what was typed), and small enough that an alias hit still beats
+ * any match found only in another entry's help text.
+ */
+const ALIAS_PENALTY = 25
+
+/** One term against an entry: its label and keywords, or failing that its best alias. */
+function termScore(entry: SettingsSearchEntry, term: string): number {
+  let best = fieldScore(entry.key, entry.keywords, term)
+  for (const alias of entry.aliases) {
+    const value = fieldScore(alias, '', term)
+    if (value) best = Math.max(best, value - ALIAS_PENALTY)
+  }
+  return best
+}
 
 /**
  * Rank `entries` against `query`. Every whitespace-separated term must match
@@ -299,7 +350,7 @@ export function searchSettings(entries: SettingsSearchEntry[], query: string, li
   for (const entry of entries) {
     let score = 0
     for (const term of terms) {
-      const value = fieldScore(entry.key, entry.keywords, term)
+      const value = termScore(entry, term)
       if (!value) { score = 0; break }
       score += value
     }

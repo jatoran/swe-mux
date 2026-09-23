@@ -6,7 +6,7 @@ Design: `../../../design/features/setting-links.md`, `../../../design/features/b
 ## Settings
 
 `Settings.tsx`, `settingsTabs.ts`, `settingsDraft.ts`, `settingsSave.ts`, `settingsSearch.ts`,
-`fuzzyText.ts`, `ActionEditorModal.tsx`, `RailEditor.tsx`, `AutomationPolicyView.tsx`,
+`settingsSearchAliases.ts`, `fuzzyText.ts`, `ActionEditorModal.tsx`, `RailEditor.tsx`, `AutomationPolicyView.tsx`,
 `HarnessSetup.tsx`, `WslBridgePanel.tsx`, `wslBridge.ts`
 
 Global non-automation options only, including the machine-wide worktree root.
@@ -42,6 +42,13 @@ Levels are positional, so opening one closes every deeper one and a new `<h3>` c
 And a heading is closed by the end of its `<section>`, which is what stops a group's `<h4>` from following the walk out and claiming the block's later controls - the "Reserved shortcut policy" disclosure filed itself under the last category rendered above it.
 `<strong>` emits an entry without claiming a level: it marks a labelled block inside a section rather than opening one.
 `section` is the joined path, and is what result identity de-duplicates on, so two same-named controls in different groups are two results.
+
+Two subtree marks opt markup out, and both hold for the vnode walk and the live-DOM harvest alike because `domVNode` copies the attribute: `data-settings-search="skip"` drops a subtree entirely, and `data-settings-search="no-options"` keeps its controls' labels while dropping their `Dropdown` option labels.
+`aria-hidden` text is never harvested.
+The keyboard-shortcut table and the note-editor chord list are skipped, and `Settings.tsx` answers a query that matches shortcut commands with one handoff row that opens the Input tab's filter holding the query, counted with the same `shortcutMatches` predicate the filter uses.
+
+`settingsSearchAliases.ts` attaches curated aliases to harvested entries by tab and label (optionally `section` or `kind` when a label repeats on its tab); `settingsSearchEntries` in `Settings.tsx` applies them to every index build, and `searchSettings` scores each alias as a second label less `ALIAS_PENALTY`.
+`auditSettingsAliases` is the collision check: `test/settingsSearchAliases.test.ts` runs its table-only half, and `test/renderer/settings-search.spec.ts` (`npm run check:settings-aliases`) visits every tab of the harness and runs it against the full live index, read through `harvestedSettingsSearch`.
 
 `settingsBreadcrumb` (in `settingsTabs.ts`, not here) turns a path into the line a result row shows.
 It lives with the page mapping because that is the fact it needs: a page is named only when a heading does not already name it, so Input's pages - which *are* its `<h3>`s - are not said twice, while Voice's several-headings-per-page grouping is.

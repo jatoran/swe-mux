@@ -28,6 +28,9 @@ The release procedure that maintains this file is [`RELEASING.md`](RELEASING.md)
 - **The Project menu opens the Run menu.**
   Right-clicking a Project in the sidebar (or tapping its `⋮`, or the Project name in the mobile top bar) now starts with a `Run` row that expands into the same Run menu the `▶` buttons open: harnesses and launch profiles, worktree sessions, plugin panes and the Project's tasks.
   With a mouse it opens on hover, beside the row, with the Project menu still open underneath; on touch, tapping it opens the Run menu.
+- **Settings search finds settings, not every keyboard shortcut.**
+  The shortcut table and the note editor's chord list no longer fill the results; when a search matches shortcuts, one row at the end says how many and opens the Keyboard shortcuts page with its own filter already holding the search.
+  Searches also understand common other names: "dark mode" finds Theme, "hotkeys" finds Keyboard shortcuts, "zoom" finds the interface scale, "tailscale" finds the tailnet listener, among 193 aliases for 65 settings.
 - **The sidebar footer's Settings cog is gone.**
   Settings opens from `menu → Settings`, the `settings.open` command, or any setting link; the cog duplicated the menu row beside it.
 
@@ -36,6 +39,7 @@ The release procedure that maintains this file is [`RELEASING.md`](RELEASING.md)
 
 ### Fixed
 
+- On a phone, Settings search results span the panel instead of the narrow search box, so labels and where they live are readable.
 - **A large fleet no longer makes the daemon read as hung when several agents start at once.**
   Every session waiting for its CLI's first transcript record used to walk that project's transcript directory on the event loop twice a second, and every switch-watch tick resolved every live session's working directory the same way; seven fresh Claude sessions in an 836-file directory pushed request latency past the desktop app's health probe for 45 seconds, and the app terminated a daemon that was serving traffic.
   The walk now runs in a worker thread and one listing serves every session in that directory for a second; path resolution is cached.

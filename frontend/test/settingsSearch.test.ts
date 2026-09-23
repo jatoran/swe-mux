@@ -255,6 +255,56 @@ test('a tab is findable by name even when its body is an opaque component', () =
   assert.equal(searchSettings(opaque, 'accounts')[0].tab, 'accounts')
 })
 
+test('a subtree marked skip is not indexed, and does not feed its neighbours keywords', () => {
+  // The keyboard-shortcut table: a row per command, three buttons each, which buried
+  // every real setting a query also matched. Its own filter searches it instead.
+  const entries = tab(
+    h('h3', {}, 'Keyboard shortcuts'),
+    h('button', {}, 'Restore shortcut defaults'),
+    h('div', { 'data-settings-search': 'skip' },
+      h('section', {}, h('h4', {}, 'View'), h('button', {}, 'Open command palette'))),
+    h('label', {}, 'After the table'))
+  assert.deepEqual(entries.map(entry => entry.label), ['Keyboard shortcuts', 'Restore shortcut defaults', 'After the table'])
+  assert.doesNotMatch(entries[1].keywords, /palette/)
+  assert.deepEqual(entries[2].path, ['Keyboard shortcuts'], 'the skipped h4 never opened')
+})
+
+test('a control marked no-options keeps its label but not its option labels', () => {
+  const Dropdown = () => null
+  const [, gesture, theme] = tab(
+    preactNode('h3', {}, 'Touch gestures'),
+    preactNode('label', { 'data-settings-search': 'no-options' }, 'Swipe left',
+      preactNode(Dropdown, { options: [{ value: 'palette.open', label: 'Open command palette' }] })),
+    preactNode('label', {}, 'Theme', preactNode(Dropdown, { options: [{ value: 'dark', label: 'Dark' }] })))
+  assert.equal(gesture.label, 'Swipe left')
+  assert.doesNotMatch(gesture.keywords, /palette/)
+  assert.match(theme.keywords, /dark/, 'unmarked controls still index their options')
+})
+
+test('the skip mark survives the live-DOM adapter', () => {
+  const text = (value: string) => ({ nodeType: 3, nodeValue: value })
+  const el = (tagName: string, attrs: Record<string, string>, ...childNodes: unknown[]) =>
+    ({ nodeType: 1, tagName, childNodes, getAttribute: (name: string) => attrs[name] ?? null })
+  const section = el('SECTION', {},
+    el('LABEL', {}, text('Kept')),
+    el('DIV', { 'data-settings-search': 'skip' }, el('BUTTON', {}, text('Dropped'))))
+  const entries = harvestSettings(domVNode(section as unknown as Element), 'input', 'Input', 13)
+  assert.deepEqual(entries.map(entry => entry.label), ['Kept'])
+})
+
+test('an alias ranks its entry like a name, just below a label that says it outright', () => {
+  const [theme, darkButton, device] = tab(
+    h('h3', {}, 'Theme'), h('button', {}, 'Dark'), h('label', {}, 'Device mode'))
+  const aliased = [{ ...theme, aliases: ['dark mode', 'color scheme'] }, darkButton, device]
+  assert.equal(searchSettings(aliased, 'dark mode')[0].label, 'Theme')
+  assert.equal(searchSettings(aliased, 'color')[0].label, 'Theme')
+  // Every term must still match something: an alias does not widen a narrowing query.
+  assert.deepEqual(searchSettings(aliased, 'color nonsense'), [])
+  // The real label wins a tie with an alias that reads the same.
+  const tie = [{ ...theme, aliases: ['dark'] }, darkButton]
+  assert.equal(searchSettings(tie, 'dark')[0].label, 'Dark')
+})
+
 test('normalizeSearchText collapses case and whitespace', () => {
   assert.equal(normalizeSearchText('  Read   aloud\n(TTS) '), 'read aloud (tts)')
 })

@@ -951,6 +951,18 @@ Its rules, and what each one is defending:
   The index and the jump's candidate scan both cover only `.settings-content`, so the
   sidebar's page and section links — which repeat every heading — can never duplicate a
   result or shift the occurrence a recorded result points at.
+- **A long generated table that has its own filter is not in the panel-wide index.**
+  The app's keyboard-shortcut rows (a row per command, three buttons each) and the note editor's chord list both carry `data-settings-search="skip"`.
+  Indexed, they were hundreds of entries that buried every real setting a query also matched, while each table's own filter already searches it by label, id, and chord.
+  The panel search hands off instead: when a query matches any shortcut command, one final row, "Keyboard shortcuts matching …", counts the matches and opens the Input tab's shortcut page with its filter already holding the query.
+  A picker whose options are the command catalogue (each touch-gesture slot) carries `data-settings-search="no-options"`, keeping its label and current value searchable but not the catalogue it chooses from.
+  Text hidden from assistive tech (`aria-hidden`) is never indexed, because it is decoration or a duplicate - a `Dropdown`'s width sizer carries its widest option and used to file one arbitrary command under every gesture slot.
+- **Aliases answer the words people type rather than the words the panel prints.**
+  `SETTINGS_SEARCH_ALIASES` (`frontend/src/settingsSearchAliases.ts`) points extra names at an entry the walk already found, by tab and rendered label ("dark mode" at Theme, "hotkeys" at Keyboard shortcuts), so it never declares a setting.
+  An alias scores as a second label, just under the real one, so it outranks a match in help text but never a control literally called what was typed.
+  Because a relabelled control silently orphans its aliases and an alias can shadow a setting added later, `auditSettingsAliases` refuses an alias that is not normalized, repeats, names a tab or another tab's deep link, equals any real entry's label, or resolves to zero or several places.
+  `npm run check:settings-aliases` runs that audit against the live index of every tab in the renderer harness (`frontend/test/renderer/settings-search.spec.ts`), and the table-only half runs in the unit suite.
+- Narrow, the result list anchors to the panel header and spans the panel rather than the search box, which shares its row with the title and can be under 100px wide.
 - A result says where it lives as a breadcrumb: its tab, the page that owns it when a heading
   does not already name that page, then the headings enclosing it, nearest two.
   The index records those headings as a **path** rather than a nearest-heading string, which is

@@ -10,7 +10,9 @@
 // the same prop contract the shell does rather than a private one.
 import { render } from 'preact'
 import { useState } from 'preact/hooks'
-import { Settings } from '../../src/Settings'
+import { Settings, harvestedSettingsSearch } from '../../src/Settings'
+import { auditSettingsAliases } from '../../src/settingsSearchAliases'
+import type { SettingsSearchEntry } from '../../src/settingsSearch'
 import type { FirewallStatus, RemoteStatus } from '../../src/remoteConnection'
 import type { WslBridgeStatus } from '../../src/wslBridge'
 import { SETTINGS_CONFIG_FIXTURE } from './settingsConfigFixture'
@@ -239,9 +241,18 @@ declare global {
   interface Window {
     /** Every request the panel made, in order, for asserting what a click did not send. */
     settingsCalls: Array<{ method: string; path: string; body?:unknown; gesture?:string|null }>
+    /**
+     * The panel-wide search index as harvested so far, and the alias audit run against it.
+     * Complete only once every tab has been on screen, which is why `harvested` is here.
+     */
+    settingsSearchAudit: () => { harvested: string[]; entries: SettingsSearchEntry[]; problems: string[] }
   }
 }
 window.settingsCalls = []
+window.settingsSearchAudit = () => {
+  const { harvested, entries } = harvestedSettingsSearch()
+  return { harvested, entries, problems: auditSettingsAliases(undefined, entries) }
+}
 // Persist the fake device settings across reloads, as the daemon does.
 const deviceSettings=JSON.parse(sessionStorage.getItem('settings-harness-profiles')||'{"desktop":{},"mobile":{}}') as Record<string,Record<string,unknown>>
 

@@ -2125,6 +2125,7 @@ body {
 .settings-panel .settings-search-results>button>strong{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text);font-weight:400}
 .settings-panel .settings-search-results>button>small{color:var(--muted)}
 .settings-panel .settings-search-results>p{margin:0;padding:11px 9px;color:var(--muted)}
+.settings-panel .settings-search-results>button.settings-search-handoff>strong{color:var(--accent)}
 /* The desktop nav column: search above the section list, one bordered column. The
    result list is wider than the column, so it escapes over the content pane. */
 .settings-nav-col{position:relative;z-index:3;min-height:0;display:flex;flex-direction:column;background:var(--bg);border-right:1px solid var(--line)}
@@ -2428,9 +2429,14 @@ body {
 :where(:root[data-workspace-layout="mobile"]) .note-chord-list small{grid-area:command}
 :where(:root[data-workspace-layout="mobile"]) .note-chord-list select,:where(:root[data-workspace-layout="mobile"]) .note-chord-list .dropdown-trigger{grid-area:control}
 :where(:root[data-workspace-layout="mobile"]) .note-chord em{display:block;margin-left:0}
-:where(:root[data-workspace-layout="mobile"]) .settings-panel>header>div.settings-search{flex:1 1 84px;min-width:0;max-width:none;margin-left:auto}
+/* On a phone the box shares its row with the title and the close button, so it can be
+   under 100px wide, and a result list as wide as the box cut every label and breadcrumb
+   down to a few letters. The list anchors to the header instead (the box goes static so
+   the header, already positioned, is its containing block) and spans the panel. */
+:where(:root[data-workspace-layout="mobile"]) .settings-panel>header>div.settings-search{position:static;flex:1 1 84px;min-width:0;max-width:none;margin-left:auto}
 :where(:root[data-workspace-layout="mobile"]) .settings-panel>header .settings-search>input{min-height:36px;padding:5px 7px}
-:where(:root[data-workspace-layout="mobile"]) .settings-panel>header .settings-search-results{max-height:min(52dvh,340px)}
+:where(:root[data-workspace-layout="mobile"]) .settings-panel>header .settings-search-results{top:calc(100% + 2px);left:6px;right:6px;max-height:min(52dvh,340px)}
+:where(:root[data-workspace-layout="mobile"]) .settings-panel>header .settings-search-results>button>strong{white-space:normal}
 :where(:root[data-workspace-layout="mobile"]) .settings-panel>header .settings-search-results>button{min-height:46px}
 :where(:root[data-workspace-layout="mobile"]) .settings-body{position:relative;z-index:1;grid-template-columns:minmax(0,1fr)!important;grid-template-rows:minmax(0,1fr)}
 :where(:root[data-workspace-layout="mobile"]) .settings-tabs button{min-height:40px}

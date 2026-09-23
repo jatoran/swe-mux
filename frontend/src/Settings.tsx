@@ -51,6 +51,7 @@ import type { LatencyReportPayload } from './voiceLatency'
 import { GESTURE_SLOTS, GESTURE_LABELS, defaultMobileGestureSettings } from './mobileGestures'
 import { allBackendNames, allHarnessesIncludingDisabled, appliesWidthEnvelope, harnessDescriptor, harnessDisplayName, harnesses } from './harnessRegistry'
 import { domVNode, harvestHeadings, harvestSettings, kindSelector, matchIndex, searchSettings, tabEntry, type SettingsSearchEntry } from './settingsSearch'
+import { applySettingsAliases } from './settingsSearchAliases'
 import { cueSettingsSection, flashSetting, flashSettingsSection, revealSetting, settingSelector } from './settingReveal'
 import {
   railSectionIds, rememberedSections, rememberedTab, rememberSection, rememberTab,
@@ -310,6 +311,28 @@ const SCROLL_CLAIM_MS = 800
 // scope, not component state: a tab visited in one Settings session stays fully
 // searchable in the next one, for as long as the page lives.
 const liveTabEntries = new Map<SettingsTab,SettingsSearchEntry[]>()
+
+/**
+ * The panel-wide search index: per tab, its own entry, then what it rendered when it
+ * was last on screen, else what `fallback` harvests from its vnodes; then the curated
+ * aliases on top. A tab whose fallback throws keeps only its own entry.
+ */
+function settingsSearchEntries(fallback:((tab:SettingsTab,label:string,index:number)=>SettingsSearchEntry[])|null):SettingsSearchEntry[]{
+  return applySettingsAliases(settingsTabs.flatMap((tab,index)=>{
+    const own=liveTabEntries.get(tab.id)
+    if(own)return [tabEntry(tab.id,tab.label,index),...own]
+    try{return [tabEntry(tab.id,tab.label,index),...(fallback?.(tab.id,tab.label,index)||[])]}
+    catch{return [tabEntry(tab.id,tab.label,index)]}
+  }))
+}
+
+/**
+ * The index exactly as the search box would build it once every tab has been on screen,
+ * plus which tabs have been. For the alias audit (`test/renderer/settings-search.spec.ts`),
+ * which needs the labels child components render - a vnode walk cannot see those.
+ */
+export const harvestedSettingsSearch = ():{harvested:SettingsTab[];entries:SettingsSearchEntry[]} =>
+  ({harvested:[...liveTabEntries.keys()],entries:settingsSearchEntries(null)})
 
 /** One empty list, so "this tab has no sections yet" is a stable effect dependency. */
 const NO_SECTIONS: SettingsRailSection[] = []
@@ -1333,11 +1356,9 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   const bindingForCommand=(commandId:string)=>commandChords.get(commandId)
 
   // Which shortcut rows the filter leaves showing. Rows are *hidden*, never dropped
-  // from the tree: the panel-wide search index is harvested from the mounted tab's live
-  // DOM and kept for the page session, so a filtered-out row would quietly leave that
-  // index and stay gone. A filter set in one corner of one tab must not decide what the
-  // whole panel can find. Keeping every row also keeps document order, and with it the
-  // `occurrence` a search result navigates by.
+  // from the tree, so filtering never re-mounts them. The panel-wide search does not
+  // index these rows at all (`data-settings-search="skip"`); it counts matches with the
+  // same predicate and hands the query to this filter.
   const visibleShortcuts=useMemo(()=>new Set(bindingCommands
     .filter(command=>shortcutMatches(command,commandChords.get(command.id),shortcutQuery,keymapHost.platform))
     .map(command=>command.id)),[bindingCommands,commandChords,shortcutQuery,keymapHost.platform])
@@ -2021,7 +2042,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
             <p>Browser-safe releases the chords Chromium claims (reload, search, DevTools); editor-first suits the desktop app, where those chords are not wanted.</p>
             <div class="keybinding-heading"><div><strong>EDITOR::CHORDS</strong><p>Per-chord overrides on that policy, applied inside a note only. This app's own shortcuts are on the Input tab.</p></div><button type="button" onClick={()=>change('note_shortcut_overrides',{...DEFAULT_NOTE_SHORTCUT_OVERRIDES})}>Restore editor shortcut defaults</button></div>
             <input class="note-chord-filter" type="search" value={noteChordQuery} placeholder="Filter chords and commands…" aria-label="Filter editor shortcuts" spellcheck={false} onInput={e=>setNoteChordQuery(e.currentTarget.value)}/>
-            <div class="note-chord-list">
+            <div class="note-chord-list" data-settings-search="skip">
               {NOTE_CHORDS.filter(binding=>{
                 const needle=noteChordQuery.trim().toLowerCase()
                 return !needle||binding.chord.includes(needle)||binding.command.includes(needle)
@@ -2319,7 +2340,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
 
           <section class="input-settings">
           <div class="keybinding-heading"><div><h3>Touch gestures</h3><p>Map multi-finger and workspace swipes. Single-finger vertical drags remain terminal scrolling; OS edge gestures remain reserved.</p></div><button onClick={()=>change('mobile_gestures',{...defaultMobileGestureSettings})}>Restore gesture defaults</button></div>
-          {GESTURE_SLOTS.map(slot=><label>{GESTURE_LABELS[slot]}<Dropdown value={draft.mobile_gestures?.[slot]??''} onChange={value=>change('mobile_gestures',{...draft.mobile_gestures,[slot]:value})} options={[{value:'',label:'Disabled'},...bindingCommands.map(command=>({value:command.id,label:command.label}))]}/></label>)}
+          {GESTURE_SLOTS.map(slot=><label data-settings-search="no-options">{GESTURE_LABELS[slot]}<Dropdown value={draft.mobile_gestures?.[slot]??''} onChange={value=>change('mobile_gestures',{...draft.mobile_gestures,[slot]:value})} options={[{value:'',label:'Disabled'},...bindingCommands.map(command=>({value:command.id,label:command.label}))]}/></label>)}
           <label class="check"><span>Horizontal swipe closes the open edge panel</span><input type="checkbox" checked={draft.mobile_gesture_swipe_away_close!==false} onChange={e=>change('mobile_gesture_swipe_away_close',e.currentTarget.checked)}/></label>
           <label class="check"><span>Swipe right closes one overlay level</span><input type="checkbox" checked={draft.mobile_gesture_overlay_back!==false} onChange={e=>change('mobile_gesture_overlay_back',e.currentTarget.checked)}/></label>
           <label class="check"><span>Contextual swipes on toolbars, tabs, voice, and editor rails</span><input type="checkbox" checked={draft.mobile_surface_gestures!==false} onChange={e=>change('mobile_surface_gestures',e.currentTarget.checked)}/></label>
@@ -2365,7 +2386,10 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <input class="keybinding-filter" type="search" value={shortcutQuery} disabled={!!capturingCommand} placeholder="Filter commands and chords…" aria-label="Filter keyboard shortcuts" autocomplete="off" spellcheck={false} onInput={event=>setShortcutQuery(event.currentTarget.value)}/>
           {capturingCommand&&<div class="keybinding-capture" role="status"><span>PRESS KEYS FOR</span><strong>{bindingCommands.find(command=>command.id===capturingCommand)?.label||capturingCommand}</strong>{!!captureSequence.length&&<kbd>{displayChord(captureSequence.join(' '),keymapHost.platform)} …</kbd>}<button onClick={()=>{setCapturingCommand(null);setCaptureSequence([]);setBindingError('')}}>Cancel</button></div>}
           {bindingError&&<p class="keybinding-error" role="alert">{bindingError}</p>}
-          <div class="keybinding-list" hidden={!visibleShortcuts.size}>
+          {/* Not in the panel-wide search: one entry per command per button flooded every
+              query that also matched a real setting, and the filter above already searches
+              these rows by label, id, and chord. The search hands off to it instead. */}
+          <div class="keybinding-list" data-settings-search="skip" hidden={!visibleShortcuts.size}>
             {[...new Set(bindingCommands.map(command=>command.category))].map(category=>{const rows=bindingCommands.filter(command=>command.category===category);return <section class="keybinding-group" aria-label={`${commandCategoryLabel(category)} shortcuts`} hidden={!rows.some(command=>visibleShortcuts.has(command.id))}><h4>{commandCategoryLabel(category)}</h4>{rows.map(command=>{const chord=bindingForCommand(command.id);return <article class={capturingCommand===command.id?'capturing':''} hidden={!visibleShortcuts.has(command.id)}><button class="keybinding-command" onClick={()=>{setCapturingCommand(command.id);setCaptureSequence([]);setBindingError('')}} title={command.id}><span>{command.label}</span><small>{command.id}</small></button><button class="keybinding-chord" onClick={()=>{setCapturingCommand(command.id);setCaptureSequence([]);setBindingError('')}} aria-label={`Set shortcut for ${command.label}`}><kbd>{chord?displayChord(chord,keymapHost.platform):UNBOUND_CHORD}</kbd></button><button class="keybinding-clear" disabled={!chord} onClick={()=>clearBinding(command.id)} aria-label={`Clear shortcut for ${command.label}`}>×</button></article>})}</section>})}
           </div>
           {!!shortcutQuery.trim()&&!!bindingCommands.length&&!visibleShortcuts.size&&<p class="keybinding-empty" role="status">No shortcut matches “{shortcutQuery.trim()}”.</p>}
@@ -2376,11 +2400,11 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
                 something", which the old single BROWSER list conflated - and that
                 conflation is why Ctrl+F was refused for years while this very panel
                 was intercepting it successfully in the same browser. */}
-            <div><strong>A BROWSER TAB KEEPS</strong>{bindingPolicy.browser_unreachable.map(chord=><kbd>{displayChord(chord,keymapHost.platform)}</kbd>)}</div>
-            <div><strong>SHARED WITH THE BROWSER</strong>{Object.entries(bindingPolicy.browser_contested).map(([chord,what])=><kbd title={what}>{displayChord(chord,keymapHost.platform)}</kbd>)}</div>
-            <div><strong>{keymapHost.platform==='mac'?'MACOS':keymapHost.platform==='linux'?'YOUR DESKTOP':'WINDOWS'} KEEPS</strong>{Object.entries(bindingPolicy.wm_reserved[keymapHost.platform]||{}).slice(0,40).map(([chord,what])=><kbd title={what}>{displayChord(chord,keymapHost.platform)}</kbd>)}</div>
-            <div><strong>THE SHELL IN A PANE USES</strong>{Object.entries(bindingPolicy.terminal_reserved).map(([chord,what])=><kbd title={what}>{displayChord(chord,keymapHost.platform)}</kbd>)}</div>
-            <div><strong>FIXED APP CONTROLS</strong>{bindingPolicy.application_reserved.map(chord=><kbd>{displayChord(chord,keymapHost.platform)}</kbd>)}</div>
+            <div data-settings-search="skip"><strong>A BROWSER TAB KEEPS</strong>{bindingPolicy.browser_unreachable.map(chord=><kbd>{displayChord(chord,keymapHost.platform)}</kbd>)}</div>
+            <div data-settings-search="skip"><strong>SHARED WITH THE BROWSER</strong>{Object.entries(bindingPolicy.browser_contested).map(([chord,what])=><kbd title={what}>{displayChord(chord,keymapHost.platform)}</kbd>)}</div>
+            <div data-settings-search="skip"><strong>{keymapHost.platform==='mac'?'MACOS':keymapHost.platform==='linux'?'YOUR DESKTOP':'WINDOWS'} KEEPS</strong>{Object.entries(bindingPolicy.wm_reserved[keymapHost.platform]||{}).slice(0,40).map(([chord,what])=><kbd title={what}>{displayChord(chord,keymapHost.platform)}</kbd>)}</div>
+            <div data-settings-search="skip"><strong>THE SHELL IN A PANE USES</strong>{Object.entries(bindingPolicy.terminal_reserved).map(([chord,what])=><kbd title={what}>{displayChord(chord,keymapHost.platform)}</kbd>)}</div>
+            <div data-settings-search="skip"><strong>FIXED APP CONTROLS</strong>{bindingPolicy.application_reserved.map(chord=><kbd>{displayChord(chord,keymapHost.platform)}</kbd>)}</div>
           </details>}
           </section>
         </Fragment>}
@@ -2898,37 +2922,50 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
     // Building a tab's vnodes evaluates the expressions inside its JSX, and those
     // now run for tabs nobody opened. A latent throw in one tab must cost that
     // tab's entries, not the whole panel — this runs during render.
-    searchIndex.current={source:draft,entries:settingsTabs.flatMap((tab,index)=>{
-      const own=liveTabEntries.get(tab.id)
-      if(own)return [tabEntry(tab.id,tab.label,index),...own]
-      try{return [tabEntry(tab.id,tab.label,index),...harvestSettings(tabContent(tab.id),tab.id,tab.label,index)]}
-      catch{return [tabEntry(tab.id,tab.label,index)]}
-    })}
+    searchIndex.current={source:draft,entries:settingsSearchEntries((tab,label,index)=>harvestSettings(tabContent(tab),tab,label,index))}
   }
   wasSearching.current=searching
   const searchResults=searching?searchSettings(searchIndex.current?.entries||[],query):[]
-  const activeResult=Math.min(highlight,Math.max(0,searchResults.length-1))
+  // Keyboard shortcuts are not in the index (see `.keybinding-list`), so a query that
+  // names some is answered with one row that opens their own filter already holding it,
+  // instead of a row per command crowding out the settings the query also matched.
+  const shortcutHits=searching?bindingCommands.filter(command=>shortcutMatches(command,commandChords.get(command.id),query,keymapHost.platform)).length:0
+  const resultCount=searchResults.length+(shortcutHits?1:0)
+  const activeResult=Math.min(highlight,Math.max(0,resultCount-1))
   const openResult=(entry:SettingsSearchEntry)=>{
     selectTab(entry.tab as SettingsTab)
     setJump({entry})
     setQuery('')
     setHighlight(0)
-    // A shortcut row the filter is hiding cannot be scrolled to. The panel-wide search
-    // can still find it (rows are hidden, not removed), so the filter yields to it.
+    // A result can sit under a shortcut row the filter is hiding; the filter yields.
     setShortcutQuery('')
   }
+  const openShortcuts=()=>{
+    const shortcuts=searchIndex.current?.entries.find(entry=>entry.tab==='input'&&entry.kind==='section'&&entry.key==='keyboard shortcuts')
+    const inputIndex=settingsTabs.findIndex(tab=>tab.id==='input')
+    const heading=shortcuts||{...tabEntry('input','Input',inputIndex),label:'Keyboard shortcuts',key:'keyboard shortcuts'}
+    const filter=query.trim()
+    openResult(heading)
+    setShortcutQuery(filter)
+  }
+  const activate=(index:number)=>{
+    if(index<searchResults.length)openResult(searchResults[index])
+    else if(shortcutHits)openShortcuts()
+  }
   const onSearchKey=(event:{key:string;preventDefault:()=>void})=>{
-    if(!searchResults.length)return
-    if(event.key==='ArrowDown'){event.preventDefault();setHighlight((activeResult+1)%searchResults.length)}
-    else if(event.key==='ArrowUp'){event.preventDefault();setHighlight((activeResult-1+searchResults.length)%searchResults.length)}
-    else if(event.key==='Enter'){event.preventDefault();openResult(searchResults[activeResult])}
+    if(!resultCount)return
+    if(event.key==='ArrowDown'){event.preventDefault();setHighlight((activeResult+1)%resultCount)}
+    else if(event.key==='ArrowUp'){event.preventDefault();setHighlight((activeResult-1+resultCount)%resultCount)}
+    else if(event.key==='Enter'){event.preventDefault();activate(activeResult)}
   }
   // One search box, drawn in the place each layout reads first: inline in the header on
   // a phone, above the section list on a desktop — beside the navigation it drives.
   const searchBox = <div class="settings-search">
-    <input ref={searchInput} type="search" value={query} placeholder="Search settings…" aria-label="Search settings" role="combobox" aria-expanded={searchResults.length>0} aria-controls="settings-search-results" autocomplete="off" spellcheck={false} onInput={event=>{setQuery(event.currentTarget.value);setHighlight(0)}} onKeyDown={onSearchKey} />
+    <input ref={searchInput} type="search" value={query} placeholder="Search settings…" aria-label="Search settings" role="combobox" aria-expanded={resultCount>0} aria-controls="settings-search-results" autocomplete="off" spellcheck={false} onInput={event=>{setQuery(event.currentTarget.value);setHighlight(0)}} onKeyDown={onSearchKey} />
     {!!query.trim()&&<div id="settings-search-results" class="settings-search-results" role="listbox" aria-label="Search results">
-      {searchResults.length?searchResults.map((entry,index)=><button type="button" role="option" aria-selected={index===activeResult} class={index===activeResult?'active':''} key={`${entry.tab}:${entry.kind}:${entry.key}:${entry.occurrence}`} onPointerDown={event=>event.preventDefault()} onClick={()=>openResult(entry)}><strong>{entry.label}</strong><small>{settingsBreadcrumb(entry.tab as SettingsTab,entry.tabLabel,entry.path)}</small></button>):<p>No setting matches “{query.trim()}”.</p>}
+      {searchResults.map((entry,index)=><button type="button" role="option" aria-selected={index===activeResult} class={index===activeResult?'active':''} key={`${entry.tab}:${entry.kind}:${entry.key}:${entry.occurrence}`} onPointerDown={event=>event.preventDefault()} onClick={()=>openResult(entry)}><strong>{entry.label}</strong><small>{settingsBreadcrumb(entry.tab as SettingsTab,entry.tabLabel,entry.path)}</small></button>)}
+      {!!shortcutHits&&<button type="button" role="option" aria-selected={activeResult===searchResults.length} class={`settings-search-handoff${activeResult===searchResults.length?' active':''}`} key="keyboard-shortcuts" onPointerDown={event=>event.preventDefault()} onClick={openShortcuts}><strong>Keyboard shortcuts matching “{query.trim()}”</strong><small>Input · Keyboard shortcuts · {shortcutHits} command{shortcutHits===1?'':'s'}</small></button>}
+      {!resultCount&&<p>No setting matches “{query.trim()}”.</p>}
     </div>}
   </div>
   return <div class="settings-layer" onMouseDown={event=>event.target===event.currentTarget&&requestClose()}><section class="settings-panel" ref={panel} role="dialog" aria-modal={!closeIntent&&!resetIntent} aria-hidden={Boolean(closeIntent||resetIntent)} aria-label="Settings">
