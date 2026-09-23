@@ -116,6 +116,10 @@ def _live_state_log_payload(
         # state only, so a session reporting live turns with no tokens and a
         # placeholder conversation id is explained by this field and not a bug.
         "transcript_provisional": session.transcript_provisional,
+        "process_transcript_probe": session.observation_state.get("process_transcript_probe"),
+        "provisional_without_activity": bool(
+            session.transcript_provisional and not session.record.parser_events_seen
+        ),
         # No transcript and no hook ever: the PTY screen is the only source
         # that can move this session, which is what licenses the
         # begin/end_pty_turn watchdog pair.

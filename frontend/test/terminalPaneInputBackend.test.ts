@@ -163,3 +163,9 @@ test('a pane promoted onto a DOM-only harness drops its WebGL surface', () => {
     'nothing drops the WebGL addon when a pane is promoted onto a DOM-only harness',
   )
 })
+
+
+test('conversation run and turn changes reach copy request invalidation', () => {
+  assert.equal(terminalPanePropsEqual(props(), props({agent_run_id:'new-run'})),false)
+  assert.equal(terminalPanePropsEqual(props(), props({turn_epoch:2})),false)
+})

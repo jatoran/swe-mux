@@ -14,6 +14,23 @@
 
 ## Invariants
 
+### Codex fork references and rollback
+
+Codex paginated forks store inherited history in `session_meta.payload.history_base`, naming a parent thread and an exclusive byte boundary.
+`codex_history.py` reads that pinned prefix followed by the fork's own records, including nested references, without changing provider files.
+Parent appends beyond the boundary never enter the fork.
+Missing parents, invalid boundaries, cycles, and excessive ancestry depth report an unreadable history rather than an apparently empty conversation.
+Readers retain inherited message identities independently of the child's byte offsets, and paging uses the concatenated history's coordinates.
+
+`thread_rolled_back.num_turns` abandons turns from the surviving turn stack.
+Repeated rollback therefore removes surviving turns rather than counting already abandoned file records again.
+The indexing projection excludes those records and the reader projection marks them `abandoned`.
+Codex `commentary` and `final_answer` phases and native turn boundaries remain distinct even without an intervening tool call.
+Latest-answer selection excludes commentary, abandoned records, and turns whose native completion has not arrived.
+Older rollouts without native turn markers retain message-boundary compatibility.
+
+### Claude ancestry
+
 - **The last record in the read window is the leaf.**
   Not `leafUuid`, which appears only in `last-prompt` checkpoints, points at the record before it, and is written on abandoned branches too.
 - **Ancestry alone is not the live set, and treating it as such is the worse bug.**

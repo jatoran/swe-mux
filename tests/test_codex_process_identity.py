@@ -94,6 +94,53 @@ def test_capture_uses_nearest_codex_and_survives_helper_exit(
     assert identity.verify_codex_root_process(start_payload, 100, 10.0).verified
 
 
+def test_open_file_binding_excludes_native_subagents_and_nested_clis(
+    tmp_path: Path,
+    processes: dict[int, Process],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root_path = tmp_path / f"rollout-{CLEARED}.jsonl"
+    child_path = tmp_path / f"rollout-{ORIGINAL}.jsonl"
+    root_path.write_text(
+        json.dumps({"type": "session_meta", "payload": {"id": CLEARED, "source": "cli"}}) + "\n",
+        encoding="utf-8",
+    )
+    child_path.write_text(
+        json.dumps(
+            {
+                "type": "session_meta",
+                "payload": {
+                    "id": ORIGINAL,
+                    "source": {"subagent": "guardian"},
+                    "parent_thread_id": CLEARED,
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        Process,
+        "children",
+        lambda self: [processes[101]] if self.pid == 100 else [processes[102]],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        Process,
+        "open_files",
+        lambda self: [SimpleNamespace(path=str(p)) for p in (root_path, child_path)],
+        raising=False,
+    )
+    assert identity.owned_rollout(100, 10.0, tmp_path) == root_path
+    assert identity.owned_rollout(100, 9.0, tmp_path) is None
+    # Another root conversation held open is ambiguous, even in this process.
+    child_path.write_text(
+        json.dumps({"type": "session_meta", "payload": {"id": ORIGINAL, "source": "cli"}}) + "\n",
+        encoding="utf-8",
+    )
+    assert identity.owned_rollout(100, 10.0, tmp_path) is None
+
+
 def test_direct_codex_root_is_accepted(
     processes: dict[int, Process],
     start_payload: dict[str, Any],

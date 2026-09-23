@@ -127,3 +127,69 @@ def verify_codex_root_process(
     if data.get("source") != "cli":
         return ProcessProof(False, "not_cli_root_thread")
     return ProcessProof(True, "pty_root_codex")
+
+
+def owned_rollout(root_pid: int, root_started_at: float | None, home: Path) -> Path | None:
+    """The unique CLI-root rollout held open by this PTY's outer Codex process.
+
+    Hooks can be disabled or untrusted, including after fork/rewind. An OS file
+    handle is independent evidence, unlike a directory's newest filename. Native
+    subagents share the process but identify themselves in their metadata; nested
+    CLIs have an intervening Codex ancestor. Ambiguity and access errors fail closed.
+    Runs only in a worker thread, on the observer's throttled recovery cadence.
+    """
+    if root_pid <= 0 or not _positive_number(root_started_at):
+        return None
+    from .codex_history import metadata
+
+    try:
+        root = psutil.Process(root_pid)
+        if root.create_time() != root_started_at:
+            return None
+        pending = [root]
+        codex: list[psutil.Process] = []
+        visited = 0
+        while pending and visited < MAX_ANCESTORS:
+            process = pending.pop()
+            visited += 1
+            if _is_codex(process):
+                codex.append(process)
+                continue  # Never inspect a nested CLI or its open files.
+            pending.extend(
+                child
+                for child in process.children()
+                if child.create_time() >= process.create_time()
+            )
+        if pending or len(codex) != 1:
+            return None
+        process = codex[0]
+        candidates: set[Path] = set()
+        for opened in process.open_files():
+            path = Path(opened.path)
+            if not path.name.startswith("rollout-") or path.suffix != ".jsonl":
+                continue
+            if not path.resolve().is_relative_to(home.resolve()):
+                continue
+            data = metadata(path)
+            native_id = data.get("id")
+            if (
+                data.get("source") != "cli"
+                or data.get("parent_thread_id")
+                or not isinstance(native_id, str)
+                or not path.name.endswith(f"-{native_id}.jsonl")
+            ):
+                continue
+            proof = verify_codex_root_process(
+                {
+                    PROCESS_FIELD: {"pid": process.pid, "started_at": process.create_time()},
+                    "session_id": native_id,
+                    "transcript_path": str(path),
+                },
+                root_pid,
+                root_started_at,
+            )
+            if proof.verified:
+                candidates.add(path)
+        return next(iter(candidates)) if len(candidates) == 1 else None
+    except (psutil.Error, OSError, ValueError):
+        return None

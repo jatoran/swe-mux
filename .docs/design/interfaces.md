@@ -1628,12 +1628,16 @@ owner, to the smallest attached one, and announces the result to every client as
 `{type:"geometry", cols, rows, owner_device}` (also sent after `replay_end` and after a
 resync). A client whose own fit differs renders that geometry at a reduced font size
 rather than fitting, which is what keeps two devices from resizing each other in a loop.
-`GET /sessions/{id}/last-reply` returns the agent's newest assistant *segment* for gesture-safe
-clipboard prefetch: the same last message `/sessions/{id}/transcript` shows, read from the same
-reduction (`transcript_view.final_reply_text`), so the two cannot disagree about where a reply
-starts. A reply that resumed after tool use begins at that tool boundary rather than at the
-narration the agent wrote before it. Provider control acknowledgements are skipped; the route
-does not type `/copy` into the PTY.
+`GET /sessions/{id}/last-reply` reads a fresh snapshot of the latest surviving completed answer.
+It returns `{text, session_id, agent_run_id, native_session_id, turn_epoch, turn_id, message_id, phase, revision, selection_reason, previous_answer}`.
+Codex commentary, abandoned turns, and explicitly incomplete turns cannot win selection.
+Provisional, stale, and remote bindings return 409; a binding or turn-epoch change during parsing also returns 409 rather than pairing old text with a new run.
+The snapshot revision covers the readable projection and its source watermark, including inherited Codex history.
+Copy requests validate the current conversation identity and discard superseded responses; terminal-output debounce and prefetch caches do not authorize copying.
+When the agent is working the action is labeled Copy previous answer, and clipboard denial retains the manual-copy path.
+`POST /sessions/{id}/reply-copy` records `{outcome, agent_run_id, native_session_id, turn_id, message_id, revision}` as a content-free `reply_copy` event.
+Valid outcomes are `copied`, `manual`, `superseded`, and `failed`.
+Neither route types into the PTY or stores another transcript copy.
 
 `GET /sessions/{id}/transcript` returns the live session's readable conversation for the drawer's
 Transcript tab: `{messages:[{ordinal,role,ts,text,preceding_tool_calls,preceding_tools:[{id,name,input}],abandoned?}], trailing_tool_calls:[{id,name,input}], hidden, abandoned_messages, truncated, observation_stale_since, reason}`.

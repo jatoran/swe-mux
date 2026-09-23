@@ -11,6 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, assert_never
 
+from . import codex_history
 from .harness import conversation_store_path, transcript_dialect
 from .opencode_store import TAIL_MESSAGE_LIMIT, conversation_record_page, conversation_records
 from .opencode_store import conversation_watermark as store_watermark
@@ -20,12 +21,22 @@ log = logging.getLogger(__name__)
 # Bumped to 4 when abandoned-branch records stopped being indexed as conversation
 # (`_mark_abandoned_records`). Every indexed transcript reparses once on the next
 # touch, because the watermark carries this number.
-TRANSCRIPT_PARSER_VERSION = 4
+TRANSCRIPT_PARSER_VERSION = 5
 _SOURCE_OFFSET_KEY = "__swe_mux_source_offset"
 _SOURCE_END_KEY = "__swe_mux_source_end"
 # Set on a record the conversation's own linkage proves is off the live branch.
 # Private to this module: readers see the public `abandoned` flag on a message.
 _ABANDONED_KEY = "__swe_mux_abandoned"
+
+# Provider-specific file layouts. Absence means an ordinary standalone JSONL;
+# this dispatch is by transcript dialect, never a list of supported harnesses.
+_FILE_PAGES: dict[str, Callable[..., tuple[list[dict[str, Any]], bool, int]]] = {
+    "codex": codex_history.page,
+}
+_FILE_SIZES: dict[str, Callable[[Path], int]] = {"codex": codex_history.size}
+_FILE_REVISIONS: dict[str, Callable[[Path], tuple[str, int, int]]] = {
+    "codex": codex_history.revision,
+}
 
 
 def _blocks(content: Any) -> list[dict[str, Any]]:
@@ -171,7 +182,12 @@ def _native_conversation_message(event: dict[str, Any], backend: str) -> dict[st
         assert_never(dialect)
     if not blocks:
         return None
-    return {"role": role, "ts": timestamp, "content": blocks}
+    message = {"role": role, "ts": timestamp, "content": blocks}
+    if dialect == "codex":
+        phase = (event.get("payload") or {}).get("phase")
+        if phase in {"commentary", "final_answer"}:
+            message["phase"] = phase
+    return message
 
 
 def _timestamp_key(value: Any) -> float | None:
@@ -217,6 +233,7 @@ def transcript_time_summary(
             if (message := _native_conversation_message(record, backend)) is not None
             and _timestamp_key(message.get("ts")) is not None
         ]
+
         def stamp(item: dict[str, Any]) -> float:
             return _timestamp_key(item.get("ts")) or 0
 
@@ -391,6 +408,9 @@ def _mark_abandoned_records(events: list[dict[str, Any]], backend: str) -> int:
     Mutates the records in place, which is safe because they are decoded fresh by
     the reader that produced them and never shared with the native file.
     """
+    marker = _BRANCH_MARKERS.get(transcript_dialect(backend) or "")
+    if marker is not None:
+        return marker(events)
     reader = _LIVE_BRANCH_READERS.get(transcript_dialect(backend) or "")
     if reader is None:
         return 0
@@ -411,6 +431,63 @@ def _mark_abandoned_records(events: list[dict[str, Any]], backend: str) -> int:
             len(events),
         )
     return abandoned
+
+
+def _mark_codex_turns(events: list[dict[str, Any]]) -> int:
+    """Project rollback onto the surviving turn stack, retaining reader evidence.
+
+    Native task markers are authoritative where present. Older rollouts use user
+    message boundaries. Duplicate event_msg/response_item messages do not create
+    extra turns. Rolling back twice acts on the surviving stack, not file order.
+    """
+    explicit = any((e.get("payload") or {}).get("type") == "task_started" for e in events)
+    response_users = any(
+        e.get("type") == "response_item" and (e.get("payload") or {}).get("role") == "user"
+        for e in events
+    )
+    current: list[dict[str, Any]] = []
+    # The initial bucket represents a partial turn at the start of a bounded
+    # tail. A rollback reaching that turn must abandon it too.
+    turns: list[list[dict[str, Any]]] = [current]
+    turn_id: str | None = None
+    for event in events:
+        payload = event.get("payload") or {}
+        kind = payload.get("type")
+        if kind == "thread_rolled_back":
+            count = payload.get("num_turns")
+            if isinstance(count, int) and not isinstance(count, bool) and count > 0:
+                for turn in turns[max(0, len(turns) - count) :]:
+                    for record in turn:
+                        record[_ABANDONED_KEY] = True
+                del turns[max(0, len(turns) - count) :]
+                current, turn_id = [], None
+            continue
+        user = (
+            (event.get("type") == "response_item" and payload.get("role") == "user")
+            if response_users
+            else kind == "user_message"
+        )
+        begins = kind == "task_started" if explicit else user
+        if begins and (not explicit or payload.get("turn_id") != turn_id or turn_id is None):
+            current = []
+            turns.append(current)
+            turn_id = str(payload.get("turn_id") or _record_identity(event))
+        current.append(event)
+        if turn_id is not None:
+            event["__swe_mux_turn_id"] = turn_id
+        if explicit:
+            event["__swe_mux_turn_complete"] = False
+        if kind == "task_complete":
+            reported = payload.get("turn_id")
+            if reported is None or reported == turn_id:
+                for record in current:
+                    record["__swe_mux_turn_complete"] = True
+    return sum(bool(e.get(_ABANDONED_KEY)) for e in events)
+
+
+_BRANCH_MARKERS: dict[str, Callable[[list[dict[str, Any]]], int]] = {
+    "codex": _mark_codex_turns,
+}
 
 
 def read_transcript_events(path: Path, max_bytes: int | None = None) -> list[dict[str, Any]]:
@@ -522,9 +599,15 @@ def _page_events(
     reader must answer from the bytes it read, and reading the whole conversation
     to classify one page would defeat the paging.
     """
-    events, has_more, boundary = _file_event_page(
-        path, direction=direction, anchor=anchor, max_bytes=max_bytes
-    )
+    reader = _FILE_PAGES.get(transcript_dialect(backend) or "")
+    if reader is None:
+        events, has_more, boundary = _file_event_page(
+            path, direction=direction, anchor=anchor, max_bytes=max_bytes
+        )
+    else:
+        events, has_more, boundary = reader(
+            path, direction=direction, anchor=anchor, max_bytes=max_bytes
+        )
     _mark_abandoned_records(events, backend)
     return events, has_more, boundary
 
@@ -533,8 +616,7 @@ def _raw_message_text(content: Any) -> str:
     return "\n".join(
         str(block.get("text") or "")
         for block in _blocks(content)
-        if block.get("type") in {"text", "input_text", "output_text"}
-        and block.get("text")
+        if block.get("type") in {"text", "input_text", "output_text"} and block.get("text")
     ).strip()
 
 
@@ -638,9 +720,7 @@ def _page_records(
             else:
                 assert_never(dialect)
         duplicate = bool(
-            dialect == "codex"
-            and codex_response_messages
-            and event.get("type") != "response_item"
+            dialect == "codex" and codex_response_messages and event.get("type") != "response_item"
         )
         if (
             message is not None
@@ -754,12 +834,7 @@ def transcript_message_page(
         boundary = {
             "kind": "file",
             "offset": int(
-                (
-                    edge.get("_source_end")
-                    if direction == "head"
-                    else edge.get("_source_start")
-                )
-                or 0
+                (edge.get("_source_end") if direction == "head" else edge.get("_source_start")) or 0
             ),
         }
     more = bool(trimmed or has_more)
@@ -774,9 +849,7 @@ def transcript_message_page(
     }
 
 
-def conversation_is_readable(
-    path: Path | None, backend: str, native_id: str | None = None
-) -> bool:
+def conversation_is_readable(path: Path | None, backend: str, native_id: str | None = None) -> bool:
     """Whether this conversation can be read right now.
 
     The one predicate every caller that used to write ``path.is_file()`` should ask
@@ -821,7 +894,10 @@ def conversation_events(
         return conversation_records(store, native_id or "", max_messages=limit)
     if path is None:
         return []
-    events = read_transcript_events(path, max_bytes)
+    reader = _FILE_PAGES.get(transcript_dialect(backend) or "")
+    events = (
+        reader(path, max_bytes=max_bytes)[0] if reader else read_transcript_events(path, max_bytes)
+    )
     _mark_abandoned_records(events, backend)
     return events
 
@@ -845,9 +921,7 @@ def parse_transcript(
     (:func:`conversation_view`) keeps and marks them instead, because a person
     looking at a conversation is entitled to see that a branch happened.
     """
-    return _parse_transcript_counted(
-        path, backend, max_bytes=max_bytes, native_id=native_id
-    )[0]
+    return _parse_transcript_counted(path, backend, max_bytes=max_bytes, native_id=native_id)[0]
 
 
 def _parse_transcript_counted(
@@ -1001,6 +1075,9 @@ def conversation_watermark(
         return f"{store}#{native_id or ''}", *(pair or (0, 0))
     if path is None:
         return f"{backend}#none", 0, 0
+    revision = _FILE_REVISIONS.get(transcript_dialect(backend) or "")
+    if revision is not None:
+        return revision(path)
     stat = path.stat()
     return str(path), stat.st_mtime_ns, stat.st_size
 
@@ -1294,6 +1371,14 @@ def _conversation_records(
             _SOURCE_OFFSET_KEY: event.get(_SOURCE_OFFSET_KEY),
             _SOURCE_END_KEY: event.get(_SOURCE_END_KEY),
         }
+        for field, source in (
+            ("phase", None),
+            ("turn_id", "__swe_mux_turn_id"),
+            ("turn_complete", "__swe_mux_turn_complete"),
+        ):
+            value = message.get(field) if source is None else event.get(source)
+            if value is not None:
+                record[field] = value
         if abandoned:
             record["abandoned"] = True
         kept.append(record)
@@ -1311,6 +1396,9 @@ def _record_identity(event: dict[str, Any]) -> str:
     neither of which an offset does. Falling back to the offset keeps every existing
     id byte-identical, so persisted references do not move.
     """
+    inherited = event.get(codex_history.SOURCE_THREAD)
+    if inherited:
+        return f"inherited:{inherited}"
     offset = event.get(_SOURCE_OFFSET_KEY)
     if offset is not None:
         return f"offset:{offset}"
@@ -1346,6 +1434,8 @@ def _merge_assistant_segments(records: list[dict[str, Any]]) -> list[dict[str, A
             and previous["role"] == "assistant"
             and record["role"] == "assistant"
             and not record["preceding_tool_calls"]
+            and previous.get("phase") == record.get("phase")
+            and previous.get("turn_id") == record.get("turn_id")
             and bool(previous.get("abandoned")) == bool(record.get("abandoned"))
         ):
             previous["text"] = f"{previous['text']}\n\n{record['text']}"
@@ -1387,7 +1477,8 @@ def conversation_view(
     # The byte cap applies to a file; a store-backed conversation is bounded by the
     # message limit the reader already applies, so it asks for the whole record set
     # and lets the window below do the trimming.
-    size = path.stat().st_size if path is not None else 0
+    size_reader = _FILE_SIZES.get(transcript_dialect(backend) or "")
+    size = (size_reader(path) if size_reader else path.stat().st_size) if path else 0
     max_bytes = CONVERSATION_MAX_BYTES if size > CONVERSATION_MAX_BYTES else None
     records, hidden, trailing_tools = _conversation_records(
         conversation_events(path, backend, max_bytes=max_bytes, native_id=native_id), backend
@@ -1657,11 +1748,9 @@ def final_exchange_record(
 ) -> SpokenExchange:
     """The agent's latest reply, what it was answering, and the reply's anchor.
 
-    Deliberately the same reduction the reader tab renders, and not a second walk
-    with its own idea of where a reply starts. "Copy reply copies the last agent
-    message in the Transcript tab" is then the whole specification, true by
-    construction rather than by two implementations agreeing, and the reader is
-    where a doubt about what was copied gets settled.
+    Uses the reader's surviving branch, turn completion, and phase annotations.
+    Commentary and abandoned or explicitly incomplete turns cannot replace a
+    completed answer. Legacy messages without completion metadata remain readable.
 
     Every field is empty when the conversation does not have a reply yet. Sharing
     the cached view is also why this is cheap enough to call on the turn boundary
@@ -1669,9 +1758,19 @@ def final_exchange_record(
     """
     messages = conversation_view_cached(path, backend, native_id=native_id)["messages"]
     for index in range(len(messages) - 1, -1, -1):
-        if messages[index].get("role") == "assistant":
+        if is_completed_reply(messages[index]):
             return _exchange_at(messages, index)
     return _EMPTY_EXCHANGE
+
+
+def is_completed_reply(message: dict[str, Any]) -> bool:
+    """The shared latest-answer contract for Copy, voice, and transcript readers."""
+    return (
+        message.get("role") == "assistant"
+        and not message.get("abandoned")
+        and message.get("phase") != "commentary"
+        and message.get("turn_complete") is not False
+    )
 
 
 def message_exchange(
@@ -1706,7 +1805,7 @@ def final_exchange(
 
 
 def final_reply_text(path: Path | None, backend: str, *, native_id: str | None = None) -> str:
-    """The agent's latest reply: its newest assistant segment, or ``""``."""
+    """The latest completed answer on the surviving branch, or ``""``."""
     return final_exchange(path, backend, native_id=native_id)[1]
 
 

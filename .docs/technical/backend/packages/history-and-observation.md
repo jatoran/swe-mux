@@ -30,6 +30,12 @@ The single user-triggered global native-history reconcile: one job at a time, sc
 
 ## Transcripts
 
+### `codex_history.py` and `reply_snapshot.py`
+
+`codex_history.py` resolves read-only pinned fork ancestry, bounded virtual pages, replacement-aware revision fingerprints, and cached native-record freshness.
+`reply_snapshot.py` selects a completed surviving answer from the shared reader projection and returns message, turn, and revision evidence for an explicit Copy request.
+The route revalidates the live session identity after off-loop parsing.
+
 A Claude transcript is an append-only DAG, so the indexing projection drops the branches the conversation left and the human reader marks them.
 Neither may reconstruct the live branch from the parent chain alone, because a parallel tool batch parents each result to its own call and a chain walk would drop every result but the last.
 
@@ -70,7 +76,10 @@ Captures the nearest Codex process fingerprint in the startup hook helper and ve
 The bounded read runs off the daemon event loop through `observation.resolve_conversation_rollover`, shared by live ingress and hook-spool replay.
 Nested CLIs, native subagent transcripts, stale PIDs, and unavailable evidence cannot authorize a conversation replacement.
 
-**Not:** conversation mutation, process termination, command-line collection, or transcript discovery.
+`owned_rollout` additionally discovers the unique CLI-root transcript held open by the verified outermost Codex process.
+The observer throttles this off-loop fallback and applies normal live-session ownership checks before binding or rolling over.
+
+**Not:** conversation mutation, process termination, or command-line collection.
 
 ### `observation.py`
 

@@ -195,12 +195,12 @@ responsive controls.
   Before this, a hand-set mark could only be undone by a second trip to the menu, which made a
   read-state toggle behave like a permanent flag.
   Being server-held, the mark converges across devices exactly like the acknowledgement does.
-- The row's kill control appears on hover, and on keyboard focus via `:focus-visible`; selecting
+- On desktop, the row's kill control appears on hover, and on keyboard focus via `:focus-visible`; selecting
   a row does not reveal it.
   `:focus-within` did reveal it, because clicking a row leaves DOM focus on it, so every selected
   session wore a hover affordance until focus left the sidebar entirely.
-  Touch raises neither hover nor `:focus-visible`, so there the tapped row keeps the
-  `:focus-within` reveal — it is the only way to reach the control on a phone.
+  Mobile session rows never reveal an inline kill control, including after tap, sticky hover, or keyboard focus.
+  Long-press the row and choose Kill from its context menu.
   **It overlays the row and reserves nothing.** It used to widen `.session-copy` by a lane while
   shown, which kept it clear of the flags at the cost of re-laying-out the row the instant the
   pointer arrived: every token slid left while you were reading them. Covering one token is a

@@ -8,12 +8,14 @@
 // `?readAloud=1` turns the per-message read-aloud markers on, which is the four-chip row
 // the header's reserved gutter has to widen for.
 import { render } from 'preact'
+import { useState } from 'preact/hooks'
 import { TranscriptTab } from '../../src/TranscriptTab'
 import type { Session } from '../../src/types'
 import '../../src/deviceMode'
 import '../../src/style.css'
 
 const params = new URLSearchParams(location.search)
+let bound = params.get('deferredBinding') !== '1'
 
 const SESSION = {
   id: 's1', name: 'claude-0e7d93', generated_title: 'Transcript reader',
@@ -49,16 +51,25 @@ window.fetch = (async (input: RequestInfo | URL) => {
   // No clips: the markers render in their resting state, which is the state whose width
   // the header gutter has to clear. Which state a marker is in is `transcriptAudio`'s
   // business and is tested there.
-  const body = path.includes('/voice/clips') ? { items: [] } : TRANSCRIPT
+  const body = path.includes('/voice/clips') ? { items: [] } : bound ? TRANSCRIPT : {...TRANSCRIPT,messages:[],reason:'no_transcript'}
   return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } })
 }) as typeof fetch
 
 document.body.style.margin = '0'
 document.documentElement.style.setProperty('--ui-scale', '1')
 
+function Harness() {
+  const [session,setSession]=useState({...SESSION,native_session_id:'placeholder'})
+  return <div style="width:100%;height:100dvh;display:flex;flex-direction:column">
+    {params.get('deferredBinding')==='1'&&<button onClick={()=>{
+      bound=true
+      setSession({...session,native_session_id:'verified-fork'})
+    }}>Bind fork transcript</button>}
+    <TranscriptTab session={session} readAloud={params.get('readAloud') === '1'} />
+  </div>
+}
+
 render(
-  <div style="width:100%;height:100dvh;display:flex;flex-direction:column">
-    <TranscriptTab session={SESSION} readAloud={params.get('readAloud') === '1'} />
-  </div>,
+  <Harness />,
   document.querySelector('#root')!,
 )

@@ -695,7 +695,7 @@ def test_terminal_pane_clears_per_session_state_on_a_session_switch() -> None:
         Path(__file__).parents[1] / "frontend" / "src" / "TerminalPane.tsx"
     ).read_text(encoding="utf-8")
 
-    reset = pane[pane.index("setLastReply('')") : pane.index("},[session.id])")]
+    reset = pane[pane.index("    exitArrange()") : pane.index("},[session.id])")]
     for setter in (
         "setPreparedClipboard('')",
         "setManualClipboard(false)",
@@ -709,9 +709,12 @@ def test_terminal_pane_clears_per_session_state_on_a_session_switch() -> None:
     # timer blanks a message the incoming one has just put up.
     assert "clipboardStatusTimerRef.current=null" in reset
     assert "clipboardStatusKindRef.current='clipboard'" in reset
-    # An empty last-reply response must clear the value rather than leave the
-    # previous session's text in place.
-    assert "if(!disposed)setLastReply(result.text||'')" in pane
+    # Copy has no text cache now. Its request guard sees identity changes on
+    # render, before the session-switch effect runs; async races are tested in
+    # frontend/test/replyCopy.test.ts.
+    assert "replyCopyRef.current.observe(session)" in pane
+    assert "replyCopyRef.current.load(session" in pane
+    assert "setLastReply" not in pane
     # A renderer change has to reach panes whose other props are stable. The memo moved
     # to its own module so its rules could be unit-tested rather than only grepped
     # (`frontend/test/terminalPaneInputBackend.test.ts`); the wiring assertion follows it.

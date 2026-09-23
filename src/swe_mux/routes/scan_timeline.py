@@ -30,6 +30,7 @@ from ..harness import (
 )
 from ..http_support import json_response
 from ..project_context import ProjectContext
+from ..reply_snapshot import read_reply_snapshot
 from ..scan_consumers import catch_me_up, live_blocker, search_scan_records
 from ..scan_timeline import ScanTimelineService
 from ..session import TERMINAL_SESSION_STATES
@@ -39,7 +40,7 @@ from ..transcript_view import (
     CONVERSATION_MAX_LIMIT,
     conversation_is_readable,
     conversation_view_cached,
-    final_reply_text,
+    conversation_watermark,
 )
 from .agent_ingress import HOOK_WINDOW_SWEEP_AT
 from .support import _project_root_for
@@ -57,29 +58,117 @@ CONVERSATION_PARSE_TIMEOUT_SECONDS = 5.0
 async def session_last_reply(request: web.Request) -> web.Response:
     """Return normalized assistant text without routing through terminal OSC 52.
 
-    Reads the same reduction the drawer's Transcript tab renders, so what this
-    hands the clipboard is the last agent message a reader can see and check,
-    down to the tool boundary it starts at.
+    Selects a completed surviving answer from the drawer's reader projection.
+    The file revision and live binding are revalidated after off-loop parsing;
+    old content can never be labeled with a successor run's identity.
     """
     session = request.app[keys.SESSIONS].resolve(request.match_info["sid"])
     if not has_observable_transcript(session.record.backend):
         return json_response({"error": "last reply is available only for agent sessions"}, 409)
     path = session.transcript_path
     native_id = session.record.native_session_id
+    backend = session.record.backend
+    run_id = session.record.agent_run_id
+    epoch = session.record.turn_epoch
+    if (
+        getattr(session, "transcript_provisional", False)
+        or session.record.observation_stale_since is not None
+        or session.record.runtime_boundary != "local"
+    ):
+        return json_response(
+            {
+                "error": "The active conversation is not verified yet.",
+                "code": "conversation_unverified",
+            },
+            409,
+        )
     if not conversation_is_readable(path, session.record.backend, native_id):
         return json_response({"error": "the agent transcript is not available yet"}, 409)
     try:
-        text = await asyncio.wait_for(
-            asyncio.to_thread(final_reply_text, path, session.record.backend, native_id=native_id),
-            timeout=CONVERSATION_PARSE_TIMEOUT_SECONDS,
-        )
+        async with asyncio.timeout(CONVERSATION_PARSE_TIMEOUT_SECONDS):
+            snapshot = await asyncio.to_thread(read_reply_snapshot, path, backend, native_id)
+            current_watermark = await asyncio.to_thread(
+                conversation_watermark, path, backend, native_id
+            )
+            if snapshot.pop("source_watermark") != current_watermark:
+                raise OSError("The conversation changed while reading its reply. Try Copy again.")
     except (OSError, TimeoutError) as exc:
-        return json_response({"error": str(exc) or "the agent transcript could not be read"}, 409)
-    if not text:
-        return json_response(
-            {"error": "no assistant reply text was found in the recent transcript"}, 409
+        log.info(
+            "reply snapshot unavailable session=%s conversation=%s reason=%s",
+            session.record.id,
+            native_id,
+            str(exc) or "read_timeout",
         )
-    return json_response({"text": text, "agent_run_id": session.record.agent_run_id})
+        return json_response({"error": str(exc) or "the agent transcript could not be read"}, 409)
+    if (
+        getattr(session, "transcript_provisional", False)
+        or session.record.observation_stale_since is not None
+        or session.record.runtime_boundary != "local"
+        or (path, native_id, backend, run_id, epoch)
+        != (
+            session.transcript_path,
+            session.record.native_session_id,
+            session.record.backend,
+            session.record.agent_run_id,
+            session.record.turn_epoch,
+        )
+    ):
+        log.info(
+            "reply snapshot superseded session=%s run=%s conversation=%s",
+            session.record.id,
+            run_id,
+            native_id,
+        )
+        return json_response(
+            {
+                "error": "The conversation changed while reading its reply. Try Copy again.",
+                "code": "conversation_changed",
+            },
+            409,
+        )
+    log.info(
+        "reply selected session=%s run=%s conversation=%s message=%s revision=%s reason=%s",
+        session.record.id,
+        run_id,
+        native_id,
+        snapshot["message_id"],
+        snapshot["revision"],
+        snapshot["selection_reason"],
+    )
+    return json_response(
+        {
+            **snapshot,
+            "session_id": session.record.id,
+            "agent_run_id": run_id,
+            "native_session_id": native_id,
+            "turn_epoch": epoch,
+            "previous_answer": session.record.state == "working",
+        }
+    )
+
+
+async def session_reply_copy(request: web.Request) -> web.Response:
+    """Content-free receipt: record the selected snapshot and clipboard outcome."""
+    session = request.app[keys.SESSIONS].resolve(request.match_info["sid"])
+    body = await request.json()
+    if not isinstance(body, dict) or body.get("outcome") not in {
+        "copied",
+        "manual",
+        "superseded",
+        "failed",
+    }:
+        raise ValueError("invalid reply copy outcome")
+    evidence: dict[str, Any] = {"outcome": body["outcome"]}
+    for field in ("agent_run_id", "native_session_id", "message_id", "turn_id", "revision"):
+        value = body.get(field)
+        if value is not None and (not isinstance(value, str) or len(value) > 256):
+            raise ValueError(f"invalid {field}")
+        evidence[field] = value
+    await request.app[keys.EVENTS].emit(
+        "reply_copy", session_id=session.record.id, source="browser", **evidence
+    )
+    log.info("reply copy session=%s evidence=%s", session.record.id, evidence)
+    return json_response({"ok": True})
 
 
 async def session_scan_timeline(request: web.Request) -> web.Response:
@@ -636,12 +725,8 @@ async def session_catch_me_up(request: web.Request) -> web.Response:
     root = _record_project_root(request, record)
     enabled = await request.app[keys.AUTOMATION_GATE](root) if root else frozenset()
     if "catch_me_up" not in enabled or not run_id:
-        return json_response(
-            {"enabled": False, "agent_run_id": run_id or None, "digest": None}
-        )
-    records = await request.app[keys.AUTOMATION_STORE].scan_records(
-        agent_run_id=run_id, limit=2000
-    )
+        return json_response({"enabled": False, "agent_run_id": run_id or None, "digest": None})
+    records = await request.app[keys.AUTOMATION_STORE].scan_records(agent_run_id=run_id, limit=2000)
     return json_response({"enabled": True, "digest": catch_me_up(records, run_id)})
 
 
@@ -1088,6 +1173,7 @@ async def runtime_inventory_ingress(request: web.Request) -> web.Response:
 
 ROUTES: tuple[web.RouteDef, ...] = (
     web.get("/api/sessions/{sid}/last-reply", session_last_reply),
+    web.post("/api/sessions/{sid}/reply-copy", session_reply_copy),
     web.get("/api/sessions/{sid}/transcript", session_transcript),
     web.get("/api/sessions/{sid}/scan-timeline", session_scan_timeline),
     web.put("/api/sessions/{sid}/scan-timeline", put_session_scan_timeline),
@@ -1115,8 +1201,6 @@ ROUTES: tuple[web.RouteDef, ...] = (
     # POST because it is the one Agent Environment call that reaches a
     # server: it may start a short-lived probe process and open a network
     # connection, which is exactly what a GET promises not to do.
-    web.post(
-        "/api/sessions/{sid}/agent-environment/mcp-tools", session_mcp_tools
-    ),
+    web.post("/api/sessions/{sid}/agent-environment/mcp-tools", session_mcp_tools),
     web.post("/api/sessions/{sid}/runtime-inventory", runtime_inventory_ingress),
 )

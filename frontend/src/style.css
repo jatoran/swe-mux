@@ -1249,10 +1249,11 @@ body {
   display:flex;
   visibility:visible;
 }
-/* Touch raises neither hover nor `:focus-visible`, so there the tapped row keeps
-   the old reveal — without it a phone has no way to reach the control at all. */
-@media(hover:none) {
-  .session-row:focus-within .row-actions { display:flex;visibility:visible }
+/* Mobile session termination lives in the long-press menu. Suppress the inline
+   control even when a tap leaves sticky hover or keyboard focus on the row. */
+:root[data-workspace-layout="mobile"] .session-row .row-actions {
+  display:none;
+  visibility:hidden;
 }
 .row-actions button { width:22px;height:calc(22px*var(--ui-scale));padding:0 }
 .context-menu,.terminal-menu { width:min(300px,calc(100dvw - 8px)) }
