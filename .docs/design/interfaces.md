@@ -2688,7 +2688,7 @@ POST   /provider-accounts/verify
 POST   /provider-accounts/{provider}/capture
 POST   /provider-accounts/{provider}/login {label?, replace_id?}
 POST   /provider-accounts/{provider}/login/dismiss
-PATCH  /provider-accounts/{provider}/{account_id}
+PATCH  /provider-accounts/{provider}/{account_id} {alias: string | null}   (legacy {label}; ""/null clears; 409 on a name another account of the provider shows)
 POST   /provider-accounts/{provider}/{account_id}/select
 POST   /provider-accounts/{provider}/{account_id}/adopt
 POST   /provider-accounts/{provider}/{account_id}/purge-telemetry {since?: epoch}

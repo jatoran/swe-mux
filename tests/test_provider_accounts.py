@@ -1508,3 +1508,146 @@ async def test_session_counts_follow_the_verified_account_not_the_slot(
     counts = manager.session_counts()
     assert counts["by_account"] == {slot: 1}
     assert counts["unsaved"] == {"claude": 1}
+
+
+def _alias_manager(tmp_path: Path) -> tuple[ProviderAccountManager, Path]:
+    home = tmp_path / "home"
+    system_auth = home / ".claude" / ".credentials.json"
+    system_auth.parent.mkdir(parents=True)
+    manager = offline(ProviderAccountManager(tmp_path / "mux", EventBus(), home=home))
+    manager._status_identity = MethodType(no_status, manager)  # type: ignore[method-assign]
+    manager.refresh = MethodType(fake_refresh, manager)  # type: ignore[method-assign]
+    return manager, system_auth
+
+
+async def _saved(manager: ProviderAccountManager, system_auth: Path, token: str, email: str) -> str:
+    system_auth.write_text(json.dumps(claude_auth(token, email)), encoding="utf-8")
+    return str((await manager.capture_current("claude"))["selected"]["claude"])
+
+
+def _account(snapshot: dict[str, Any], account_id: str) -> dict[str, Any]:
+    return next(item for item in snapshot["accounts"] if item["id"] == account_id)
+
+
+@pytest.mark.asyncio
+async def test_an_alias_names_the_account_and_clearing_it_falls_back_to_the_email(
+    tmp_path: Path,
+) -> None:
+    manager, system_auth = _alias_manager(tmp_path)
+    account_id = await _saved(manager, system_auth, "one", "one@example.com")
+    saved = _account(manager.snapshot(), account_id)
+    assert (saved["label"], saved["alias"]) == ("one@example.com", None)
+
+    snapshot = await manager.rename("claude", account_id, "  Personal \n Max  ")
+    renamed = _account(snapshot, account_id)
+    assert renamed["alias"] == "Personal Max", "whitespace and control characters collapse"
+    assert renamed["label"] == "Personal Max"
+    assert renamed["email"] == "one@example.com", "the identity is untouched"
+
+    cleared = _account(await manager.rename("claude", account_id, ""), account_id)
+    assert (cleared["alias"], cleared["label"]) == (None, "one@example.com")
+    # Typing the email back is asking for the default, not pinning the name to it.
+    retyped = _account(await manager.rename("claude", account_id, "one@example.com"), account_id)
+    assert retyped["alias"] is None
+
+    # It survives a restart, from the manifest alone.
+    await manager.rename("claude", account_id, "Personal")
+    restarted = ProviderAccountManager(tmp_path / "mux", EventBus(), home=tmp_path / "home")
+    assert _account(restarted.snapshot(), account_id)["label"] == "Personal"
+
+
+@pytest.mark.asyncio
+async def test_without_an_alias_the_name_follows_the_identity(tmp_path: Path) -> None:
+    manager, system_auth = _alias_manager(tmp_path)
+    account_id = await _saved(manager, system_auth, "one", "old@example.com")
+    system_auth.write_text(json.dumps(claude_auth("two", "new@example.com")), encoding="utf-8")
+    snapshot = await manager.capture_current("claude", replace_id=account_id)
+    assert _account(snapshot, account_id)["label"] == "new@example.com"
+
+    await manager.rename("claude", account_id, "Work")
+    system_auth.write_text(json.dumps(claude_auth("three", "newer@example.com")), encoding="utf-8")
+    snapshot = await manager.capture_current("claude", replace_id=account_id)
+    assert _account(snapshot, account_id)["label"] == "Work", "a chosen name is kept"
+
+
+@pytest.mark.asyncio
+async def test_an_alias_cannot_repeat_another_accounts_name_or_run_long(tmp_path: Path) -> None:
+    manager, system_auth = _alias_manager(tmp_path)
+    first = await _saved(manager, system_auth, "one", "one@example.com")
+    second = await _saved(manager, system_auth, "two", "two@example.com")
+    await manager.rename("claude", first, "Personal")
+
+    with pytest.raises(ProviderAccountConflict, match="already called 'Personal'"):
+        await manager.rename("claude", second, "personal")
+    # Nor the email another account goes by when it has no alias.
+    await manager.rename("claude", first, "")
+    with pytest.raises(ProviderAccountConflict, match="one@example.com"):
+        await manager.rename("claude", second, "ONE@example.com")
+    with pytest.raises(ProviderAccountError, match="at most 64"):
+        await manager.rename("claude", second, "x" * 65)
+    # The same account may keep its own name, in any case.
+    assert _account(await manager.rename("claude", first, "PERSONAL"), first)["label"] == "PERSONAL"
+
+
+def test_a_manifest_from_before_aliases_keeps_names_people_chose(tmp_path: Path) -> None:
+    data_dir = tmp_path / "mux"
+    data_dir.mkdir()
+    base = {"provider": "claude", "created_at": 1.0, "updated_at": 1.0}
+    (data_dir / "provider-accounts.json").write_text(
+        json.dumps(
+            {
+                "version": 2,
+                "selected": {"claude": None, "codex": None},
+                "accounts": [
+                    base | {"id": "chosen", "label": "Work", "email": "w@example.com"},
+                    base | {"id": "default", "label": "d@example.com", "email": "d@example.com"},
+                    base | {"id": "bare", "label": "Claude account", "email": None},
+                ],
+                "quota": {},
+                "identities": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+    manager = ProviderAccountManager(data_dir, EventBus(), home=tmp_path / "home")
+    aliases = {item["id"]: item["alias"] for item in manager.snapshot()["accounts"]}
+    assert aliases == {"chosen": "Work", "default": None, "bare": None}
+
+
+@pytest.mark.asyncio
+async def test_rename_route_takes_alias_and_the_older_label_field(tmp_path: Path) -> None:
+    from aiohttp import web
+
+    from swe_mux import app_keys as keys
+    from swe_mux.routes.usage import patch_provider_account
+
+    manager, system_auth = _alias_manager(tmp_path)
+    account_id = await _saved(manager, system_auth, "one", "one@example.com")
+    app = web.Application()
+    app[keys.PROVIDER_ACCOUNTS] = manager
+    app[keys.TELEMETRY] = SimpleNamespace(  # type: ignore[assignment]
+        latest_quota_by_account=lambda: _resolved({}),
+        reset_summary=lambda: _resolved(None),
+    )
+
+    async def patch(body: object) -> dict[str, Any]:
+        async def read() -> object:
+            return body
+
+        request = SimpleNamespace(
+            app=app,
+            json=read,
+            match_info={"provider": "claude", "account_id": account_id},
+        )
+        response = await patch_provider_account(request)  # type: ignore[arg-type]
+        return _account(json.loads(response.body), account_id)  # type: ignore[arg-type]
+
+    assert (await patch({"alias": "Personal"}))["label"] == "Personal"
+    assert (await patch({"label": "Legacy client"}))["label"] == "Legacy client"
+    assert (await patch({"alias": None}))["label"] == "one@example.com"
+    with pytest.raises(ValueError, match="string or null"):
+        await patch({"alias": 7})
+
+
+async def _resolved(value: Any) -> Any:
+    return value

@@ -232,6 +232,11 @@ export interface Session {
   process_job_assignment:string
   tokens_out: number; tokens_cache_read:number; tokens_cache_write:number; cost_usd:number
   provider?:string|null; provider_account_hashes?:Record<string,string>
+  /** The saved Claude/Codex account mux had selected when this process started (see
+   *  `SessionRecord.spawn_provider_account_id`). What mux selected, not proof of what the
+   *  process authenticates as, so a surface naming it says "spawned under". Empty with a
+   *  provider set means a login mux had not saved. */
+  spawn_provider?:string|null; spawn_provider_account_id?:string|null
   context_window: number; context_pct: number; last_activity_ts: number
   /**
    * Semantic turn completions, and the highest one a human has acknowledged.

@@ -561,13 +561,20 @@ async def dismiss_provider_login(request: web.Request) -> web.Response:
 async def patch_provider_account(request: web.Request) -> web.Response:
     accounts: ProviderAccountManager = request.app[keys.PROVIDER_ACCOUNTS]
     body = await request.json()
+    if not isinstance(body, dict):
+        raise ValueError("expected a JSON object")
+    # `alias` is the field; `label` is what clients before aliases sent, and meant the
+    # same thing. An empty or null alias clears it, and the name follows the identity.
+    raw = body["alias"] if "alias" in body else body.get("label")
+    if raw is not None and not isinstance(raw, str):
+        raise ValueError("alias must be a string or null")
     return json_response(
         await _enriched_accounts(
             request,
             await accounts.rename(
                 request.match_info["provider"],
                 request.match_info["account_id"],
-                str(body["label"]),
+                raw,
             ),
         )
     )

@@ -28,6 +28,10 @@ The release procedure that maintains this file is [`RELEASING.md`](RELEASING.md)
 - **The Project menu opens the Run menu.**
   Right-clicking a Project in the sidebar (or tapping its `⋮`, or the Project name in the mobile top bar) now starts with a `Run` row that expands into the same Run menu the `▶` buttons open: harnesses and launch profiles, worktree sessions, plugin panes and the Project's tasks.
   With a mouse it opens on hover, beside the row, with the Project menu still open underneath; on touch, tapping it opens the Run menu.
+- **Name your Claude and Codex accounts.**
+  Settings → Accounts gives each saved account a name field; whatever you type there is what the account switcher, Settings, the usage views and the session rows show instead of its email.
+  Clear the field to go back to the email, and an account without a name follows its login if you sign it in again with a different address.
+  Session rows' "Provider account" field now names the Claude or Codex account a session was started under, and only calls attention to it when one provider has more than one account in use.
 - **Settings search finds settings, not every keyboard shortcut.**
   The shortcut table and the note editor's chord list no longer fill the results; when a search matches shortcuts, one row at the end says how many and opens the Keyboard shortcuts page with its own filter already holding the search.
   Searches also understand common other names: "dark mode" finds Theme, "hotkeys" finds Keyboard shortcuts, "zoom" finds the interface scale, "tailscale" finds the tailnet listener, among 193 aliases for 65 settings.

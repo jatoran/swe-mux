@@ -1094,11 +1094,11 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
       </div>
       <div class="relgroups">
         <div><span class="k">Added</span> <span class="sep">1 entry</span></div>
-        <div><span class="k">Changed</span> <span class="sep">4 entries</span></div>
+        <div><span class="k">Changed</span> <span class="sep">5 entries</span></div>
         <div><span class="k">Fixed</span> <span class="sep">5 entries</span></div>
       </div>
       <details class="relmore">
-        <summary>all 10 entries</summary>
+        <summary>all 11 entries</summary>
         <div class="changetype">Added</div>
         <ul class="bullets">
           <li><span><b>The terminal's font family is a setting.</b> Settings → Appearance → Terminal font takes a family list such as <code>JetBrainsMono Nerd Font</code>, which is what makes prompt-theme and agent-CLI icons render as glyphs rather than boxes. Whatever you enter is placed ahead of the default stack rather than replacing it, so a typo or a font the viewing device lacks falls back to the terminal you had. The field says whether each name is installed on the device you are typing on, since the setting is shared by every device and fonts are not. Saving re-fits every open terminal in place; nothing is restarted.</span></li>
@@ -1106,6 +1106,7 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
         <div class="changetype">Changed</div>
         <ul class="bullets">
           <li><span><b>The Project menu opens the Run menu.</b> Right-clicking a Project in the sidebar (or tapping its <code>⋮</code>, or the Project name in the mobile top bar) now starts with a <code>Run</code> row that expands into the same Run menu the <code>▶</code> buttons open: harnesses and launch profiles, worktree sessions, plugin panes and the Project's tasks. With a mouse it opens on hover, beside the row, with the Project menu still open underneath; on touch, tapping it opens the Run menu.</span></li>
+          <li><span><b>Name your Claude and Codex accounts.</b> Settings → Accounts gives each saved account a name field; whatever you type there is what the account switcher, Settings, the usage views and the session rows show instead of its email. Clear the field to go back to the email, and an account without a name follows its login if you sign it in again with a different address. Session rows' "Provider account" field now names the Claude or Codex account a session was started under, and only calls attention to it when one provider has more than one account in use.</span></li>
           <li><span><b>Settings search finds settings, not every keyboard shortcut.</b> The shortcut table and the note editor's chord list no longer fill the results; when a search matches shortcuts, one row at the end says how many and opens the Keyboard shortcuts page with its own filter already holding the search. Searches also understand common other names: "dark mode" finds Theme, "hotkeys" finds Keyboard shortcuts, "zoom" finds the interface scale, "tailscale" finds the tailnet listener, among 193 aliases for 65 settings.</span></li>
           <li><span><b>The sidebar footer's Settings cog is gone.</b> Settings opens from <code>menu → Settings</code>, the <code>settings.open</code> command, or any setting link; the cog duplicated the menu row beside it.</span></li>
         </ul>

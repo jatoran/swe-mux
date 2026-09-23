@@ -21,7 +21,9 @@ type AccountQuota={session?:QuotaWindow|null;weekly?:QuotaWindow|null;fable?:Quo
 type IdentitySource='token'|'cli'|'file'
 type AccountConflict={kind:'duplicate_account';provider_account_id:string;primary_id:string;is_primary:boolean;account_ids:string[]}
 type MatchHint={account_id:string;label?:string|null;reason:string}
-export type ProviderAccount={id:string;provider:ProviderName;label:string;email?:string|null;organization?:string|null;provider_account_id?:string|null;identity_source?:IdentitySource|null;identity_verified_at?:number|null;created_at:number;updated_at:number;quota?:AccountQuota|null;conflict?:AccountConflict|null}
+/** `label` is what every surface prints: the account's `alias` when one is set, else its
+ *  email (or organization). The daemon derives it, so no client composes the fallback. */
+export type ProviderAccount={id:string;provider:ProviderName;label:string;alias?:string|null;email?:string|null;organization?:string|null;provider_account_id?:string|null;identity_source?:IdentitySource|null;identity_verified_at?:number|null;created_at:number;updated_at:number;quota?:AccountQuota|null;conflict?:AccountConflict|null}
 type CurrentProviderAccount={state:'saved'|'external'|'signed_out'|'unreadable';account_id:string|null;email?:string|null;organization?:string|null;provider_account_id?:string|null;identity_source?:IdentitySource|null;match_hint?:MatchHint|null}
 type ResetEvidence={id:string;provider:ProviderName;account_id:string;window:string;before_value:number;after_value:number;confirmed_at?:number}
 /** Every unreviewed confirmed reset, not just the newest: one provider rollover lands on
@@ -76,8 +78,44 @@ const formatRefreshAge=(seconds?:number,nowSeconds=serverNow())=>{
   return `${Math.floor(hours/24)}d`
 }
 
+// Every saved account's display name, by id, for surfaces that name an account without
+// owning an accounts poll - the session rows, which say which account each session was
+// spawned under. Published by whichever accounts surface loaded last, so a rename reaches
+// the rows on the same response that confirmed it.
+let accountLabelsValue:Record<string,string>={}
+let accountLabelsKey=''
+let accountLabelsLoaded=false
+const accountLabelListeners=new Set<(labels:Record<string,string>)=>void>()
+function publishAccountLabels(status:ProviderAccountsStatus|null){
+  if(!status)return
+  accountLabelsLoaded=true
+  const next=Object.fromEntries(status.accounts.map(account=>[account.id,account.label]))
+  const key=JSON.stringify(next)
+  // Only a real change notifies: the poll returns an equal payload every minute, and the
+  // rows memoise their tokens on this object's identity.
+  if(key===accountLabelsKey)return
+  accountLabelsKey=key
+  accountLabelsValue=next
+  for(const listener of accountLabelListeners)listener(next)
+}
+
+/** Saved account display names by id, kept current by the accounts surfaces. Fetches
+ *  once itself if none of them has loaded yet, so a layout without an account switcher
+ *  still names its rows. */
+export function useAccountLabels():Record<string,string>{
+  const [labels,setLabels]=useState(accountLabelsValue)
+  useEffect(()=>{
+    accountLabelListeners.add(setLabels)
+    setLabels(accountLabelsValue)
+    if(!accountLabelsLoaded)void api<ProviderAccountsStatus>('GET','/api/provider-accounts').then(publishAccountLabels).catch(()=>{})
+    return()=>{accountLabelListeners.delete(setLabels)}
+  },[])
+  return labels
+}
+
 function useProviderAccounts(intervalMs=60_000,idleMs=intervalMs) {
   const [status,setStatus]=useState<ProviderAccountsStatus|null>(null)
+  useEffect(()=>publishAccountLabels(status),[status])
   const [error,setError]=useState('')
   const load=()=>api<ProviderAccountsStatus>('GET','/api/provider-accounts').then(value=>{setStatus(value);setError('')}).catch(cause=>setError(cause instanceof Error?cause.message:String(cause)))
   // A sign-in running on the daemon is the only state here that a human is
@@ -416,6 +454,42 @@ export function AccountSwitcher({variant='full',placement,onManage,onViewUsage,p
   </div>
 }
 
+/**
+ * The name an account goes by everywhere in the app. Empty means "use the email", which
+ * is why the email is the placeholder rather than the value: a field pre-filled with the
+ * address reads as a record of it, not as a name you are invited to change, and clearing
+ * it has to be how the default comes back.
+ *
+ * Commits on Enter or on leaving the field. While an edit is unsaved, Escape puts back
+ * what was saved instead of closing the panel - closing it with a half-typed name would
+ * commit that name on the way out. `data-owns-escape` is how it claims the key: Settings
+ * handles Escape in the capture phase, before the field could see it, and yields to a
+ * target carrying the mark; the field then stops propagation so the app's bubble-phase
+ * handler does not pop a level either. The mark is on only while there is something to
+ * revert, so a second Escape closes the panel as usual. Keyed on the saved alias, so a
+ * response that changed it resets the draft.
+ */
+function AccountAliasField({account,disabled,onCommit}:{account:ProviderAccount;disabled:boolean;onCommit:(alias:string)=>void}){
+  const saved=account.alias||''
+  const [draft,setDraft]=useState(saved)
+  useEffect(()=>setDraft(saved),[saved])
+  const dirty=draft!==saved
+  const identity=account.email||account.organization||`${account.provider} account`
+  return <label class="account-alias">
+    <span>name</span>
+    <input value={draft} placeholder={identity} maxLength={64} disabled={disabled} spellcheck={false} autocomplete="off"
+      data-owns-escape={dirty?'':undefined}
+      aria-label={`Name for ${account.provider} account ${identity}`}
+      title="Shown instead of the email everywhere in swe-mux. Leave empty to use the email."
+      onInput={event=>setDraft(event.currentTarget.value)}
+      onKeyDown={event=>{
+        if(event.key==='Enter'){event.preventDefault();event.currentTarget.blur()}
+        else if(event.key==='Escape'&&dirty){event.preventDefault();event.stopPropagation();setDraft(saved)}
+      }}
+      onBlur={()=>onCommit(draft)}/>
+  </label>
+}
+
 export function AccountSettings() {
   const {status,setStatus,error,setError}=useProviderAccounts(120_000)
   const {busy:loginBusy,startLogin,dismissLogin}=useProviderLogin(setStatus,setError)
@@ -449,7 +523,11 @@ export function AccountSettings() {
   // input only ever made an optional step look like a required one.
   const capture=(provider:ProviderName)=>void mutate(`${provider}-capture`,'POST',`/api/provider-accounts/${provider}/capture`,{},true)
   const reauthenticate=(account:ProviderAccount)=>startLogin(account.provider,account.id)
-  const rename=(account:ProviderAccount,label:string)=>{if(label.trim()&&label.trim()!==account.label)void mutate(account.id,'PATCH',`/api/provider-accounts/${account.provider}/${account.id}`,{label})}
+  const rename=(account:ProviderAccount,alias:string)=>{
+    const next=alias.trim()
+    if(next===(account.alias||'').trim())return
+    void mutate(account.id,'PATCH',`/api/provider-accounts/${account.provider}/${account.id}`,{alias:next||null})
+  }
   const remove=(account:ProviderAccount)=>{if(confirmRemove!==account.id){setConfirmRemove(account.id);return}setConfirmRemove('');void mutate(account.id,'DELETE',`/api/provider-accounts/${account.provider}/${account.id}`)}
   return <section data-tutorial="provider-accounts" class="account-settings"><div class="account-settings-head"><h3>Provider accounts</h3><div class="account-actions">
       {/* One global control, once. `/verify` is a whole-install operation, so a copy of
@@ -474,7 +552,7 @@ export function AccountSettings() {
       {current?.state!=='saved'&&<div class={`account-current ${current?.state||'signed_out'}`}><span>LIVE SYSTEM AUTH</span><strong>{currentDescription(current,active)}</strong>{current?.match_hint&&<p class="account-relink"><span>{hintDescription(current)}</span><button disabled={!!busy} onClick={()=>void mutate(`adopt-${provider}`,'POST',`/api/provider-accounts/${provider}/${current.match_hint!.account_id}/adopt`)}>{busy===`adopt-${provider}`?'relinking…':`relink to ${current.match_hint.label}`}</button></p>}</div>}
       <div data-tutorial="provider-account-actions" class="account-add"><button class="primary" disabled={!!busy||login?.state==='running'} title={signInTitle(status?.login_commands,provider)} onClick={()=>startLogin(provider)}>sign in + save</button><button class="account-add-secondary" disabled={!!busy} title="Captures an account you signed in to separately, without starting a login." onClick={()=>capture(provider)}>{busy===`${provider}-capture`?'saving…':'already signed in? save current login'}</button></div>
       <LoginProgress login={login} busy={!!busy} onDismiss={()=>dismissLogin(provider)}/>
-      <div class="account-list">{accounts.map(account=><article class={`${status?.selected[provider]===account.id?'active':''} ${account.conflict?'conflicted':''}`}><span class="account-state">{status?.selected[provider]===account.id?'◆ active':'◇ saved'}</span><input aria-label={`${provider} account label`} defaultValue={account.label} onBlur={event=>rename(account,event.currentTarget.value)}/><small>{account.email||account.organization||account.provider_account_id||'identity unavailable'}<i class={`account-identity ${account.identity_source==='token'?'verified':'unverified'}`} title={identityTitle(account)}>{identityNote(account)}</i></small><div class="account-quota" title={quotaTitle(account)}><span>session <b>{percent(account.quota?.session)}</b></span><span>weekly <b>{percent(account.quota?.weekly)}</b></span>{account.quota?.fable&&<span>fable <b>{percent(account.quota.fable)}</b></span>}<em>{account.quota?.status||'pending'}{account.quota?.error?` · ${account.quota.error}`:''}</em></div><div class="account-actions"><button disabled={!!busy||status?.selected[provider]===account.id} onClick={()=>void selectAccount(account)}>use</button><button disabled={!!busy||login?.state==='running'} onClick={()=>reauthenticate(account)}>sign in again</button><button class={confirmRemove===account.id?'danger confirming':'danger'} disabled={!!busy} onClick={()=>remove(account)}>{confirmRemove===account.id?'confirm remove':'remove'}</button></div>{account.conflict&&<p class="account-conflict" role="alert">{conflictDescription(account)}</p>}</article>)}{!accounts.length&&<div class="account-empty">No {provider} accounts saved yet.</div>}</div>
+      <div class="account-list">{accounts.map(account=><article class={`${status?.selected[provider]===account.id?'active':''} ${account.conflict?'conflicted':''}`}><span class="account-state">{status?.selected[provider]===account.id?'◆ active':'◇ saved'}</span><AccountAliasField account={account} disabled={!!busy} onCommit={alias=>rename(account,alias)}/><small>{account.email||account.organization||account.provider_account_id||'identity unavailable'}<i class={`account-identity ${account.identity_source==='token'?'verified':'unverified'}`} title={identityTitle(account)}>{identityNote(account)}</i></small><div class="account-quota" title={quotaTitle(account)}><span>session <b>{percent(account.quota?.session)}</b></span><span>weekly <b>{percent(account.quota?.weekly)}</b></span>{account.quota?.fable&&<span>fable <b>{percent(account.quota.fable)}</b></span>}<em>{account.quota?.status||'pending'}{account.quota?.error?` · ${account.quota.error}`:''}</em></div><div class="account-actions"><button disabled={!!busy||status?.selected[provider]===account.id} onClick={()=>void selectAccount(account)}>use</button><button disabled={!!busy||login?.state==='running'} onClick={()=>reauthenticate(account)}>sign in again</button><button class={confirmRemove===account.id?'danger confirming':'danger'} disabled={!!busy} onClick={()=>remove(account)}>{confirmRemove===account.id?'confirm remove':'remove'}</button></div>{account.conflict&&<p class="account-conflict" role="alert">{conflictDescription(account)}</p>}</article>)}{!accounts.length&&<div class="account-empty">No {provider} accounts saved yet.</div>}</div>
     </div>})}
     {(error||message)&&<p class={error?'settings-inline-error':''} role={error?'alert':'status'}>{error||message}</p>}
   </section>

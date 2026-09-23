@@ -91,6 +91,9 @@ CLAUDE_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
 CODEX_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage"
 
 IDENTITY_FIELDS = ("email", "provider_account_id", "organization")
+# An alias is a name a person reads in a row, not a document; the cap keeps one from
+# pushing every other column of the switcher and the Settings list off screen.
+ALIAS_MAX_CHARS = 64
 IDENTITY_STRENGTH: dict[str, int] = {"file": 1, "cli": 2, "token": 3}
 # A credential blob's owner never changes, so a digest→identity entry stays valid
 # forever; the map is bounded only to keep the manifest small.
@@ -119,6 +122,41 @@ class ProviderAccountError(RuntimeError):
 
 class ProviderAccountConflict(ProviderAccountError):
     """A request would bind credentials to the wrong account, or needs a force flag."""
+
+
+def _identity_label(account: dict[str, Any]) -> str:
+    """The name a slot goes by when nobody has given it one: its email, else its org."""
+    return (
+        _string(account.get("email"))
+        or _string(account.get("organization"))
+        or f"{str(account.get('provider') or '').title()} account"
+    )
+
+
+def _apply_label(account: dict[str, Any]) -> bool:
+    """Derive the displayed ``label`` from the alias, falling back to the identity.
+
+    ``label`` is what every surface reads, and it is stored rather than computed per
+    reader so the stranded-session notices, the audit trail and the usage history all
+    name one account the same way. It is never written directly: without an alias it
+    follows the identity, so a slot re-authenticated into a new email is not left
+    named after the old one. Returns whether it changed.
+    """
+    label = _string(account.get("alias")) or _identity_label(account)
+    if account.get("label") == label:
+        return False
+    account["label"] = label
+    return True
+
+
+def _clean_alias(value: str | None) -> str | None:
+    """Collapse whitespace and drop control characters; ``None`` for nothing left."""
+    if value is None:
+        return None
+    text = " ".join("".join(ch for ch in value if ch.isprintable()).split())
+    if len(text) > ALIAS_MAX_CHARS:
+        raise ProviderAccountError(f"account alias must be at most {ALIAS_MAX_CHARS} characters")
+    return text or None
 
 
 def _blank_identity() -> dict[str, Any]:
@@ -422,6 +460,16 @@ class ProviderAccountManager:
         manifest.setdefault("accounts", [])
         manifest.setdefault("quota", {})
         manifest.setdefault("identities", {})
+        for item in manifest["accounts"] if isinstance(manifest["accounts"], list) else []:
+            account = _record(item)
+            # Manifests written before aliases stored the chosen name straight in
+            # `label`. A label that is not what the identity would produce was set by a
+            # person, so it becomes the alias; one that is, was a default and follows
+            # the identity from here on.
+            if "alias" not in account:
+                label = _string(account.get("label"))
+                account["alias"] = label if label and label != _identity_label(account) else None
+            _apply_label(account)
         return manifest
 
     @staticmethod
@@ -713,6 +761,7 @@ class ProviderAccountManager:
                 "id",
                 "provider",
                 "label",
+                "alias",
                 "email",
                 "provider_account_id",
                 "organization",
@@ -872,6 +921,8 @@ class ProviderAccountManager:
             changed = True
         elif not _string(account.get("identity_source")) and _string(identity.get("source")):
             account["identity_source"] = _string(identity.get("source"))
+            changed = True
+        if _apply_label(account):
             changed = True
         if changed:
             account["auth_digest"] = digest
@@ -1291,13 +1342,15 @@ class ProviderAccountManager:
                 }
                 self._accounts().append(account)
             account.update({key: identity.get(key) for key in IDENTITY_FIELDS})
+            alias = _clean_alias(label)
+            if alias is not None:
+                self._check_alias_free(provider, alias, str(account["id"]))
+                account["alias"] = alias
+            else:
+                account.setdefault("alias", None)
+            _apply_label(account)
             account.update(
                 {
-                    "label": (label or "").strip()
-                    or account.get("label")
-                    or identity.get("email")
-                    or identity.get("organization")
-                    or f"{provider.title()} account",
                     "updated_at": now,
                     "auth_digest": digest,
                     "identity_source": _string(identity.get("source")),
@@ -1715,18 +1768,56 @@ class ProviderAccountManager:
         )
         return self.snapshot()
 
-    async def rename(self, provider_value: str, account_id: str, label: str) -> dict[str, Any]:
+    def _check_alias_free(self, provider: Provider, alias: str, account_id: str) -> None:
+        """Refuse an alias another slot of the same provider already displays.
+
+        Two rows reading the same name are indistinguishable in the switcher, which
+        is the one place a person chooses between them.
+        """
+        folded = alias.casefold()
+        for item in self._accounts():
+            if item.get("provider") != provider or item.get("id") == account_id:
+                continue
+            if str(item.get("label") or "").casefold() == folded:
+                raise ProviderAccountConflict(
+                    f"another {provider} account is already called '{item.get('label')}'"
+                )
+
+    async def rename(
+        self, provider_value: str, account_id: str, alias: str | None
+    ) -> dict[str, Any]:
+        """Set the name an account is shown by, or clear it with an empty value.
+
+        Clearing is not a rename to the email: the label then follows the identity,
+        so a later re-authentication into a different address is named correctly.
+        """
         provider = _provider(provider_value)
-        clean_label = label.strip()
-        if not clean_label:
-            raise ProviderAccountError("account label must not be empty")
+        clean = _clean_alias(alias)
         async with self._mutation_lock:
             account = self._account(account_id)
             if account.get("provider") != provider:
                 raise ProviderAccountError("account provider does not match")
-            account["label"] = clean_label
+            if clean is not None and clean == _identity_label(account):
+                # Typing the email back in is asking for the default, and storing it
+                # as an alias would pin the name to an address that can change.
+                clean = None
+            if clean is not None:
+                self._check_alias_free(provider, clean, account_id)
+            previous = _string(account.get("label"))
+            account["alias"] = clean
+            _apply_label(account)
             account["updated_at"] = time.time()
             self._write()
+            log.info(
+                "provider account renamed",
+                extra={
+                    "provider": provider,
+                    "account_id": account_id,
+                    "old_label": previous,
+                    "new_label": _string(account.get("label")),
+                    "alias_set": clean is not None,
+                },
+            )
         return self.snapshot()
 
     @staticmethod
@@ -2211,6 +2302,7 @@ class ProviderAccountManager:
             return None
         previous = _string(account.get("provider_account_id"))
         account.update({key: verified.get(key) for key in IDENTITY_FIELDS})
+        _apply_label(account)
         account["identity_source"] = "token"
         account["identity_verified_at"] = time.time()
         account["identity_verified_digest"] = digest

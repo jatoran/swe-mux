@@ -1276,7 +1276,11 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
 
   useEffect(() => {
     const close = (event: KeyboardEvent) => {
-      if (event.key === 'Escape'&&!capturingCommand) {
+      // A field with an unsaved edit that Escape reverts (a saved account's name) marks
+      // itself, because this capture-phase listener would otherwise close the panel
+      // before the field saw the key. It stops the key's propagation itself.
+      const ownsEscape=event.target instanceof Element&&!!event.target.closest('[data-owns-escape]')
+      if (event.key === 'Escape'&&!capturingCommand&&!ownsEscape) {
         event.preventDefault()
         event.stopImmediatePropagation()
         dismissStack.pop()

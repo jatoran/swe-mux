@@ -48,7 +48,7 @@ import { UsageModal } from './UsageModal'
 import type { UsageSegment } from './usageSegments'
 import { HistoryBrowser } from './HistoryBrowser'
 import { resumeDraft, type ScheduleDraft, type ScheduleTargetKind } from './schedules'
-import { AccountSwitcher } from './ProviderAccounts'
+import { AccountSwitcher, useAccountLabels } from './ProviderAccounts'
 import { harnessMark } from './harnessIcons'
 import { PromptLibrary } from './PromptLibrary'
 import { PROMPT_RAIL_EVENT } from './promptRail'
@@ -625,9 +625,12 @@ export function App() {
     ()=>({enabled:!!voiceStatus?.enabled,default_mode:voiceStatus?.default_mode||'off'}),
     [voiceStatus?.enabled,voiceStatus?.default_mode],
   )
+  // Saved Claude/Codex account names, so a row can say which account its session was
+  // spawned under by the name the operator gave it rather than by nothing at all.
+  const accountLabels=useAccountLabels()
   const rowFacts=useMemo(
-    ()=>deriveRowFleetFacts(sessions,rowQueueDepth,rowBudget,localDrafts,rowVoice),
-    [sessions,rowQueueDepth,rowBudget,localDrafts,rowVoice],
+    ()=>deriveRowFleetFacts(sessions,rowQueueDepth,rowBudget,localDrafts,rowVoice,accountLabels),
+    [sessions,rowQueueDepth,rowBudget,localDrafts,rowVoice,accountLabels],
   )
   const refreshQueueSummary=()=>{
     if(queueSummaryTimer.current)return

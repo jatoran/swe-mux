@@ -97,6 +97,16 @@ the last good reading and changes no state.
   Neither takes a label: a new slot is named from the identity the capture just verified
   (email, then organization, then `<Provider> account`), and renaming is an in-place edit on
   the saved row.
+- **An account's name is an optional `alias`; `label` is derived from it.**
+  `label` is what every surface prints (the switcher, Settings, usage, the stranded-session notices, and each session row's account token), and it is `alias` when one is set, else the identity name above.
+  The daemon writes `label` only through `_apply_label`, never directly, so without an alias it follows the identity: a slot re-authenticated into a different email is renamed with it, which a stored copy of the old email would not be.
+  Settings → Accounts edits the alias in a "name" field whose placeholder is the email; clearing the field clears the alias, and typing the identity name back in is treated as clearing it.
+  Enter or leaving the field commits, and Escape reverts an unsaved edit instead of closing the panel (the field carries `data-owns-escape`, which the panel's capture-phase Escape handler yields to).
+  An alias is whitespace-collapsed, at most 64 characters, and refused with 409 when another account of the same provider already shows that name (case-insensitive), because two identical rows in the switcher cannot be told apart.
+  Manifests from before aliases migrate on load: a stored `label` that differs from the identity name becomes the alias, and one that matches was a default and is not pinned.
+- A session row's "Provider account" token names the saved slot a Claude or Codex session was spawned under (`spawn_provider_account_id`), by its `label`, cut to 18 characters with the full name in the tooltip.
+  The names come from the accounts payload (`useAccountLabels`), not from the session record, so a rename reaches every row at once.
+  The token is "notable" only when one provider has more than one account live; one Claude and one Codex account is not ambiguous.
 - **A sign-in is daemon state, not request state.** `POST .../{provider}/login` starts the
   provider CLI as a supervised background task and returns immediately; the run is reported
   as `login[provider]` on every accounts snapshot as `running`, `succeeded` with the account

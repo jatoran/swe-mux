@@ -35,6 +35,12 @@ export interface SessionRowContext {
   defaultEffort: Record<string, string | undefined>
   /** True when more than one provider account is live across the fleet. */
   multiAccount: boolean
+  /**
+   * Display name of every saved Claude/Codex account, by account id: its alias, else
+   * its email. Read from the accounts payload rather than stamped on the session, so a
+   * rename reaches every row at once instead of only sessions started afterwards.
+   */
+  accountLabels: Record<string, string>
   /** Pending queue depth by target session id. */
   queueDepth: Record<string, number>
   /**
@@ -92,7 +98,7 @@ export const EMPTY_ROW_BUDGET: RowBudget = { top: 0, bottom: 0 }
 export function emptyRowContext(now = Date.now() / 1000): SessionRowContext {
   return {
     now, defaultBranch: {}, defaultModel: {}, defaultEffort: {}, multiAccount: false,
-    queueDepth: {}, checkoutSessions: {}, localDrafts: {},
+    accountLabels: {}, queueDepth: {}, checkoutSessions: {}, localDrafts: {},
     voice: VOICE_MODE_OFF, budget: EMPTY_ROW_BUDGET,
   }
 }
@@ -580,13 +586,26 @@ function pathInside(cwd: string, root: string): string | null {
   return target.startsWith(`${base}/`) ? target.slice(base.length + 1) : null
 }
 
-function accountToken(session: Session): { text: string; title: string } | null {
+/** Longest account name a row prints before the tooltip has to carry the rest. */
+const ACCOUNT_TOKEN_CHARS = 18
+
+/** The provider account a row names: a saved Claude/Codex slot by its display name
+ *  (alias, else email), or an omp/pi credential pin by its hash. */
+function accountToken(session: Session, labels: Record<string, string>): { text: string; title: string } | null {
+  const slot = session.spawn_provider_account_id
+  const label = slot ? labels[slot] : undefined
+  if (label) {
+    const text = [...label].length > ACCOUNT_TOKEN_CHARS ? `${[...label].slice(0, ACCOUNT_TOKEN_CHARS - 1).join('')}…` : label
+    // "Spawned under", never "using": mux stamps what it had selected when the process
+    // started and cannot see a `/login` typed inside the pane.
+    return { text, title: `spawned under ${session.spawn_provider || 'provider'} account ${label}` }
+  }
   const entries = Object.entries(session.provider_account_hashes || {})
   if (!entries.length) return null
   const [provider, hash] = entries[0]
   if (!hash) return null
-  // The daemon exposes the pseudonymous hash, not a friendly account name, so
-  // this answers "is this the same account as that row?" and nothing more.
+  // omp records a pseudonymous hash, not a friendly account name, so this answers
+  // "is this the same account as that row?" and nothing more.
   return { text: hash.slice(0, 6), title: `${provider} account ${hash}` }
 }
 
@@ -927,7 +946,7 @@ function candidateFor(
       return make({ kind: 'text', text: displayModelName(model), title: `model ${model}` }, model !== context.defaultModel[session.project_id])
     }
     case 'account': {
-      const account = accountToken(session)
+      const account = accountToken(session, context.accountLabels)
       return account ? make({ kind: 'text', text: account.text, title: account.title, tone: 'muted' }, context.multiAccount) : null
     }
     case 'compactions': {
@@ -1267,8 +1286,9 @@ export function deriveRowContext(
   budget: RowBudget = EMPTY_ROW_BUDGET,
   localDrafts: Record<string, number> = {},
   voice: VoiceModeDefaults = VOICE_MODE_OFF,
+  accountLabels: Record<string, string> = {},
 ): SessionRowContext {
-  return { ...deriveRowFleetFacts(sessions, queueDepth, budget, localDrafts, voice), now }
+  return { ...deriveRowFleetFacts(sessions, queueDepth, budget, localDrafts, voice, accountLabels), now }
 }
 
 export function deriveRowFleetFacts(
@@ -1277,6 +1297,7 @@ export function deriveRowFleetFacts(
   budget: RowBudget = EMPTY_ROW_BUDGET,
   localDrafts: Record<string, number> = {},
   voice: VoiceModeDefaults = VOICE_MODE_OFF,
+  accountLabels: Record<string, string> = {},
 ): SessionRowFleetFacts {
   const byProject = new Map<string, Session[]>()
   for (const session of sessions) {
@@ -1292,19 +1313,30 @@ export function deriveRowFleetFacts(
     defaultModel[projectId] = mostCommon(list.map(session => session.model))
     defaultEffort[projectId] = mostCommon(list.map(session => session.harness_status?.effort))
   }
-  const accounts = new Set<string>()
+  // Accounts per provider: one Claude and one Codex login is not "more than one
+  // account" in the sense that makes the token worth drawing - no row is ambiguous.
+  const accounts = new Map<string, Set<string>>()
+  const addAccount = (provider: string, account: string) => {
+    const seen = accounts.get(provider)
+    if (seen) seen.add(account)
+    else accounts.set(provider, new Set([account]))
+  }
   // Ended sessions are excluded: the question a shared-checkout mark answers is
   // "how many rows in front of me are quoting this same number", and an exited
   // session is not competing for the attribution. A repository whose only live
   // session is this one is unambiguous however many corpses sit beside it.
   const checkoutSessions: Record<string, number> = {}
   for (const session of sessions) {
-    for (const hash of Object.values(session.provider_account_hashes || {})) if (hash) accounts.add(hash)
+    for (const [provider, hash] of Object.entries(session.provider_account_hashes || {})) if (hash) addAccount(provider, hash)
+    if (session.spawn_provider && session.spawn_provider_account_id && !isEnded(session)) {
+      addAccount(session.spawn_provider, session.spawn_provider_account_id)
+    }
     const root = session.git?.root
     if (root && !isEnded(session)) checkoutSessions[root] = (checkoutSessions[root] || 0) + 1
   }
   return {
     defaultBranch, defaultModel, defaultEffort,
-    multiAccount: accounts.size > 1, queueDepth, checkoutSessions, localDrafts, voice, budget,
+    multiAccount: [...accounts.values()].some(seen => seen.size > 1), accountLabels,
+    queueDepth, checkoutSessions, localDrafts, voice, budget,
   }
 }

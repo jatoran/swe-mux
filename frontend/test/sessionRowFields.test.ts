@@ -532,6 +532,32 @@ test('the account token is notable only when more than one account is live', () 
   assert.deepEqual(bottomText(two[0], config, deriveRowContext(two, {}, NOW)), ['aaaaaa'])
 })
 
+test('a Claude or Codex row names the saved account it was spawned under, by its alias', () => {
+  const config = withBottom(defaultSessionRowConfig(), ['account'], 'always')
+  const labels = { work: 'Work Max', personal: 'a-very-long-personal-alias-name' }
+  const work = session({ id: 'a', spawn_provider: 'claude', spawn_provider_account_id: 'work' })
+  const personal = session({ id: 'b', spawn_provider: 'claude', spawn_provider_account_id: 'personal' })
+  const ctx = deriveRowContext([work, personal], {}, NOW, EMPTY_ROW_BUDGET, {}, undefined, labels)
+  assert.deepEqual(bottomText(work, config, ctx), ['Work Max'])
+  assert.deepEqual(bottomText(personal, config, ctx), ['a-very-long-perso…'], 'long names are cut, not dropped')
+  const token = buildSessionRowTokens(personal, config, ctx).bottom.left.tokens.find(item => item.text.startsWith('a-very'))
+  assert.equal(token?.title, 'spawned under claude account a-very-long-personal-alias-name')
+  // An account the labels do not know (removed, or not loaded yet) draws nothing rather than an id.
+  assert.deepEqual(bottomText(session({ spawn_provider: 'claude', spawn_provider_account_id: 'gone' }), config, ctx), [])
+})
+
+test('one Claude and one Codex account is not more than one account', () => {
+  const config = withBottom(defaultSessionRowConfig(), ['account'], 'notable')
+  const labels = { c: 'Claude main', x: 'Codex main', c2: 'Claude spare' }
+  const claude = session({ id: 'a', spawn_provider: 'claude', spawn_provider_account_id: 'c' })
+  const codex = session({ id: 'b', spawn_provider: 'codex', spawn_provider_account_id: 'x' })
+  const mixed = deriveRowContext([claude, codex], {}, NOW, EMPTY_ROW_BUDGET, {}, undefined, labels)
+  assert.deepEqual(bottomText(claude, config, mixed), [])
+  const spare = session({ id: 'c', spawn_provider: 'claude', spawn_provider_account_id: 'c2' })
+  const split = deriveRowContext([claude, codex, spare], {}, NOW, EMPTY_ROW_BUDGET, {}, undefined, labels)
+  assert.deepEqual(bottomText(claude, config, split), ['Claude main'])
+})
+
 test('model labels compact only at render time', () => {
   const config = withBottom(defaultSessionRowConfig(), ['model'], 'notable')
   const item = session({ model: 'claude-opus-5' })

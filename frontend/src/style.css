@@ -2282,6 +2282,12 @@ body {
 /* A per-control hint sits under the control, in the control column — never auto-placed
    into the narrow label column, which rendered a sentence as a ragged 165px strip. */
 .settings-content label:not(.check)>small,.settings-content label.check>small{grid-column:2;margin-top:2px;color:var(--muted)}
+/* A saved account's name: a caption over one field inside a list row, not the panel's
+   two-column label-beside-control form, which would give a 165px caption column to the word "name". */
+.settings-content .account-list label.account-alias{display:grid;grid-template-columns:minmax(0,1fr);gap:2px;min-width:0;padding:0;max-width:none}
+.settings-content .account-list label.account-alias>span{font-size:8px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.settings-content .account-list label.account-alias>input{grid-column:1;min-width:0;width:100%}
+.settings-content .account-list label.account-alias>input::placeholder{color:var(--muted);opacity:.8}
 .settings-content input:not([type=checkbox]):not([type=radio]),.settings-content select,.settings-content textarea,.settings-content .dropdown-trigger{min-height:calc(31px*var(--ui-scale));border:1px solid var(--line);border-radius:0;padding:6px 8px;background:var(--bg);color:var(--text);font:inherit}
 .settings-content textarea{min-height:calc(82px*var(--ui-scale));resize:vertical}.settings-content p{max-width:100ch;margin:8px 0;color:var(--muted);line-height:1.5!important}
 /* A section whose body is reference rather than a control someone came to change:

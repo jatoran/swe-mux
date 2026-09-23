@@ -256,6 +256,27 @@ window.settingsSearchAudit = () => {
 // Persist the fake device settings across reloads, as the daemon does.
 const deviceSettings=JSON.parse(sessionStorage.getItem('settings-harness-profiles')||'{"desktop":{},"mobile":{}}') as Record<string,Record<string,unknown>>
 
+/**
+ * `/api/provider-accounts`, stateful for exactly one mutation: renaming. The daemon derives
+ * `label` from `alias` (else the email), and the harness mirrors that rule so a spec can
+ * assert what the panel draws after the response, not only what it sent.
+ */
+const ACCOUNT_EMAILS: Record<string, string> = { 'claude-work': 'work@example.com', 'claude-home': 'home@example.com' }
+const accountAliases: Record<string, string | null> = { 'claude-work': 'Work', 'claude-home': null }
+const providerAccounts = () => ({
+  providers: ['claude', 'codex'],
+  selected: { claude: 'claude-work', codex: null },
+  current: {
+    claude: { state: 'saved', account_id: 'claude-work', email: 'work@example.com' },
+    codex: { state: 'signed_out', account_id: null },
+  },
+  accounts: Object.keys(ACCOUNT_EMAILS).map(id => ({
+    id, provider: 'claude', alias: accountAliases[id], label: accountAliases[id] || ACCOUNT_EMAILS[id],
+    email: ACCOUNT_EMAILS[id], identity_source: 'token', created_at: 1, updated_at: 1, quota: null, conflict: null,
+  })),
+  poll_minutes: 15, stale_minutes: 30, refreshing: false,
+})
+
 window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const raw = typeof input === 'string' ? input : input instanceof URL ? input.pathname : input.url
   const path = raw.split('?')[0]
@@ -269,6 +290,14 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       status: failure.status,
       headers: { 'Content-Type': 'application/json' },
     })
+  }
+  const renamed=path.match(/^\/api\/provider-accounts\/claude\/([^/]+)$/)?.[1]
+  if(renamed&&init?.method==='PATCH'){
+    const alias=(requestBody as {alias?:string|null}).alias
+    accountAliases[renamed]=alias||null
+  }
+  if(path==='/api/provider-accounts'||renamed){
+    return new Response(JSON.stringify(providerAccounts()), { status: 200, headers: { 'Content-Type': 'application/json' } })
   }
   const profile=path.match(/^\/api\/settings\/(desktop|mobile)$/)?.[1]
   if(profile&&init?.method==='PUT'){
