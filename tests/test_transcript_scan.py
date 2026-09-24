@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import threading
 import time
 from pathlib import Path
@@ -98,9 +99,13 @@ async def test_the_listing_expires_and_a_different_directory_is_its_own_scan(
     now[0] = 1.1
     await cache.recent(adapter, tmp_path, 0.0)
     assert len(adapter.calls) == 3
-    # Two spellings of one directory share, without a resolve syscall to prove it.
-    await cache.recent(adapter, Path(str(tmp_path).upper()), 0.0)
-    assert len(adapter.calls) == 3
+    # Two spellings the platform treats as one directory share, without a resolve
+    # syscall to prove it. Where `normcase` folds case (Windows) that includes an
+    # upper-cased path; elsewhere it is a different directory and its own scan.
+    upper = Path(str(tmp_path).upper())
+    await cache.recent(adapter, upper, 0.0)
+    folds_case = os.path.normcase(str(upper)) == os.path.normcase(str(tmp_path))
+    assert len(adapter.calls) == (3 if folds_case else 4)
 
 
 async def test_concurrent_askers_join_one_inflight_scan(tmp_path: Path) -> None:

@@ -12,6 +12,7 @@ import asyncio
 import logging
 import socket
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import aiohttp
@@ -44,9 +45,18 @@ async def answers(port: int) -> bool:
 
 
 def close_listening_socket(site: web.TCPSite) -> None:
-    """What `BaseProactorEventLoop._start_serving.loop` does on an accept error."""
+    """What `BaseProactorEventLoop._start_serving.loop` does on an accept error.
+
+    The proactor stops accepting and closes the socket. A selector loop (Linux,
+    macOS) has no equivalent path, so the faithful simulation there also stops
+    watching the socket first: closing it under a live reader registration leaves
+    a stale selector key that a new socket reusing the fd number collides with.
+    """
+    loop = asyncio.get_running_loop()
     server: Any = site._server
     for sock in server._sockets:
+        if isinstance(loop, asyncio.SelectorEventLoop):
+            loop.remove_reader(sock.fileno())
         sock.close()
 
 
@@ -74,6 +84,9 @@ async def test_a_closed_listening_socket_is_detected_and_rebound(tmp_path: Path)
         assert not await answers(port)
 
         assert await guard.check_once() == 1
+        # Separate the two ways this can fail: the rebind raised, or it bound and
+        # the new listener does not answer.
+        assert guard.snapshot()["rebind_failures"] == 0
         assert await answers(port)
         snapshot = guard.snapshot()
         assert snapshot["dead_found"] == 1
@@ -142,6 +155,9 @@ async def test_a_rebind_that_fails_is_retried_on_the_next_tick_and_logged_once(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     monkeypatch.setattr(listener_guard, "REBIND_FAILURE_LOG_INTERVAL_SECONDS", 1000.0)
+    # A host up for less than the log interval: the first failure must still log.
+    # (A 0.0 "never logged" sentinel swallowed it on freshly booted CI runners.)
+    monkeypatch.setattr(listener_guard, "time", SimpleNamespace(monotonic=lambda: 5.0))
     replacements: list[Any] = [DeadSite(OSError("address in use")), LiveSite()]
     made: list[Any] = []
 

@@ -56,7 +56,10 @@ class GuardedListener:
     port: int
     site: Any
     rebinds: int = 0
-    last_failure_logged_at: float = 0.0
+    #: `None` until the first failure is logged. Not 0.0: `time.monotonic()` counts
+    #: from boot on Linux and macOS, so on a host up for less than the log interval
+    #: a 0.0 sentinel would suppress the very first failure.
+    last_failure_logged_at: float | None = None
     failing_since: float | None = None
 
 
@@ -145,7 +148,8 @@ class ListenerGuard:
         except OSError as exc:
             self.rebind_failures += 1
             now = time.monotonic()
-            if now - listener.last_failure_logged_at >= REBIND_FAILURE_LOG_INTERVAL_SECONDS:
+            last = listener.last_failure_logged_at
+            if last is None or now - last >= REBIND_FAILURE_LOG_INTERVAL_SECONDS:
                 listener.last_failure_logged_at = now
                 log.error(
                     "listener_rebind_failed host=%s port=%d error=%s; retrying every %.0fs",
