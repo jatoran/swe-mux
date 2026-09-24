@@ -417,7 +417,8 @@ async def last_reply_response(tmp_path: Path, events: list[dict[str, Any]]) -> d
         # `native_session_id` is what names the conversation for a harness that
         # keeps one in a store; a file-backed harness carries it and ignores it.
         record=SimpleNamespace(
-            backend="claude", agent_run_id="run-1", native_session_id="native-1"
+            id="s1", backend="claude", agent_run_id="run-1", native_session_id="native-1",
+            turn_epoch=1, observation_stale_since=None, runtime_boundary="local", state="idle",
         ),
     )
     request = SimpleNamespace(
@@ -445,7 +446,7 @@ async def test_last_reply_route_skips_provider_control_acknowledgement(tmp_path:
 async def test_last_reply_route_reports_a_conversation_with_no_reply(tmp_path: Path) -> None:
     payload = await last_reply_response(tmp_path, [claude_user("only a question so far")])
     assert payload["status"] == 409
-    assert "no assistant reply" in payload["error"]
+    assert "No completed assistant answer" in payload["error"]
 
 
 async def test_generate_verbatim_produces_ready_clip_and_event(tmp_path: Path) -> None:

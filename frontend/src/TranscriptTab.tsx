@@ -285,6 +285,7 @@ export function TranscriptTab({ session, readAloud = false }: {
 }) {
   const sessionId = session?.id || ''
   const runId = session?.agent_run_id || ''
+  const nativeId = session?.native_session_id || ''
   const [data, setData] = useState<SessionTranscript | null>(null)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
@@ -343,8 +344,8 @@ export function TranscriptTab({ session, readAloud = false }: {
   }
 
   // A rollover (`/clear`, `/new`) swaps the transcript under the same pane, so the
-  // run id belongs in here beside the session id: without it the tab would keep
-  // showing the retired conversation until something else forced a reload.
+  // run id belongs beside the session id. A fresh fork's initial binding changes
+  // only the native id, and must replace its empty "no transcript" reading too.
   useEffect(() => {
     setData(null); setUnseen(0); setError('')
     setOpenBranches([])
@@ -360,7 +361,8 @@ export function TranscriptTab({ session, readAloud = false }: {
     // are no longer on screen.
     setClips([]); setAudioRequests([])
     if (sessionId) void load(sessionId)
-  }, [sessionId, runId])
+    return () => { requestSequence.current++ }
+  }, [sessionId, runId, nativeId])
 
   // The run's audio. `limit` is the store's own ceiling: a conversation with more clips
   // than that has older ones no longer worth a marker, and the reader's window is

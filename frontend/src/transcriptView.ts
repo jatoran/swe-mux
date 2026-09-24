@@ -27,6 +27,9 @@ export type TranscriptMessage = {
   role: 'user' | 'assistant'
   ts?: string
   text: string
+  phase?: 'commentary' | 'final_answer'
+  turn_id?: string
+  turn_complete?: boolean
   /** Tool calls the agent made between the previous message and this one.
    *
    * Zero for anything a human typed and for the opening of a turn. Non-zero

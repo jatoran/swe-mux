@@ -23,6 +23,13 @@ const open = async (page: Page, query = '') => {
   await expect(messages(page)).toHaveCount(3)
 }
 
+test('a newly bound fork transcript replaces the empty view without a new run or turn',async({page})=>{
+  await page.goto('/transcript-actions-harness.html?deferredBinding=1')
+  await expect(page.getByText('This agent has not written its first message yet.')).toBeVisible()
+  await page.getByRole('button',{name:'Bind fork transcript'}).click()
+  await expect(messages(page)).toHaveCount(3)
+})
+
 test.describe('pointer', () => {
   test.use({ viewport: { width: 900, height: 800 } })
 

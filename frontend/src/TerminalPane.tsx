@@ -45,6 +45,7 @@ import { isMobileTerminalInput, mobileEnterNeedsPinnedSend, mobileEnterPayload, 
 import { claimTerminalTextPaste, clipboardImage, copyPreparedText, pasteNeedsManualBracketing, ResilientClipboardProvider, strayPasteBelongsToPane } from './terminalClipboard'
 import { currentInsertTarget, noteTerminalFocus } from './insertTarget'
 import { captureCopy } from './clipboardHistory'
+import { ReplyCopyRequest, type ReplySnapshot } from './replyCopy.ts'
 import { resumeCommand } from './resumeCommand'
 import { padRingCount, padSlotKeys, railItemDisplayLabel, railItemDisplayMode, railItemVisible, railPadSlotLabel, railPadSlotMode, railPayload, resolveRailRows, type RailBackend, type RailConfig, type RailDevice, type RailEntry, type RailItem } from './commandRail'
 import { isRepeatableRailKey } from './railKeyRepeat'
@@ -459,7 +460,9 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
   const [connectionState,setConnectionState]=useState<'connecting'|'connected'|'reconnecting'|'ended'>('connecting')
   const [preparedClipboard,setPreparedClipboard]=useState('')
   const [manualClipboard,setManualClipboard]=useState(false)
-  const [lastReply,setLastReply]=useState('')
+  const replyCopyRef=useRef(new ReplyCopyRequest())
+  replyCopyRef.current.observe(session)
+  useEffect(()=>()=>replyCopyRef.current.cancel(),[])
   const [clipboardStatus,setClipboardStatus]=useState('')
   const [manualPaste,setManualPaste]=useState(false)
   const [fileDropActive,setFileDropActive]=useState(false)
@@ -599,7 +602,6 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
   // previous session's reply, and the prepared-clipboard, selection and find
   // state bleed across the switch too.
   useEffect(()=>{
-    setLastReply('')
     // Arranging is per-rail and the rail is per-session: a mode left standing across a switch
     // would leave the incoming session's chips inert with no visible reason.
     exitArrange()
@@ -1222,7 +1224,6 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     let reconnectAttempt=0
     let reconnectReplay=false
     let disposed=false
-    let replyRefreshTimer:number|undefined
     // Connection-attempt bookkeeping for the liveness watcher: when the current attempt
     // started, when the backoff retry is due, and the watchdog that fails a handshake
     // which never completes (see liveness.ts for why that is the important case).
@@ -1269,7 +1270,6 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     let lastHumanInputAt: number | null = null
     let currentGeneration = session._snapshot_generation || ''
     let currentRevision = session._snapshot_generation ? Number(session._snapshot_revision ?? -1) : -1
-    let lastReplyTriggerState=session.state
     let exitWritten = false
     let fitFrame = 0
     let redrawFrame = 0
@@ -1408,19 +1408,6 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       reportRepair('webgl_render_error', { message: event.message, renderer: activeRenderer })
     }
     window.addEventListener('error', onRenderError)
-    const loadLatestReply=()=>{
-      if(!isAgentBackend(backendRef.current))return
-      void api<{text:string}>('GET',`/api/sessions/${session.id}/last-reply`).then(result=>{
-        // Clear on an empty result too: keeping the previous value here is what
-        // let a session with no reply yet still answer "Copy reply".
-        if(!disposed)setLastReply(result.text||'')
-      }).catch(()=>{if(!disposed)setLastReply('')})
-    }
-    const scheduleLatestReply=(delay=700)=>{
-      if(!isAgentBackend(backendRef.current))return
-      if(replyRefreshTimer!==undefined)window.clearTimeout(replyRefreshTimer)
-      replyRefreshTimer=window.setTimeout(()=>{replyRefreshTimer=undefined;loadLatestReply()},delay)
-    }
     const reportTerminalState = () => {
       if (socket?.readyState !== WebSocket.OPEN) return
       socket.send(JSON.stringify({ type: 'terminal_state', mode: term.buffer.active.type }))
@@ -2345,7 +2332,6 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     }
     const handleMessage=(event:MessageEvent, source:WebSocket)=>{
       if (event.data instanceof ArrayBuffer) {
-        scheduleLatestReply()
         lastBytesAt = performance.now()
         const byteCount = event.data.byteLength
         if (replaying) {
@@ -2395,9 +2381,6 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         if(frameGeneration&&frameGeneration!==currentGeneration){currentGeneration=frameGeneration;currentRevision=-1}
         if ((frame.type === 'state' || frame.type === 'update') && Number(frame.revision ?? 0) > currentRevision) {
           currentRevision = Number(frame.revision ?? 0)
-          const nextState=frame.snapshot?.state as Session['state']|undefined
-          if(nextState&&['idle','awaiting'].includes(nextState)&&nextState!==lastReplyTriggerState)scheduleLatestReply(250)
-          if(nextState)lastReplyTriggerState=nextState
           onState(frame.snapshot)
         }
         if (frame.type === 'replay_start') {
@@ -3535,10 +3518,9 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       reconnect:reconnectNow,
     })
     window.visualViewport?.addEventListener('resize',scheduleBurstFit)
-    loadLatestReply()
     window.addEventListener(PRESENCE_REPORTED_EVENT, onPresenceReported)
     connect(false)
-    return () => { disposed=true;finishCaretPlacement('disposed');stopSelectionScroll();stopLivenessWatch();stopInputStallWatch();clearHandshakeWatchdog();reconnectNowRef.current=()=>{};if(reconnectTimer!==undefined)clearTimeout(reconnectTimer);if(replyRefreshTimer!==undefined)clearTimeout(replyRefreshTimer);if(lineBreakResetTimer!==undefined)clearTimeout(lineBreakResetTimer);if(outputAckTimer!==undefined)clearTimeout(outputAckTimer);window.clearInterval(terminalStateTimer);if(keyboardSettleTimer!==undefined)window.clearTimeout(keyboardSettleTimer);scheduleKeyboardSettleRef.current=()=>{};bufferChange.dispose();tailScroll.dispose();tailRender.dispose();writeParsed.dispose();renderDiagnostic?.dispose();input.dispose();wheelPacer.dispose();selectionChange.dispose();caretCursorMove.dispose();caretWriteParsed.dispose();caretResize.dispose();cancelLongPress();observer.disconnect();trackObserver.disconnect();intersection?.disconnect();window.cancelAnimationFrame(fitFrame);window.cancelAnimationFrame(redrawFrame);surfaceRepair?.cancel();window.cancelAnimationFrame(visibilityFrame);window.clearTimeout(surfaceConfirmTimer);window.removeEventListener('resize',scheduleBurstFit);window.visualViewport?.removeEventListener('resize',scheduleBurstFit);viewportScheduler.cancel();document.removeEventListener('visibilitychange',onVisibility);window.removeEventListener('pageshow',onPageShow);window.removeEventListener('focus',onWindowFocus);window.removeEventListener('error',onRenderError);window.removeEventListener('pointermove',pointerMove);window.removeEventListener('pointerup',pointerEnd);window.removeEventListener('pointercancel',pointerCancel);window.removeEventListener('mux:theme',onTheme);window.removeEventListener(PRESENCE_REPORTED_EVENT,onPresenceReported);mobileLiveInput?.removeEventListener('beforeinput',mobileBeforeInput);mobileLiveInput?.removeEventListener('input',mobileTextInput);mobileLiveInput?.removeEventListener('keydown',mobileKeyDown);mobileLiveInput?.removeEventListener('paste',mobilePaste);mobileLiveInput?.removeEventListener('focusout',keepBridgeFocused);holdingBridgeFocus=false;terminalGestureActiveRef.current=false;deferredKeyboardInsetRef.current=null;setKeyboardGestureHold(false);if(mobileLiveInput)mobileLiveInput.value='';host.current?.removeEventListener('pointerdown',pointerClaim);host.current?.removeEventListener('mousedown',mobileMouseClaim,true);host.current?.removeEventListener('keydown',terminalKeyCapture,true);host.current?.removeEventListener('beforeinput',terminalBeforeInputCapture,true);host.current?.removeEventListener('focusin',claimOnFocus);host.current?.removeEventListener('contextmenu',openMenu);host.current?.removeEventListener('paste',pasteEvent,true);term.textarea?.removeEventListener('paste',unclaimedPaste);document.removeEventListener('paste',documentPaste,true);host.current?.removeEventListener('dragenter',dragEnter);host.current?.removeEventListener('dragover',dragOver);host.current?.removeEventListener('dragleave',dragLeave);host.current?.removeEventListener('drop',drop);if(socket){socket.onclose=null;socket.close()}term.dispose();termRef.current=null;searchRef.current=null;focusTerminalInputRef.current=()=>{};pasteAttachmentRef.current=()=>{};claimInputRef.current=()=>{};resizeToPaneRef.current=()=>{};applyBaseFontRef.current=()=>{};applyFontFamilyRef.current=()=>{} }
+    return () => { disposed=true;finishCaretPlacement('disposed');stopSelectionScroll();stopLivenessWatch();stopInputStallWatch();clearHandshakeWatchdog();reconnectNowRef.current=()=>{};if(reconnectTimer!==undefined)clearTimeout(reconnectTimer);if(lineBreakResetTimer!==undefined)clearTimeout(lineBreakResetTimer);if(outputAckTimer!==undefined)clearTimeout(outputAckTimer);window.clearInterval(terminalStateTimer);if(keyboardSettleTimer!==undefined)window.clearTimeout(keyboardSettleTimer);scheduleKeyboardSettleRef.current=()=>{};bufferChange.dispose();tailScroll.dispose();tailRender.dispose();writeParsed.dispose();renderDiagnostic?.dispose();input.dispose();wheelPacer.dispose();selectionChange.dispose();caretCursorMove.dispose();caretWriteParsed.dispose();caretResize.dispose();cancelLongPress();observer.disconnect();trackObserver.disconnect();intersection?.disconnect();window.cancelAnimationFrame(fitFrame);window.cancelAnimationFrame(redrawFrame);surfaceRepair?.cancel();window.cancelAnimationFrame(visibilityFrame);window.clearTimeout(surfaceConfirmTimer);window.removeEventListener('resize',scheduleBurstFit);window.visualViewport?.removeEventListener('resize',scheduleBurstFit);viewportScheduler.cancel();document.removeEventListener('visibilitychange',onVisibility);window.removeEventListener('pageshow',onPageShow);window.removeEventListener('focus',onWindowFocus);window.removeEventListener('error',onRenderError);window.removeEventListener('pointermove',pointerMove);window.removeEventListener('pointerup',pointerEnd);window.removeEventListener('pointercancel',pointerCancel);window.removeEventListener('mux:theme',onTheme);window.removeEventListener(PRESENCE_REPORTED_EVENT,onPresenceReported);mobileLiveInput?.removeEventListener('beforeinput',mobileBeforeInput);mobileLiveInput?.removeEventListener('input',mobileTextInput);mobileLiveInput?.removeEventListener('keydown',mobileKeyDown);mobileLiveInput?.removeEventListener('paste',mobilePaste);mobileLiveInput?.removeEventListener('focusout',keepBridgeFocused);holdingBridgeFocus=false;terminalGestureActiveRef.current=false;deferredKeyboardInsetRef.current=null;setKeyboardGestureHold(false);if(mobileLiveInput)mobileLiveInput.value='';host.current?.removeEventListener('pointerdown',pointerClaim);host.current?.removeEventListener('mousedown',mobileMouseClaim,true);host.current?.removeEventListener('keydown',terminalKeyCapture,true);host.current?.removeEventListener('beforeinput',terminalBeforeInputCapture,true);host.current?.removeEventListener('focusin',claimOnFocus);host.current?.removeEventListener('contextmenu',openMenu);host.current?.removeEventListener('paste',pasteEvent,true);term.textarea?.removeEventListener('paste',unclaimedPaste);document.removeEventListener('paste',documentPaste,true);host.current?.removeEventListener('dragenter',dragEnter);host.current?.removeEventListener('dragover',dragOver);host.current?.removeEventListener('dragleave',dragLeave);host.current?.removeEventListener('drop',drop);if(socket){socket.onclose=null;socket.close()}term.dispose();termRef.current=null;searchRef.current=null;focusTerminalInputRef.current=()=>{};pasteAttachmentRef.current=()=>{};claimInputRef.current=()=>{};resizeToPaneRef.current=()=>{};applyBaseFontRef.current=()=>{};applyFontFamilyRef.current=()=>{} }
     // `keybindings` used to be a dependency here, so every keymap edit tore down and
     // rebuilt the terminal. The key handler now asks `keymapDispatch` at the moment
     // it fires, so a changed map is picked up without remounting anything.
@@ -3669,22 +3651,21 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
   }
   const copyLastReply = async () => {
     if(session.backend==='shell')return
-    let text=lastReply
-    if(!text){
-      showClipboardStatus('Loading reply…')
-      try {
-        const result=await api<{text:string}>('GET',`/api/sessions/${session.id}/last-reply`)
-        text=result.text
-        setLastReply(text)
-      } catch(cause) {
-        reportError(cause instanceof Error?cause.message:'No assistant reply is available yet.')
-        return
-      }
+    showClipboardStatus('Loading latest reply…')
+    try {
+      const result=await replyCopyRef.current.load(session,()=>api<ReplySnapshot>('GET',`/api/sessions/${session.id}/last-reply`))
+      if(!result)return
+      captureCopy(result.text,'reply')
+      const copied=await copyPreparedText(result.text)
+      if(copied){
+        setPreparedClipboard('');setManualClipboard(false)
+        showClipboardStatus(result.previous_answer?'Copied previous answer':'Copied reply')
+      }else prepareClipboardFallback(result.text)
+      const {text:_text,previous_answer:_previous,...receipt}=result
+      void api('POST',`/api/sessions/${session.id}/reply-copy`,{...receipt,outcome:copied?'copied':'manual'}).catch(()=>{})
+    } catch(cause) {
+      reportError(cause instanceof Error?cause.message:'No completed assistant answer is available yet.')
     }
-    captureCopy(text,'reply')
-    if(await copyPreparedText(text)){
-      setPreparedClipboard('');setManualClipboard(false)
-    }else prepareClipboardFallback(text)
   }
 
   // ---- the unsent draft ----------------------------------------------------
@@ -4171,7 +4152,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       case 'copyReply':{
         if(isTask)return null
         const view=actionPresentation(item)
-        return {...view,run:()=>void copyLastReply(),disabled:!isAgentBackend(session.backend),ariaLabel:'Copy last reply',title:!isAgentBackend(session.backend)?'Copy reply is available in agent sessions':'Copy the latest assistant reply',padLabel:'Reply'}
+        return {...view,run:()=>void copyLastReply(),disabled:!isAgentBackend(session.backend),ariaLabel:session.state==='working'?'Copy previous answer':'Copy last reply',title:!isAgentBackend(session.backend)?'Copy reply is available in agent sessions':session.state==='working'?'Copy previous answer':'Copy the latest completed answer',padLabel:'Reply'}
       }
       case 'copyResume':{
         if(isTask)return null

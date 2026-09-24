@@ -70,6 +70,8 @@ export function terminalPanePropsEqual(
     // Changes once per agent lifecycle (codex: placeholder → detected rollout id);
     // the resume Action rail button must pick up the flip.
     a.session.native_session_id === b.session.native_session_id &&
+    a.session.agent_run_id === b.session.agent_run_id &&
+    a.session.turn_epoch === b.session.turn_epoch &&
     // Task shells set this once at spawn; comparing it keeps the leaner rail authoritative.
     a.session.relaunchable === b.session.relaunchable &&
     a.broadcast === b.broadcast &&

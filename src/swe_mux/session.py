@@ -1634,7 +1634,13 @@ def session_is_unwitnessed(session: Any) -> bool:
     if getattr(session.record, "backend", None) not in AGENT_BACKENDS:
         return False
     if getattr(session, "transcript_path", None) is not None:
-        return False
+        # A provisional file containing only setup records has never witnessed
+        # a turn. It must not disable the owner-submit + PTY fallback forever.
+        if not (
+            getattr(session, "transcript_provisional", False)
+            and not getattr(session.record, "parser_events_seen", 0)
+        ):
+            return False
     return not getattr(session, "last_hook_ts", 0.0)
 
 
@@ -3800,6 +3806,9 @@ class SessionManager:
             direct = await self._named_conversation_transcript(session, cwd)
             if direct is not None:
                 return direct, False
+            proven = await self._process_owned_transcript(session)
+            if proven is not None:
+                return proven, False
             try:
                 candidates = self._unclaimed_transcripts(
                     session, await self._recent_transcripts(session.adapter, cwd, started)
@@ -3842,6 +3851,54 @@ class SessionManager:
             except TimeoutError:
                 pass
         return None
+
+    async def _process_owned_transcript(self, session: Session) -> Path | None:
+        resolver = getattr(session.adapter, "process_transcript_path", None)
+        if not callable(resolver) or session.record.pid <= 0 or not session.record.root_started_at:
+            return None
+        now = time.monotonic()
+        state = session.observation_state
+        if now - float(state.get("process_transcript_probe_at", 0)) < 10:
+            return None
+        state["process_transcript_probe_at"] = now
+        native_before = session.record.native_session_id
+        path = await asyncio.to_thread(resolver, session.record.pid, session.record.root_started_at)
+        # A hook may have bound/rolled this session while the OS query ran.
+        if not isinstance(path, Path) or native_before != session.record.native_session_id:
+            state["process_transcript_probe"] = "unavailable_or_superseded"
+            return None
+        native = session.adapter.transcript_native_id(path)
+        claimed_ids, claimed_paths = self._live_transcript_claims(session)
+        if (
+            not native
+            or (session.record.backend, native) in claimed_ids
+            or self._path_key(path) in claimed_paths
+        ):
+            state["process_transcript_probe"] = "identity_unavailable_or_owned_elsewhere"
+            return None
+        state["process_transcript_probe"] = "root_process_open_file"
+        if state.get("process_transcript_proof") != str(path):
+            state["process_transcript_proof"] = str(path)
+            evidence = {
+                "native_session_id": native,
+                "transcript_path": str(path),
+                "pty_pid": session.record.pid,
+                "reason": "root_process_open_file",
+            }
+            session.state_transitions.append(
+                {"ts": time.time(), "kind": "transcript_process_binding", **evidence}
+            )
+            log.info(
+                "session %s transcript proven by root process: %s", session.record.id, path.name
+            )
+            await self.events.emit(
+                "transcript_process_binding",
+                session_id=session.record.id,
+                source="process",
+                backend=session.record.backend,
+                **evidence,
+            )
+        return path
 
     @staticmethod
     def _may_adopt_sole_candidate(session: Session, candidate: Path, started: float) -> bool:
@@ -5335,6 +5392,14 @@ class SessionManager:
                     observe_task.cancel()
                 await asyncio.gather(observe_task, return_exceptions=True)
             if switch is not None:
+                process_proven = session.observation_state.pop("process_transcript_switch", False)
+                if process_proven and provisional:
+                    # The old file was only a guess, so there is no owned run to
+                    # retire. Bind and replay the proven file in this same run.
+                    provisional = False
+                    session.record.native_session_id = (
+                        adapter.transcript_native_id(switch) or session.record.native_session_id
+                    )
                 # Following a different transcript is not a file-path detail: the
                 # CLI is on another conversation, so the agent run ends here and a
                 # new one begins. Applied in place rather than through
@@ -5362,8 +5427,8 @@ class SessionManager:
                         native_id=switched_native,
                         transcript=switch,
                         reason="conversation_rolled",
-                        source="transcript_switch",
-                        confirmed=False,
+                        source="process" if process_proven else "transcript_switch",
+                        confirmed=bool(process_proven),
                     )
                 path = switch
                 backoff = OBSERVER_RESTART_BACKOFF_MIN_SECONDS
@@ -5418,6 +5483,18 @@ class SessionManager:
                 break
             if not has_observable_transcript(session.record.backend):
                 break
+            # An exact OS ownership proof precedes filesystem heuristics. Include
+            # the same path to upgrade a provisional binding without waiting for
+            # a first-turn completion hook.
+            if (
+                session.transcript_provisional
+                or time.time() - (self._transcript_last_write_ts(session, current) or 0)
+                >= TRANSCRIPT_SWITCH_QUIET_SECONDS
+            ):
+                proven = await self._process_owned_transcript(session)
+                if proven is not None and (proven != current or session.transcript_provisional):
+                    session.observation_state["process_transcript_switch"] = True
+                    return proven
             # The CLI's own word first. A hook names the file it is writing, which
             # settles in one comparison what the readings below have to infer from
             # a cwd the poller happened to catch and a path the daemon recomputes.
@@ -5996,6 +6073,19 @@ class SessionManager:
             candidates = await self._recent_transcripts(session.adapter, cwd, started)
         except OSError:
             return None
+        candidate_last_write = getattr(session.adapter, "transcript_last_write_ts", None)
+        if callable(candidate_last_write):
+
+            def fresh_candidates() -> list[tuple[float, Path, str]]:
+                fresh: list[tuple[float, Path, str]] = []
+                for modified, path, native in candidates:
+                    try:
+                        fresh.append((candidate_last_write(path, modified), path, native))
+                    except OSError:
+                        continue
+                return fresh
+
+            candidates = await asyncio.to_thread(fresh_candidates)
         plausible: list[tuple[float, Path]] = []
         for modified, path, native_id in candidates:
             if path == current or str(path) in other_paths:

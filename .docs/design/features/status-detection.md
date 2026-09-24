@@ -956,6 +956,18 @@ conversation" without reading each session's state-log by hand.
 
 ## Regression defense
 
+### Codex branch and rewind recovery
+
+The observer checks process-owned Codex rollouts before filesystem switch heuristics, on a throttled off-loop cadence.
+An initial provisional guess upgraded by OS ownership keeps its run; replacing an established conversation uses the normal rollover transaction.
+Candidate freshness includes the newest bounded native record timestamp, cached by file identity and size, because Windows can retain the creation-time mtime while a rollout grows.
+Freshness never bypasses live-session ownership or ambiguous-sibling checks.
+
+A provisional setup-only file with zero parsed activity does not disable the existing unwitnessed PTY fallback.
+That fallback still requires an owner submit and a positive working marker.
+The state-log fields `provisional_without_activity` and `process_transcript_probe` distinguish this gap from an established observation channel.
+Accepted process bindings persist as `transcript_process_binding` evidence in the event and state ledgers.
+
 - **Golden corpus** (`tests/fixtures/detection/v1/`): every fixture pins `expected.states`
   — the normalized transition stream (previous/state/source/proof/awaiting_reason) — and
   asserts `SessionState`/`awaiting_reason` at every delivery checkpoint, alongside the

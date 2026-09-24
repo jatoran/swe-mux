@@ -652,7 +652,7 @@ The guarded assertions themselves did not move: a real turn still has to produce
   rollout until the first submitted turn, so a one-second quiet period after live PTY output
   remains the lowest-priority startup fallback. Any later hook/transcript evidence supersedes it.
 - **A Codex rollout may be followed provisionally before its conversation is proven.** Identity
-  still comes only from the hook — an outsider cannot forge one, and nothing on disk separates
+  comes from authenticated root hooks or verified root-process file ownership; filenames alone cannot separate
   our rollout from a `codex` started in the same cwd outside mux (`originator` betrays only the
   headless `codex exec`). But refusing to *read* the file until then meant a fresh pane had no
   transcript and no hook for its entire first turn, so its status could not move at all: measured
@@ -669,8 +669,13 @@ The guarded assertions themselves did not move: a real turn still has to produce
   wrong guess is a pane reading "working" while an unrelated codex runs: visible, self-correcting,
   and strictly more conservative for delivery than the "ready" it replaces.
 - `SessionStart` normally prevents the provisional path by binding the conversation before the
-  observer needs to guess. When lifecycle hooks are unavailable, `agent-turn-complete` resolves
-  it. If the hook names the conversation the guess was already
+  observer needs to guess.
+  When lifecycle hooks are unavailable, a throttled worker checks the outermost Codex process's open rollout files and verifies the PTY process fingerprint, ancestry, CLI-root header, and unique ownership.
+  This can bind a fresh branch or follow rewind before the first turn completes.
+  Ambiguous handles, unavailable process evidence, nested CLIs, subagent headers, and transcripts claimed by live siblings cannot establish a binding.
+  The `transcript_process_binding` event records accepted evidence; state-log exposes the probe outcome.
+  `agent-turn-complete` remains the compatibility fallback.
+  If the hook names the conversation the guess was already
   following, the binding is promoted (`transcript_binding_confirmed`) and the history row is
   finally written; if it names a different one, the guess is discarded
   (`transcript_binding_discarded`) and the observer re-derives by exact match, which exists from

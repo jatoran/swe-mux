@@ -318,6 +318,16 @@ class CodexAdapter(BackendAdapter):
         del session_id, current
         return None
 
+    def process_transcript_path(self, pid: int, started_at: float | None) -> Path | None:
+        from ..codex_process_identity import owned_rollout
+
+        return owned_rollout(pid, started_at, self._data_home_resolver())
+
+    def transcript_last_write_ts(self, path: Path, modified: float) -> float:
+        from ..codex_history import last_write
+
+        return last_write(path, modified)
+
     def graceful_exit_keys(self) -> str:
         return "/exit\r"
 

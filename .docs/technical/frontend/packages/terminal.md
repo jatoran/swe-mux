@@ -26,6 +26,12 @@ Design: `../../../design/features/terminal-input.md`.
 
 ### Pure models beneath it
 
+`replyCopy.ts` guards explicit fresh reply requests with session, native conversation, run, and turn-epoch identity plus a request generation.
+`TerminalPane.tsx` rejects obsolete responses, preserves manual clipboard fallback, and posts content-free snapshot receipts.
+Reply text is not cached between copy actions.
+The pane memo comparator includes run identity and turn epoch so in-place rewind can retire an in-flight request.
+The Transcript tab also refreshes on native conversation identity changes, including a fork's first verified binding without a new run or turn.
+
 `terminalFont.ts` resolves the `terminal_font_family` config string into the `font-family` value xterm and the width-capped host box are handed, and measures whether each named family resolves on the viewing device.
 The configured families are normalised to quoted CSS names (generic keywords stay bare, because the string also feeds a canvas `font` shorthand) and prepended to the default stack, so a name the device lacks falls back to the terminal the app has always drawn rather than to the browser's default.
 Availability is a canvas measurement against each generic fallback, because the Font Loading API answers only for `@font-face` fonts and reports an uninstalled system font as fine; `loadTerminalFont` uses that API for the one case it does answer, a web font arriving after xterm measured against its fallback, and says whether a re-fit is owed.
