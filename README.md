@@ -1,9 +1,9 @@
 # swe-mux
 
-**Run your coding agents together. Know which ones need you.**
+**Run your coding agents together, on your desktop and your phone. Know which ones need you.**
 
 Keep Claude Code, Codex and other coding agents side by side, with live status, flexible panes and messages between sessions.
-Work from your desktop or phone.
+The same live sessions open on your phone over your own Tailscale network: terminal, git review, files, previews and push alerts, not a companion app.
 Dictate prompts, hear replies, and ask the assistant what needs attention.
 
 [![Agents and a preview arranged in the swe-mux workspace](site/img/showcase-panes.webp?v=e8ebca109a98)](https://swemux.dev/demo/)
