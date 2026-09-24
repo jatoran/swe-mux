@@ -4,12 +4,13 @@ import asyncio
 import hashlib
 import logging
 import os
+import re
 import signal
 import sys
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Collection
 from contextlib import suppress
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
@@ -171,9 +172,33 @@ class OwnedProcess:
     root_ended_at: float | None = None
 
     def snapshot(self) -> dict[str, Any]:
-        result = asdict(self)
+        """Every field plus `server_eligible`, with the nested lists copied.
+
+        Not `dataclasses.asdict`: that walks every nested value generically, and over
+        a fleet's retained processes it was the largest single cost on the event loop
+        - about three quarters of its busy time, in multi-second blocks, measured with
+        7,484 retained processes on 2026-09-24. The nested values are lists of flat
+        dicts and a list of strings, so copying one level deep yields the same value
+        `asdict` did (`test_process_observation_persistence.py` asserts the equality).
+        """
+        result = {name: getattr(self, name) for name in _OWNED_PROCESS_FIELDS}
+        for name in _OWNED_PROCESS_LIST_FIELDS:
+            result[name] = [dict(item) if isinstance(item, dict) else item for item in result[name]]
         result["server_eligible"] = self.server_eligible()
         return result
+
+    def observation(self) -> dict[str, Any]:
+        """The durable projection `record_process_observations` writes, and nothing more."""
+        result = {name: getattr(self, name) for name in _OBSERVATION_FIELDS}
+        result["parent_lineage"] = [dict(item) for item in self.parent_lineage]
+        return result
+
+    def observation_fingerprint(self) -> tuple[Any, ...]:
+        """Equal exactly when `observation()` would write the same row again."""
+        return (
+            *(getattr(self, name) for name in _OBSERVATION_SCALAR_FIELDS),
+            tuple(tuple(sorted(item.items())) for item in self.parent_lineage),
+        )
 
     def server_eligible(self) -> bool:
         """Whether listeners may be presented as servers owned by this session."""
@@ -184,6 +209,42 @@ class OwnedProcess:
             and self.evidence_state
             in {"active", "escaped", "suspected_orphan"}
         )
+
+
+_OWNED_PROCESS_FIELDS: tuple[str, ...] = tuple(item.name for item in fields(OwnedProcess))
+_OWNED_PROCESS_LIST_FIELDS = ("listeners", "conditions", "connections", "parent_lineage")
+#: What `OperationalTelemetryStore.record_process_observations` reads. CPU, memory,
+#: listeners and connections are live readings, not evidence, and are not persisted.
+_OBSERVATION_SCALAR_FIELDS = (
+    "pid",
+    "parent_pid",
+    "session_id",
+    "executable",
+    "command",
+    "started_at",
+    "exited_at",
+    "project_id",
+    "agent_run_id",
+    "identity_id",
+    "command_hash",
+    "job_assignment",
+    "evidence_state",
+    "evidence_reason",
+    "confidence",
+    "first_seen",
+    "last_seen",
+    "last_verified_at",
+    "exit_evidence",
+    "inaccessible_count",
+    "startup_revalidated",
+    "attribution_version",
+    "attribution_source",
+    "last_attributed_at",
+    "last_job_confirmed_at",
+)
+_OBSERVATION_FIELDS = (*_OBSERVATION_SCALAR_FIELDS, "parent_lineage")
+#: A retained process's identity: pid plus creation time.
+_ProcessKey = tuple[int, float]
 
 
 class ProcessInspector:
@@ -219,6 +280,11 @@ class ProcessInspector:
         self._sample_lock = asyncio.Lock()
         self._last_collect = 0.0
         self._last_persist = 0.0
+        # What each retained process last wrote to `process_evidence`, so a persist
+        # writes only rows that changed. An exited process stops changing, and the
+        # retained set is mostly those (7,377 of 7,484 when measured), so rewriting
+        # all of them every pass was pure cost.
+        self._persisted: dict[tuple[int, float], tuple[Any, ...]] = {}
         # Live psutil.Process handles reused across passes, keyed by pid.
         self._handles: dict[int, tuple[Any, int]] = {}
         # (name, command, command_hash) per pid. A live process never renames itself and
@@ -410,10 +476,60 @@ class ProcessInspector:
         if self.telemetry is not None and (
             startup or now - self._last_persist >= max(10.0, self.cadence * 2)
         ):
-            await self.telemetry.record_process_observations(
-                [item.snapshot() for item in self.owned.values()]
-            )
+            await self._persist_observations()
             self._last_persist = now
+
+    async def _persist_observations(self) -> None:
+        """Write the retained processes whose durable row changed since the last write.
+
+        The projection is built in a worker thread under the sample lock, so the
+        event loop never serializes the retained set and a collection pass cannot
+        mutate a process halfway through being read. The written fingerprints are
+        committed only after the store accepted the rows, so a failed write is
+        retried in full on the next pass rather than silently skipped.
+        """
+        assert self.telemetry is not None
+        async with self._sample_lock:
+            rows, written, retained = await asyncio.to_thread(self._changed_observations)
+        if rows:
+            await self.telemetry.record_process_observations(rows)
+        persisted = {key: value for key, value in self._persisted.items() if key in retained}
+        persisted.update(written)
+        self._persisted = persisted
+        log.debug(
+            "process observations persisted changed=%d retained=%d", len(rows), len(retained)
+        )
+
+    def _changed_observations(
+        self,
+    ) -> tuple[list[dict[str, Any]], dict[_ProcessKey, tuple[Any, ...]], set[_ProcessKey]]:
+        rows: list[dict[str, Any]] = []
+        written: dict[_ProcessKey, tuple[Any, ...]] = {}
+        retained: set[_ProcessKey] = set()
+        persisted = self._persisted
+        for key, process in list(self.owned.items()):
+            retained.add(key)
+            fingerprint = process.observation_fingerprint()
+            if persisted.get(key) == fingerprint:
+                continue
+            rows.append(process.observation())
+            written[key] = fingerprint
+        return rows, written, retained
+
+    def infrastructure_loopback_ports(self) -> frozenset[int]:
+        """Loopback ports swe-mux's own processes listen on, as of the last sample.
+
+        The supervisor's RPC port and the desktop shell's optional WebView2 debugging
+        port live here beside the daemon's own; `PreviewRegistry` refuses all of them
+        as Preview destinations.
+        """
+        ports: set[int] = set()
+        for member in self._daemon_resources.get("members") or []:
+            for listener in member.get("listeners") or []:
+                if listener.get("loopback") is True:
+                    with suppress(TypeError, ValueError):
+                        ports.add(int(listener["port"]))
+        return frozenset(ports)
 
     def live_listeners(self) -> set[tuple[str, int, str]]:
         """`(session_id, port, host)` for every listener seen by the last reconcile."""
@@ -2042,6 +2158,25 @@ class PreviewRegistration:
         return asdict(self)
 
 
+class PreviewDestinationReserved(ValueError):
+    """A Preview may never point at a listener that belongs to swe-mux itself.
+
+    swe-mux's own origin is not a development server. Registered as one, it entered
+    every sibling preview's route table, and the runtime bridge then treated each
+    same-origin URL in those documents as a Project service and re-prefixed it on
+    every mutation - an unbounded loop in whichever renderer drew the page, which in
+    the desktop app was the app's own (2026-09-24). The transport answers 409 with
+    ``code`` so the browser can open such a link externally instead of reporting a
+    failure.
+    """
+
+    code = "preview_destination_reserved"
+
+
+#: `/preview/<id>/...` - a link that is already a Preview route rather than a server.
+_PREVIEW_ROUTE_PATH = re.compile(r"^/preview/([^/]+)/")
+
+
 @dataclass(frozen=True, slots=True)
 class PreviewProbeResult:
     browser_preview: bool
@@ -2102,6 +2237,7 @@ class PreviewRegistry:
         *,
         preview_probe: Callable[[str], Awaitable[PreviewProbeResult]] | None = None,
         store: PreviewStore | None = None,
+        reserved_ports: Callable[[], Collection[int]] | None = None,
     ) -> None:
         self.inspector = inspector
         self.sessions = sessions
@@ -2109,11 +2245,31 @@ class PreviewRegistry:
         self._listener_seen: dict[str, float] = {}
         self._preview_probe = preview_probe or probe_browser_preview
         self._preview_probe_state: dict[str, tuple[str, int, float]] = {}
+        # The loopback ports swe-mux itself serves on - the daemon's own port and
+        # whatever its infrastructure (supervisor, desktop WebView2) listens on. A
+        # callable because the infrastructure half is only known after sampling.
+        self._reserved_ports = reserved_ports or (lambda: ())
         # Optional so every test that only exercises detection can omit it: a
         # detected preview is rediscovered and needs nothing from disk.
         self._store = store
         if store is not None:
             self._restore(store)
+
+    def reserved_ports(self) -> frozenset[int]:
+        """Loopback ports that belong to swe-mux and can never be a Preview destination."""
+        try:
+            return frozenset(int(port) for port in self._reserved_ports())
+        except Exception:  # noqa: BLE001 - a failed lookup must not break previews
+            log.exception("reserved preview port lookup failed")
+            return frozenset()
+
+    @staticmethod
+    def _targets_swe_mux(item: PreviewRegistration, reserved: frozenset[int]) -> bool:
+        return (
+            item.kind == "loopback"
+            and item.host in PREVIEW_LOOPBACK_HOSTS
+            and item.port in reserved
+        )
 
     def _restore(self, store: PreviewStore) -> None:
         """Bring approved previews back from the mirror.
@@ -2121,7 +2277,13 @@ class PreviewRegistry:
         Their whole reason for existing is that mux cannot find them again on its
         own, so without this a redeploy - or an ordinary "Reload daemon" - silently
         cost the user every preview they had added by hand.
+
+        An entry pointing at swe-mux itself is dropped and the mirror rewritten:
+        registration refuses those now, and one written before that rule is the
+        exact record that froze the desktop app on 2026-09-24.
         """
+        dropped = 0
+        reserved = self.reserved_ports()
         for record in store.load():
             try:
                 item = PreviewRegistration(**record)
@@ -2132,9 +2294,21 @@ class PreviewRegistry:
             # Restoring one would only race that with a stale session id.
             if item.source == "detected":
                 continue
+            if self._targets_swe_mux(item, reserved):
+                dropped += 1
+                log.warning(
+                    "dropping restored preview preview_id=%s project_id=%s port=%d: "
+                    "it points at swe-mux's own listener, not a development server",
+                    item.id,
+                    item.project_id,
+                    item.port,
+                )
+                continue
             self.items[item.id] = item
         if self.items:
             log.info("restored %d approved preview(s)", len(self.items))
+        if dropped:
+            self._persist()
 
     def _persist(self) -> None:
         """Mirror the approved set. Called on every change to it, never on detection."""
@@ -2258,6 +2432,7 @@ class PreviewRegistry:
         snapshot = await snapshot_all()
         probe_targets: list[tuple[PreviewRegistration, str]] = []
         now = time.monotonic()
+        reserved = self.reserved_ports()
         for group in snapshot.get("sessions", []):
             if project_id is not None and group.get("project_id") != project_id:
                 continue
@@ -2273,6 +2448,8 @@ class PreviewRegistry:
                     port = int(listener.get("port") or 0)
                     url = str(listener.get("url") or "")
                     if host not in PREVIEW_LOOPBACK_HOSTS or not 1 <= port <= 65535 or not url:
+                        continue
+                    if port in reserved:
                         continue
                     scheme = urlsplit(url).scheme
                     key = (scheme, port)
@@ -2349,13 +2526,22 @@ class PreviewRegistry:
             await asyncio.gather(*(classify(item, url) for item, url in probe_targets))
 
     def routes_for_project(self, project_id: str) -> dict[str, str]:
+        """Sibling service origins a preview document may reach through mux.
+
+        swe-mux's own listeners never appear, whatever the registry holds: the page
+        is served from that origin, so mapping it would make every same-origin URL in
+        the document look like a service to re-route.
+        """
         routes: dict[str, str] = {}
+        reserved = self.reserved_ports()
         for item in self.items.values():
             if item.project_id != project_id:
                 continue
             # A static preview has no origin to map: its `file://` url names bytes
             # on disk, not a service another preview could dial.
             if item.kind != "loopback":
+                continue
+            if self._targets_swe_mux(item, reserved):
                 continue
             parsed = urlsplit(item.url)
             host = parsed.hostname or ""
@@ -2392,6 +2578,29 @@ class PreviewRegistry:
             raise ValueError("preview registration URL cannot contain a query")
         if not 1 <= port <= 65535:
             raise ValueError("preview URL has an invalid port")
+        if port in self.reserved_ports():
+            # A copied Preview link (`http://127.0.0.1:<mux>/preview/<id>/...`) names a
+            # registration that already exists: open that one. Anything else on this
+            # port is swe-mux's own UI or API, which is never a development server.
+            named = _PREVIEW_ROUTE_PATH.match(parsed.path or "")
+            existing = self.items.get(named.group(1)) if named else None
+            if existing is not None:
+                log.info(
+                    "preview link names an existing preview preview_id=%s session_id=%s",
+                    existing.id,
+                    session.record.id,
+                )
+                return existing
+            log.warning(
+                "preview registration refused session_id=%s host=%s port=%d: the "
+                "destination is swe-mux's own listener",
+                session.record.id,
+                host,
+                port,
+            )
+            raise PreviewDestinationReserved(
+                f"{host}:{port} is swe-mux itself, not a development server"
+            )
         netloc = f"[{host}]:{port}" if ":" in host else f"{host}:{port}"
         normalized_url = urlunsplit((parsed.scheme, netloc, parsed.path.rstrip("/") + "/", "", ""))
         # Force one coherent process sample, then attribute this endpoint across the

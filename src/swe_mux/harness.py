@@ -2537,6 +2537,43 @@ def detect_installations_with_versions(
     return result
 
 
+#: How long the polled registry read may reuse the previous detection. Every browser
+#: re-reads `/api/harnesses` with each fleet refresh, and detection resolves every
+#: registered harness against PATH - twice for an absent one, across every PATH
+#: directory and PATHEXT suffix - which measured 2026-09-24 as ~9% of the daemon's
+#: GIL time at 2.5 fleet refreshes a second. What it answers changes when a CLI is
+#: installed or removed, so a few seconds of reuse costs nothing; the setup panel,
+#: where an install just happened, asks for a fresh read instead.
+DETECTION_REUSE_SECONDS = 10.0
+_detection_reuse: dict[tuple[object, ...], tuple[float, dict[str, HarnessInstallation]]] = {}
+
+
+def reused_installations_with_versions(
+    harness_exe: dict[str, str] | None = None,
+    *,
+    max_age: float = DETECTION_REUSE_SECONDS,
+    clock: Callable[[], float] | None = None,
+) -> dict[str, HarnessInstallation]:
+    """:func:`detect_installations_with_versions`, reused for up to ``max_age`` seconds.
+
+    Keyed by the executable overrides and PATH, so a changed setting or environment
+    is never answered from an older detection. ``max_age=0`` detects afresh and
+    refreshes the reuse. Only the last key is kept: there is one live configuration.
+    """
+    import time
+
+    overrides = dict(harness_exe or {})
+    key = (tuple(sorted(overrides.items())), os.environ.get("PATH", ""))
+    now = (clock or time.monotonic)()
+    previous = _detection_reuse.get(key)
+    if previous is not None and now - previous[0] < max_age:
+        return dict(previous[1])
+    detected = detect_installations_with_versions(overrides)
+    _detection_reuse.clear()
+    _detection_reuse[key] = (now, detected)
+    return dict(detected)
+
+
 def enabled_backends(
     harness_enabled: dict[str, bool], harness_exe: dict[str, str] | None = None
 ) -> tuple[str, ...]:

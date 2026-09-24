@@ -55,6 +55,9 @@ Detection is machine state, kept out of the descriptor because a `HarnessDescrip
 `resolved_path` is the real executable the launcher would run, or `null`.
 
 Detection rides the payload only when the daemon supplies it: `GET /api/harnesses` computes `detect_installations_with_versions(config.harness_exe)` off the event loop and passes it to `public_harness_registry(installations)`, which adds `installed`, `resolved_path`, and a best-effort `cli_version` per harness.
+Every browser re-reads this endpoint with each fleet refresh, so it goes through `reused_installations_with_versions`, which reuses a detection up to `DETECTION_REUSE_SECONDS` (10s) old, keyed by the executable overrides and `PATH`.
+Detection resolves every registered harness against `PATH`, twice for an absent one, and was about 9% of the daemon's GIL time at the refresh rate measured on 2026-09-24.
+`GET /api/harnesses?fresh=1` detects anew and refreshes the reuse; the setup panel and `swemux harnesses` ask for it, because that is where someone checks a CLI they just installed.
 The generated seed calls `public_harness_registry()` with no installations and omits those machine facts, because a static file cannot carry one; a missing `installed` reads as "detection not yet known", which the browser treats as enabled for the first paint until the snapshot narrows it.
 
 The CLI version is captured only for the registry payload, never in the hot `detect_installation` enablement path: `probe_cli_version(name, executable)` runs `<cli> --version` best-effort with a short timeout and a brief cache, and never raises.

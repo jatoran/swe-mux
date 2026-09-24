@@ -22,6 +22,7 @@ from typing import Any, TextIO
 from .config import Config, load_config
 from .daemon_recovery import PROBE_TIMEOUT_SECONDS, DaemonRecovery, recovery_lock
 from .desktop_permissions import WebviewMicrophoneGrant
+from .desktop_renderer import BROWSER_ARGUMENTS_ENV, RendererGuard, configure_webview_isolation
 from .desktop_window_state import (
     DEFAULT_WINDOW_HEIGHT,
     DEFAULT_WINDOW_WIDTH,
@@ -400,6 +401,16 @@ class DesktopRuntime:
         )
         self.exiting = False
         self.stop = threading.Event()
+        # A crashed or hung page is reloaded with Preview documents paused, so a
+        # restored tab cannot freeze the window again (`desktop_renderer.py`).
+        self.renderer_guard = RendererGuard(
+            self.url,
+            note=lambda message: ledger(config.data_dir, message),
+            warn=self._warn_in_background,
+            stop=self.stop,
+        )
+        #: The operator's own WebView2 browser arguments, handed back to children.
+        self.inherited_browser_arguments: str | None = os.environ.get(BROWSER_ARGUMENTS_ENV)
         self.recovery_pause = threading.Event()
         assert config.config_path is not None
         self.instance = WindowsSingleInstance(instance_key(config.config_path))
@@ -466,6 +477,13 @@ class DesktopRuntime:
         # parent-Claude child-session markers down to every terminal.
         environment = scrub_claude_session_markers(os.environ)
         environment[CONTROL_TOKEN_ENV] = self.token
+        # The shell adds sandboxed-iframe isolation for its own WebView2 only; the
+        # daemon, and every terminal it spawns, gets the operator's value back.
+        inherited = getattr(self, "inherited_browser_arguments", None)
+        if inherited is None:
+            environment.pop(BROWSER_ARGUMENTS_ENV, None)
+        else:
+            environment[BROWSER_ARGUMENTS_ENV] = inherited
         flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         log_path = self.config.data_dir / "desktop-daemon.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -524,6 +542,15 @@ class DesktopRuntime:
             )
 
         threading.Thread(target=wait, name="mux-daemon-exit-watch", daemon=True).start()
+
+    def _warn_in_background(self, title: str, message: str) -> None:
+        """A modal warning that blocks nothing: the caller may be the WinForms UI thread."""
+        threading.Thread(
+            target=show_desktop_warning,
+            args=(title, message),
+            name="swe-mux-warning",
+            daemon=True,
+        ).start()
 
     def show(self, *_: object) -> None:
         if self.window is None or self.exiting:
@@ -616,6 +643,13 @@ class DesktopRuntime:
 
     def open_external(self, *_: object) -> None:
         webbrowser.open(self.url, new=2)
+
+    def reload_window(self, *_: object) -> None:
+        if self.window is None or self.exiting:
+            return
+        ledger(self.config.data_dir, "tray requested a window reload with previews paused")
+        self.renderer_guard.safe_reload()
+        self.show()
 
     def startup_enabled(self, _item: object | None = None) -> bool:
         """Whether *anything* starts swe-mux at login, not just this menu item.
@@ -903,6 +937,8 @@ class DesktopRuntime:
         self._start_daemon_recovery()
         webview.settings["OPEN_EXTERNAL_LINKS_IN_BROWSER"] = True
         self._enable_webview_debugging(webview)
+        # Before pywebview creates the WebView2 environment, which reads it once.
+        configure_webview_isolation(lambda message: ledger(self.config.data_dir, message))
         window_state = self._load_window_state(webview)
         self.window_state_recorder = WindowStateRecorder(
             self.window_state_path,
@@ -927,6 +963,7 @@ class DesktopRuntime:
         # while the app is up. The control it needs is built inside that call,
         # so the grant polls for it on its own thread.
         self.microphone_grant.attach(self.window)
+        self.renderer_guard.attach(self.window)
         self.window.events.closing += self.close_to_tray
         self.window.events.shown += self._capture_initial_window_state
         self.window.events.moved += self.window_state_recorder.moved
@@ -938,6 +975,10 @@ class DesktopRuntime:
         menu_items = [
             pystray.MenuItem("Open swe-mux", self.show, default=True),
             pystray.MenuItem("Open in browser", self.open_external),
+            # Reachable when the page itself is not: it terminates the page's renderer
+            # rather than asking a hung one to navigate, and reloads with Preview
+            # documents paused so a restored tab cannot freeze it again.
+            pystray.MenuItem("Reload window (previews paused)", self.reload_window),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem(
                 "Start with Windows", self.toggle_startup, checked=self.startup_enabled

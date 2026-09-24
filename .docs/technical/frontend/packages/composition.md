@@ -90,6 +90,11 @@ One cycle reads five independent daemon registries - sessions, Projects, preview
 - **A caller arriving mid-cycle gets the follow-up, not the cycle in flight.**
   `await refresh()` after a mutation used to be handed a promise whose GETs left before the mutation did, and so resolved with a fleet that had never seen the change.
   Follow-ups coalesce: many callers during one cycle share one queued cycle.
+- **An event requests a refresh; it never runs one.**
+  `createEventRefreshScheduler` sits between the events socket and the controller: a burst settles for `EVENT_REFRESH_SETTLE_MS`, cycles never overlap, and each starts at least a gap after the previous event-driven one started - twice what that cycle took, clamped to [`EVENT_REFRESH_MIN_GAP_MS`, `EVENT_REFRESH_MAX_GAP_MS`] (1-5s) - so a slow daemon is asked less often, not more.
+  Before it, every refreshing event queued a follow-up that started the moment the previous cycle ended, and on 2026-09-24 a subagent fleet's ~17 `subagent_activity` events a second held one desktop window at 2.5 full cycles a second, back to back: 12 requests a second on the daemon's one event loop.
+  `subagent_activity` still refreshes, because it moves the session row's subagent annotation, which no dedicated event carries.
+  A refresh after the operator's own mutation calls the controller directly and is never delayed.
 - `fleetLayouts.ts` is the pure half: given one snapshot it returns the layouts to store, the joins to persist quietly, and the pruned join-refusal record.
   The join rules live there - a Project mid-launch is withheld, a session this device already has a pending leaf for is not joined twice, ended sessions keep a leaf but are never given one.
 

@@ -130,6 +130,46 @@ That is not hypothetical - it is why a `talk:error` whose whole cause was client
 Setting the variable to a port opens a Chromium remote-debugging (CDP) endpoint on loopback; unset, which is the default, opens nothing.
 It is a real surface - anything that can reach the port can drive the page - so it is opt-in per launch and never persisted.
 
+**The shell marker is also installed for every future document.**
+`WebviewMicrophoneGrant` registers `document_shell_script()` once with `AddScriptToExecuteOnDocumentCreatedAsync`, before it subscribes to `PermissionRequested`, so it runs ahead of any page script in every document the window loads.
+The navigation-time publish races the page: `hostProfile.ts` reads `window.__swemuxDesktopShell` once, early, and caches the answer, and after a renderer crash on 2026-09-24 the reloaded page asked for browser keybindings.
+The script is guarded to the top frame, because WebView2 runs it in child frames too and a preview document is not the shell.
+
+**Every WebView2 call is marshalled through one helper.**
+`src/swe_mux/desktop_webview.py` holds the two rules both the permission grant and the renderer guard depend on: `await_webview_control` finds pywebview's control by following Python attributes only, and `on_ui_thread` runs work on the WinForms message loop and treats a form without a window handle as "not ready" rather than as safe to call inline.
+
+## Renderer isolation and recovery
+
+**What went wrong (2026-09-24).**
+A preview document looped forever in its renderer (`processes-and-previews.md` § Preview contract has the bridge half).
+The desktop app froze and the phone and a desktop browser did not, because in the desktop app that renderer was also the app's own.
+Chromium puts a sandboxed iframe in its own process only when `IsolateSandboxedIframes` is on, and Edge's field-trial variations can leave it off in WebView2: measured against the live shell's own variations seed, the looping preview froze the app's page with the feature off and did not with it forced on, on the same runtime (153.0.4234.32).
+WebView2 then killed the renderer for its memory and left its built-in error page, the tray could not reach the page at all, and a daemon restart could not help because the daemon was healthy.
+Reloading by hand put the same Preview back on screen, because the Project's layout is shared across devices, and froze it again.
+
+Three independent layers now hold, each covering what the others cannot:
+
+- **Isolation.**
+  `configure_webview_isolation` sets `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` to include `--enable-features=IsolateSandboxedIframes` in the shell's own environment before `webview.start()` creates the WebView2 environment, and records the applied value in `lifecycle.log` ("webview browser arguments: ...").
+  WebView2 appends the variable to pywebview's arguments and merges every `--enable-features` list, so the addition removes nothing the operator or pywebview set, and a value that already enables the feature is kept as is.
+  The value is the shell's alone: `_spawn_daemon` hands the daemon (and so every terminal) the operator's original value, or none.
+  Preview iframes are sandboxed without `allow-same-origin`, so with the feature on they never share the app's renderer, and a runaway preview costs its own frame rather than the window.
+- **Detection and recovery** (`src/swe_mux/desktop_renderer.py`, `RendererGuard`), armed on its own thread once the control exists ("renderer guard armed" in `lifecycle.log`).
+  It watches the main-frame renderer two ways:
+  - `CoreWebView2.ProcessFailed`: `RenderProcessExited` recovers at once; `RenderProcessUnresponsive`, which WebView2 raises only while input is pending, is acted on once it has persisted for `UNRESPONSIVE_GRACE_SECONDS` (15s); `FrameRenderProcessExited` (an isolated preview's renderer) is recorded and nothing more; `BrowserProcessExited` raises a native warning, since nothing short of reopening the shell recovers it.
+  - A heartbeat: `ExecuteScriptAsync("0")` every `HEARTBEAT_SECONDS` (5s) on the UI thread.
+    A dispatched probe that has not completed within `HANG_SECONDS` (30s) is a hung page whether or not anyone is clicking, which is what a window left open overnight needs.
+    A probe the shell's own UI thread never dispatched is reported once and not acted on, because terminating the renderer cannot fix the shell's own thread.
+    A tick later than `SUSPEND_GAP_SECONDS` (20s) is host sleep, not a hang, and restarts the measurement.
+  A hung renderer is terminated (`terminate_renderers`, the browser process's `--type=renderer` children), because a navigation would queue behind the very script that never yields.
+  The window is then navigated to `/?mux_recovered=<reason>` (`renderer_exited`, `renderer_hung`, `renderer_unresponsive`, or `operator_reload`), when the exit event arrives or after `EXIT_EVENT_WAIT_SECONDS` (5s) without one.
+  Automatic recovery is budgeted to `MAX_RECOVERIES` (3) inside `RECOVERY_WINDOW_SECONDS` (600s); past that it stops, raises one native warning, and leaves WebView2's error page and its Refresh button in place, because a page that fails even in safe mode is not something another reload fixes.
+- **Safe mode in the page.**
+  `?mux_recovered` makes the frontend hold every Preview behind a "Load preview" placeholder and show a banner naming the reason (`processes-and-previews.md` § Preview contract), so the reload cannot restore the document that caused it.
+
+**The tray can always reach the page.**
+"Reload window (previews paused)" calls `RendererGuard.safe_reload()`: it terminates the renderer rather than asking a hung one to navigate, reloads with the `operator_reload` reason, is never refused by the recovery budget, and shows the window.
+
 ## Security boundary
 
 - **The packaged app makes one outbound request of its own, and it is still not an
@@ -873,6 +913,11 @@ person with no shortcut, no tray, and no idea where anything went.
 - WebView2 microphone permission and its page-published report:
   `src/swe_mux/desktop_permissions.py`, `frontend/src/desktopShell.ts`
 - Permission tests: `tests/test_desktop_permissions.py`, `frontend/test/desktopShell.test.ts`
+- WebView2 control lookup and UI-thread marshalling: `src/swe_mux/desktop_webview.py`
+- Renderer isolation, hang/crash recovery, and the tray's safe reload:
+  `src/swe_mux/desktop_renderer.py`, `frontend/src/rendererRecovery.ts`,
+  `frontend/src/RecoveryBanner.tsx`
+- Renderer tests: `tests/test_desktop_renderer.py`, `frontend/test/rendererRecovery.test.ts`
 - Daemon runner: `src/swe_mux/__main__.py`
 - Shutdown boundary: `src/swe_mux/server.py`
 - Package metadata: `pyproject.toml`, `uv.lock`

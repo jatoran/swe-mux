@@ -64,6 +64,15 @@ A closed listening socket is one whose `fileno()` reads -1, the only trace async
 Each finding is an ERROR in `daemon.log`, a line in `lifecycle.log`, and a counter under `listener_guard` on `/api/diagnostics/background`; a rebind that fails is retried every tick and logged at most every thirty seconds.
 A site that never started has no sockets and is not reported dead, because that is the startup path's failure to report.
 
+The guard is the backstop; the close itself is prevented first.
+`__main__` runs the daemon on `proactor_accept.resilient_event_loop()` (`asyncio.run(..., loop_factory=...)`), whose `ResilientIocpProactor.accept` absorbs a per-connection accept failure and arms the next accept on the same, still-open listener.
+Per-connection means `ConnectionResetError`, `ConnectionAbortedError`, or one of `TRANSIENT_ACCEPT_WINERRORS` (64, 121, 1236, 10053, 10054, 10057), and only while the listener's `fileno()` is still valid.
+After `MAX_CONSECUTIVE_ABSORBED` (64) consecutive failures on one accept the error is handed to asyncio after all, which closes the listener and leaves the guard to rebind it, so a genuinely broken listener is never masked forever.
+It wraps the public `IocpProactor.accept` rather than copying CPython's private accept loop, so a Python upgrade that changes that loop cannot silently change this.
+Before it, one morning of 2026-09-24 had 36 listener deaths, each costing every local client up to the guard's two-second tick of refused connections.
+Absorbed failures are counted under `listener_guard.accept_failures_absorbed` on `/api/diagnostics/background` (`absorbed`, `last_error`, `last_at`) and logged as `accept_failure_absorbed` at WARNING at most once a minute.
+POSIX selector loops already survive a failed accept, so there the factory is the ordinary loop.
+
 ## Session protection and durable authority
 
 `daemon-recovery.json` records the PID, OS creation timestamp, desktop-token digest, readiness, lifetime local-PTY revocation, attached supervisor identity, and planned shutdown intent.

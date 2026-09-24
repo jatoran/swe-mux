@@ -1616,7 +1616,9 @@ def dispatch(args: argparse.Namespace, base: str) -> tuple[Any, Any]:
     if args.command == "profiles":
         return request("GET", "/api/profiles", base=base), _render_id_name
     if args.command == "harnesses":
-        return request("GET", "/api/harnesses", base=base), _render_harnesses
+        # Fresh: an operator asking is usually checking an install they just made,
+        # and the polled read may reuse a detection a few seconds old.
+        return request("GET", "/api/harnesses?fresh=1", base=base), _render_harnesses
     if args.command == "doctor":
         if args.export:
             # The export bundle is an artifact to copy, not a table; always JSON.

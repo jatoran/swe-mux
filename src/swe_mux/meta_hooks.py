@@ -26,6 +26,9 @@ from .session import SessionManager
 log = logging.getLogger(__name__)
 
 META_HOOKS_LOOP = "meta-hooks"
+#: How stale the in-memory rules may be relative to the rules file. The event wait
+#: below times out at the same cadence, so an idle daemon picks up an edit this fast.
+RELOAD_INTERVAL_SECONDS = 2.0
 
 MAX_HOOK_FILE_BYTES = 256 * 1024
 MAX_ACTION_TEXT_BYTES = 64 * 1024
@@ -158,15 +161,15 @@ class MetaHookEngine:
         await background.stop(META_HOOKS_LOOP)
         self._task = None
 
-    async def _reload(self) -> None:
+    def _read_rules_file(self) -> bytes | None:
+        """The rules file's bytes, or None when it does not exist. Runs in a thread."""
         if not self.path.exists():
-            if self._fingerprint is not None:
-                self.rules = []
-                self._fingerprint = None
-            self.diagnostic = {"status": "missing", "error": None, "rules": 0}
-            return
+            return None
+        return self.path.read_bytes()
+
+    async def _reload(self) -> None:
         try:
-            data = self.path.read_bytes()
+            data = await asyncio.to_thread(self._read_rules_file)
         except OSError as exc:
             self.diagnostic = {
                 "status": "invalid",
@@ -175,6 +178,12 @@ class MetaHookEngine:
                 "retained_last_known_good": True,
             }
             await self.events.emit("hook_reload_failed", source="hooks", error=str(exc))
+            return
+        if data is None:
+            if self._fingerprint is not None:
+                self.rules = []
+                self._fingerprint = None
+            self.diagnostic = {"status": "missing", "error": None, "rules": 0}
             return
         fingerprint = hashlib.sha256(data).hexdigest()
         if fingerprint == self._fingerprint:
@@ -198,10 +207,17 @@ class MetaHookEngine:
 
     async def _run(self) -> None:
         queue = self.events.subscribe(name="meta-hooks")
+        last_reload: float | None = None
         try:
             while True:
-                with background.iteration(META_HOOKS_LOOP):
-                    await self._reload()
+                # The rules file is re-read at most every RELOAD_INTERVAL_SECONDS,
+                # not before every event: a busy fleet emits many events a second,
+                # and each reload is a stat and a read.
+                now = time.monotonic()
+                if last_reload is None or now - last_reload >= RELOAD_INTERVAL_SECONDS:
+                    last_reload = now
+                    with background.iteration(META_HOOKS_LOOP):
+                        await self._reload()
                 try:
                     event = await asyncio.wait_for(queue.get(), timeout=2)
                 except TimeoutError:

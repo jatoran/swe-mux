@@ -13,6 +13,9 @@ import os
 from pathlib import Path
 from typing import Any
 
+import pytest
+
+from swe_mux import cli_state as cli_state_module
 from swe_mux.cli_state import (
     CLI_STATE_SETTLE_SECONDS,
     PARKED_MOVE_ATTEMPTS,
@@ -313,6 +316,35 @@ def test_a_leftover_file_from_before_this_run_is_not_this_runs_child(tmp_path: P
     )
     monitor.observe(monitor.poll(), [session], now)
     assert "nested_children_observed" not in session.status_health_counters
+
+
+def test_observe_resolves_no_path_on_the_loop_once_poll_has_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # `observe` runs on the event loop and groups sessions by resolved cwd; the
+    # resolution is a filesystem call and belongs to `poll`, in the worker thread.
+    session = claude_session(str(tmp_path))
+    now = session.clock.wall()
+    monitor = CliStateMonitor(tmp_path)
+    write_state(
+        tmp_path, 200, FOREIGN, cwd=str(tmp_path), status="busy",
+        status_updated_at_ms=(now - 10) * 1000,
+    )
+    resolved: list[str] = []
+    real = cli_state_module.identity_key
+
+    def counting(path: Any) -> str:
+        resolved.append(str(path))
+        return real(path)
+
+    monkeypatch.setattr(cli_state_module, "identity_key", counting)
+    states = monitor.poll([session.record.run_cwd or session.record.cwd])
+    polled = len(resolved)
+    monitor.observe(states, [session], now)
+
+    assert polled >= 1
+    assert len(resolved) == polled, "observe resolved a path on the loop"
+    assert session.status_health_counters.get("nested_children_observed") == 1
 
 
 # --- who holds a conversation right now ---------------------------------------

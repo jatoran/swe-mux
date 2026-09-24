@@ -315,8 +315,32 @@ class CliStateMonitor:
         # Attempts already yielded per (mux session, backgrounded conversation).
         self._parked_attempts: dict[tuple[str, str], int] = {}
         self._parked_noted: dict[str, str] = {}
+        # Working-directory grouping keys, resolved by `poll` in the worker thread for
+        # `observe` on the loop. A key is a filesystem call (`Path.resolve`), and
+        # `observe` needs one per live session every poll: measured 2026-09-24 on the
+        # loop thread in the stall profile, where a slow provider makes it arbitrarily
+        # long.
+        self._cwd_keys: dict[str, str] = {}
 
-    def poll(self) -> list[CliSessionState]:
+    def poll(self, cwds: Iterable[str] = ()) -> list[CliSessionState]:
+        """Read the state files, and resolve the grouping keys `observe` will need.
+
+        ``cwds`` are the live sessions' working directories. Their keys, and those
+        of every state and parked job read here, are resolved now because this is
+        the threaded half of the loop.
+        """
+        states = self._read_states()
+        wanted = {*cwds, *(state.cwd for state in states)}
+        wanted.update(state.parked.cwd for state in states if state.parked is not None)
+        self._cwd_keys = {cwd: _normalized_cwd(cwd) for cwd in wanted if cwd}
+        return states
+
+    def _cwd_key(self, cwd: str) -> str:
+        """The key `poll` resolved for ``cwd``; resolved here only if it missed one."""
+        key = self._cwd_keys.get(cwd)
+        return key if key is not None else _normalized_cwd(cwd)
+
+    def _read_states(self) -> list[CliSessionState]:
         try:
             paths = list(self.root.glob("*.json"))
         except OSError:
@@ -433,7 +457,7 @@ class CliStateMonitor:
         live_ids = {session.record.id for session in live}
         cwd_owners: dict[str, list[Any]] = {}
         for session in live:
-            cwd = _normalized_cwd(session.record.run_cwd or session.record.cwd)
+            cwd = self._cwd_key(session.record.run_cwd or session.record.cwd)
             cwd_owners.setdefault(cwd, []).append(session)
         for session in live:
             own = by_conversation.get(session.record.native_session_id)
@@ -461,7 +485,7 @@ class CliStateMonitor:
         for state in states:
             if state.session_id in live_conversations or state.session_id in live_ids:
                 continue
-            owners = cwd_owners.get(_normalized_cwd(state.cwd)) or []
+            owners = cwd_owners.get(self._cwd_key(state.cwd)) or []
             if len(owners) != 1:
                 # Two live sessions in one cwd make the attribution ambiguous;
                 # a wrong nested-child count is worse than a missed one.
@@ -548,7 +572,7 @@ class CliStateMonitor:
             return None
         if not parked.session_id or parked.session_id == record.native_session_id:
             return None
-        if _normalized_cwd(parked.cwd) != _normalized_cwd(record.run_cwd or record.cwd):
+        if self._cwd_key(parked.cwd) != self._cwd_key(record.run_cwd or record.cwd):
             return None
         key = (record.id, parked.session_id)
         attempts = self._parked_attempts.get(key, 0)

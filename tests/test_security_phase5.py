@@ -276,8 +276,11 @@ def test_preview_html_routes_other_project_loopback_services_through_mux() -> No
     )
 
     assert b'"http://127.0.0.1:37655":"/preview/backend-preview/"' in rewritten
-    assert b"const projectPrefix=projectRoutes[canonicalOrigin(url)]" in rewritten
-    assert b'!url.pathname.startsWith("/preview/")' in rewritten
+    assert b"const projectPrefix=serviceRoute(url)" in rewritten
+    # A URL already routed through mux is never routed again, and the page's own
+    # origin (swe-mux) is never a service: the two rules that keep rewriting finite.
+    assert b'url.pathname.startsWith("/preview/")' in rewritten
+    assert b"if(origin===pageOrigin)return undefined;" in rewritten
 
 
 def test_browser_origin_must_match_host_and_explicit_port() -> None:

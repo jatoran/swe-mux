@@ -529,6 +529,34 @@ def test_a_daemon_that_exits_fails_immediately(
     assert time.monotonic() - started < 30
 
 
+@pytest.mark.parametrize("operator_value", [None, "--operator-flag"])
+def test_the_daemon_gets_the_operators_webview_arguments_not_the_shells(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, operator_value: str | None
+) -> None:
+    """Sandboxed-iframe isolation is for the shell's own WebView2 only.
+
+    The daemon passes its environment to every terminal, so a WebView2 app launched
+    from a session must see what the operator set, not what the shell added.
+    """
+    from swe_mux.desktop_renderer import BROWSER_ARGUMENTS_ENV
+
+    runtime = tray_runtime(tmp_path)
+    runtime.inherited_browser_arguments = operator_value
+    monkeypatch.setenv(BROWSER_ARGUMENTS_ENV, "--enable-features=IsolateSandboxedIframes")
+    seen: dict[str, Any] = {}
+
+    def capture(*_args: Any, **kwargs: Any) -> FakeDaemonChild:
+        seen.update(kwargs["env"])
+        return FakeDaemonChild()
+
+    monkeypatch.setattr("swe_mux.desktop.popen_outside_job", capture)
+    monkeypatch.setattr(DesktopRuntime, "_watch_daemon_exit", lambda *_a: None)
+
+    runtime._spawn_daemon()
+
+    assert seen.get(BROWSER_ARGUMENTS_ENV) == operator_value
+
+
 def test_a_healthy_daemon_is_adopted_without_spawning(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -78,6 +78,38 @@ def watched_entry_path(
     return relative
 
 
+def _desired_watches(
+    requests: list[tuple[str, str, tuple[str, ...], str]],
+    global_patterns: tuple[str, ...],
+) -> set[tuple[str, str, str, tuple[str, ...]]]:
+    """Watch keys for the live leases. Filesystem-bound: runs in a worker thread.
+
+    Each request is `(project_id, lease_root, paths, project_root)`. Ignore patterns
+    apply only to a lease on the Project's own root, never to a sibling worktree's.
+    """
+    canonical: dict[str, str] = {}
+    ignores: dict[str, tuple[str, ...]] = {}
+    desired: set[tuple[str, str, str, tuple[str, ...]]] = set()
+    for project_id, lease_root, paths, project_root in requests:
+        if project_root not in canonical:
+            canonical[project_root] = os.path.normcase(str(Path(project_root).resolve()))
+        if os.path.normcase(lease_root) == canonical[project_root]:
+            if project_root not in ignores:
+                ignores[project_root] = tuple(
+                    effective_project_ignores(project_root, list(global_patterns))
+                )
+            patterns = ignores[project_root]
+        else:
+            patterns = ()
+        desired.update((project_id, lease_root, path, patterns) for path in paths)
+    return desired
+
+
+def _watch_target(project_root: str, relative_path: str) -> tuple[Path, Path]:
+    root = Path(project_root).resolve()
+    return root, project_path(root, relative_path)
+
+
 @dataclass(slots=True)
 class WatchLease:
     project_id: str
@@ -128,6 +160,34 @@ class ProjectFileWatcher:
         *,
         root: str | None = None,
     ) -> WatchLease:
+        """Validate and record a lease. Synchronous and filesystem-bound: tests only.
+
+        The route calls `register_async`, which does the same filesystem work in a
+        worker thread; this form keeps the contract testable without a loop.
+        """
+        return self._commit(project_id, watch_id, *self._prepare(project_id, paths, root))
+
+    async def register_async(
+        self,
+        project_id: str,
+        paths: list[str],
+        watch_id: str | None = None,
+        *,
+        root: str | None = None,
+    ) -> WatchLease:
+        """`register`, with the resolves and directory checks off the event loop.
+
+        A client renews its lease every 30s per open tree, and every path in it is a
+        `resolve` plus an `is_dir`; on a disk that is busy those are what stalled the
+        loop. Only the lease bookkeeping runs on the loop, which is also what keeps
+        `leases` single-writer.
+        """
+        prepared = await asyncio.to_thread(self._prepare, project_id, paths, root)
+        return self._commit(project_id, watch_id, *prepared)
+
+    def _prepare(
+        self, project_id: str, paths: list[str], root: str | None
+    ) -> tuple[str, tuple[str, ...]]:
         project = self.projects.projects.get(project_id)
         if project is None:
             raise ValueError("unknown project")
@@ -140,6 +200,7 @@ class ProjectFileWatcher:
             if os.path.normcase(resource_root) == os.path.normcase(canonical_root)
             else []
         )
+        resolved_root = Path(resource_root).resolve()
         normalized: list[str] = []
         for value in paths:
             target = project_path(resource_root, value)
@@ -149,19 +210,22 @@ class ProjectFileWatcher:
                 # and silently drop that client's entire watch set.
                 continue
             relative = (
-                target.relative_to(Path(resource_root).resolve()).as_posix()
-                if target != Path(resource_root).resolve()
-                else ""
+                target.relative_to(resolved_root).as_posix() if target != resolved_root else ""
             )
             if relative and ignored_project_path(relative, patterns):
                 continue
             normalized.append(relative)
+        return resource_root, tuple(dict.fromkeys(normalized))
+
+    def _commit(
+        self, project_id: str, watch_id: str | None, resource_root: str, paths: tuple[str, ...]
+    ) -> WatchLease:
         identity = watch_id or str(uuid.uuid4())
         lease = WatchLease(
             project_id,
             identity,
             resource_root,
-            tuple(dict.fromkeys(normalized)),
+            paths,
             time.monotonic() + WATCH_LEASE_SECONDS,
         )
         self.leases[(project_id, identity)] = lease
@@ -180,28 +244,25 @@ class ProjectFileWatcher:
     async def _run(self) -> None:
         while True:
             with background.iteration(PROJECT_WATCH_LOOP):
-                self._reconcile_watchers()
+                await self._reconcile_watchers()
             await asyncio.sleep(1)
 
-    def _reconcile_watchers(self) -> None:
+    async def _reconcile_watchers(self) -> None:
         now = time.monotonic()
         self.leases = {
             key: lease for key, lease in self.leases.items() if lease.expires_at > now
         }
-        desired: set[tuple[str, str, str, tuple[str, ...]]] = set()
-        for lease in self.leases.values():
-            project = self.projects.projects.get(lease.project_id)
-            if project is None:
-                continue
-            patterns = (
-                tuple(effective_project_ignores(project.root, self.config.project_ignore_patterns))
-                if os.path.normcase(lease.root)
-                == os.path.normcase(str(Path(project.root).resolve()))
-                else ()
-            )
-            desired.update(
-                (lease.project_id, lease.root, path, patterns) for path in lease.paths
-            )
+        requests = [
+            (lease.project_id, lease.root, lease.paths, project.root)
+            for lease in self.leases.values()
+            if (project := self.projects.projects.get(lease.project_id)) is not None
+        ]
+        # Every second, per lease: a `resolve` of the Project root and a read of its
+        # `.swe-mux/config.toml`. Run on the loop, that was a 49.5s stall on
+        # 2026-09-23 when the disk under a Project root stopped answering.
+        desired = await asyncio.to_thread(
+            _desired_watches, requests, tuple(self.config.project_ignore_patterns)
+        )
         for key, task in tuple(self._watchers.items()):
             if key not in desired or task.done():
                 if task.done() and key in desired:
@@ -231,8 +292,10 @@ class ProjectFileWatcher:
         relative_path: str,
         patterns: tuple[str, ...],
     ) -> None:
-        root = Path(project_root).resolve()
-        directory = project_path(root, relative_path)
+        try:
+            root, directory = await asyncio.to_thread(_watch_target, project_root, relative_path)
+        except (FileNotFoundError, NotADirectoryError, OSError, ValueError):
+            return
 
         def entry(changed_path: str) -> str | None:
             return watched_entry_path(root, directory, changed_path, patterns)

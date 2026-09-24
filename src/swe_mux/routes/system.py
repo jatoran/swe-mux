@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
 import logging
 import secrets
@@ -27,8 +28,9 @@ from ..bundle_locks import (
 from ..config import Config
 from ..event_bus import EventBus
 from ..harness import (
-    detect_installations_with_versions,
+    DETECTION_REUSE_SECONDS,
     public_harness_registry,
+    reused_installations_with_versions,
 )
 from ..host_platform import IS_WINDOWS
 from ..http_support import is_loopback_peer, json_response
@@ -185,8 +187,15 @@ async def get_harnesses(request: web.Request) -> web.Response:
     # Detection touches the filesystem (PATH resolution and a data-home stat per
     # harness), so it runs off the event loop. The configured executable override
     # is passed through so detection agrees with what the launcher would run.
+    # Every fleet refresh reads this, so it reuses a detection a few seconds old;
+    # `?fresh=1` (the setup panel, right after an install) detects anew.
+    fresh = request.query.get("fresh") in {"1", "true"}
     installations = await asyncio.to_thread(
-        detect_installations_with_versions, dict(config.harness_exe)
+        functools.partial(
+            reused_installations_with_versions,
+            dict(config.harness_exe),
+            max_age=0.0 if fresh else DETECTION_REUSE_SECONDS,
+        )
     )
     return json_response(public_harness_registry(installations))
 

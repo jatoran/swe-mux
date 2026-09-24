@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
 import logging
 import mimetypes
 import re
 from contextlib import suppress
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
@@ -72,147 +73,53 @@ _PROXY_HOP_HEADERS = {
 }
 
 
+#: The bridge's source ships as an asset rather than a string literal here, so the
+#: exact bytes a preview receives are the bytes the renderer suite executes in a real
+#: browser (`frontend/test/renderer/preview-bridge.spec.ts`). `assets/` is carried by
+#: the wheel and the frozen bundle alike (`packaging/swe_mux.spec`).
+PREVIEW_BRIDGE_PATH = Path(__file__).with_name("assets") / "preview" / "runtime_bridge.js"
+_BRIDGE_PREFIX_PLACEHOLDER = "__MUX_PREVIEW_PREFIX__"
+_BRIDGE_ROUTES_PLACEHOLDER = "__MUX_PROJECT_ROUTES__"
+_BRIDGE_PLACEHOLDERS = re.compile(
+    f"{re.escape(_BRIDGE_PREFIX_PLACEHOLDER)}|{re.escape(_BRIDGE_ROUTES_PLACEHOLDER)}"
+)
+
+
+@functools.cache
+def _bridge_template() -> str:
+    template = PREVIEW_BRIDGE_PATH.read_text(encoding="utf-8")
+    for placeholder in (_BRIDGE_PREFIX_PLACEHOLDER, _BRIDGE_ROUTES_PLACEHOLDER):
+        if template.count(placeholder) != 1:
+            raise RuntimeError(f"{PREVIEW_BRIDGE_PATH} must contain {placeholder} exactly once")
+    return template
+
+
+def _script_json(value: object) -> str:
+    """JSON that cannot close the `<script>` element it is inlined into."""
+    return (
+        json.dumps(value, separators=(",", ":"))
+        .replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+        .replace("&", "\\u0026")
+    )
+
+
 def _preview_runtime_bridge(prefix: str, project_routes: dict[str, str] | None = None) -> str:
-    encoded = json.dumps(prefix)
-    encoded_routes = json.dumps(project_routes or {}, separators=(",", ":"))
-    return f"""<script>(function(){{
-const prefix={encoded};
-const projectRoutes={encoded_routes};
-// A client-side router reads location.pathname directly and Location is not
-// patchable, so the mount point cannot be hidden from it the way asset URLs are.
-// Advertise it instead: an app passes this to its router's basename (React Router,
-// vue-router, SvelteKit) and falls back to "/" when it is not inside a preview.
-window.__MUX_PREVIEW_BASE__=prefix;
-const canonicalOrigin=function(url){{
-  let protocol=url.protocol;
-  if(protocol==="ws:")protocol="http:";
-  if(protocol==="wss:")protocol="https:";
-  let hostname=url.hostname.toLowerCase();
-  if(hostname==="localhost"||hostname==="0.0.0.0")hostname="127.0.0.1";
-  if(hostname==="[::]"||hostname==="::")hostname="[::1]";
-  if(hostname.includes(":" )&&!hostname.startsWith("["))hostname="["+hostname+"]";
-  const defaultPort=(protocol==="http:"&&url.port==="80")||(protocol==="https:"&&url.port==="443");
-  return protocol+"//"+hostname+(url.port&&!defaultPort?":"+url.port:"");
-}};
-const route=function(value){{
-  try {{
-    const url=new URL(String(value),location.href);
-    const projectPrefix=projectRoutes[canonicalOrigin(url)];
-    if(projectPrefix){{
-      url.protocol=location.protocol==="https:"?(url.protocol.startsWith("ws")?"wss:":"https:"):(url.protocol.startsWith("ws")?"ws:":"http:");
-      url.host=location.host;
-      url.pathname=projectPrefix+url.pathname.replace(/^\\/+/,"");
-    }} else if(url.host===location.host&&!url.pathname.startsWith("/preview/")){{
-      url.pathname=prefix+url.pathname.replace(/^\\/+/,"");
-    }}
-    return url.toString();
-  }} catch (_) {{ return value; }}
-}};
-const urlAttributes=new Set(["src","href","action"]);
-const routeAttribute=function(value){{
-  const raw=String(value);
-  if(raw.startsWith("/")&&!raw.startsWith("//"))return route(raw);
-  try {{
-    const url=new URL(raw,location.href);
-    if(projectRoutes[canonicalOrigin(url)])return route(raw);
-  }} catch (_) {{}}
-  return value;
-}};
-const rewriteMarkup=function(value){{
-  const source=String(value);
-  return source.replace(/(\\b(?:src|href|action)\\s*=\\s*["'])([^"']+)/gi,
-    function(_,start,target){{return start+routeAttribute(target);}});
-}};
-const nativeSetAttribute=Element.prototype.setAttribute;
-Element.prototype.setAttribute=function(name,value){{
-  const next=urlAttributes.has(String(name).toLowerCase())?routeAttribute(value):value;
-  return nativeSetAttribute.call(this,name,next);
-}};
-const patchMarkupProperty=function(name){{
-  const descriptor=Object.getOwnPropertyDescriptor(Element.prototype,name);
-  if(!descriptor||typeof descriptor.set!=="function")return;
-  try {{
-    Object.defineProperty(Element.prototype,name,{{
-      configurable:descriptor.configurable,
-      enumerable:descriptor.enumerable,
-      get:descriptor.get,
-      set:function(value){{descriptor.set.call(this,rewriteMarkup(value));}}
-    }});
-  }} catch (_) {{}}
-}};
-patchMarkupProperty("innerHTML");
-patchMarkupProperty("outerHTML");
-const nativeInsertAdjacentHTML=Element.prototype.insertAdjacentHTML;
-Element.prototype.insertAdjacentHTML=function(position,value){{
-  return nativeInsertAdjacentHTML.call(this,position,rewriteMarkup(value));
-}};
-const patchUrlProperty=function(constructorName,name){{
-  const constructor=window[constructorName];
-  if(!constructor)return;
-  const descriptor=Object.getOwnPropertyDescriptor(constructor.prototype,name);
-  if(!descriptor||typeof descriptor.set!=="function")return;
-  try {{
-    Object.defineProperty(constructor.prototype,name,{{
-      configurable:descriptor.configurable,
-      enumerable:descriptor.enumerable,
-      get:descriptor.get,
-      set:function(value){{descriptor.set.call(this,routeAttribute(value));}}
-    }});
-  }} catch (_) {{}}
-}};
-[
-  ["HTMLImageElement","src"],
-  ["HTMLScriptElement","src"],
-  ["HTMLIFrameElement","src"],
-  ["HTMLSourceElement","src"],
-  ["HTMLMediaElement","src"],
-  ["HTMLLinkElement","href"],
-  ["HTMLAnchorElement","href"],
-  ["HTMLAreaElement","href"],
-  ["HTMLFormElement","action"]
-].forEach(function(entry){{patchUrlProperty(entry[0],entry[1]);}});
-const rerouteOwnAttributes=function(element){{
-  urlAttributes.forEach(function(name){{
-    if(!element.hasAttribute(name))return;
-    const current=element.getAttribute(name);
-    const next=routeAttribute(current);
-    if(next!==current)nativeSetAttribute.call(element,name,next);
-  }});
-}};
-const rerouteTree=function(node){{
-  if(!(node instanceof Element))return;
-  rerouteOwnAttributes(node);
-  node.querySelectorAll("[src],[href],[action]").forEach(rerouteOwnAttributes);
-}};
-new MutationObserver(function(records){{
-  records.forEach(function(record){{
-    if(record.type==="attributes")rerouteOwnAttributes(record.target);
-    else record.addedNodes.forEach(rerouteTree);
-  }});
-}}).observe(document,{{subtree:true,childList:true,attributes:true,
-  attributeFilter:["src","href","action"]}});
-const NativeWebSocket=window.WebSocket;
-window.WebSocket=class extends NativeWebSocket{{
-  constructor(url,protocols){{super(route(url),protocols);}}
-}};
-const nativeFetch=window.fetch.bind(window);
-window.fetch=function(input,init){{
-  if(input instanceof Request) input=new Request(route(input.url),input);
-  else input=route(input);
-  return nativeFetch(input,init);
-}};
-const nativeOpen=XMLHttpRequest.prototype.open;
-XMLHttpRequest.prototype.open=function(method,url){{
-  const args=Array.prototype.slice.call(arguments);args[1]=route(url);
-  return nativeOpen.apply(this,args);
-}};
-if(window.EventSource){{
-  const NativeEventSource=window.EventSource;
-  window.EventSource=class extends NativeEventSource{{
-    constructor(url,init){{super(route(url),init);}}
-  }};
-}}
-}})();</script>"""
+    """The inline `<script>` every proxied preview document receives.
+
+    `project_routes` maps a sibling service's canonical loopback origin to its preview
+    prefix. The bridge itself refuses to treat the page's own origin - swe-mux - as one
+    of them, and never re-routes a URL that already points at a preview, which is what
+    keeps every rewrite idempotent; `PreviewRegistry` also keeps swe-mux's own
+    listeners out of the table, so neither half depends on the other.
+    """
+    values = {
+        _BRIDGE_PREFIX_PLACEHOLDER: _script_json(prefix),
+        _BRIDGE_ROUTES_PLACEHOLDER: _script_json(project_routes or {}),
+    }
+    # One pass, so a substituted value can never be mistaken for the other placeholder.
+    script = _BRIDGE_PLACEHOLDERS.sub(lambda match: values[match.group(0)], _bridge_template())
+    return f"<script>{script}</script>"
 
 
 def rewrite_preview_html(

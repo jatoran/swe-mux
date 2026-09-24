@@ -19,6 +19,7 @@ from .http_support import ACCESS_LOG_FORMAT
 from .lifecycle import ledger
 from .listener_guard import ListenerGuard, ledger_writer
 from .logsetup import enable_crash_tracebacks, setup_daemon_logging
+from .proactor_accept import resilient_event_loop
 from .process_reaper import process_in_job
 from .server import create_app, wait_runtime_ready
 from .tailscale import enable_mobile_voice_serve, listener_hosts
@@ -450,7 +451,10 @@ def main(argv: Sequence[str] | None = None) -> None:
                 # open somewhere. Asked here rather than inside `_announce`,
                 # which should stay a question about *this* process only.
                 browser=not args.no_browser and not args.relaunch_wait,
-            )
+            ),
+            # On Windows a proactor loop whose listeners survive a client that
+            # vanished mid-accept (`proactor_accept.py`); elsewhere the default.
+            loop_factory=resilient_event_loop,
         )
     except KeyboardInterrupt:
         pass

@@ -930,7 +930,7 @@ class JsonlTailer:
         ``(None, False)`` ends catch-up.  The end marker is also emitted after all
         bytes that existed at initial attach have been decoded.
         """
-        while not stop.is_set() and not self.path.exists():
+        while not stop.is_set() and not await asyncio.to_thread(self.path.exists):
             try:
                 await asyncio.wait_for(stop.wait(), timeout=0.2)
             except TimeoutError:
@@ -944,8 +944,13 @@ class JsonlTailer:
             await asyncio.sleep(0.25)
 
     async def _poll(self, stop: asyncio.Event):  # type: ignore[no-untyped-def]
-        """One tick: settle whether the file was replaced, then drain new bytes."""
-        stat = self.path.stat()
+        """One tick: settle whether the file was replaced, then drain new bytes.
+
+        The `stat` runs in a worker thread. It happens every 250ms for every observed
+        session, and a stat on a busy disk is exactly the call that blocked the event
+        loop for seconds at a time; one in flight per observer is the whole cost.
+        """
+        stat = await asyncio.to_thread(self.path.stat)
         size = stat.st_size
         identity: _TailIdentity = (size, stat.st_ino, stat.st_dev, stat.st_mtime_ns)
         probe_due = identity != self._identity or (

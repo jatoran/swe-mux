@@ -16,6 +16,7 @@ import shutil
 import sys
 import time
 import uuid
+from collections import deque
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -54,6 +55,13 @@ MARKETPLACE_URL = (
 MARKETPLACE_CATALOG_URL = "https://swemux.dev/plugins/catalog.json"
 GITHUB_API = "https://api.github.com"
 PLUGIN_EVENT_LOOP = "plugin-events"
+#: How many recent events the dispatcher remembers so a redelivered one is not run
+#: twice. Bounded by count, not age, so remembering one costs O(1) at any event rate:
+#: the age-pruned dict this replaced rebuilt itself on every event once more than
+#: 2,000 had arrived inside an hour, which a fleet emitting ~30 a second reaches in
+#: about a minute - measured 2026-09-24 as half the event loop's GIL time, on an
+#: install with no plugin enabled at all.
+EVENT_DEDUPE_WINDOW = 4096
 DEVELOPMENT_ROOT_SETTING = "development_root"
 MAX_DISCOVERED_PLUGINS = 256
 
@@ -174,7 +182,10 @@ class PluginManager:
         self._event_task: asyncio.Task[None] | None = None
         self._tokens: dict[str, PluginToken] = {}
         self._last_event_run: dict[tuple[str, str], float] = {}
-        self._event_seen: dict[str, float] = {}
+        # An insertion-ordered window of recent event keys: the set answers
+        # membership, the deque says which key to forget next.
+        self._event_seen: set[str] = set()
+        self._event_order: deque[str] = deque()
         self._default_development_root = Path.home() / "swe-mux-plugins"
         self._update_checks: dict[str, dict[str, Any]] = {}
 
@@ -1587,19 +1598,28 @@ class PluginManager:
             with background.iteration(PLUGIN_EVENT_LOOP):
                 await self._dispatch_event(event)
 
+    def _first_delivery(self, event: Any) -> bool:
+        """Remember `event`; False if it was already dispatched within the window."""
+        key = f"{event.seq}:{event.type}:{event.ts}"
+        if key in self._event_seen:
+            return False
+        if len(self._event_order) >= EVENT_DEDUPE_WINDOW:
+            self._event_seen.discard(self._event_order.popleft())
+        self._event_seen.add(key)
+        self._event_order.append(key)
+        return True
+
     async def _dispatch_event(self, event: Any) -> None:
         if not self.execution_enabled:
             return
-        snapshot = event.snapshot()
-        event_key = f"{event.seq}:{event.type}:{event.ts}"
-        if event_key in self._event_seen:
+        # Every event the daemon emits arrives here - tens a second on a busy fleet -
+        # so an install with no enabled plugin must pay nothing past this read.
+        enabled = [record for record in await self.store.list() if record["enabled"]]
+        if not enabled or not self._first_delivery(event):
             return
-        self._event_seen[event_key] = time.time()
-        if len(self._event_seen) > 2000:
-            cutoff = time.time() - 3600
-            self._event_seen = {key: ts for key, ts in self._event_seen.items() if ts >= cutoff}
-        for record in await self.store.list():
-            if not record["enabled"] or event.payload.get("plugin_id") == record["id"]:
+        snapshot = event.snapshot()
+        for record in enabled:
+            if event.payload.get("plugin_id") == record["id"]:
                 continue
             try:
                 manifest = await self._load(record, require_enabled=True)

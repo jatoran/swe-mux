@@ -12,7 +12,9 @@ export function useSetupHarnesses() {
     setLoading(true);setError('')
     void (async()=>{
       if(attempt)await api('POST','/api/diagnostics/prerequisites/refresh',{}, {signal:controller.signal,timeoutMs:15000})
-      const result=await api<HarnessRegistryPayload>('GET','/api/harnesses',undefined,{signal:controller.signal,timeoutMs:15000})
+      // `fresh`: the fleet refresh reuses a detection a few seconds old, and this panel
+      // is where a CLI was just installed.
+      const result=await api<HarnessRegistryPayload>('GET','/api/harnesses?fresh=1',undefined,{signal:controller.signal,timeoutMs:15000})
       if(controller.signal.aborted)return
       installHarnessRegistry(result);setRegistry(result)
     })().catch(cause=>{if(!controller.signal.aborted)setError((cause as Error).message)})

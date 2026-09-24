@@ -156,6 +156,14 @@ Its predicates and shadow-root walk are pure and duck-typed.
 
 Loopback normalization, link dispatch, and a sandboxed registered viewport.
 Plain-text URLs (the web-links addon) and OSC 8 hyperlinks (`term.options.linkHandler`) must share one handler: an OSC 8 link renders as a label with no URL text to regex, which is how a Codex-announced server had no clickable route to a Preview.
+The link event carries the `original` URI beside the normalized one, because a link to swe-mux itself is refused with `409 preview_destination_reserved` and `App.tsx` then opens the original in a new window.
+
+`rendererRecovery.ts`, `RecoveryBanner.tsx`
+
+Safe mode after the desktop shell reloads a crashed or hung page (`../../../design/features/desktop-shell.md` § Renderer isolation and recovery).
+`consumeRendererRecovery()` runs in `main.tsx` before the first render, strips `?mux_recovered=<reason>` with `history.replaceState`, and arms the `rendererRecovery` store.
+`PreviewPane.tsx` subscribes and draws a "Load preview" placeholder instead of its iframe while `previewPaused(id)`; `RecoveryBanner.tsx` names the reason and resumes every open Preview at once.
+`RecoveryStore` is pure and takes the href as an argument, so the parsing and pause rules are unit-tested without a DOM.
 
 ## Ended and recovered panes
 

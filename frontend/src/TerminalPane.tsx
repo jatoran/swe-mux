@@ -1038,7 +1038,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       const previewUrl=localPreviewUrl(uri)
       if(previewUrl){
         event.preventDefault()
-        window.dispatchEvent(new CustomEvent('mux:open-terminal-preview',{detail:{sessionId:session.id,url:previewUrl}}))
+        window.dispatchEvent(new CustomEvent('mux:open-terminal-preview',{detail:{sessionId:session.id,url:previewUrl,original:uri}}))
         return
       }
       window.open(uri,'_blank','noopener,noreferrer')

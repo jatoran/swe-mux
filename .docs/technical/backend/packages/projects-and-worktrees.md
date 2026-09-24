@@ -87,6 +87,7 @@ It answers in **Project coordinates**, so a caller filtering relative paths does
 ### `project_watcher.py`
 
 Leased non-recursive directory watches keyed by Project, exact root, path set, and watch id.
+Every filesystem call it makes (resolving and stat-ing watch targets when a lease registers, when the desired watch set is reconciled, and when a watcher starts) runs in a worker thread; routes call `register_async`, and the synchronous `register` remains for callers already off the loop.
 
 Also the platform seam over `watchfiles`: `watched_entry_path` is the single projection from a raw change onto a Project-relative *entry*, and it owns the host difference.
 `watchfiles` guarantees no event granularity, passing Rust `notify` straight through.

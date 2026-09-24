@@ -14,6 +14,7 @@ from swe_mux.desktop_permissions import (
     MediaPermissionReport,
     WebviewMicrophoneGrant,
     decide_media_permission,
+    document_shell_script,
     marker_script,
     normalized_origin,
     same_origin,
@@ -137,9 +138,13 @@ class FakeCoreWebView2:
     def __init__(self) -> None:
         self.PermissionRequested = FakeEvent()
         self.scripts: list[str] = []
+        self.document_scripts: list[str] = []
 
     def ExecuteScriptAsync(self, script: str) -> None:  # noqa: N802 - .NET name
         self.scripts.append(script)
+
+    def AddScriptToExecuteOnDocumentCreatedAsync(self, script: str) -> None:  # noqa: N802
+        self.document_scripts.append(script)
 
 
 class FakeControl:
@@ -227,6 +232,30 @@ def test_a_healthy_window_arms_the_grant_and_publishes_it() -> None:
     for handler in window.events.loaded.handlers:
         handler()
     assert len(core.scripts) > before
+
+
+def test_every_future_document_learns_it_is_in_the_shell_before_its_own_scripts() -> None:
+    """The navigation-time publish raced the page's cached host check.
+
+    After a renderer crash on 2026-09-24 the reloaded page asked for `host=browser`
+    keybindings: `hostProfile.ts` reads the marker once, early, and the `loaded`
+    publish arrived later. A document-created script cannot lose that race, and it is
+    registered exactly once however many attempts the bind takes.
+    """
+    core = FakeCoreWebView2()
+    window = FakeWindow(FakeForm(FakeControl(core)))
+    grant = WebviewMicrophoneGrant(
+        ORIGIN, note=lambda _m: None, wait_seconds=1.0, poll_seconds=0.01
+    )
+    grant.attach(window)
+    settle(lambda: grant.report.state == "armed")
+
+    assert core.document_scripts == [document_shell_script()]
+    script = core.document_scripts[0]
+    # Top frame only: WebView2 runs it in child frames too, and a preview is not the shell.
+    assert script.startswith("if(window===window.top){")
+    assert f"window.{SHELL_MARKER}=Object.freeze(" in script
+    assert MEDIA_MARKER not in script
 
 
 def test_attach_survives_a_window_whose_loaded_event_cannot_be_subscribed() -> None:

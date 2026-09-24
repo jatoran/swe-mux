@@ -28,6 +28,9 @@ accept a validated, bounded variable set.
 - Rules execute in the daemon and are rate-limited per rule.
 - Reload parses and validates the complete file before replacement. A malformed edit keeps
   the last-known-good rules and emits a Settings/event diagnostic.
+- The file is re-read at most every `RELOAD_INTERVAL_SECONDS` (2s), in a worker thread, not
+  before every event: a busy fleet emits many events a second, and a stat plus a read per
+  event on the loop was measurable lag. An edit is therefore picked up within two seconds.
 - `run` uses an explicit platform shell policy, bounded command/output sizes, a timeout,
   and process cleanup. `http` has body limits, timeout, status handling, and bounded retry.
 - Notification actions append provider-neutral delivery records with correlation ID,

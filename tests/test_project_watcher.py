@@ -48,8 +48,8 @@ async def test_equal_relative_paths_in_two_worktrees_have_distinct_watch_identit
     watcher = ProjectFileWatcher(projects, EventBus(), Config(data_dir=tmp_path / "data"))
 
     main = watcher.register(project.id, ["src"], "main-tab")
-    other = watcher.register(project.id, ["src"], "sibling-tab", root=str(sibling))
-    watcher._reconcile_watchers()
+    other = await watcher.register_async(project.id, ["src"], "sibling-tab", root=str(sibling))
+    await watcher._reconcile_watchers()
 
     assert main.root == str(canonical.resolve())
     assert other.root == str(sibling.resolve())

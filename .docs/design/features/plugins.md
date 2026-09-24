@@ -125,6 +125,8 @@ The permission layer prevents accidental control-plane widening and provides aud
 - Each command has a manifest timeout and process-tree cancellation.
 - The durable command ledger is capped at 1,000 rows and carries correlation, context, outcome, truncation, and diagnostic fields.
 - EventBus backpressure never waits on a plugin command.
+- Every event the daemon emits reaches the dispatcher, tens a second on a busy fleet, so an install with no enabled plugin pays one registry read per event and nothing more.
+  Redelivery is refused by a count-bounded window of the last `EVENT_DEDUPE_WINDOW` (4,096) event keys, O(1) per event; the age-pruned dict it replaced rebuilt itself on every event once more than 2,000 arrived inside an hour, which was half the event loop's GIL time on 2026-09-24 with no plugin enabled.
 - Missing, changed, invalid, or incompatible plugins remain inspectable and cannot block daemon readiness.
 - Background diagnostics report installed, enabled, degraded, in-flight, token, and EventBus-subscription state.
 

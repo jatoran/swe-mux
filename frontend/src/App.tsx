@@ -30,6 +30,7 @@ import { editQueueMessage, enqueueMessage, fetchAutoStatus, fetchQueueSummary, s
 import { FleetQueue } from './FleetQueue'
 import { ContinuityBanner } from './ContinuityBanner'
 import { DaemonStallBanner } from './DaemonStallBanner'
+import { RecoveryBanner } from './RecoveryBanner'
 import { UpdateBanner } from './UpdateBanner'
 import { Dropdown } from './Dropdown'
 import { agentTargetName } from './agentTargets'
@@ -159,7 +160,8 @@ import {
   type JoinAttempts,
 } from './sessionJoin'
 import {
-  createFleetRefreshController, describeFleetFailures, fetchFleetSlices, type FleetRefreshController,
+  createEventRefreshScheduler, createFleetRefreshController, describeFleetFailures, fetchFleetSlices,
+  type FleetRefreshController,
 } from './fleetRefresh.ts'
 import { planFleetLayouts, type PendingSpawn } from './fleetLayouts.ts'
 import { placePluginPane, pluginPaneTarget } from './pluginPanes.ts'
@@ -2221,7 +2223,7 @@ export function App() {
 
   useEffect(()=>{
     const openFromTerminal=(event:Event)=>{
-      const detail=(event as CustomEvent<{sessionId:string;url:string}>).detail
+      const detail=(event as CustomEvent<{sessionId:string;url:string;original?:string}>).detail
       const session=sessionsRef.current.find(item=>item.id===detail?.sessionId)
       if(!session||!detail?.url)return
       void api<{preview:Preview;project:Project}>('POST','/api/previews',{session_id:session.id,url:detail.url,approved:true,attach:true}).then(result=>{
@@ -2229,7 +2231,15 @@ export function App() {
         setProjects(items=>items.map(item=>item.id===result.project.id?result.project:item))
         setLayoutMap(current=>({...current,[result.project.id]:parseLayout(result.project.layout)}))
         setProjectId(session.project_id);setFocusedViewId(result.preview.id);setSidebarOpen(false)
-      }).catch(cause=>setError(cause instanceof Error?cause.message:String(cause)))
+      }).catch(cause=>{
+        // A link to swe-mux itself is not a development server: open it the way any
+        // other non-preview link opens rather than reporting a failed Preview.
+        if((cause as ApiError)?.detail?.code==='preview_destination_reserved'){
+          window.open(detail.original||detail.url,'_blank','noopener,noreferrer')
+          return
+        }
+        setError(cause instanceof Error?cause.message:String(cause))
+      })
     }
     window.addEventListener('mux:open-terminal-preview',openFromTerminal)
     return()=>window.removeEventListener('mux:open-terminal-preview',openFromTerminal)
@@ -2440,7 +2450,9 @@ export function App() {
   useEffect(() => {
     let socket: WebSocket | null = null
     let retry: number | undefined
-    let refreshTimer: number | undefined
+    // Events only ever *request* a fleet refresh; the scheduler decides when, so a
+    // busy fleet's event rate cannot become the daemon's request rate.
+    const eventRefresh = createEventRefreshScheduler(() => refresh())
     // Attempt bookkeeping for the liveness watcher (see liveness.ts): a handshake started
     // while a dormant PWA wakes can hang without ever failing, and the backoff timer that
     // should retry it may have been frozen along with the page.
@@ -2453,13 +2465,7 @@ export function App() {
     const presence = watchDevicePresence(frame => {
       if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(frame))
     })
-    const queueRefresh = () => {
-      if (refreshTimer !== undefined) return
-      refreshTimer = window.setTimeout(() => {
-        refreshTimer = undefined
-        void refresh()
-      }, 100)
-    }
+    const queueRefresh = () => eventRefresh.request()
     const clearHandshakeWatchdog = () => {
       if (handshakeTimer === undefined) return
       window.clearTimeout(handshakeTimer)
@@ -2713,7 +2719,7 @@ export function App() {
       nextAttemptAt: () => nextAttemptAt,
       reconnect,
     })
-    return () => { stopLivenessWatch(); presence.stop(); clearHandshakeWatchdog(); if (retry) clearTimeout(retry); if(refreshTimer)clearTimeout(refreshTimer);if(socket){socket.onclose=null;socket.close()} }
+    return () => { stopLivenessWatch(); presence.stop(); clearHandshakeWatchdog(); if (retry) clearTimeout(retry); eventRefresh.cancel();if(socket){socket.onclose=null;socket.close()} }
   }, [])
 
   useEffect(() => {
@@ -8197,6 +8203,9 @@ export function App() {
         outage (redeploy's down stage, a session-preserving restart), which already
         has its own surface. */}
     <DaemonStallBanner suppressed={suppressTransientErrors} />
+    {/* Only on a page the desktop shell reloaded after it crashed or hung: explains why
+        Preview documents are paused (`rendererRecovery.ts`). */}
+    <RecoveryBanner previewIds={Object.keys(previews)} />
     <ContinuityBanner />
     {/* A release update, which is a different thing from the UI-build strip below:
         that one says this browser tab is behind the daemon it is already talking to

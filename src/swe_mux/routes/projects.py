@@ -410,12 +410,29 @@ async def _projects_payload(request: web.Request) -> list[dict[str, Any]]:
     manager: ProjectManager = request.app[keys.PROJECTS]
     activity = await request.app[keys.HISTORY].project_last_activity()
     history_counts = await request.app[keys.HISTORY].project_history_counts()
+    projects = manager.ordered_projects()
+    # One worker call stats every root: a root on a slow or unreachable provider (a
+    # WSL or network path) must cost that worker, never the event loop, and every
+    # fleet refresh reads this.
+    available = await asyncio.to_thread(_roots_available, [item.root for item in projects])
     return await asyncio.gather(
         *(
-            _project_snapshot(request, item, activity, history_counts)
-            for item in manager.ordered_projects()
+            _project_snapshot(
+                request, item, activity, history_counts, root_available=available[index]
+            )
+            for index, item in enumerate(projects)
         )
     )
+
+
+def _roots_available(roots: list[str]) -> list[bool]:
+    result: list[bool] = []
+    for root in roots:
+        try:
+            result.append(Path(root).is_dir())
+        except (OSError, ValueError):
+            result.append(False)
+    return result
 
 
 async def list_projects(request: web.Request) -> web.Response:
@@ -448,7 +465,11 @@ async def _project_snapshot(  # type: ignore[no-untyped-def]
     project,
     activity: dict[str, float],
     history_counts: dict[str, int] | None = None,
+    *,
+    root_available: bool | None = None,
 ) -> dict[str, Any]:
+    if root_available is None:
+        (root_available,) = await asyncio.to_thread(_roots_available, [project.root])
     identity = ProjectIdentity(project.id, project.name, project.root, "registered")
     portable = await read_project_config(project.root, project=identity)
     values = portable["values"] if portable["status"] in {"ready", "read-only"} else {}
@@ -503,7 +524,7 @@ async def _project_snapshot(  # type: ignore[no-untyped-def]
         # Project that has never run one, which the sidebar orders last.
         "last_activity": activity.get(project.id, 0.0),
         "history_count": (history_counts or {}).get(project.id, 0),
-        "root_available": Path(project.root).is_dir(),
+        "root_available": root_available,
         "portable_options": public_values,
         "effective_options": effective,
         "option_sources": sources,

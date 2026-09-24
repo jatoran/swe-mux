@@ -290,7 +290,9 @@ async def put_project_watch(request: web.Request) -> web.Response:
         raise ValueError("watch_id must be a string of 100 characters or fewer")
     project = _request_project(request)
     root = await _project_file_root(project.root, body.get("worktree"))
-    lease = request.app[keys.PROJECT_WATCHER].register(project.id, raw_paths, watch_id, root=root)
+    lease = await request.app[keys.PROJECT_WATCHER].register_async(
+        project.id, raw_paths, watch_id, root=root
+    )
     return json_response(
         {
             "watch_id": lease.watch_id,

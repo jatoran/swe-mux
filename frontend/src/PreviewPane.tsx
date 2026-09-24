@@ -4,6 +4,7 @@ import { api } from './api'
 import { captureUnavailableNote, type CaptureResult } from './previewCapture'
 import { copyPreparedText } from './terminalClipboard'
 import { isStaticPreview, previewLabel, type Preview } from './processFleet'
+import { rendererRecovery } from './rendererRecovery'
 
 type Rect = { x: number; y: number; w: number; h: number }
 type Clip = { x: number; y: number; width: number; height: number }
@@ -30,6 +31,13 @@ export function PreviewPane({ preview, onClose }: { preview: Preview; onClose: (
   const isStatic = isStaticPreview(preview)
   const label = previewLabel(preview)
   const [live,setLive] = useState(true)
+  // After the desktop page crashed or hung, no Preview document is mounted until the
+  // operator asks for this one (`rendererRecovery.ts`).
+  const [paused,setPaused] = useState(() => rendererRecovery.previewPaused(preview.id))
+  useEffect(() => {
+    setPaused(rendererRecovery.previewPaused(preview.id))
+    return rendererRecovery.subscribe(() => setPaused(rendererRecovery.previewPaused(preview.id)))
+  }, [preview.id])
 
   const copyReference = async (text: string) => {
     if (await copyPreparedText(text, manualRef.current)) {
@@ -144,7 +152,13 @@ export function PreviewPane({ preview, onClose }: { preview: Preview; onClose: (
   return <section class={`preview-pane viewport-${viewport}`}>
     <header><div><span>[PREVIEW]</span><strong title={preview.url}>{label}</strong><small>{preview.source}</small></div><nav><button onClick={()=>setViewport('mobile')}>mobile</button><button onClick={()=>setViewport('tablet')}>tablet</button><button onClick={()=>setViewport('responsive')}>fit</button><button onClick={()=>setRefresh(value=>value+1)}>refresh</button>{isStatic&&<button class={live?'active':''} aria-pressed={live} title={live?'Reloading when the served files change':'Not following file changes'} onClick={()=>setLive(value=>!value)}>live</button>}<button onClick={()=>void navigator.clipboard.writeText(new URL(proxyUrl,location.href).toString())}>copy</button><button onClick={()=>window.open(proxyUrl,'_blank','noopener,noreferrer')}>external</button><button aria-label="Close preview" onClick={onClose}>×</button></nav></header>
     <div class="preview-frame">
-      <iframe ref={iframeRef} key={refresh} title={`Preview ${preview.url}`} src={proxyUrl} sandbox="allow-forms allow-modals allow-pointer-lock allow-popups allow-scripts" />
+      {paused
+        ? <div class="preview-paused" role="status" data-testid="preview-paused">
+            <strong>Preview paused</strong>
+            <span>swe-mux reloaded this window after the page stopped working, and holds previews until you ask for one.</span>
+            <button type="button" onClick={()=>rendererRecovery.resume(preview.id)}>Load preview</button>
+          </div>
+        : <iframe ref={iframeRef} key={refresh} title={`Preview ${preview.url}`} src={proxyUrl} sandbox="allow-forms allow-modals allow-pointer-lock allow-popups allow-scripts" />}
       {selecting && <div ref={overlayRef} class="preview-select-overlay" onPointerDown={startDrag} onPointerMove={moveDrag} onPointerUp={endDrag}>
         {rect && <div class="preview-select-rect" style={`left:${rect.x}px;top:${rect.y}px;width:${rect.w}px;height:${rect.h}px;border:2px solid #00e5ff;background:rgba(0,229,255,.28);box-shadow:0 0 0 1px #000,0 0 8px #00e5ff`} />}
         <span class="preview-select-hint">drag to select a region · Esc to cancel</span>

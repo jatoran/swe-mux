@@ -17,6 +17,10 @@ and started again on the same host and port, and every finding is an ERROR in
 `daemon.log`, a line in `lifecycle.log`, and a counter on
 `/api/diagnostics/background`. The poll is a handful of attribute reads, so its
 cadence is short; the rebind is the same `TCPSite.start` the startup path uses.
+
+Since 2026-09-24 the daemon's event loop absorbs the per-connection accept failures
+before asyncio can close anything (`proactor_accept.py`), so this guard is the
+backstop for a listener failure that module does not recognise, not the routine path.
 """
 
 from __future__ import annotations
@@ -208,12 +212,20 @@ class ListenerGuard:
             log.debug("listener guard ledger write failed", exc_info=True)
 
     def snapshot(self) -> dict[str, Any]:
-        """Counters for `/api/diagnostics/background`."""
+        """Counters for `/api/diagnostics/background`.
+
+        `accept_failures_absorbed` is the prevention half (`proactor_accept.py`): failed
+        incoming connections that no longer close the listener. `dead_found` is what
+        still got through to this guard.
+        """
+        from .proactor_accept import STATS
+
         return {
             "interval_seconds": self.interval_seconds,
             "checks": self.checks,
             "dead_found": self.dead_found,
             "rebind_failures": self.rebind_failures,
+            "accept_failures_absorbed": STATS.snapshot(),
             "listeners": [
                 {
                     "host": item.host,

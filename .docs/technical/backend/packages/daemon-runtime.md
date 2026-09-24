@@ -84,6 +84,16 @@ Contracts: `../../../design/features/daemon-resilience.md`.
 
 **Not:** the bind itself (that stays in `__main__.serve`, which decides which address is fatal to lose), or anything that reads the socket.
 
+### `proactor_accept.py`
+
+The daemon's event loop factory (`resilient_event_loop`, passed to `asyncio.run` by `__main__`).
+On Windows it is a `ProactorEventLoop` over `ResilientIocpProactor`, whose `accept` absorbs a per-connection failure (`is_transient_accept_error`) and re-arms the accept on the same listener instead of letting `BaseProactorEventLoop._start_serving` close it.
+It wraps the public `IocpProactor.accept`, never a copy of CPython's private accept loop.
+Counters are the process-wide `STATS`, surfaced by `listener_guard.py`'s snapshot.
+Contracts: `../../../design/features/daemon-resilience.md` § Listener guard.
+
+**Not:** the rebind of a listener that did close (`listener_guard.py`), or any non-Windows loop, which is the stock one.
+
 ### `transcript_scan.py`
 
 The shared, off-loop transcript directory scan (`TranscriptScanCache`) and the cached path resolver (`resolve_path_cached`) the session manager's discovery, promotion and switch-watch loops read through.
@@ -290,8 +300,26 @@ Every other permission kind is left at the runtime's default, and nothing is per
 What it did is published into the page as `window.__swemuxDesktopMedia`, for the UI to read when capture fails.
 The pure half - origin normalization, the per-request decision, the marker script - is platform-free and directly testable.
 The platform half touches WebView2 only on the WinForms UI thread, because `CoreWebView2` is thread affine and reading it from a worker wedges the process while holding the GIL.
+It also registers `document_shell_script()` once with `AddScriptToExecuteOnDocumentCreatedAsync`, so `window.__swemuxDesktopShell` exists before any page script in every top-frame document, including one reloaded after a renderer crash.
 
 **Not:** the microphone repair it looks like (that was a client-side voice-status latch, `.docs/design/features/voice.md`), capture itself, or any permission the browser build needs.
+
+### `desktop_webview.py`
+
+The two WebView2 access rules every shell module shares: `await_webview_control` finds pywebview's control through Python attributes alone, and `on_ui_thread` runs work on the WinForms message loop (`Invoke` or `BeginInvoke`) and raises for a form with no window handle rather than running the work inline.
+
+**Not:** any WebView2 decision - it only reaches the control safely.
+
+### `desktop_renderer.py`
+
+Keeps the desktop window usable when its page's renderer crashes or hangs.
+`configure_webview_isolation` adds `--enable-features=IsolateSandboxedIframes` to the shell's `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` before `webview.start()`, so a sandboxed Preview iframe never shares the app's renderer.
+`RendererGuard` subscribes to `CoreWebView2.ProcessFailed` and runs an `ExecuteScriptAsync` heartbeat; a crashed, hung, or persistently unresponsive renderer is terminated and the window navigated to `/?mux_recovered=<reason>`, within a recovery budget.
+`safe_reload` is the tray's "Reload window (previews paused)".
+The decision logic (`handle_process_failed`, `heartbeat_tick`, `RecoveryBudget`) takes an injectable clock and terminator and is tested without WebView2.
+Contracts: `../../../design/features/desktop-shell.md` § Renderer isolation and recovery.
+
+**Not:** the page's safe mode itself (`frontend/src/rendererRecovery.ts`), or the daemon's hang recovery (`daemon_recovery.py`).
 
 ## Remote reachability
 

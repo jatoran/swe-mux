@@ -218,6 +218,28 @@ the canary running, both during a `cargo test`.
 The first is now answered from a cached reading, the second runs on the spawn loop
 (`runtime-rules.md`).
 
+**A daemon that has been up for a while, on a busy fleet, has costs a fresh idle one does not.**
+On 2026-09-24 a daemon up for ten days (2 GB private, input "slightly laggy here and there", `daemon_recovery state=unresponsive` every few minutes in `lifecycle.log`) had no hung process anywhere; its loop was busy.
+Every cause was a per-item cost multiplied by something that grows with uptime or with fleet activity, which is why a restart hid it and a quiet fleet never showed it:
+
+- **The process inspector's evidence mirror.**
+  It rewrote its whole retained set into `process_evidence` every ten seconds, re-serializing each row through `dataclasses.asdict` on the loop: 7,484 retained processes, 7,377 of them exited.
+  Exited rows are kept for `ENDED_RETENTION_SECONDS` (a day), so the cost grew over the first day of uptime and then held there.
+  It was about three quarters of the loop's busy time, in multi-second blocks, and is now changed-rows-only and built in a worker thread (`design/features/processes-and-previews.md` § Sampling cost).
+- **The plugin event dispatcher's dedupe.**
+  With no plugin enabled it still ran for every event, and its age-pruned dict rebuilt itself on every event once more than 2,000 had arrived inside an hour - so at ~30 events a second it cost O(events in the last hour) per event.
+  It was about half of the event loop's GIL time in a `py-spy --gil` profile.
+  The dispatcher now returns before any per-event work when nothing is enabled, and the window is count-bounded and O(1) (`design/features/plugins.md` § Bounds and diagnostics).
+- **The desktop's fleet refresh.**
+  Every event outside a short list queued a five-endpoint fleet refresh that started the moment the previous one ended, so a subagent fleet's ~17 `subagent_activity` events a second held one window at 2.5 full refreshes a second, back to back.
+  The frontend now spaces event-driven refreshes by at least a second, and by twice the last cycle's duration when the daemon is slow (`technical/frontend/packages/composition.md` § Fleet refresh).
+  Two of those five reads were themselves expensive per call and are cheaper now: `/api/harnesses` reuses a detection up to ten seconds old (`design/features/backends.md`), and `/api/projects` stats Project roots in one worker call instead of one `is_dir` per Project on the loop.
+- **Filesystem calls on the loop**, each small until a disk or a provider is slow: `project_watcher` resolving watch targets (`realpath`/`stat`, now `asyncio.to_thread`, with `register_async` for the route), the observation loop's `exists`/`stat`, the state watchdog resolving every session's cwd (`CliStateMonitor.poll` now resolves them in its worker thread), and the legacy meta-hooks engine re-reading its rules file, which now runs in a thread and reloads at most every `RELOAD_INTERVAL_SECONDS` (2s) however many events arrive.
+
+The sibling symptom was brief refusals rather than lag: a client that times out against a busy loop leaves a failed accept, and asyncio's proactor closed the listener for it (`design/features/daemon-resilience.md` § Listener guard).
+When a long-lived daemon feels slow, read the request rate per path in `access.log` and the event rate per type in `mux.db` (`events`) before profiling: a cost that is cheap per call and wrong per event is invisible in any single request and obvious in the counts.
+Then take a `py-spy record --gil --threads` profile, which shows only the thread holding the GIL and so names what is actually starving the loop.
+
 ### 4. Profile, if the first three did not name the culprit
 
 `py-spy` attaches to the frozen daemon.

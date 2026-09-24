@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
-  FLEET_REFRESH_TIMEOUT_MS, createFleetRefreshController, describeFleetFailures, fetchFleetSlices,
+  EVENT_REFRESH_MAX_GAP_MS, EVENT_REFRESH_MIN_GAP_MS, EVENT_REFRESH_SETTLE_MS, FLEET_REFRESH_TIMEOUT_MS,
+  createEventRefreshScheduler, createFleetRefreshController, describeFleetFailures, fetchFleetSlices,
 } from '../src/fleetRefresh.ts'
 
 type Call = { method: string; path: string; timeoutMs: number | undefined; signal: AbortSignal | undefined }
@@ -228,4 +229,101 @@ test('reset abandons the cycle and releases everyone waiting on it', async () =>
   assert.equal(controller.pending(), false)
   // The queued follow-up was released, not silently started.
   assert.equal(signals.length, 1)
+})
+
+/** Let a settled refresh's continuation run: a few microtask turns, no real timer. */
+const flush = async () => { for (let turn = 0; turn < 5; turn += 1) await Promise.resolve() }
+
+/** A clock and timer queue the scheduler runs on, advanced by hand. */
+const manualTime = () => {
+  let clock = 0
+  let nextId = 0
+  const timers = new Map<number, { at: number; run: () => void }>()
+  return {
+    now: () => clock,
+    setTimer: (run: () => void, delayMs: number) => {
+      nextId += 1
+      timers.set(nextId, { at: clock + delayMs, run })
+      return nextId
+    },
+    clearTimer: (handle: unknown) => { timers.delete(handle as number) },
+    pending: () => [...timers.values()].map(timer => timer.at - clock),
+    /** Move the clock forward, firing every timer that comes due, in order. */
+    advance: async (ms: number) => {
+      const until = clock + ms
+      for (;;) {
+        const due = [...timers.entries()].filter(([, timer]) => timer.at <= until).sort((a, b) => a[1].at - b[1].at)[0]
+        if (!due) break
+        timers.delete(due[0])
+        clock = due[1].at
+        due[1].run()
+        await flush()
+      }
+      clock = until
+      await flush()
+    },
+  }
+}
+
+test('a burst of events costs one refresh, after a short settle', async () => {
+  const time = manualTime()
+  let runs = 0
+  const scheduler = createEventRefreshScheduler(async () => { runs += 1 }, time)
+  for (let index = 0; index < 50; index += 1) scheduler.request()
+  assert.deepEqual(time.pending(), [EVENT_REFRESH_SETTLE_MS])
+  await time.advance(EVENT_REFRESH_SETTLE_MS)
+  assert.equal(runs, 1)
+})
+
+test('a continuous event stream refreshes at the minimum gap, not back to back', async () => {
+  const time = manualTime()
+  const starts: number[] = []
+  const scheduler = createEventRefreshScheduler(async () => { starts.push(time.now()) }, time)
+  // ~17 events a second for ten seconds: the measured subagent fleet.
+  for (let at = 0; at < 10_000; at += 60) {
+    scheduler.request()
+    await time.advance(60)
+  }
+  await time.advance(EVENT_REFRESH_MAX_GAP_MS)
+  const gaps = starts.slice(1).map((start, index) => start - starts[index])
+  assert.ok(starts.length <= 11, `expected about one refresh a second, got ${starts.length}`)
+  for (const gap of gaps) assert.ok(gap >= EVENT_REFRESH_MIN_GAP_MS, `two refreshes ${gap}ms apart`)
+})
+
+test('a slow daemon is asked less often, up to the ceiling', async () => {
+  const time = manualTime()
+  const starts: number[] = []
+  let finish: () => void = () => {}
+  const scheduler = createEventRefreshScheduler(() => {
+    starts.push(time.now())
+    return new Promise<void>(resolve => { finish = resolve })
+  }, time)
+  scheduler.request()
+  await time.advance(EVENT_REFRESH_SETTLE_MS)
+  // Events keep arriving while a 1.5s cycle runs; none starts a second one.
+  for (let index = 0; index < 10; index += 1) {
+    scheduler.request()
+    await time.advance(150)
+  }
+  assert.equal(starts.length, 1)
+  finish()
+  await flush()
+  await time.advance(EVENT_REFRESH_MAX_GAP_MS)
+  assert.equal(starts.length, 2)
+  // Twice the 1.5s the first cycle took, measured from when it started.
+  assert.equal(starts[1] - starts[0], 3_000)
+})
+
+test('a quiet fleet refreshes nothing, and cancel drops what was scheduled', async () => {
+  const time = manualTime()
+  let runs = 0
+  const scheduler = createEventRefreshScheduler(async () => { runs += 1 }, time)
+  await time.advance(10_000)
+  assert.equal(runs, 0)
+  scheduler.request()
+  scheduler.cancel()
+  await time.advance(10_000)
+  assert.equal(runs, 0)
+  scheduler.request()
+  assert.deepEqual(time.pending(), [])
 })

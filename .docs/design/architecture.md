@@ -66,6 +66,11 @@ Inactive rows restore on every boot independently of unexpected-loss recovery se
 - `desktop.py`: Windows single-instance shell, tray/window lifecycle, login startup, daemon
   supervision, and desktop control token.
 - `desktop_window_state.py`: versioned desktop geometry persistence and monitor-safe restore.
+- `desktop_renderer.py`: WebView2 sandboxed-iframe isolation and recovery of a crashed or hung
+  page into safe mode; `desktop_webview.py` holds the UI-thread access rules it shares with
+  `desktop_permissions.py`.
+- `proactor_accept.py`: the daemon's Windows event loop, which keeps a listener open through a
+  failed incoming connection.
 - `ui_build.py`: strict parsing and stat-cached lookup of the identity embedded in the served production document.
 - `__main__.py`: reusable aiohttp runner and standalone/desktop-child daemon entry.
 - `projects.py`: explicit Project and Group lifecycle.

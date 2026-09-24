@@ -6300,8 +6300,15 @@ class SessionManager:
             with background.iteration(STATE_WATCHDOG_LOOP):
                 await self._reconcile_identity_collisions()
                 now = time.time()
-                # File I/O off the loop; counter/ledger application on it.
-                cli_states = await asyncio.to_thread(self.cli_state_monitor.poll)
+                # File I/O off the loop - including resolving each session's cwd,
+                # which `observe` groups by - and counter/ledger application on it.
+                cli_states = await asyncio.to_thread(
+                    self.cli_state_monitor.poll,
+                    [
+                        session.record.run_cwd or session.record.cwd
+                        for session in tuple(self.sessions.values())
+                    ],
+                )
                 parked_moves = self.cli_state_monitor.observe(
                     cli_states, tuple(self.sessions.values()), now
                 )

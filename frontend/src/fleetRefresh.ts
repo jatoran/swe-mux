@@ -121,6 +121,100 @@ function makeDeferred(): Deferred {
   return { promise, resolve }
 }
 
+/**
+ * How soon an event-driven refresh may start: at least `EVENT_REFRESH_SETTLE_MS`
+ * after the event (so a burst lands in one cycle), and at least a gap after the
+ * previous event-driven cycle *started*. The gap is twice what that cycle took,
+ * clamped to [`EVENT_REFRESH_MIN_GAP_MS`, `EVENT_REFRESH_MAX_GAP_MS`], so a slow
+ * daemon is asked less often rather than more.
+ *
+ * Measured 2026-09-24: a subagent fleet emitted `subagent_activity` about 17 times
+ * a second, each event queued a refresh, and a queued refresh started the moment
+ * the previous one ended - so one desktop window re-read all five slices about 2.5
+ * times a second, back to back, for as long as the agents ran. That is 12 requests
+ * a second competing with terminal input on the daemon's one event loop, two of
+ * which (`/api/previews`, `/api/harnesses`) are among its most expensive reads.
+ */
+export const EVENT_REFRESH_SETTLE_MS = 100
+export const EVENT_REFRESH_MIN_GAP_MS = 1_000
+export const EVENT_REFRESH_MAX_GAP_MS = 5_000
+
+export type EventRefreshScheduler = {
+  /** An event says the fleet may have changed. Coalesces; never starts two at once. */
+  request(): void
+  /** Drop anything scheduled. For teardown. */
+  cancel(): void
+}
+
+export type EventRefreshSchedulerOptions = {
+  now?: () => number
+  setTimer?: (run: () => void, delayMs: number) => unknown
+  clearTimer?: (handle: unknown) => void
+}
+
+/**
+ * The rate limit between the events socket and the fleet refresh controller.
+ *
+ * Only event-driven refreshes go through here. A refresh after the operator's own
+ * mutation still calls the controller directly, because its whole contract is that
+ * the next paint shows the change just made.
+ */
+export function createEventRefreshScheduler(
+  refresh: () => Promise<void>,
+  options: EventRefreshSchedulerOptions = {},
+): EventRefreshScheduler {
+  const now = options.now ?? (() => Date.now())
+  const setTimer = options.setTimer ?? ((run, delayMs) => setTimeout(run, delayMs))
+  const clearTimer = options.clearTimer ?? (handle => clearTimeout(handle as ReturnType<typeof setTimeout>))
+  let timer: unknown = null
+  let running = false
+  let dirty = false
+  let cancelled = false
+  let lastStart = Number.NEGATIVE_INFINITY
+  let gapMs = EVENT_REFRESH_MIN_GAP_MS
+
+  const schedule = () => {
+    if (timer !== null || running || cancelled) return
+    const delay = Math.max(EVENT_REFRESH_SETTLE_MS, lastStart + gapMs - now())
+    timer = setTimer(fire, delay)
+  }
+
+  function fire() {
+    timer = null
+    if (cancelled) return
+    dirty = false
+    running = true
+    lastStart = now()
+    const started = lastStart
+    let cycle: Promise<void>
+    try {
+      cycle = refresh()
+    } catch (cause) {
+      cycle = Promise.reject(cause)
+    }
+    void cycle.catch(() => {}).then(() => {
+      running = false
+      const took = Math.max(0, now() - started)
+      gapMs = Math.min(EVENT_REFRESH_MAX_GAP_MS, Math.max(EVENT_REFRESH_MIN_GAP_MS, 2 * took))
+      if (dirty) schedule()
+    })
+  }
+
+  return {
+    request: () => {
+      if (cancelled) return
+      dirty = true
+      schedule()
+    },
+    cancel: () => {
+      cancelled = true
+      dirty = false
+      if (timer !== null) clearTimer(timer)
+      timer = null
+    },
+  }
+}
+
 export type FleetRefreshOptions = {
   stallMs?: number
   /** Called when a cycle outran `stallMs` and was abandoned. */

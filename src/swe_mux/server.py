@@ -142,7 +142,7 @@ from .preview_store import PreviewStore
 from .preview_transport import PREVIEW_HTTP_CONCURRENCY, PREVIEW_WS_CONCURRENCY
 from .process_priority import raise_self as raise_process_priority
 from .process_reaper import create_reaper
-from .processes import PreviewRegistry, ProcessInspector
+from .processes import PreviewDestinationReserved, PreviewRegistry, ProcessInspector
 from .project_actions import (
     ProjectActionService,
     preview_action_run,
@@ -420,6 +420,10 @@ async def error_middleware(request: web.Request, handler: Handler) -> web.Stream
             exc,
         )
         return json_response(exc.as_payload(), 409)
+    except PreviewDestinationReserved as exc:
+        # A ValueError subclass, caught first for its code: the browser opens such a
+        # link outside the app rather than reporting a failed Preview.
+        return json_response({"error": str(exc), "code": exc.code}, 409)
     except ScheduleError as exc:
         # A ValueError subclass, so it must be caught before the generic clause
         # below: the schedule editor branches on the machine code and highlights
@@ -1840,7 +1844,14 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
         cadence=config.ghost_window_poll_seconds,
         enabled=config.ghost_window_sweep_enabled,
     )
-    previews = PreviewRegistry(process_inspector, sessions, store=PreviewStore(config.data_dir))
+    previews = PreviewRegistry(
+        process_inspector,
+        sessions,
+        store=PreviewStore(config.data_dir),
+        # Every listener this daemon binds uses `config.port`; the supervisor's RPC
+        # port and the shell's WebView2 come from the infrastructure sample.
+        reserved_ports=lambda: {config.port, *process_inspector.infrastructure_loopback_ports()},
+    )
     fleet = FleetIntelligence(
         sessions, events, automation_store, process_inspector, previews, config
     )

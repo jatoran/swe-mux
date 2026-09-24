@@ -2223,6 +2223,10 @@ Explained records persist to `mux.db` (`loop_stalls`, `design/features/operation
 Recovery contracts: `design/features/daemon-resilience.md`.
 `process_priority` reports what the process inspector has lowered to keep the fleet
 below this process (`target`, `lowered_total`, `lowered_last_pass`, `denied_pids`).
+`listener_guard` reports closed listeners found and rebound, and carries
+`accept_failures_absorbed` (`absorbed`, `last_error`, `last_at`): per-connection accept
+failures the event loop's proactor absorbed without closing the listener
+(`design/features/daemon-resilience.md` § Listener guard).
 
 This is the surface that makes a poller which died — the
 audited failure mode where a feature silently stops for the rest of the process lifetime —
@@ -2670,6 +2674,11 @@ A bounded, cached HTTP probe promotes browser-facing HTML endpoints to `listed=t
 `GET /previews` returns listed items only, plus session-scoped raw listener candidates when requested with `?session=`.
 `attach=true` opens or activates the stable Preview leaf beside the owner, and closing the leaf leaves the listed registration intact.
 Sandboxed Preview fetch/XHR/WebSocket traffic to another registered Project service is rewritten through that service's `/preview/{id}/…` route.
+A loopback destination on one of swe-mux's own ports (the daemon's, the PTY supervisor's, the desktop shell's WebView2 debugging port) is refused with `409 {"error", "code": "preview_destination_reserved"}`, unless its path is `/preview/{id}/…` naming an existing registration, which is returned instead.
+The browser answers that code by opening the clicked link in a new window.
+
+The desktop shell reloads a crashed or hung page at `/?mux_recovered=<reason>`; the frontend strips the parameter before rendering and holds every Preview leaf until the operator loads it (`features/desktop-shell.md` § Renderer isolation and recovery).
+`<reason>` is reduced to `[a-z_]` and an empty result reads as `manual`.
 
 ## Provider accounts and usage
 
@@ -3229,6 +3238,8 @@ An ambiguous name or prefix lists the candidates and exits `5`; no match exits `
 Backend and harness choices come from the harness registry, not a hardcoded list; `swemux harnesses`
 prints the registry with per-harness detection (installed, resolved path, CLI version, and whether
 that version is newer than the tested bound).
+It reads `GET /api/harnesses?fresh=1`: the polled form reuses a detection up to ten seconds old,
+and `fresh=1` detects anew (`features/backends.md`).
 
 URL resolution is `--url`, then `MUX_URL`, then the daemon host/port from config, then the loopback
 default; the CLI never accepts or prints a provider secret.

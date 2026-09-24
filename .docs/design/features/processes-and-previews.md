@@ -351,6 +351,26 @@ proof of recycling and rebuilds its handle; `_revalidate_unseen` constructs fres
 everything that fell out of the walk; and every process action re-checks creation time against
 a freshly constructed handle before acting.
 
+### Persisting evidence
+
+Every tenth second or so the pass mirrors the retained set into `process_evidence`, and the retained set is mostly processes that already exited.
+Measured on 2026-09-24 against a daemon up for weeks: 7,484 retained processes, 7,377 of them exited, every one re-serialized through `dataclasses.asdict` on the event loop and rewritten each pass.
+That was about three quarters of the loop's busy time, in multi-second blocks, and it was the input lag and brief unresponsive spells a long-running daemon showed.
+Three rules replace it:
+
+- **Only a changed row is written.**
+  `ProcessInspector._persisted` keeps each process's `observation_fingerprint()` from its last successful write, and a pass writes only processes whose fingerprint moved.
+  An exited process stops changing, so it is written once more when it exits and then never again.
+  The fingerprints are committed only after the store accepts the rows, so a failed write is retried in full rather than silently skipped.
+  A process that leaves `owned` leaves the tracker too, so a restored or re-adopted one is written again.
+- **The projection is built off the loop.**
+  `_changed_observations` runs in a worker thread under `_sample_lock`, which is also what stops a collection pass from mutating a process halfway through being read.
+- **`observation()` is the stored row and nothing more.**
+  It carries exactly the fields `OperationalTelemetryStore.record_process_observations` reads; CPU, memory, listeners and connections are live readings, not evidence, and are not persisted.
+
+`OwnedProcess.snapshot()`, which every `/api/processes` read still calls per process, copies its fields one level deep instead of calling `asdict`.
+The nested values are lists of flat dicts and one list of strings, so the result is equal to what `asdict` produced, and `tests/test_process_observation_persistence.py` asserts that equality rather than trusting it.
+
 ## Memory reporting
 
 `memory_bytes` is RSS, which on Windows is the working set and therefore counts each shared
@@ -383,6 +403,13 @@ and differs where § Static document previews says it does.
   and port of a listener owned by some session in that Project or carry explicit user approval.
   Clicking a URL printed by another session therefore attributes the Preview to the listener
   owner, and the same Project/scheme/host/port can never create a second registration.
+- **swe-mux itself is never a Preview destination.**
+  `PreviewRegistry` takes a `reserved_ports` callable, which `server.py` wires to the daemon's own port plus every loopback port swe-mux's infrastructure listens on (`ProcessInspector.infrastructure_loopback_ports()`: the supervisor's RPC port and the desktop shell's optional WebView2 debugging port).
+  Registration refuses a loopback destination on one of those ports with `PreviewDestinationReserved`, which the transport answers as `409 {"code": "preview_destination_reserved"}`.
+  The one exception is a copied Preview link, `http://127.0.0.1:<mux>/preview/<id>/...`: it names a registration that already exists, so registration returns that one instead of refusing.
+  Detection skips those ports, `routes_for_project` never emits them, and a mirrored approved entry that points at one is dropped at restore with a warning and the mirror rewritten.
+  The browser answers the 409 by opening the original link in a new window, so a swe-mux URL printed in a terminal still opens.
+  The reason is not tidiness: on 2026-09-24 an approved registration for the daemon's own origin put that origin in a Project's route table, the runtime bridge then treated every same-origin URL in that Project's previews as a sibling service and re-prefixed it on every mutation, and the desktop app froze because its renderer drew the preview (the bridge's own guard against that loop is the "idempotent and bounded" rule in this section).
 - The registry separates route-only identities from listed Previews.
   Automatic listener discovery creates a route-only identity so sandboxed Preview traffic can reach sibling Project services.
   A bounded HTTP probe automatically lists 2xx HTML/XHTML responses, HTML signatures, and relative redirects as browser-facing Previews.
@@ -437,6 +464,15 @@ and differs where § Static document previews says it does.
   The injected runtime intercepts DOM attribute/property writes and HTML insertion, with a
   mutation fallback for detached fragments; external, protocol-relative, `data:`, and `blob:`
   destinations keep browser-native behavior.
+- **The runtime bridge is idempotent and bounded.**
+  Its source is a shipped asset, `src/swe_mux/assets/preview/runtime_bridge.js`, and `preview_transport._preview_runtime_bridge` fills its two placeholders (`__MUX_PREVIEW_PREFIX__`, `__MUX_PROJECT_ROUTES__`) with script-safe JSON in one pass; the template is checked at load to contain each placeholder exactly once.
+  Three rules keep a rewrite from feeding itself:
+  - A URL that is already a Preview route on the page's own host, and a root-relative `/preview/` value, is returned untouched, so rewriting a rewritten value is a no-op.
+  - The page's own origin is never a service, whatever the route table says.
+  - Each element and attribute gets at most 16 rewrites per task; past that the bridge stops rewriting it for the task and logs one `console.warn` ("swe-mux preview bridge: stopped rewriting ...").
+    The budget is the backstop for a page that fights the bridge (its own observer resetting a value the bridge routes), which would otherwise be two observers answering each other forever.
+  The failure these prevent is not a broken preview but a frozen renderer: without them one self-origin route turned every mutation into another mutation, and a sandboxed preview iframe shares its renderer process with the page that embeds it unless site isolation separates them (`desktop-shell.md` § Renderer isolation and recovery).
+  `frontend/test/renderer/preview-bridge.spec.ts` runs the asset in real Chromium and fails against the pre-fix bridge.
 - Rewriting covers `src`/`href`/`action` attributes **and inline `<script>` bodies**, because a
   module specifier inside an inline script is unreachable by attribute rewriting: the
   `@vitejs/plugin-react` preamble imports `/@react-refresh` that way, and an unprefixed miss
@@ -461,6 +497,11 @@ and differs where § Static document previews says it does.
 - The iframe intentionally omits `allow-same-origin`, preventing preview code from reading
   the parent swe-mux application/API. Sandboxed `Origin: null` requests receive narrowly
   scoped CORS handling only on their registered preview route.
+- **A page loaded in safe mode holds every Preview.**
+  When the desktop shell reloads a crashed or hung page it adds `?mux_recovered=<reason>` (`desktop-shell.md` § Renderer isolation and recovery), and `rendererRecovery.consumeRendererRecovery()` strips the parameter before the first render and marks the page recovered.
+  Every Preview leaf in that page then draws a "Load preview" placeholder instead of its iframe, and `RecoveryBanner` names the reason and offers "Load previews" for all of them.
+  The layout is stored by the daemon and shared by every device, so without the hold the reload would restore the very Preview that hung the page, and a Preview selected on a phone would reopen it on the desktop too.
+  The hold lasts for the page's life: a Preview opened later in a recovered page is held too, and dismissing the banner does not release anything.
 - A detected registration lasts as long as its listener. Once that listener has been gone for
   the restart grace the registration is dropped on the next read, and the browser retires the
   matching tab and sidebar row, so a stopped server never keeps a viewport pointed at nothing.
@@ -648,14 +689,23 @@ with its viewport presets, refresh, copy-URL, external open, and capture.
 - Job membership: `src/swe_mux/win_jobobj.py` (`ReaperJob.process_ids`),
   `src/swe_mux/supervisor.py` (`job_pids` message),
   `src/swe_mux/session.py` (`SessionManager.job_process_ids` merges both PTY ownerships)
-- Proxy and runtime bridge: `src/swe_mux/server.py`
+- Proxy and runtime bridge: `src/swe_mux/preview_transport.py` (`preview_proxy`,
+  `_preview_runtime_bridge`), `src/swe_mux/assets/preview/runtime_bridge.js` (the bridge
+  source), `frontend/test/renderer/preview-bridge.spec.ts` (the bridge in real Chromium)
+- Reserved destinations: `src/swe_mux/processes.py` (`PreviewDestinationReserved`,
+  `PreviewRegistry.reserved_ports`, `ProcessInspector.infrastructure_loopback_ports`),
+  `tests/test_preview_self_origin.py`
+- Evidence persistence: `src/swe_mux/processes.py` (`ProcessInspector._persist_observations`,
+  `OwnedProcess.observation`), `tests/test_process_observation_persistence.py`
 - Durable evidence: `src/swe_mux/operational_telemetry.py`
 - Job boundary: `src/swe_mux/win_jobobj.py`, `src/swe_mux/session.py`
-- Inspector (the act surface, modal): `frontend/src/ProcessPanel.tsx`, `frontend/src/processRows.ts`
+- Inspector (the act surface, shared by the System dialog and the drawer tab):
+  `frontend/src/ProcessFleetView.tsx`, `frontend/src/processFleet.ts`,
+  `frontend/src/processFleetFeed.ts`, `frontend/src/processRows.ts`
   (the pure row model: command-tail stripping, the abnormal-state rule, detail assembly, rollup
   suppression), `frontend/test/renderer/process-fleet-layout.spec.ts` (the density geometry)
-- Drawer watch tab: `frontend/src/ProcessesTab.tsx`, `frontend/src/processWatch.ts` (the pure row
-  model: rollups, focused-first ordering, ended-process rules)
+- Drawer tab (the same surface scoped to the Project): `frontend/src/ProcessesTab.tsx`,
+  `frontend/test/renderer/processes-tab-parity.spec.ts`
 - Resource summary: `frontend/src/ResourceUsage.tsx`, `frontend/src/resourceTotals.ts`
 - Duplicate tooling classification: `frontend/src/resourceTooling.ts`
 - Static previews: `src/swe_mux/processes.py` (`static_preview_id`, `static_preview_url`,
@@ -667,6 +717,8 @@ with its viewport presets, refresh, copy-URL, external open, and capture.
   `tests/test_static_preview.py`
 - Preview leaf + capture/region UI: `frontend/src/PreviewPane.tsx`, `frontend/src/previewCapture.ts`
   (the pure unavailable-state wording), `frontend/test/previewCapture.test.ts`
+- Paused previews after a renderer recovery: `frontend/src/rendererRecovery.ts`,
+  `frontend/src/RecoveryBanner.tsx`, `frontend/test/rendererRecovery.test.ts`
 - Headless capture (optional Playwright): `src/swe_mux/preview_capture.py`,
   `tests/test_first_use_assets.py`
 - Terminal-link routing: `frontend/src/TerminalPane.tsx`, `frontend/src/previewLinks.ts`

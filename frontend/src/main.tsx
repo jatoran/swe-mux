@@ -4,7 +4,12 @@ import wasmUrl from '@continuity-editor/editor/wasm?url'
 import { App } from './App'
 import { reportContinuityFailure } from './continuityStatus'
 import { installClipboardCapture } from './clipboardHistory'
+import { consumeRendererRecovery } from './rendererRecovery'
 import './style.css'
+
+// Before the first render, so no Preview document mounts on a page the desktop shell
+// reloaded because it crashed or hung (`rendererRecovery.ts`).
+consumeRendererRecovery()
 
 // Before the app (and before the note editor's WASM engine) can take a reference
 // to `navigator.clipboard.writeText`: the capture hooks wrap that method, so they

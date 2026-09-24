@@ -16,6 +16,8 @@ Periodic psutil work in this area is the daemon's largest measured cost centre; 
 - Static document registration (`register_static`) and its derived route id (`static_preview_id`).
 - The reduced fleet projection for the browser watch, built in one pass over the owned processes: `snapshot_all` indexes `session_id -> processes` once and serializes each process once, rather than re-scanning every owned process per session.
 - The `background_tasks` fast-clear, since a descendant older than the annotation cannot be its task.
+- Changed-only evidence persistence: `OwnedProcess.observation()` is the stored row, `observation_fingerprint()` decides whether it changed, and `ProcessInspector._persist_observations` builds the rows in a worker thread under `_sample_lock`. `OwnedProcess.snapshot()` copies one level deep instead of calling `dataclasses.asdict`, which was the loop's largest cost on a long-running daemon.
+- Reserved Preview destinations: `PreviewRegistry(reserved_ports=...)`, `ProcessInspector.infrastructure_loopback_ports()`, and `PreviewDestinationReserved`.
 
 **Not:** proxy transport, authoritative ownership from PID alone, or deciding a process *is* a background task - it may only refute.
 
@@ -27,6 +29,7 @@ Preview rules it enforces:
 - A bounded HTML probe or an explicit registration promotes an identity into the listed Preview inventory.
 - Negative probes are cached by listener process identity and backed off, so a UI refresh does not create a request loop against tool listeners.
 - The iframe sandbox is never weakened, and a browser never dials raw loopback for cross-service traffic.
+- swe-mux's own listeners are never a destination: refused at registration (409 `preview_destination_reserved`, except a `/preview/{id}/` link naming an existing registration), skipped by detection, absent from the route map, and dropped from the mirror at restore.
 - `kind` distinguishes a `loopback` registration from a `static` one, and every rule that differs between them is gated on that field rather than on an empty session id. A static registration is unowned, never pruned (it has no listener whose absence could mean anything), and absent from the cross-service route map (its `file://` url names bytes, not a service).
 
 ## `ghost_windows.py`
@@ -58,6 +61,9 @@ Only *approved* and *static* registrations are mirrored, because detected ones a
 ## `preview_transport.py`
 
 Serving a registered Preview through the daemon at `/preview/{preview_id}/…`: the injected runtime bridge, HTML/CSS/JavaScript URL rewriting, the static-preview content-type table and its sandbox CSP, upstream target resolution, the forwarded and hop-by-hop header sets, the concurrency slots, the WebSocket relay, and the HTTP proxy itself.
+
+The runtime bridge's source is the asset `src/swe_mux/assets/preview/runtime_bridge.js`, loaded once (`_bridge_template`, which checks each placeholder occurs exactly once) and filled with script-safe JSON (`_script_json` escapes `<`, `>` and `&`) in a single regex pass, so a substituted value can never be read as another placeholder.
+Edit the bridge there, not in Python; `frontend/test/renderer/preview-bridge.spec.ts` executes the file in Chromium.
 
 The proxy streams its own `StreamResponse`, so it stamps `apply_security_headers` before `prepare()`: the security middleware stamps after a handler returns, which is too late once bytes are on the wire.
 It never copies `Content-Length` from an upstream response it decompressed, because aiohttp would then truncate the outbound body to the compressed length - a silent fail-open.

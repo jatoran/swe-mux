@@ -75,19 +75,19 @@ from dataclasses import asdict, dataclass
 from typing import Any, Literal
 from urllib.parse import urlsplit
 
+from .desktop_webview import (
+    CONTROL_POLL_SECONDS,
+    CONTROL_WAIT_SECONDS,
+    await_webview_control,
+    on_ui_thread,
+)
+
 #: The page-global the shell publishes its permission state into. The frontend
 #: reads it only when capture fails, so a browser tab - which never has it - is
 #: not asked to care that it is absent.
 MEDIA_MARKER = "__swemuxDesktopMedia"
 
 MECHANISM = "CoreWebView2.PermissionRequested"
-
-#: How long to wait for pywebview to build its WebView2 control before giving
-#: up. The control is created inside ``webview.start()``, which is called after
-#: the grant is armed, and a cold WebView2 runtime on a loaded machine has been
-#: seen to take several seconds. Expiring here is a reported state, not a crash.
-CONTROL_WAIT_SECONDS = 60.0
-CONTROL_POLL_SECONDS = 0.1
 
 GrantState = Literal["pending", "armed", "granted", "refused", "unsupported"]
 
@@ -238,6 +238,23 @@ def shell_report() -> dict[str, str]:
     }
 
 
+def document_shell_script() -> str:
+    """The shell marker, installed to run before any script of every future document.
+
+    Registered once with ``AddScriptToExecuteOnDocumentCreatedAsync``. The
+    navigation-time publish in ``_publish`` races the page: ``hostProfile.ts`` reads
+    the marker once, early, and caches the answer, and after a renderer crash the
+    reloaded page asked for ``host=browser`` keybindings (observed 2026-09-24). A
+    document-created script cannot lose that race. It is guarded to the top frame:
+    WebView2 also runs it in child frames, and a preview document is not the shell.
+    """
+    return (
+        "if(window===window.top){"
+        f"window.{SHELL_MARKER}=Object.freeze({json.dumps(shell_report())});"
+        "}"
+    )
+
+
 def marker_script(report: MediaPermissionReport) -> str:
     """JavaScript that publishes ``report`` into the page, idempotently.
 
@@ -280,6 +297,7 @@ class WebviewMicrophoneGrant:
         self._lock = threading.Lock()
         self._window: Any = None
         self._control: Any = None
+        self._document_script_added = False
         self._report = MediaPermissionReport(
             state="pending",
             origin=origin,
@@ -395,57 +413,18 @@ class WebviewMicrophoneGrant:
         )
 
     def _await_control(self) -> Any:
-        """Poll for pywebview's WebView2 control, or ``None`` if it never comes.
+        """pywebview's WebView2 control, found by Python attributes alone.
 
-        **Reads nothing but Python attributes.** ``native`` and ``browser`` are
-        plain attributes on pywebview's own objects and ``webview`` is a
-        reference held by one of them, so following that chain costs nothing and
-        crosses no apartment. Reaching one step further to ``CoreWebView2`` -
-        which is what an obvious version of this loop does, to find out whether
-        the control is ready - is a cross-apartment COM call from a background
-        thread, and it does not merely fail: measured 2026-08-29, it wedged the
-        whole process, and because pythonnet holds the GIL across that call it
-        also froze every other Python thread, including the watchdog that was
-        supposed to notice. The window became a "not responding" ghost on the
-        operator's desktop. Readiness is therefore decided on the UI thread, in
-        ``_subscribe``, and never here.
+        Readiness is decided on the UI thread, in ``_subscribe``, and never by
+        polling ``CoreWebView2`` from here (`desktop_webview.py` says why).
         """
-        deadline = time.monotonic() + self._wait_seconds
-        while time.monotonic() < deadline:
-            browser = getattr(getattr(self._window, "native", None), "browser", None)
-            control = getattr(browser, "webview", None)
-            if control is not None:
-                return control
-            time.sleep(self._poll_seconds)
-        return None
+        return await_webview_control(
+            self._window, wait_seconds=self._wait_seconds, poll_seconds=self._poll_seconds
+        )
 
     def _on_ui_thread(self, form: Any, work: Callable[[], None], *, wait: bool) -> None:
-        """Run ``work`` on the WinForms message loop, or raise if there is no loop yet.
-
-        Every WebView2 call in this module goes through here. ``InvokeRequired``
-        is one of the few members WinForms documents as safe to read from any
-        thread, which is what makes the check itself legal - but it answers
-        **false** when the control has no window handle yet, because then there
-        is no owning thread to differ from. Taking that at face value would run
-        the work inline on the caller, which is the exact off-thread COM call
-        this indirection exists to prevent, and it would happen only in the
-        narrow startup window where it is hardest to reproduce. So a form
-        without a handle is "not ready", never "safe to call directly".
-        """
-        if not getattr(form, "IsHandleCreated", True):
-            raise RuntimeError("the WebView2 host window has no handle yet")
-        if not getattr(form, "InvokeRequired", False):
-            work()
-            return
-        # Imported here rather than at module scope: `System` exists only once
-        # pythonnet has loaded the CLR, which the WinForms backend has done and
-        # nothing else has. Marshalling is the only reason we need it.
-        from System import Action
-
-        if wait:
-            form.Invoke(Action(work))
-        else:
-            form.BeginInvoke(Action(work))
+        """Every WebView2 call in this module is marshalled through here."""
+        on_ui_thread(form, work, wait=wait)
 
     def _subscribe(self, control: Any) -> None:
         """Attach the handler on the UI thread, which is where WebView2 lives.
@@ -481,6 +460,14 @@ class WebviewMicrophoneGrant:
                 if core is None:
                     outcome.append(False)
                     return
+                if not self._document_script_added:
+                    # Before the permission handler, so a runtime that rejects that
+                    # still tells every page it is in the shell.
+                    self._document_script_added = True
+                    try:
+                        core.AddScriptToExecuteOnDocumentCreatedAsync(document_shell_script())
+                    except Exception as exc:  # noqa: BLE001 - the loaded publish remains
+                        self._note(f"could not register the shell marker for new documents: {exc}")
                 # Recorded only after the subscription actually took, so a
                 # runtime that rejects it cannot be read as "ready".
                 core.PermissionRequested += self._on_permission_requested
