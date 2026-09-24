@@ -39,7 +39,7 @@ async def answers(port: int) -> bool:
             client.get(f"http://127.0.0.1:{port}/") as response,
         ):
             return response.status == 200
-    except (aiohttp.ClientError, asyncio.TimeoutError):
+    except (aiohttp.ClientError, TimeoutError):
         return False
 
 
@@ -102,11 +102,17 @@ async def test_a_site_that_never_started_is_not_reported_dead() -> None:
         await runner.cleanup()
 
 
+def fake_server(fileno: int) -> Any:
+    """An object shaped like `site._server` whose one socket reports `fileno`."""
+    sock = type("Sock", (), {"fileno": lambda self: fileno})()
+    return type("Server", (), {"sockets": [sock]})()
+
+
 class DeadSite:
     """A site whose socket reads closed, and whose replacement may refuse to bind."""
 
     def __init__(self, fail_start: BaseException | None = None) -> None:
-        self._server = type("Server", (), {"sockets": [type("Sock", (), {"fileno": lambda self: -1})()]})()
+        self._server = fake_server(-1)
         self.fail_start = fail_start
         self.started = 0
         self.stopped = 0
@@ -122,7 +128,7 @@ class DeadSite:
 
 class LiveSite:
     def __init__(self) -> None:
-        self._server = type("Server", (), {"sockets": [type("Sock", (), {"fileno": lambda self: 7})()]})()
+        self._server = fake_server(7)
         self.started = 0
 
     async def start(self) -> None:
