@@ -490,8 +490,41 @@ and differs where § Static document previews says it does.
   30-minute idle timeout, and 12-hour lifetime. Clients may reconnect normally.
 - Preview responses use `Cache-Control: no-cache` and preserve upstream validators, so a manual
   refresh revalidates same-URL assets instead of requiring a new port to escape an upstream
-  `max-age`. HMR/live reload remains server-owned; a plain server still needs manual refresh,
-  and server code without an autoreloader still needs a same-port process restart.
+  `max-age`. Server code without an autoreloader still needs a same-port process restart.
+- **The proxy base is the origin; the page is a separate field.**
+  A loopback registration's `url` is always `scheme://host:port/`, and the path of the link the
+  user opened is `entry`, which is where the pane mounts (`/preview/<id>/<entry>`).
+  Clicking a printed link updates `entry` even when the endpoint is already registered; the
+  listener scan never touches it, and neither does a root URL that names no page (selecting a
+  server in Processes), while a root link the user followed does (`open_page`).
+  Before 2026-09-25 the two were one field, and both outcomes were wrong. The scan usually
+  registered the server at `/` first, so the click found the existing registration and dropped
+  the path, and a preview of `http://127.0.0.1:8766/cart-drawings.html` opened as the directory
+  listing on every open - for Claude and Codex alike, depending only on which directory the agent
+  served from. When the click won instead, the path became the base: every root-relative asset
+  was rebased under it, `/page.html` was requested as `/page.html/` (a 404 on `http.server`),
+  and the base never moved again. A mirror written by those builds is migrated at restore.
+- **The pane follows the page on screen, not the page it opened at.**
+  A sandboxed document's location is unreadable from the parent, so the runtime bridge posts
+  `{source: "swe-mux-preview", type: "location", path, resources}` to the parent on start, on
+  `load`, and on history navigation, with every path relative to the preview route and only
+  paths under it. The pane re-validates each one (`previewLocation.ts`: no scheme, host,
+  leading slash, control character, or `..` walk out of the route), because the message is
+  written by the previewed page. Refresh, live reload, copy, external open, and capture all use
+  that reported page; refresh used to remount the route root and throw the reader back to the
+  listing.
+- **Live reload is the pane's, and it is on by default only for plain file servers.**
+  A loopback server has no watcher mux can lease, because the daemon does not know which
+  directory it serves. A live pane instead polls `POST /previews/{id}/revision` every 2s with
+  the reported page and up to 23 assets it loaded; the daemon fingerprints the server's bytes
+  (`HEAD` validators, a body digest where `HEAD` has none) and the pane remounts when the
+  fingerprint moves. The first answer for a set of paths is a baseline, since navigating is not
+  an edit, and an answer with anything unreachable is ignored, since a restarting server is not
+  one either. It pauses while the page is hidden.
+  `static_server` - the listener's command matches a plain file server (`http.server`,
+  `http-server`, `serve`, `php -S`, ...) - turns it on by default. A bundler dev server reloads
+  the page itself over HMR, and a second reload from the pane would discard that state, so it
+  stays off there until the reader turns it on.
 - Preview chrome is width-contained by a shrinkable grid column. On mobile, the header action
   rail scrolls inside the tab while the viewport and iframe remain within the visible width.
 - The iframe intentionally omits `allow-same-origin`, preventing preview code from reading
@@ -617,7 +650,8 @@ with its viewport presets, refresh, copy-URL, external open, and capture.
   port, so the screenshot is of exactly what the pane draws instead of a second render path
   that could drift from it. The shot still lands in the owning Project's `.swe-mux`, resolved
   from `project_id` since there is no session to resolve it from.
-- The pane offers a `live` toggle for static previews. The lease on the served directory is
+- The pane offers a `live` toggle for static previews (loopback previews have their own, driven
+  by the revision check in § Preview contract). The lease on the served directory is
   held only while it is on, and a change under that directory bumps the iframe. It is a
   toggle rather than the behaviour because a page holding state is not worth blowing away on
   every keystroke-save, and an unwatched directory costs the daemon nothing.
@@ -717,6 +751,12 @@ with its viewport presets, refresh, copy-URL, external open, and capture.
   `tests/test_static_preview.py`
 - Preview leaf + capture/region UI: `frontend/src/PreviewPane.tsx`, `frontend/src/previewCapture.ts`
   (the pure unavailable-state wording), `frontend/test/previewCapture.test.ts`
+- Page entry, location reports and live reload: `src/swe_mux/processes.py`
+  (`PreviewRegistration.entry`/`static_server`, `loopback_entry`, `is_static_file_server`,
+  `PreviewRegistry._split_legacy_path`), `src/swe_mux/preview_transport.py`
+  (`preview_revision`, `preview_relative_path`), `frontend/src/previewLocation.ts` (the
+  re-validation of the bridge's report), `tests/test_preview_entry.py`,
+  `frontend/test/previewLocation.test.ts`
 - Paused previews after a renderer recovery: `frontend/src/rendererRecovery.ts`,
   `frontend/src/RecoveryBanner.tsx`, `frontend/test/rendererRecovery.test.ts`
 - Headless capture (optional Playwright): `src/swe_mux/preview_capture.py`,

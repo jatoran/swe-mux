@@ -2138,11 +2138,22 @@ class PreviewRegistration:
     # A loopback preview is known by host:port. A static one has neither, so its
     # file name is the only thing that identifies it on a tab or a sidebar row.
     label: str = ""
-    # Static only: the absolute directory served, and the entry file relative to
-    # it. Serving the directory rather than the single file is what makes a
-    # page's own ``./style.css`` and ``../assets/x.png`` resolve.
+    # Static only: the absolute directory served. Serving the directory rather
+    # than the single file is what makes a page's own ``./style.css`` and
+    # ``../assets/x.png`` resolve.
     doc_root: str = ""
+    # The page a pane opens at, relative to the route's root and without a leading
+    # slash. Static: the entry file within ``doc_root``. Loopback: the path of the
+    # last URL the user opened for this endpoint ("" for the server's root). It is
+    # never part of ``url``, which stays the bare origin for a loopback preview: a
+    # path folded into the proxy base rebased every root-relative asset under it,
+    # and turned a printed ``/page.html`` into a request for ``/page.html/``.
     entry: str = ""
+    # Loopback only: the listener is a plain file server (``python -m http.server``,
+    # ``http-server``, ...) with no reload of its own, so the pane follows file
+    # changes by default. A dev server with HMR reloads itself, and a second reload
+    # from the pane would throw its state away.
+    static_server: bool = False
     # Static only: the same directory expressed relative to the checkout root
     # ("" when it *is* the root). The Project file watcher speaks in checkout
     # relative paths, so without this the browser would have to subtract one
@@ -2175,6 +2186,42 @@ class PreviewDestinationReserved(ValueError):
 
 #: `/preview/<id>/...` - a link that is already a Preview route rather than a server.
 _PREVIEW_ROUTE_PATH = re.compile(r"^/preview/([^/]+)/")
+
+#: Commands that start a plain file server: one that serves bytes off disk and has
+#: no reload channel of its own. Matched against the listener's command line, so
+#: each pattern names the program rather than a word that could appear in an
+#: argument. Deliberately absent: `live-server` and every bundler dev server, which
+#: reload the page themselves.
+_STATIC_FILE_SERVER_COMMANDS = (
+    re.compile(r"(?:^|\s)-m\s+(?:http\.server|SimpleHTTPServer)(?:\s|$)"),
+    re.compile(r"(?:^|[\s\\/])http-server(?:\.cmd|\.js)?(?:\s|$)"),
+    re.compile(r"[\\/]node_modules[\\/]serve[\\/]"),
+    re.compile(r"(?:^|\s)(?:npx|pnpm\s+dlx|bunx)(?:\.cmd)?\s+serve(?:\s|$)"),
+    re.compile(r"(?:^|[\s\\/])php(?:\.exe)?\s+-S\s"),
+    re.compile(r"(?:^|[\s\\/])ruby(?:\.exe)?\s+-run\s+-e\s+httpd"),
+    re.compile(r"(?:^|[\s\\/])(?:miniserve|static-web-server)(?:\.exe)?(?:\s|$)"),
+)
+
+
+def _origin_url(scheme: str, host: str, port: int) -> str:
+    """A loopback preview's proxy base: the origin and nothing below it."""
+    netloc = f"[{host}]:{port}" if ":" in host else f"{host}:{port}"
+    return urlunsplit((scheme, netloc, "/", "", ""))
+
+
+def is_static_file_server(command: str) -> bool:
+    """Whether a listener's command line starts a plain file server."""
+    return any(pattern.search(command) for pattern in _STATIC_FILE_SERVER_COMMANDS)
+
+
+def loopback_entry(path: str) -> str:
+    """The page a URL path names, relative to the server's root.
+
+    Kept percent-encoded exactly as it arrived: the pane appends it to the route
+    verbatim, so decoding it here would turn a `%20` back into a space the browser
+    then has to guess about.
+    """
+    return path.lstrip("/")
 
 
 @dataclass(frozen=True, slots=True)
@@ -2283,6 +2330,7 @@ class PreviewRegistry:
         exact record that froze the desktop app on 2026-09-24.
         """
         dropped = 0
+        migrated = 0
         reserved = self.reserved_ports()
         for record in store.load():
             try:
@@ -2294,6 +2342,8 @@ class PreviewRegistry:
             # Restoring one would only race that with a stale session id.
             if item.source == "detected":
                 continue
+            if item.kind == "loopback" and self._split_legacy_path(item):
+                migrated += 1
             if self._targets_swe_mux(item, reserved):
                 dropped += 1
                 log.warning(
@@ -2307,8 +2357,31 @@ class PreviewRegistry:
             self.items[item.id] = item
         if self.items:
             log.info("restored %d approved preview(s)", len(self.items))
-        if dropped:
+        if dropped or migrated:
             self._persist()
+
+    @staticmethod
+    def _split_legacy_path(item: PreviewRegistration) -> bool:
+        """Move a path an older build folded into a loopback ``url`` into ``entry``.
+
+        Those builds kept the printed path as the proxy base, so a mirror written by
+        one carries `http://127.0.0.1:9763/docs/` where the base is now the origin.
+        The id does not change - it was always derived from the origin alone.
+        """
+        parsed = urlsplit(item.url)
+        if not parsed.path or parsed.path == "/":
+            return False
+        entry = loopback_entry(parsed.path)
+        log.info(
+            "preview migrated a path out of its proxy base preview_id=%s url=%s entry=%s",
+            item.id,
+            item.url,
+            entry,
+        )
+        item.url = _origin_url(parsed.scheme, item.host, item.port)
+        if not item.entry:
+            item.entry = entry
+        return True
 
     def _persist(self) -> None:
         """Mirror the approved set. Called on every change to it, never on detection."""
@@ -2375,12 +2448,44 @@ class PreviewRegistry:
             None,
         )
 
+    def _set_entry(self, item: PreviewRegistration, entry: str | None, *, reason: str) -> None:
+        """Point a loopback preview's pane at the page the user just opened.
+
+        ``None`` means the caller named no page (the listener scan), which must
+        never overwrite one a person chose. An explicit root URL is a choice too,
+        so ``""`` does overwrite.
+        """
+        if entry is None or entry == item.entry:
+            return
+        log.info(
+            "preview entry set preview_id=%s session_id=%s port=%d entry=%s previous=%s "
+            "reason=%s",
+            item.id,
+            item.session_id,
+            item.port,
+            entry or "/",
+            item.entry or "/",
+            reason,
+        )
+        item.entry = entry
+
     def _record_detected(
-        self, session: Any, url: str, *, host: str, port: int, listed: bool = True
+        self,
+        session: Any,
+        url: str,
+        *,
+        host: str,
+        port: int,
+        listed: bool = True,
+        entry: str | None = None,
+        static_server: bool | None = None,
     ) -> PreviewRegistration:
         parsed = urlsplit(url)
         existing = self._existing_endpoint(session.record.project_id, parsed.scheme, host, port)
         if existing is not None:
+            self._set_entry(existing, entry, reason="opened")
+            if static_server is not None:
+                existing.static_server = static_server
             # Endpoint identity is project-wide. If it was first opened from a
             # terminal that merely printed another service's URL, retain its stable
             # Preview id but move ownership to the session that actually listens.
@@ -2402,7 +2507,7 @@ class PreviewRegistry:
             preview_id(session.record.project_id, parsed.scheme, host, port),
             session.record.id,
             session.record.project_id,
-            url,
+            _origin_url(parsed.scheme, host, port),
             host,
             port,
             "detected",
@@ -2413,6 +2518,8 @@ class PreviewRegistry:
                 getattr(session.record, "project_scope_id", None),
             ),
             getattr(session.record, "repo_group_id", None),
+            entry=entry or "",
+            static_server=bool(static_server),
         )
         self.items[item.id] = item
         item.listed = listed
@@ -2439,7 +2546,7 @@ class PreviewRegistry:
             session = self.sessions.sessions.get(str(group.get("session_id") or ""))
             if session is None:
                 continue
-            endpoints: dict[tuple[str, int], tuple[str, str, str]] = {}
+            endpoints: dict[tuple[str, int], tuple[str, str, str, bool]] = {}
             for process in group.get("processes", []):
                 for listener in process.get("listeners", []):
                     if listener.get("loopback") is not True:
@@ -2459,9 +2566,21 @@ class PreviewRegistry:
                             process.get("identity_id")
                             or f"{process.get('pid')}:{process.get('started_at')}"
                         )
-                        endpoints[key] = (host, url, process_identity)
-            for (_, port), (host, url, process_identity) in endpoints.items():
-                item = self._record_detected(session, url, host=host, port=port, listed=False)
+                        endpoints[key] = (
+                            host,
+                            url,
+                            process_identity,
+                            is_static_file_server(str(process.get("command") or "")),
+                        )
+            for (_, port), (host, url, process_identity, static_server) in endpoints.items():
+                item = self._record_detected(
+                    session,
+                    url,
+                    host=host,
+                    port=port,
+                    listed=False,
+                    static_server=static_server,
+                )
                 if item.listed:
                     continue
                 previous = self._preview_probe_state.get(item.id)
@@ -2557,7 +2676,7 @@ class PreviewRegistry:
         return routes
 
     async def register(
-        self, session_id: str, url: str, *, approved: bool = False
+        self, session_id: str, url: str, *, approved: bool = False, open_page: bool = False
     ) -> PreviewRegistration:
         session = self.sessions.resolve(session_id)
         try:
@@ -2590,6 +2709,12 @@ class PreviewRegistry:
                     existing.id,
                     session.record.id,
                 )
+                if named is not None and existing.kind == "loopback":
+                    self._set_entry(
+                        existing, loopback_entry(parsed.path[named.end() :]), reason="copied_link"
+                    )
+                    if existing.source == "user-approved":
+                        self._persist()
                 return existing
             log.warning(
                 "preview registration refused session_id=%s host=%s port=%d: the "
@@ -2601,12 +2726,19 @@ class PreviewRegistry:
             raise PreviewDestinationReserved(
                 f"{host}:{port} is swe-mux itself, not a development server"
             )
-        netloc = f"[{host}]:{port}" if ":" in host else f"{host}:{port}"
-        normalized_url = urlunsplit((parsed.scheme, netloc, parsed.path.rstrip("/") + "/", "", ""))
+        # The origin is the proxy base and the path is only where the pane opens;
+        # see `PreviewRegistration.entry` for what folding the two together broke.
+        normalized_url = _origin_url(parsed.scheme, host, port)
+        # A path below the root always names a page. A bare root names one only when
+        # the caller says the URL is a link the user followed: selecting a server in
+        # Processes sends its root too, and that must not undo the page they opened.
+        names_page = open_page or parsed.path not in {"", "/"}
+        entry = loopback_entry(parsed.path) if names_page else None
         # Force one coherent process sample, then attribute this endpoint across the
         # whole Project. A frontend terminal often prints its backend URL; the URL
         # still belongs to the backend session, not whichever terminal was clicked.
         owner = None
+        owner_command = ""
         project_sessions = [
             candidate
             for candidate in self.sessions.sessions.values()
@@ -2615,21 +2747,38 @@ class PreviewRegistry:
         project_sessions.sort(key=lambda candidate: candidate.record.id != session.record.id)
         for index, candidate in enumerate(project_sessions):
             snapshot = await self.inspector.snapshot(candidate.record.id, force=index == 0)
-            if any(
-                listener["port"] == port
-                and listener.get("host") == host
-                and listener.get("loopback") is True
-                for process in snapshot["processes"]
-                for listener in process["listeners"]
-            ):
+            listening = next(
+                (
+                    process
+                    for process in snapshot["processes"]
+                    for listener in process["listeners"]
+                    if listener["port"] == port
+                    and listener.get("host") == host
+                    and listener.get("loopback") is True
+                ),
+                None,
+            )
+            if listening is not None:
                 owner = candidate
+                owner_command = str(listening.get("command") or "")
                 break
         if owner is None and not approved:
             raise ValueError("preview listener is not owned by this session; approval is required")
         if owner is not None:
-            return self._record_detected(owner, normalized_url, host=host, port=port)
+            return self._record_detected(
+                owner,
+                normalized_url,
+                host=host,
+                port=port,
+                entry=entry,
+                static_server=is_static_file_server(owner_command),
+            )
         existing = self._existing_endpoint(session.record.project_id, parsed.scheme, host, port)
         if existing:
+            if entry is not None and entry != existing.entry:
+                self._set_entry(existing, entry, reason="opened")
+                if existing.source == "user-approved":
+                    self._persist()
             return existing
         item = PreviewRegistration(
             preview_id(session.record.project_id, parsed.scheme, host, port),
@@ -2646,6 +2795,7 @@ class PreviewRegistry:
                 getattr(session.record, "project_scope_id", None),
             ),
             getattr(session.record, "repo_group_id", None),
+            entry=entry or "",
         )
         self.items[item.id] = item
         self._listener_seen[item.id] = time.time()

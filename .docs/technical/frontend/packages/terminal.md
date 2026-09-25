@@ -158,9 +158,11 @@ Its predicates and shadow-root walk are pure and duck-typed.
 
 ## Preview links and views
 
-`previewLinks.ts`, `PreviewPane.tsx`, `TerminalPane.tsx`
+`previewLinks.ts`, `PreviewPane.tsx`, `previewLocation.ts`, `TerminalPane.tsx`
 
 Loopback normalization, link dispatch, and a sandboxed registered viewport.
+The viewport mounts at the registration's `entry` and then follows the page the document reports through the runtime bridge's `postMessage`; `previewLocation.ts` re-validates every reported path, because the previewed page wrote it.
+A link click for an already-open preview dispatches `PREVIEW_OPEN_PAGE_EVENT`, which returns the pane to the linked page even when the entry did not change.
 Plain-text URLs (the web-links addon) and OSC 8 hyperlinks (`term.options.linkHandler`) must share one handler: an OSC 8 link renders as a label with no URL text to regex, which is how a Codex-announced server had no clickable route to a Preview.
 The link event carries the `original` URI beside the normalized one, because a link to swe-mux itself is refused with `409 preview_destination_reserved` and `App.tsx` then opens the original in a new window.
 

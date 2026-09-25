@@ -2382,9 +2382,10 @@ POST   /land/verify-command/approve  {project_id, worktree_root, digest}
 GET    /processes[?session=&include_ended=1&unique_memory=1&summary=1]
 POST   /processes/action             {session_id, pid, identity_id, action}
 GET    /previews[?session=]
-POST   /previews                     {session_id, url, approved?, attach?, target_session_id?, direction?, target_view_id?}
+POST   /previews                     {session_id, url, approved?, open_page?, attach?, target_session_id?, direction?, target_view_id?}
 POST   /previews                     {kind:"static", project_id, path, worktree?, scope?, attach?, target_view_id?}
-POST   /previews/{id}/capture         {viewport?, width?, height?, clip?}
+POST   /previews/{id}/capture         {viewport?, width?, height?, clip?, path?}
+POST   /previews/{id}/revision        {paths}
 DELETE /previews/{id}
 ```
 
@@ -2499,7 +2500,12 @@ the same list as `resumed_lands` when it raised `land_verify_grant`, filtered th
 refusals whose provenance the grant actually reaches. See `features/land-queue.md`.
 
 `POST /previews` takes one of two bodies. The default registers a literal-loopback endpoint
-owned by a session. `kind: "static"` registers a document in a Project checkout instead:
+owned by a session. The registration's `url` is always the bare origin, which is the proxy
+base; the URL's path becomes `entry`, the page the pane opens at, whenever it is below the
+root or `open_page` is true (a link the user followed). A root URL without `open_page` -
+selecting a server in Processes - leaves an existing `entry` alone. `static_server` reports
+whether the listener's command is a plain file server, which is what turns the pane's live
+reload on by default. `kind: "static"` registers a document in a Project checkout instead:
 `path` is checkout-relative and must be an `.html`, `.htm`, or `.xhtml` file that exists;
 `worktree` is an exact worktree root (absent means the Project root); `scope` is `"file"`
 (default, serve the document's own folder) or `"project"` (serve the whole checkout). It
@@ -2515,7 +2521,18 @@ opened document in an opaque origin. It is not gated on a live session.
 `POST /previews/{id}/capture` headlessly screenshots the live loopback server and saves a PNG
 under the owning Project's `.swe-mux/preview-shots/` (data-dir fallback), returning
 `{available, path, url, width, height, region}`. Optional `clip {x,y,width,height}` (page
-pixels, from the top of the page) captures a region.
+pixels, from the top of the page) captures a region. Optional `path` is the page relative to
+the preview route (default: the registration's `entry`), so the shot is of the page the pane
+shows rather than of the server's root.
+
+`POST /previews/{id}/revision` takes `{paths}` - a page path and the asset paths it loaded,
+relative to the preview route, at most 24 - and returns `{revision, checked, unreachable}`:
+one fingerprint over the server's current bytes for those paths (`ETag`, `Last-Modified` and
+`Content-Length` from `HEAD`, or a body digest when the server answers `HEAD` with none).
+A path with a scheme, a host, or a control character is dropped; a body with none left is a
+400. It is loopback only (a static preview answers 400 and follows the Project watcher
+instead) and needs the owning session live. The pane polls it for live reload and compares
+only answers with `unreachable: 0`, so a restarting server is never read as an edit.
 An absent optional backend returns `{available: false, state, reason, remedy}` at 200 —
 a state, not a fault.
 `state` is `extra_missing` (no Playwright package) or `browser_missing` (Playwright present,

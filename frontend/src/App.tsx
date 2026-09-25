@@ -42,6 +42,7 @@ import { ResourceUsageSummary } from './ResourceUsage'
 import { ProjectsManager, type ProjectPatch } from './ProjectsManager'
 import { MenuGroup, useFlyoutCapable } from './MenuGroup'
 import { PreviewPane } from './PreviewPane'
+import { PREVIEW_OPEN_PAGE_EVENT } from './previewLocation'
 import type { NotificationData, UiNotification } from './Notifications'
 import { alertPreferences, setAlertPreferencesFor } from './alertPrefs'
 import { ResourcesModal, type ResourceSegment } from './ResourcesModal'
@@ -2226,11 +2227,16 @@ export function App() {
       const detail=(event as CustomEvent<{sessionId:string;url:string;original?:string}>).detail
       const session=sessionsRef.current.find(item=>item.id===detail?.sessionId)
       if(!session||!detail?.url)return
-      void api<{preview:Preview;project:Project}>('POST','/api/previews',{session_id:session.id,url:detail.url,approved:true,attach:true}).then(result=>{
+      // `open_page`: the link names a page, so the pane opens there - even a bare root,
+      // which is a page too when it is what the user clicked.
+      void api<{preview:Preview;project:Project}>('POST','/api/previews',{session_id:session.id,url:detail.url,approved:true,attach:true,open_page:true}).then(result=>{
         setPreviews(current=>({...current,[result.preview.id]:result.preview}))
         setProjects(items=>items.map(item=>item.id===result.project.id?result.project:item))
         setLayoutMap(current=>({...current,[result.project.id]:parseLayout(result.project.layout)}))
         setProjectId(session.project_id);setFocusedViewId(result.preview.id);setSidebarOpen(false)
+        // A pane already showing this preview may have navigated away from the page
+        // the link names, and an unchanged entry would not move it back.
+        window.dispatchEvent(new CustomEvent(PREVIEW_OPEN_PAGE_EVENT,{detail:{previewId:result.preview.id}}))
       }).catch(cause=>{
         // A link to swe-mux itself is not a development server: open it the way any
         // other non-preview link opens rather than reporting a failed Preview.

@@ -85,6 +85,46 @@ test('every rewrite happens exactly once', async ({ page }) => {
   expect(settled.final).toBe(settled.property)
 })
 
+test('the page tells the pane where it is and what it loaded', async ({ page }) => {
+  // The pane cannot read a sandboxed document's location, so refresh used to remount
+  // the preview's root and live reload had nothing to watch. The bridge reports both.
+  const document_ = `<!doctype html><html><head><script>${bridge({})}</script>`
+    + `<link rel="stylesheet" href="/css/site.css"></head><body><img src="ref/a.png">`
+    + `<img src="https://elsewhere.test/b.png"></body></html>`
+  const host = `<!doctype html><html><body><script>window.__reports=[];`
+    + `addEventListener('message',e=>window.__reports.push(e.data))</script>`
+    + `<iframe src="${PREFIX}docs/page.html?v=1" sandbox="allow-scripts"></iframe></body></html>`
+  await page.route('https://elsewhere.test/**', route => route.fulfill({ status: 200, body: '' }))
+  await page.route(`${ORIGIN}/**`, route => {
+    const url = new URL(route.request().url())
+    if (url.pathname === '/host.html') return route.fulfill({ status: 200, contentType: 'text/html', body: host })
+    if (url.pathname.endsWith('.html')) return route.fulfill({ status: 200, contentType: 'text/html', body: document_ })
+    return route.fulfill({ status: 200, contentType: url.pathname.endsWith('.css') ? 'text/css' : 'image/png', body: '' })
+  })
+  await page.goto(`${ORIGIN}/host.html`, { waitUntil: 'load', timeout: 15_000 })
+  await expect.poll(() => page.evaluate(() =>
+    (window as unknown as { __reports: { resources: string[] }[] }).__reports.some(item => item.resources.length > 0)),
+  { timeout: 5_000 }).toBe(true)
+  const reports = await page.evaluate(() => (window as unknown as { __reports: unknown[] }).__reports)
+  expect(reports[0]).toEqual({ source: 'swe-mux-preview', type: 'location', path: 'docs/page.html?v=1', resources: [] })
+  const loaded = reports[reports.length - 1] as { path: string; resources: string[] }
+  expect(loaded.path).toBe('docs/page.html?v=1')
+  // Both are routed under the prefix; the other origin's image is not this preview's.
+  expect(loaded.resources.sort()).toEqual(['css/site.css', 'docs/ref/a.png'])
+})
+
+test('a top-level preview document reports nothing', async ({ page }) => {
+  await open(page, {}, '<p>opened in its own tab</p>')
+  const posted = await responsive(page, async () => {
+    let count = 0
+    addEventListener('message', () => { count += 1 })
+    history.pushState({}, '', 'other')
+    await new Promise(resolve => setTimeout(resolve, 100))
+    return count
+  })
+  expect(posted).toBe(0)
+})
+
 test('a page that fights the bridge is bounded, not frozen', async ({ page }) => {
   const warnings: string[] = []
   page.on('console', message => { if (message.type() === 'warning') warnings.push(message.text()) })

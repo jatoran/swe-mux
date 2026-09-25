@@ -69,10 +69,16 @@ export type Preview = {
    *  Project checkout the daemon serves itself. Absent on an older daemon, which
    *  only ever had the first kind. */
   kind?: 'loopback'|'static'
-  /** Static only: the file name to draw, the served directory, the entry within
-   *  it, that directory relative to the checkout root (what the file watcher
-   *  speaks in), and the exact worktree it came from ('' for the Project root). */
-  label?: string; doc_root?: string; entry?: string; doc_root_relative?: string; worktree?: string
+  /** Static only: the file name to draw, the served directory, that directory
+   *  relative to the checkout root (what the file watcher speaks in), and the exact
+   *  worktree it came from ('' for the Project root). */
+  label?: string; doc_root?: string; doc_root_relative?: string; worktree?: string
+  /** The page the pane opens at, relative to `/preview/<id>/`. Static: the entry file.
+   *  Loopback: the path of the link the user last opened ('' for the server root). */
+  entry?: string
+  /** Loopback only: a plain file server with no reload of its own, so the pane
+   *  follows changes by default. */
+  static_server?: boolean
 }
 
 /** What a Preview is called on a tab, a sidebar row, and its own header.

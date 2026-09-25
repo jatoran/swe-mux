@@ -61,6 +61,7 @@ Only *approved* and *static* registrations are mirrored, because detected ones a
 ## `preview_transport.py`
 
 Serving a registered Preview through the daemon at `/preview/{preview_id}/…`: the injected runtime bridge, HTML/CSS/JavaScript URL rewriting, the static-preview content-type table and its sandbox CSP, upstream target resolution, the forwarded and hop-by-hop header sets, the concurrency slots, the WebSocket relay, and the HTTP proxy itself.
+Also the live-reload revision check (`preview_revision`): one fingerprint over the upstream's current bytes for a page and its assets, fetched straight from the registered origin rather than through the rewriting half, and `preview_relative_path`, which refuses any page path a previewed document reports that is not a plain path.
 
 The runtime bridge's source is the asset `src/swe_mux/assets/preview/runtime_bridge.js`, loaded once (`_bridge_template`, which checks each placeholder occurs exactly once) and filled with script-safe JSON (`_script_json` escapes `<`, `>` and `&`) in a single regex pass, so a substituted value can never be read as another placeholder.
 Edit the bridge there, not in Python; `frontend/test/renderer/preview-bridge.spec.ts` executes the file in Chromium.

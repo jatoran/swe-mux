@@ -180,4 +180,45 @@ if(window.EventSource){
     constructor(url,init){super(route(url),init);}
   };
 }
+// Tell the pane which page this is and what it loaded. The pane cannot read a
+// sandboxed document's location, so without this its refresh returned to the
+// preview's root instead of reloading the page on screen, and it had nothing to
+// watch for a file server that cannot push a reload. Only paths under this
+// preview's own route are reported, relative to it; the pane validates them again.
+const ownPath=function(value){
+  try {
+    const url=new URL(String(value),location.href);
+    if(url.host!==location.host||!url.pathname.startsWith(prefix))return undefined;
+    return url.pathname.slice(prefix.length)+url.search+url.hash;
+  } catch (_) { return undefined; }
+};
+const RESOURCE_LIMIT=23;
+const report=function(){
+  if(window.parent===window)return;
+  const path=ownPath(location.href);
+  if(path===undefined)return;
+  const resources=[];
+  try {
+    performance.getEntriesByType("resource").forEach(function(entry){
+      const initiator=String(entry.initiatorType||"");
+      if(initiator==="fetch"||initiator==="xmlhttprequest"||initiator==="beacon")return;
+      const own=ownPath(entry.name);
+      if(own!==undefined&&own!==path&&resources.indexOf(own)<0&&resources.length<RESOURCE_LIMIT)resources.push(own);
+    });
+  } catch (_) {}
+  try { window.parent.postMessage({source:"swe-mux-preview",type:"location",path:path,resources:resources},"*"); } catch (_) {}
+};
+report();
+window.addEventListener("load",report);
+window.addEventListener("popstate",report);
+window.addEventListener("hashchange",report);
+["pushState","replaceState"].forEach(function(name){
+  const native=history[name];
+  if(typeof native!=="function")return;
+  history[name]=function(){
+    const result=native.apply(this,arguments);
+    report();
+    return result;
+  };
+});
 })();

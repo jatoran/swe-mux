@@ -5,6 +5,10 @@ import { captureUnavailableNote, type CaptureResult } from './previewCapture'
 import { copyPreparedText } from './terminalClipboard'
 import { isStaticPreview, previewLabel, type Preview } from './processFleet'
 import { rendererRecovery } from './rendererRecovery'
+import {
+  PREVIEW_LIVE_POLL_MS, PREVIEW_OPEN_PAGE_EVENT, previewPagePath, previewRoute, readPreviewLocation,
+  revisionPaths, type PreviewLocation,
+} from './previewLocation'
 
 type Rect = { x: number; y: number; w: number; h: number }
 type Clip = { x: number; y: number; width: number; height: number }
@@ -26,11 +30,63 @@ export function PreviewPane({ preview, onClose }: { preview: Preview; onClose: (
   const overlayRef = useRef<HTMLDivElement>(null)
   const manualRef = useRef<HTMLTextAreaElement>(null)
   const dragStart = useRef<{x:number;y:number}|null>(null)
-  const proxyUrl=`/preview/${encodeURIComponent(preview.id)}/`
-  const fallbackWidth = viewport === 'mobile' ? 390 : viewport === 'tablet' ? 834 : 1280
+  const route = previewRoute(preview.id)
   const isStatic = isStaticPreview(preview)
+  // A static preview's route root already serves its entry file. A loopback one's
+  // root is the server's, so the pane opens at the page the user last followed a
+  // link to - which is what stopped a printed `/page.html` opening as a listing.
+  const entryPath = isStatic ? '' : (previewPagePath(preview.id, preview.entry || '') ?? '')
+  // What the frame is mounted at, and what the page last reported it is showing.
+  // They differ once the user navigates inside the preview; refresh and live reload
+  // remount at the second so neither throws the reader back to the entry.
+  const [srcPath,setSrcPath] = useState(entryPath)
+  const shown = useRef<PreviewLocation>({ path: entryPath, resources: [] })
+  const [shownPath,setShownPath] = useState(entryPath)
+  const proxyUrl = route + srcPath
+  const shownUrl = route + shownPath
+  const fallbackWidth = viewport === 'mobile' ? 390 : viewport === 'tablet' ? 834 : 1280
   const label = previewLabel(preview)
-  const [live,setLive] = useState(true)
+  // Static previews follow the served directory. Loopback ones follow by default
+  // only when the server is a plain file server: a dev server with HMR reloads the
+  // page itself, and a second reload from here would discard its state.
+  const liveDefault = isStatic || !!preview.static_server
+  const [live,setLiveState] = useState(liveDefault)
+  // The default follows the server until the reader picks one: a registration can
+  // learn it is a plain file server after the pane has mounted.
+  const liveChosen = useRef(false)
+  const setLive = (next: (value: boolean) => boolean) => { liveChosen.current = true; setLiveState(next) }
+  useEffect(() => { if (!liveChosen.current) setLiveState(liveDefault) }, [liveDefault])
+  const reloadShown = () => { setSrcPath(shown.current.path); setRefresh(value => value + 1) }
+  const openEntry = () => {
+    shown.current = { path: entryPath, resources: [] }
+    setShownPath(entryPath); setSrcPath(entryPath); setRefresh(value => value + 1)
+  }
+  // A link opened for a new page moves the pane there; a later identical click
+  // arrives as the event, because an unchanged entry re-renders nothing.
+  const openedEntry = useRef(entryPath)
+  useEffect(() => {
+    if (openedEntry.current === entryPath) return
+    openedEntry.current = entryPath
+    openEntry()
+  }, [entryPath])
+  useEffect(() => {
+    const opened = (event: Event) => {
+      if ((event as CustomEvent<{previewId?:string}>).detail?.previewId === preview.id) openEntry()
+    }
+    window.addEventListener(PREVIEW_OPEN_PAGE_EVENT, opened)
+    return () => window.removeEventListener(PREVIEW_OPEN_PAGE_EVENT, opened)
+  }, [preview.id, entryPath])
+  useEffect(() => {
+    const reported = (event: MessageEvent) => {
+      if (!iframeRef.current || event.source !== iframeRef.current.contentWindow) return
+      const location = readPreviewLocation(preview.id, event.data)
+      if (!location) return
+      shown.current = location
+      setShownPath(location.path)
+    }
+    window.addEventListener('message', reported)
+    return () => window.removeEventListener('message', reported)
+  }, [preview.id])
   // After the desktop page crashed or hung, no Preview document is mounted until the
   // operator asks for this one (`rendererRecovery.ts`).
   const [paused,setPaused] = useState(() => rendererRecovery.previewPaused(preview.id))
@@ -59,7 +115,7 @@ export function PreviewPane({ preview, onClose }: { preview: Preview; onClose: (
     setBusy(true); setNote(opts ? 'Capturing region…' : 'Capturing preview…')
     try {
       const result = await api<CaptureResult>('POST', `/api/previews/${encodeURIComponent(preview.id)}/capture`,
-        { viewport, width, ...(opts ? { height: opts.height, clip: opts.clip } : {}) })
+        { viewport, width, path: shown.current.path, ...(opts ? { height: opts.height, clip: opts.clip } : {}) })
       if (!result.available) { setNote(captureUnavailableNote(result)); return }
       if (result.error || !result.path) { setNote(result.error || 'Capture failed.'); return }
       const scope = result.region ? 'selected region of the' : 'current'
@@ -143,14 +199,47 @@ export function PreviewPane({ preview, onClose }: { preview: Preview; onClose: (
       // The lease is on the served directory, but the watcher reports the whole
       // Project, so a change elsewhere in the repo must not reload this page.
       if (!detail.paths.some(path => watchRoot ? path === watchRoot || path.startsWith(`${watchRoot}/`) : true)) return
-      setRefresh(value => value + 1)
+      reloadShown()
     }
     window.addEventListener('mux:project-files-changed', changed)
     return () => window.removeEventListener('mux:project-files-changed', changed)
   }, [isStatic, live, preview.project_id, preview.worktree, watchRoot])
+  // A loopback server has no watcher mux can lease: the daemon does not know which
+  // directory it serves. So a live pane asks the daemon, on a timer, for one
+  // fingerprint over the page and the assets it loaded, and reloads when it moves.
+  // The first answer for a set of paths is only a baseline - navigating changes
+  // the set, and that is not an edit.
+  useEffect(() => {
+    if (isStatic || !live || paused) return
+    let stopped = false
+    let inFlight = false
+    let baselineKey = ''
+    let baseline = ''
+    const check = async () => {
+      if (stopped || inFlight || document.hidden) return
+      const paths = revisionPaths(shown.current)
+      const key = paths.join('\n')
+      inFlight = true
+      try {
+        const result = await api<{revision:string;unreachable:number}>('POST',
+          `/api/previews/${encodeURIComponent(preview.id)}/revision`, { paths })
+        // A server mid-restart is not a change, and reloading into it blanks the page.
+        if (stopped || result.unreachable) return
+        if (key !== baselineKey) { baselineKey = key; baseline = result.revision; return }
+        if (result.revision === baseline) return
+        baseline = result.revision
+        reloadShown()
+      } catch {
+        // The next tick asks again; a preview whose session ended stops being mounted.
+      } finally { inFlight = false }
+    }
+    void check()
+    const timer = window.setInterval(() => void check(), PREVIEW_LIVE_POLL_MS)
+    return () => { stopped = true; clearInterval(timer) }
+  }, [isStatic, live, paused, preview.id])
 
   return <section class={`preview-pane viewport-${viewport}`}>
-    <header><div><span>[PREVIEW]</span><strong title={preview.url}>{label}</strong><small>{preview.source}</small></div><nav><button onClick={()=>setViewport('mobile')}>mobile</button><button onClick={()=>setViewport('tablet')}>tablet</button><button onClick={()=>setViewport('responsive')}>fit</button><button onClick={()=>setRefresh(value=>value+1)}>refresh</button>{isStatic&&<button class={live?'active':''} aria-pressed={live} title={live?'Reloading when the served files change':'Not following file changes'} onClick={()=>setLive(value=>!value)}>live</button>}<button onClick={()=>void navigator.clipboard.writeText(new URL(proxyUrl,location.href).toString())}>copy</button><button onClick={()=>window.open(proxyUrl,'_blank','noopener,noreferrer')}>external</button><button aria-label="Close preview" onClick={onClose}>×</button></nav></header>
+    <header><div><span>[PREVIEW]</span><strong title={preview.url}>{label}</strong><small>{preview.source}</small></div><nav><button onClick={()=>setViewport('mobile')}>mobile</button><button onClick={()=>setViewport('tablet')}>tablet</button><button onClick={()=>setViewport('responsive')}>fit</button><button onClick={reloadShown}>refresh</button><button class={live?'active':''} aria-pressed={live} title={live?(isStatic?'Reloading when the served files change':'Reloading when the page or its assets change on the server'):'Not following file changes'} onClick={()=>setLive(value=>!value)}>live</button><button onClick={()=>void navigator.clipboard.writeText(new URL(shownUrl,location.href).toString())}>copy</button><button onClick={()=>window.open(shownUrl,'_blank','noopener,noreferrer')}>external</button><button aria-label="Close preview" onClick={onClose}>×</button></nav></header>
     <div class="preview-frame">
       {paused
         ? <div class="preview-paused" role="status" data-testid="preview-paused">

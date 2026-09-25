@@ -45,10 +45,15 @@ def test_browser_access_has_no_mux_bearer_path_and_previews_use_proxy() -> None:
     root = Path(__file__).parents[1] / "frontend" / "src"
     api = (root / "api.ts").read_text(encoding="utf-8")
     preview = (root / "PreviewPane.tsx").read_text(encoding="utf-8")
+    location = (root / "previewLocation.ts").read_text(encoding="utf-8")
     assert "Authorization" not in api
     assert "mux.token" not in api
     assert "mux.auth" not in api
-    assert "/preview/${encodeURIComponent(preview.id)}/" in preview
+    # The pane mounts under the proxy route; the route string lives with the path
+    # validation that keeps every page it mounts inside it.
+    assert "/preview/${encodeURIComponent(previewId)}/" in location
+    assert "const route = previewRoute(preview.id)" in preview
+    assert "const proxyUrl = route + srcPath" in preview
     assert "allow-same-origin" not in preview
 
 

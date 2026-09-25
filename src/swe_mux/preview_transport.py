@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import hashlib
 import json
 import logging
 import mimetypes
@@ -432,6 +433,105 @@ def preview_target(item: Any, tail: str, query: str = "") -> tuple[str, str]:
     target = urlunsplit((parsed.scheme, parsed.netloc, path, query, ""))
     origin = urlunsplit((parsed.scheme, parsed.netloc, "", "", ""))
     return target, origin
+
+
+#: How many paths one revision check may name: the document plus the assets it
+#: loaded. Bounded because every one is a request to the development server.
+PREVIEW_REVISION_MAX_PATHS = 24
+PREVIEW_REVISION_CONCURRENCY = 4
+#: A server that answers HEAD without a validator is fingerprinted by its body,
+#: read up to this much. Past it the length and the leading bytes stand in.
+PREVIEW_REVISION_BODY_BYTES = 2 * 1024 * 1024
+
+
+def preview_relative_path(value: object) -> tuple[str, str] | None:
+    """A page path a browser reported, as `(tail, query)` under a preview route.
+
+    The value comes from the previewed document itself, which is untrusted code,
+    so anything that is not a plain path is refused rather than interpreted: a
+    scheme or a host would name some other destination, and the proxy never
+    reaches one.
+    """
+    if not isinstance(value, str) or len(value) > 2048:
+        return None
+    if any(ord(character) < 0x20 for character in value):
+        return None
+    parsed = urlsplit(value)
+    if parsed.scheme or parsed.netloc or value.startswith("//"):
+        return None
+    return parsed.path.lstrip("/"), parsed.query
+
+
+async def _revision_token(client: ClientSession, target: str) -> str:
+    """What identifies one resource's current bytes, cheapest first."""
+    async with client.head(target, allow_redirects=False) as response:
+        validators = "|".join(
+            response.headers.get(name, "") for name in ("ETag", "Last-Modified", "Content-Length")
+        )
+        if response.status not in {405, 501} and validators.strip("|"):
+            return f"{response.status}|{validators}"
+    async with client.get(target, allow_redirects=False) as response:
+        digest = hashlib.sha256()
+        total = 0
+        async for chunk in response.content.iter_chunked(64 * 1024):
+            remaining = PREVIEW_REVISION_BODY_BYTES - total
+            digest.update(chunk[:remaining])
+            total += len(chunk)
+            if total >= PREVIEW_REVISION_BODY_BYTES:
+                break
+        return f"{response.status}|{total}|{digest.hexdigest()}"
+
+
+async def preview_revision(item: Any, paths: list[str]) -> dict[str, Any]:
+    """One fingerprint over the bytes a loopback preview's page is made of.
+
+    The pane asks for this on a timer and reloads when it changes, which is what
+    live reload is for a plain file server: nothing on the server can push a
+    change, and the pane cannot read the sandboxed document's own network state.
+    The fetches go straight to the registered origin, like the proxy's, and never
+    through the rewriting half, so the fingerprint is of the server's bytes rather
+    than of what the bridge made of them.
+
+    An unreachable resource is counted rather than fingerprinted: a restarting
+    server is not a change, and reloading into its absence would blank the pane.
+    """
+    requested: list[tuple[str, str, str]] = []
+    for value in paths[:PREVIEW_REVISION_MAX_PATHS]:
+        parsed = preview_relative_path(value)
+        if parsed is not None:
+            requested.append((value, *parsed))
+    if not requested:
+        raise ValueError("a revision check needs at least one page path")
+    semaphore = asyncio.Semaphore(PREVIEW_REVISION_CONCURRENCY)
+    unreachable = 0
+    timeout = ClientTimeout(total=None, sock_connect=5, sock_read=10)
+    async with ClientSession(timeout=timeout) as client:
+
+        async def token(tail: str, query: str) -> str:
+            nonlocal unreachable
+            target, _ = preview_target(item, tail, query)
+            async with semaphore:
+                try:
+                    return await _revision_token(client, target)
+                except (ClientError, OSError, TimeoutError):
+                    unreachable += 1
+                    return "unreachable"
+
+        tokens = await asyncio.gather(*(token(tail, query) for _, tail, query in requested))
+    fingerprint = hashlib.sha256(
+        "\n".join(
+            f"{value}\t{value_token}"
+            for (value, _, _), value_token in zip(requested, tokens, strict=True)
+        ).encode("utf-8")
+    ).hexdigest()
+    log.debug(
+        "preview revision preview_id=%s paths=%d unreachable=%d revision=%s",
+        getattr(item, "id", ""),
+        len(requested),
+        unreachable,
+        fingerprint[:12],
+    )
+    return {"revision": fingerprint, "checked": len(requested), "unreachable": unreachable}
 
 
 def _preview_request_headers(request: web.Request, upstream_origin: str) -> dict[str, str]:

@@ -125,7 +125,10 @@ async def create_preview(request: web.Request) -> web.Response:
         item = await _register_static_preview(request, body)
     else:
         item = await previews.register(
-            str(body["session_id"]), str(body["url"]), approved=bool(body.get("approved"))
+            str(body["session_id"]),
+            str(body["url"]),
+            approved=bool(body.get("approved")),
+            open_page=bool(body.get("open_page")),
         )
     if body.get("attach", True):
         projects: ProjectManager = request.app[keys.PROJECTS]
@@ -182,6 +185,28 @@ async def delete_preview(request: web.Request) -> web.Response:
     return json_response({"ok": True})
 
 
+async def preview_revision(request: web.Request) -> web.Response:
+    """Fingerprint a loopback preview's page so its pane can follow file changes.
+
+    A static preview has the Project file watcher for this and is refused here;
+    a loopback one has no such channel, because the daemon does not know which
+    directory a development server serves.
+    """
+    previews: PreviewRegistry = request.app[keys.PREVIEWS]
+    item = previews.items.get(request.match_info["preview_id"])
+    if item is None:
+        raise ValueError("unknown preview")
+    if item.kind != "loopback":
+        raise ValueError("a static preview follows file changes through the Project watcher")
+    if item.session_id not in request.app[keys.SESSIONS].sessions:
+        raise ValueError("preview session is no longer live")
+    body = await request.json()
+    paths = body.get("paths") if isinstance(body, dict) else None
+    if not isinstance(paths, list):
+        raise ValueError("paths must be a list")
+    return json_response(await preview_transport.preview_revision(item, paths))
+
+
 def _capture_unavailable(capability: CaptureCapability) -> web.Response:
     """The one shape an absent capture backend reports, from either discovery path.
 
@@ -229,15 +254,21 @@ async def capture_preview(request: web.Request) -> web.Response:
     height = int(body.get("height") or 800)
     raw_clip = body.get("clip")
     clip = raw_clip if isinstance(raw_clip, dict) else None
+    # The page the pane is showing, not the server's root: a capture of the
+    # directory listing the preview used to open at is not what anyone asked for.
+    page = preview_transport.preview_relative_path(
+        body.get("path", getattr(item, "entry", ""))
+    ) or ("", "")
     # A static preview has no upstream port; the daemon's own loopback proxy route
     # is the thing that renders it, and pointing the capture there means the
     # screenshot is of exactly what the pane draws rather than of a second render
     # path that could drift from it.
-    url = (
+    base = (
         f"http://127.0.0.1:{config.port}/preview/{item.id}/"
         if getattr(item, "kind", "loopback") == "static"
         else f"http://{item.host}:{item.port}/"
     )
+    url = base + page[0] + (f"?{page[1]}" if page[1] else "")
     # Save into the owning project's .swe-mux so a local agent can read it without
     # hunting through the mux data dir; fall back to the data dir if unresolvable.
     session = request.app[keys.SESSIONS].sessions.get(item.session_id)
@@ -286,6 +317,7 @@ ROUTES: tuple[web.RouteDef, ...] = (
     web.post("/api/previews", create_preview),
     web.delete("/api/previews/{preview_id}", delete_preview),
     web.post("/api/previews/{preview_id}/capture", capture_preview),
+    web.post("/api/previews/{preview_id}/revision", preview_revision),
     # The proxy handler itself lives in `preview_transport`, with the rewriting
     # it exists to drive; the registry that answers "which Preview is this"
     # lives here, so the route is registered beside its siblings.
