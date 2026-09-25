@@ -64,6 +64,7 @@ And a repair is **written down**, or the surface that noticed heals only itself 
 ### `transcript_fork.py`
 
 Writing a forked conversation: given a byte offset, a new native transcript holding the source's records up to it, with conversation ids rewritten, sidecar tool outputs repointed and copied, titles marked so the CLI has no name collision to break, and a queued prompt dropped rather than inherited.
+The source's `last-prompt` resume checkpoints are dropped and one naming the prefix's last linked record is appended, because `claude --resume` follows a checkpoint's leaf and the inherited ones are stale.
 It refuses a source that is too large, a cut at byte zero, and an id that already names a conversation.
 
 **Not:** where a cut is *legal* (`transcript_view` owns that), the source file (opened read-only, never written), spawning or attaching the pane, or session and history bookkeeping.

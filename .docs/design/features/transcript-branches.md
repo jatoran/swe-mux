@@ -33,6 +33,7 @@ Older rollouts without native turn markers retain message-boundary compatibility
 
 - **The last record in the read window is the leaf.**
   Not `leafUuid`, which appears only in `last-prompt` checkpoints, points at the record before it, and is written on abandoned branches too.
+  The CLI's own `--resume` does follow a checkpoint whose `leafUuid` names a leaf, which is why a fork writes its own rather than inheriting the source's (`design/features/sessions.md`, Branch).
 - **Ancestry alone is not the live set, and treating it as such is the worse bug.**
   Three shapes hang off an ancestor rather than continuing the chain, and all three are live conversation:
   - A **parallel tool batch** writes one assistant record per call, and parents each `tool_result` to the record whose call it answers, so every result but the last is a sibling.

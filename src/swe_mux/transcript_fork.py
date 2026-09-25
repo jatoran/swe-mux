@@ -94,6 +94,9 @@ class ForkOutcome:
     records_dropped: int
     attachments_copied: int
     bytes_written: int
+    # The record the CLI is told to resume from, or None when the prefix carries no
+    # record linkage to name one by.
+    resume_leaf: str | None = None
 
 
 def fork_supported(backend: object) -> bool:
@@ -140,7 +143,7 @@ def write_fork(plan: ForkPlan) -> ForkOutcome:
     outcome = writer(plan)
     log.info(
         "fork wrote backend=%s source=%s fork=%s cut=%d records=%d dropped=%d "
-        "attachments=%d bytes=%d path=%s",
+        "attachments=%d bytes=%d resume_leaf=%s path=%s",
         plan.backend,
         plan.source_conversation_id,
         outcome.conversation_id,
@@ -149,6 +152,7 @@ def write_fork(plan: ForkPlan) -> ForkOutcome:
         outcome.records_dropped,
         outcome.attachments_copied,
         outcome.bytes_written,
+        outcome.resume_leaf,
         outcome.path,
     )
     return outcome
@@ -166,11 +170,20 @@ def write_fork(plan: ForkPlan) -> ForkOutcome:
 # have. Dropping it is the whole reason this list is not simply empty.
 _CLAUDE_DROPPED_TYPES = frozenset({"queue-operation"})
 
+# The record type whose `leafUuid` tells `claude --resume` which record the
+# conversation continues from. Claude writes it lazily, in the housekeeping batch it
+# flushes when the *next* prompt starts, so the newest one before any cut names
+# whatever the leaf was at some earlier flush - typically mid-turn, and after a
+# parallel tool batch a side leaf whose ancestry skips every call but the first. A
+# fork that inherited them resumed from that stale leaf and opened in the middle of a
+# tool call without the reply it was cut after (2026-09-25). So none is inherited, and
+# the writer appends exactly one naming the fork's own leaf.
+_CLAUDE_RESUME_CHECKPOINT = "last-prompt"
+
 # Claude records that name a message by uuid. Kept only when that message is in the
-# fork, because the alternative is a checkpoint or a recalled prompt pointing at a
-# turn this conversation never had.
+# fork, because the alternative is a checkpoint pointing at a turn this conversation
+# never had.
 _CLAUDE_MESSAGE_REFERENCES: dict[str, tuple[str, ...]] = {
-    "last-prompt": ("leafUuid",),
     "file-history-snapshot": ("messageId",),
     "file-history-delta": ("messageId", "snapshotMessageId"),
 }
@@ -261,7 +274,8 @@ def _write_claude_fork(plan: ForkPlan) -> ForkOutcome:
     fork's, because a record claiming the source conversation inside the fork's file
     is two conversations disagreeing about which one it is. Sidecar paths are
     repointed and the files copied. A record naming a message the fork does not
-    contain is dropped. A queued prompt is dropped. Titles are marked so the fork and
+    contain is dropped. A queued prompt is dropped. The source's resume checkpoints are
+    dropped and one naming the fork's own leaf is appended. Titles are marked so the fork and
     its source are distinguishable in the CLI's own picker, which is also what keeps
     Claude's name-collision resolver from treating them as a clash to break.
     """
@@ -270,6 +284,7 @@ def _write_claude_fork(plan: ForkPlan) -> ForkOutcome:
     roots = (str(source_dir), source_dir.as_posix())
     kept_uuids: set[str] = set()
     sidecar_names: set[str] = set()
+    checkpoint = _ClaudeResumeCheckpoint()
     written = 0
     dropped = 0
     temporary = plan.target_path.with_name(
@@ -284,6 +299,10 @@ def _write_claude_fork(plan: ForkPlan) -> ForkOutcome:
                 text = line.decode("utf-8", "replace")
                 record = _decode_record(text)
                 if record is None:
+                    dropped += 1
+                    continue
+                if record.get("type") == _CLAUDE_RESUME_CHECKPOINT:
+                    checkpoint.observe(record)
                     dropped += 1
                     continue
                 transformed = _transform_claude_record(
@@ -306,6 +325,12 @@ def _write_claude_fork(plan: ForkPlan) -> ForkOutcome:
                 out.write(json.dumps(transformed, ensure_ascii=False).encode("utf-8"))
                 out.write(b"\n")
                 written += 1
+                checkpoint.observe(transformed)
+            resume = checkpoint.record(plan.fork_conversation_id)
+            if resume is not None:
+                out.write(json.dumps(resume, ensure_ascii=False).encode("utf-8"))
+                out.write(b"\n")
+                written += 1
         copied = _copy_sidecars(source_dir, fork_dir, sidecar_names)
         size = temporary.stat().st_size
         os.replace(temporary, plan.target_path)
@@ -319,6 +344,69 @@ def _write_claude_fork(plan: ForkPlan) -> ForkOutcome:
         records_dropped=dropped,
         attachments_copied=copied,
         bytes_written=size,
+        resume_leaf=checkpoint.leaf,
+    )
+
+
+class _ClaudeResumeCheckpoint:
+    """The one `last-prompt` record a fork ends with, derived from the prefix it holds.
+
+    The leaf is the last linked record in the prefix, the same rule the reader uses
+    for the live branch (`.docs/design/features/transcript-branches.md`): the file is
+    append-only and a cut lands on a message's own end, so that record is the message
+    the fork was cut after. Sidechain records are skipped because they hang off the
+    main chain rather than continuing it.
+
+    `lastPrompt` is the CLI's own text for its resume picker, so it is carried from the
+    newest checkpoint in the prefix rather than reconstructed - the CLI's rule for it is
+    not ours to reproduce (a slash command records an empty string). A typed prompt
+    after that checkpoint makes the carried text stale, and then it is omitted, which is
+    a shape the CLI writes itself, rather than naming a prompt that is not the last one.
+    """
+
+    __slots__ = ("leaf", "_prompt", "_prompt_current")
+
+    def __init__(self) -> None:
+        self.leaf: str | None = None
+        self._prompt: object = None
+        self._prompt_current = False
+
+    def observe(self, record: dict[str, Any]) -> None:
+        kind = record.get("type")
+        if kind == _CLAUDE_RESUME_CHECKPOINT:
+            self._prompt = record.get("lastPrompt")
+            self._prompt_current = "lastPrompt" in record
+            return
+        if _is_typed_prompt(record):
+            self._prompt_current = False
+        identity = record.get("uuid")
+        if isinstance(identity, str) and identity and not record.get("isSidechain"):
+            self.leaf = identity
+
+    def record(self, conversation_id: str) -> dict[str, Any] | None:
+        if self.leaf is None:
+            return None
+        resume: dict[str, Any] = {"type": _CLAUDE_RESUME_CHECKPOINT}
+        if self._prompt_current:
+            resume["lastPrompt"] = self._prompt
+        resume["leafUuid"] = self.leaf
+        resume["sessionId"] = conversation_id
+        return resume
+
+
+def _is_typed_prompt(record: dict[str, Any]) -> bool:
+    """A user record carrying prompt text, as opposed to a tool result or injected context."""
+    if record.get("type") != "user" or record.get("isMeta") or record.get("isSidechain"):
+        return False
+    message = record.get("message")
+    content = message.get("content") if isinstance(message, dict) else None
+    if isinstance(content, str):
+        return bool(content)
+    if not isinstance(content, list):
+        return False
+    blocks = [block for block in content if isinstance(block, dict)]
+    return any(block.get("type") == "text" for block in blocks) and not any(
+        block.get("type") == "tool_result" for block in blocks
     )
 
 

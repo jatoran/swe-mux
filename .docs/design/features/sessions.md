@@ -242,6 +242,14 @@ and reattachable browser viewports.
   ~57 MB of generated suffixes into two transcripts), and a queued prompt staged against the
   *source* pane is dropped rather than inherited — delivering somebody's queued message into a
   conversation they had not yet decided to have is the one failure mode a branch must not have.
+- **A fork resumes from the message it was cut after.** Claude's `last-prompt` records name the
+  leaf `claude --resume` continues from, and `--resume` honours one whenever it names a leaf -
+  including the side leaf a parallel tool batch leaves behind, whose ancestry skips the later
+  calls and every reply after them. Claude writes them lazily, when the *next* prompt starts, so
+  the newest one before any cut is stale. None is inherited: the writer appends exactly one,
+  naming the prefix's last linked record (`ForkOutcome.resume_leaf`). Measured 2026-09-25 on
+  Claude 2.1.282: a fork cut after a turn's final reply, carrying the source's mid-turn
+  checkpoint, reopened on the tool results with the reply missing.
 - A branch cut **before** one of the operator's own messages hands that message back. It is
   staged client-side and inserted into the new pane's composer once its replay finishes
   (`branchSeed.ts`), never submitted: re-sending the prompt unedited would repeat the request the

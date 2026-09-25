@@ -141,20 +141,97 @@ def test_a_queued_prompt_is_not_inherited(tmp_path: Path) -> None:
     assert outcome.records_dropped >= 1
 
 
-def test_a_record_naming_a_message_the_fork_kept_survives(tmp_path: Path) -> None:
+def _checkpoints(path: Path) -> list[dict]:
+    return [record for record in read_records(path) if record.get("type") == "last-prompt"]
+
+
+def test_a_fork_resumes_from_the_message_it_was_cut_after(tmp_path: Path) -> None:
+    """The fork ends with exactly one checkpoint, and it names the cut's own message.
+
+    The source's newest checkpoint names `a2`, from before the second prompt; inheriting
+    it would resume the fork from there and silently drop the turn it was cut after.
+    The checkpoint's prompt text is omitted because `u2` was typed after it was written.
+    """
     source = write_source(tmp_path)
     outcome = write_fork(_plan(source, _points(source)[-1].source_end))
-    survivors = [
-        record for record in read_records(outcome.path) if record.get("type") == "last-prompt"
+    records = read_records(outcome.path)
+    assert _checkpoints(outcome.path) == [
+        {"type": "last-prompt", "leafUuid": "a3", "sessionId": FORK_ID}
     ]
-    assert [record["leafUuid"] for record in survivors] == ["a2"]
+    assert records[-1]["type"] == "last-prompt"
+    assert outcome.resume_leaf == "a3"
+
+
+def test_a_checkpoint_still_current_at_the_cut_keeps_its_prompt_text(tmp_path: Path) -> None:
+    """With nothing typed after the source's checkpoint, its prompt text is still true.
+
+    Cut on the record boundary just past that checkpoint, so the prefix holds it.
+    """
+    source = write_source(tmp_path)
+    body = source.read_bytes()
+    cut = body.index(b"\n", body.index(b'"type": "last-prompt"')) + 1
+    outcome = write_fork(_plan(source, cut))
+    assert _checkpoints(outcome.path) == [
+        {"type": "last-prompt", "lastPrompt": "first prompt", "leafUuid": "a2",
+         "sessionId": FORK_ID}
+    ]
+
+
+def test_a_stale_mid_turn_checkpoint_is_not_what_the_fork_resumes_from(tmp_path: Path) -> None:
+    """The 2026-09-25 regression, in the shape a real transcript produced it.
+
+    A parallel tool batch parents each result to its own call, so the first result is
+    a side leaf. Claude flushed a checkpoint naming that side leaf mid-turn, finished
+    the turn, and wrote no newer checkpoint before the cut. A fork that kept it resumed
+    from the side leaf: mid tool call, missing the second call and the final reply.
+    """
+    session = "cccccccc-3333-4a7b-8c9d-0e1f2a3b4c5d"
+
+    def line(record: dict) -> dict:
+        return {"isSidechain": False, "sessionId": session, **record}
+
+    def call(uuid: str, parent: str, tool: str) -> dict:
+        return line({
+            "type": "assistant", "uuid": uuid, "parentUuid": parent,
+            "message": {"role": "assistant", "content": [
+                {"type": "tool_use", "id": tool, "name": "Bash", "input": {}}]},
+        })
+
+    def result(uuid: str, parent: str, tool: str) -> dict:
+        return line({
+            "type": "user", "uuid": uuid, "parentUuid": parent,
+            "message": {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": tool, "content": "ok"}]},
+        })
+
+    records = [
+        line({"type": "user", "uuid": "u1", "parentUuid": None,
+              "message": {"role": "user", "content": "do two things"}}),
+        call("c1", "u1", "toolu_a"),
+        call("c2", "c1", "toolu_b"),
+        result("r1", "c1", "toolu_a"),
+        {"type": "last-prompt", "lastPrompt": "do two things", "leafUuid": "r1",
+         "sessionId": session},
+        result("r2", "c2", "toolu_b"),
+        line({"type": "assistant", "uuid": "a1", "parentUuid": "r2",
+              "message": {"role": "assistant", "content": [
+                  {"type": "text", "text": "both done"}]}}),
+        line({"type": "user", "uuid": "u2", "parentUuid": "a1",
+              "message": {"role": "user", "content": "next"}}),
+    ]
+    source = tmp_path / f"{session}.jsonl"
+    source.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
+    final_reply = _points(source)[-2]
+    assert (final_reply.role, final_reply.open_tool_calls) == ("assistant", 0)
+    outcome = write_fork(_plan(source, final_reply.source_end))
+    checkpoints = _checkpoints(outcome.path)
+    assert [record["leafUuid"] for record in checkpoints] == ["a1"]
+    assert checkpoints[0]["lastPrompt"] == "do two things"
 
 
 @pytest.mark.parametrize(
     ("record", "kept"),
     [
-        ({"type": "last-prompt", "leafUuid": "u1"}, True),
-        ({"type": "last-prompt", "leafUuid": "never-written"}, False),
         ({"type": "file-history-delta", "messageId": "u1", "snapshotMessageId": "u1"}, True),
         ({"type": "file-history-delta", "messageId": "u1", "snapshotMessageId": "gone"}, False),
     ],
