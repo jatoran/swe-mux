@@ -2446,7 +2446,8 @@ and the request whose run produced the verdict), so the reuse is checkable rathe
 See `features/land-queue.md`.
 
 Every row also carries `absorbed_by_trunk`: the trunk already contains the tip that
-request asked to land, so a refusal or handback on it is answered whatever the queue's own
+request asked to land, or the branch's current tip, or the requested commit and the branch
+are both gone - so a refusal or handback on it is answered whatever the queue's own
 history says. It is **derived at the reading and never stored** - a terminal row keeps its
 record - and it is how a branch landed by hand stops leaving a live-looking block behind.
 Absent reads as `false`, which leaves the row standing.

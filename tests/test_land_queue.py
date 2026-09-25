@@ -673,6 +673,96 @@ async def test_a_refusal_the_trunk_has_since_absorbed_stops_speaking(
         store.close()
 
 
+async def _refused_then(tmp_path: Path, trunk: Path) -> tuple[Any, Any, dict[str, Any], Path, str]:
+    """A refused land of `worktree-alpha`, and the tip it asked for."""
+    worktree = add_worktree(trunk, "alpha")
+    write_verify(worktree, noise="edited gate")
+    requested = commit(worktree, "alpha.txt", "alpha\n", "alpha work")
+    service, store, _ = build_service(tmp_path, trunk, verify_grant="draft")
+    row = await service.request(
+        project_id="p", project_root=str(trunk), worktree_root=str(worktree)
+    )
+    assert (await service.tick())[0]["state"] == "refused"
+    return service, store, row, worktree, requested
+
+
+def prune_unreachable(repo: Path) -> None:
+    """What `gc.auto` does to an abandoned commit once it is two weeks unreachable."""
+    git(repo, "reflog", "expire", "--expire=now", "--all")
+    git(repo, "gc", "--prune=now", "--quiet")
+
+
+async def absorbed(service: Any, row: dict[str, Any]) -> list[bool]:
+    snapshot = await service.status(project_id="p", project_root=row["project_root"])
+    return [item["absorbed_by_trunk"] for item in snapshot["requests"]]
+
+
+async def test_a_refusal_whose_branch_was_rewritten_then_landed_stops_speaking(
+    tmp_path: Path, trunk: Path
+) -> None:
+    """The live case (2026-09-25): the refused commit was rewritten away, the branch landed
+    by hand, and git later pruned the commit - so "is the requested tip on the trunk" had
+    no answer at all and the refusal spoke for four weeks over work the trunk had."""
+    service, store, row, worktree, requested = await _refused_then(tmp_path, trunk)
+    try:
+        git(worktree, "reset", "--hard", "HEAD~1")
+        tip = commit(worktree, "alpha.txt", "alpha, rewritten\n", "alpha work, again")
+        git(trunk, "merge", "--ff-only", "worktree-alpha")
+        assert git(trunk, "rev-parse", "HEAD") == tip
+        # Still present, merely not on the trunk: the branch tip answers it.
+        assert await absorbed(service, row) == [True]
+
+        prune_unreachable(trunk)
+        with pytest.raises(subprocess.CalledProcessError):
+            git(trunk, "cat-file", "-e", f"{requested}^{{commit}}")
+        assert await absorbed(service, row) == [True]
+        assert (await store.get(row["id"]) or {})["state"] == "refused"
+    finally:
+        store.close()
+
+
+async def test_a_refusal_still_speaks_while_its_branch_holds_work_the_trunk_lacks(
+    tmp_path: Path, trunk: Path
+) -> None:
+    """The property the requested-tip rule exists for survives the fallback: a branch
+    with commits the trunk does not have still needs a new request."""
+    service, store, row, worktree, _ = await _refused_then(tmp_path, trunk)
+    try:
+        git(worktree, "reset", "--hard", "HEAD~1")
+        commit(worktree, "alpha.txt", "alpha, rewritten\n", "alpha work, again")
+        prune_unreachable(trunk)
+        assert await absorbed(service, row) == [False]
+    finally:
+        store.close()
+
+
+async def test_a_refusal_whose_commit_and_branch_are_both_gone_stops_speaking(
+    tmp_path: Path, trunk: Path
+) -> None:
+    """Nothing could ever be landed from it again."""
+    service, store, row, worktree, _ = await _refused_then(tmp_path, trunk)
+    try:
+        git(trunk, "worktree", "remove", "--force", str(worktree))
+        git(trunk, "branch", "-D", "worktree-alpha")
+        prune_unreachable(trunk)
+        assert await absorbed(service, row) == [True]
+    finally:
+        store.close()
+
+
+async def test_a_deleted_branch_whose_commit_survives_off_the_trunk_still_speaks(
+    tmp_path: Path, trunk: Path
+) -> None:
+    """The work still exists and is not landed, so the refusal is not spent."""
+    service, store, row, worktree, _ = await _refused_then(tmp_path, trunk)
+    try:
+        git(trunk, "worktree", "remove", "--force", str(worktree))
+        git(trunk, "branch", "-D", "worktree-alpha")
+        assert await absorbed(service, row) == [False]
+    finally:
+        store.close()
+
+
 async def test_approving_the_bytes_re_queues_the_land_the_block_ended(
     tmp_path: Path, trunk: Path
 ) -> None:

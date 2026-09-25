@@ -668,8 +668,15 @@ Ties do not supersede either: two rows created in the same second are not ordere
 A fast-forward refusal tells its author to merge the trunk and land again; doing that *by hand* - which is the ordinary response, and the whole point of the message - produces no later request at all, so the refusal went on speaking for a branch the trunk had already absorbed.
 Observed 2026-08-29 on `worktree-spawn-model-selection`, whose refusal was still describing a divergence the operator had resolved days earlier, and which an agent reading the queue then reported as current.
 
-So a refusal or handback is also answered when **the trunk contains the tip that request asked to land** (`absorbed_by_trunk`).
-It is asked of `requested_oid` rather than of the branch as it stands: a branch that has since gained commits needs a new request anyway, and "the trunk contains what *this* asked for" is the precise thing that makes *this* row spent.
+So a refusal or handback is also answered when **the trunk has absorbed it** (`absorbed_by_trunk`, `LandQueueService._absorption`), which is one of three git facts:
+
+- `requested_tip`: the trunk contains `requested_oid`, the tip the request asked to land. "The trunk contains what *this* asked for" is the precise thing that makes *this* row spent, so it is asked first.
+- `branch_tip`: the branch as it stands now is contained in the trunk, so nothing on it is left to land and there is nothing for the refusal to block.
+- `gone`: `requested_oid` no longer exists and neither does the branch, so nothing could ever be landed from the request again.
+
+The first rule alone left the same refusal standing again (observed 2026-09-25, four weeks later, on the very `worktree-spawn-model-selection` row it was written for).
+The branch had been rewritten after its refusal and landed by hand, so `requested_oid` was never on the trunk; once git's garbage collection pruned the abandoned commit, the question had no answer at all, and "no answer" keeps a refusal standing.
+Neither fallback lets a branch with un-landed work go quiet: a branch that gained commits the trunk lacks fails `branch_tip`, and a deleted branch whose requested commit survives off the trunk fails `gone`, so both still need a new request.
 The daemon asks it, because the browser cannot run git - bounded to `MAX_ABSORBED_PROBES` distinct tips per reading, over rows nothing else has answered, which is none or one on an ordinary Project.
 A question git cannot answer is `None`, which leaves the refusal standing: a reader's second look is the cheap direction, a hidden block is not.
 

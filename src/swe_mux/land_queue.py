@@ -1887,10 +1887,10 @@ class LandQueueService:
         it extends does. A `closed` column would be a second writer's opinion about a
         terminal row.
 
-        It is asked of `requested_oid`, the tip the request carried, rather than of the
-        branch as it stands: a branch that has since gained commits needs a new request
-        anyway, and "the trunk contains what this asked for" is the precise thing that
-        makes *this* refusal spent.
+        It is asked first of `requested_oid`, the tip the request carried, because "the
+        trunk contains what this asked for" is the precise thing that makes *this*
+        refusal spent; `_absorption` names the two fallbacks for a tip that was
+        rewritten away, and why neither lets a branch with un-landed commits go quiet.
 
         Bounded to `MAX_ABSORBED_PROBES` distinct tips, newest first, over rows nothing
         else has answered - in practice none or one - so the Git tab's poll does not pay
@@ -1925,17 +1925,75 @@ class LandQueueService:
         trunk_head = await self._head(project_root)
         if not trunk_head:
             return
-        from .git_monitor import read_is_ancestor
-
         for row in candidates:
             oid = str(row["requested_oid"])
-            # `None` is "the question could not be asked", which is not "no" - it leaves
-            # the refusal standing, which is the direction that costs a reader a second
-            # look rather than a hidden block.
-            if await read_is_ancestor(project_root, oid, trunk_head) is True:
-                for sibling in requests:
-                    if str(sibling.get("requested_oid") or "") == oid:
-                        sibling["absorbed_by_trunk"] = True
+            reason = await self._absorption(project_root, row, trunk_head)
+            if reason is None:
+                continue
+            log.debug(
+                "land refusal absorbed by trunk request_id=%s branch=%s oid=%s reason=%s",
+                row.get("id"),
+                row.get("branch"),
+                oid[:12],
+                reason,
+            )
+            for sibling in requests:
+                if str(sibling.get("requested_oid") or "") == oid:
+                    sibling["absorbed_by_trunk"] = True
+
+    async def _absorption(
+        self, project_root: str, row: dict[str, Any], trunk_head: str
+    ) -> str | None:
+        """Why the trunk has answered this bounce, or `None` while it has not.
+
+        Three answers, each a git fact rather than a judgement:
+
+        - ``requested_tip``: the trunk contains the tip the request asked to land.
+        - ``branch_tip``: the branch as it stands now is contained in the trunk, so
+          nothing on it is left to land and there is nothing for the refusal to block.
+          This is what answers a branch that was rewritten after its refusal and then
+          landed by hand: the requested commit is not on the trunk, and once git's
+          garbage collection prunes it (two weeks unreachable) it is not anywhere, so
+          the first question stops having an answer at all. Observed 2026-09-25 on
+          `worktree-spawn-model-selection` - the very refusal the first rule was
+          written for - still speaking four weeks after its work landed.
+        - ``gone``: the requested commit no longer exists and neither does the branch.
+          Nothing could ever be landed from this request again.
+
+        A branch that has gained commits the trunk lacks fails the second rule, so
+        such a branch still needs a new request - the property the first rule exists
+        for. Every "git could not say" (a timeout, an unreadable repository) is
+        treated as not answered: the refusal keeps standing, which costs a reader a
+        second look rather than hiding a block.
+        """
+        from .git_monitor import read_is_ancestor
+
+        oid = str(row["requested_oid"])
+        if await read_is_ancestor(project_root, oid, trunk_head) is True:
+            return "requested_tip"
+        branch = str(row.get("branch") or "")
+        branch_tip = await self._resolve_commit(project_root, f"refs/heads/{branch}")
+        if branch_tip and await read_is_ancestor(project_root, branch_tip, trunk_head) is True:
+            return "branch_tip"
+        if branch_tip == "" and await self._resolve_commit(project_root, oid) == "":
+            return "gone"
+        return None
+
+    async def _resolve_commit(self, cwd: str, revision: str) -> str | None:
+        """The commit `revision` names, `''` when it definitely names none, `None` if unknown.
+
+        `rev-parse --verify -q` exits 1 for a name that resolves to nothing and 128 (or
+        the bounded runner's own codes) when git itself could not answer, and only the
+        first is evidence of absence.
+        """
+        from .git_monitor import read_git
+
+        code, output = await read_git(
+            cwd, "rev-parse", "--verify", "-q", f"{revision}^{{commit}}"
+        )
+        if code == 0:
+            return output.strip() or None
+        return "" if code == 1 else None
 
     async def _head(self, cwd: str) -> str:
         from .git_monitor import read_git
