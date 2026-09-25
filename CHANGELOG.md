@@ -15,8 +15,15 @@ The release procedure that maintains this file is [`RELEASING.md`](RELEASING.md)
 
 ## [Unreleased]
 
+## [0.2.9] - 2026-09-25
+
 ### Added
 
+- **Phones can have their own session top bar layout.**
+  Settings → Session top bars has a Desktop/Mobile switch; a phone uses the desktop layout until you edit its own, and **Use desktop layout** goes back to following it.
+- **Server previews can follow edits.**
+  A preview of a development server gets a `live` toggle that reloads the page when it, or anything it loaded, changes on the server.
+  It is on by default for plain file servers (`python -m http.server`, `http-server`, `serve`, `php -S`) and off for dev servers that reload themselves, which a second reload would reset.
 - **The terminal's font family is a setting.**
   Settings → Appearance → Terminal font takes a family list such as `JetBrainsMono Nerd Font`, which is what makes prompt-theme and agent-CLI icons render as glyphs rather than boxes.
   Whatever you enter is placed ahead of the default stack rather than replacing it, so a typo or a font the viewing device lacks falls back to the terminal you had.
@@ -44,6 +51,22 @@ The release procedure that maintains this file is [`RELEASING.md`](RELEASING.md)
 ### Fixed
 
 - On a phone, Settings search results span the panel instead of the narrow search box, so labels and where they live are readable.
+- **A preview opens at the page the agent printed, not the server's directory listing.**
+  A preview was known only by host and port, so once swe-mux had noticed a server, clicking a link to `http://127.0.0.1:8766/page.html` dropped the path and opened `/`; clicked before that, the path became the preview's base and broke its absolute asset paths.
+  The page is now kept separately and followed by the pane, and refresh, copy, external open and capture use the page on screen instead of returning to the root.
+  A preview saved with a path in its base is converted on the first start.
+- **The desktop app no longer freezes on a preview of swe-mux's own address.**
+  Registering swe-mux itself as a preview made the preview's link rewriting loop forever inside the app's own renderer.
+  swe-mux's ports are now refused as preview destinations (a copied `/preview/…` link still opens its preview), the rewriting is bounded, sandboxed previews render in their own process, and a hung or crashed window is reloaded with every preview paused until you ask for it (tray: "Reload window (previews paused)").
+- **A long-running daemon on a busy fleet no longer slows down with uptime.**
+  Process evidence is written only when it changes, off the event loop, and the plugin event dispatcher no longer rebuilds its duplicate filter on every event.
+- **Branching a Claude conversation "after" its last reply resumes at that reply.**
+  The branch copied Claude's own resume checkpoint, which is written lazily and named a point mid-turn, so the new pane opened inside a tool call without the reply it was cut after.
+- **Codex conversations are tracked through replacement, branching and resume.**
+  Starting a new thread in a Codex pane rebinds the pane to it only when the running CLI is proven to be that pane's own; Branch uses `codex fork` and binds the fork's own conversation rather than the parent's; Resume reopens the original rollout under its visible name; and forked or rolled-back Codex histories read correctly in the Transcript tab and search.
+  Copying the last reply always fetches it fresh and refuses an answer from a conversation the pane has since left.
+- **A refused land no longer stands over work that landed by hand.**
+  The Git map kept showing a refusal whose branch had been rewritten and landed outside the queue, because the commit it named was later pruned; it now clears once the branch's current tip is on the trunk, or once the commit and the branch are both gone.
 - **A large fleet no longer makes the daemon read as hung when several agents start at once.**
   Every session waiting for its CLI's first transcript record used to walk that project's transcript directory on the event loop twice a second, and every switch-watch tick resolved every live session's working directory the same way; seven fresh Claude sessions in an 836-file directory pushed request latency past the desktop app's health probe for 45 seconds, and the app terminated a daemon that was serving traffic.
   The walk now runs in a worker thread and one listing serves every session in that directory for a second; path resolution is cached.
@@ -1048,7 +1071,8 @@ macOS is implemented and typechecked but has never been executed.
   resolved dependency closure that runs in the test suite, and a payload check over the built
   desktop bundle. No GPL or AGPL code ships; the two LGPL libraries ship as replaceable source.
 
-[Unreleased]: https://github.com/jatoran/swe-mux/compare/v0.2.8...HEAD
+[Unreleased]: https://github.com/jatoran/swe-mux/compare/v0.2.9...HEAD
+[0.2.9]: https://github.com/jatoran/swe-mux/releases/tag/v0.2.9
 [0.2.8]: https://github.com/jatoran/swe-mux/releases/tag/v0.2.8
 [0.2.7]: https://github.com/jatoran/swe-mux/releases/tag/v0.2.7
 [0.2.6]: https://github.com/jatoran/swe-mux/releases/tag/v0.2.6
