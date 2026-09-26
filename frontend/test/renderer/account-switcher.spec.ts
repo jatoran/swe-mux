@@ -274,6 +274,45 @@ test('a failed sign-in keeps its reason until it is dismissed', async ({ page })
   expect(dismissals).toHaveLength(1)
 })
 
+for (const width of [1280, 360]) {
+  for (const outcome of ['succeeded', 'failed']) {
+    test(`sign-in messages keep a readable text column at ${width}px after ${outcome}`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 800 })
+      await page.goto(`/account-switcher-harness.html?saved=1&outcome=${outcome}`)
+      await page.click('.account-summary > button >> nth=0')
+      await page.click('.account-section-head .account-signin >> nth=0')
+
+      for (const state of ['running', outcome]) {
+        const progress = page.locator(`.account-login.${state}`).first()
+        await expect(progress).toBeVisible()
+        const layout = await progress.evaluate(node => {
+          const box = node.getBoundingClientRect()
+          const title = node.querySelector('strong')!.getBoundingClientRect()
+          const detail = node.querySelector('small')!.getBoundingClientRect()
+          const button = node.querySelector('button')!.getBoundingClientRect()
+          return {
+            textFraction: detail.width / box.width,
+            aligned: Math.abs(title.left - detail.left),
+            textGap: detail.top - title.bottom,
+            buttonGap: button.left - Math.max(title.right, detail.right),
+            overflow: node.scrollWidth - node.clientWidth,
+          }
+        })
+        // Auto-placing the row-spanning button can steal the text column and
+        // leave the explanation wrapping one character at a time.
+        expect(layout.textFraction).toBeGreaterThan(0.5)
+        expect(layout.aligned).toBeLessThan(1)
+        expect(layout.textGap).toBeGreaterThanOrEqual(0)
+        expect(layout.buttonGap).toBeGreaterThan(0)
+        expect(layout.overflow).toBeLessThanOrEqual(1)
+      }
+
+      await page.locator('.account-login').getByRole('button', { name: 'dismiss' }).click()
+      await expect(page.locator('.account-login')).toHaveCount(0)
+    })
+  }
+}
+
 test('the footer refreshes in place and otherwise leaves, and only leaving closes the popover', async ({ page }) => {
   await page.goto('/account-switcher-harness.html?accounts=multi')
   await page.click('.account-summary > button >> nth=0')

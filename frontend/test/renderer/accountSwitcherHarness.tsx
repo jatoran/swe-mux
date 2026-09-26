@@ -156,7 +156,7 @@ document.documentElement.style.setProperty('--ui-scale', '1')
 function Harness() {
   const [dismissed, setDismissed] = useState(params.get('prompt') === 'hidden')
   return <div class="app-shell" style="height:100vh">
-    <div class="sidebar" style="height:100vh;display:flex;flex-direction:column">
+    <div class="sidebar open" style="height:100vh;display:flex;flex-direction:column">
       <div class="sidebar-status">
         <AccountSwitcher
           onManage={() => { calls.push({ method: 'UI', url: 'manage' }) }}
