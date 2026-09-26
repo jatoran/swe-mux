@@ -168,7 +168,9 @@ async def create_preview(request: web.Request) -> web.Response:
         preview_id=item.id,
         url=item.url,
     )
-    return json_response({"preview": item.snapshot(), "project": project.snapshot()}, 201)
+    return json_response(
+        {"preview": await previews.describe(item), "project": project.snapshot()}, 201
+    )
 
 
 async def delete_preview(request: web.Request) -> web.Response:

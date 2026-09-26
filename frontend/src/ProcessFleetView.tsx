@@ -16,6 +16,7 @@ import {
 } from './processFleet'
 import { invalidateFleet, refreshFleet, setFleetSessions, subscribeFleet } from './processFleetFeed'
 import { detectedServers } from './sessionProcesses'
+import { portConflictNotice } from './previewPortConflict'
 import { sessionDisplayName } from './sessionNames'
 
 /**
@@ -201,12 +202,14 @@ export function ProcessFleetView({
         <i class="process-link-mark registered" title="Registered preview">▣</i>
         <strong>{preview.url}</strong>
         <span>{preview.source} · port {preview.port}</span>
+        {preview.port_conflict && <em class="process-port-shared" title={portConflictNotice(preview.port_conflict)?.headline}>⚠ port shared</em>}
         <button onClick={() => void navigator.clipboard.writeText(preview.url)}>copy</button>
       </div>)}
       {servers.map(server => <div class="process-link-row" key={`${server.pid}:${server.port}`}>
         <i class="process-link-mark" title="Loopback listener">⇢</i>
         <strong>{server.url}</strong>
         <span>{group.processes.find(process => process.pid === server.pid)?.executable} {server.pid}</span>
+        {server.shared_with && <em class="process-port-shared" title={`Port ${server.port} is also held by PID ${server.shared_with.join(', ')}. The OS picks which process answers each connection, so this URL may not reach PID ${server.pid}.`}>⚠ shared with {server.shared_with.join(', ')}</em>}
         <button title={`Open ${server.url} as a preview beside this session`} onClick={() => void attach(group.session_id, server.url)}>preview</button>
         <button onClick={() => void navigator.clipboard.writeText(server.url)}>copy</button>
       </div>)}

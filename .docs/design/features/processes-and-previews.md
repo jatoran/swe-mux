@@ -513,6 +513,46 @@ and differs where § Static document previews says it does.
   written by the previewed page. Refresh, live reload, copy, external open, and capture all use
   that reported page; refresh used to remount the route root and throw the reader back to the
   listing.
+- **Shared ports: a Preview says when its port has more than one listener.**
+  On Windows a socket with `SO_REUSEADDR` - which every Python standard-library server sets -
+  binds a port another process is already listening on without any error, and the kernel then
+  hands each connection to one of them.
+  A server started second on such a port runs perfectly and never receives a request.
+  On 2026-09-26 a Project task started `logger.py` on 127.0.0.1:8766 while two orphaned
+  `python -m http.server 8766` processes from earlier sessions held it; the Preview was
+  correctly attributed to the task's session and rendered an orphan's directory listing, with
+  nothing on screen to say the page came from a different process.
+  - Detection reads the socket table the sampling pass already enumerates: `index_listeners`
+    keys every listening socket machine-wide at the address a client dials, so a wildcard bind
+    and a loopback bind of one port are one key.
+    Two distinct pids under a key is a shared port.
+    Session attribution alone cannot see it, because the process that answers is usually not in
+    any live session's tree.
+  - Which process a client actually reaches is **measured, not assumed**: `probe_listener_answerer`
+    opens one connection, sends nothing, and reads the owner of the server-side row from the
+    connection table.
+    It runs only for a shared port, and its answer is reused for `PORT_CONFLICT_RECHECK_SECONDS`
+    while the listener set is unchanged.
+    On Windows the oldest listener answered every probe in the incident; that is the kernel's
+    choice and nothing here depends on it.
+    A pid the table cannot name, or one that is not among the listeners, is reported as unknown
+    rather than as a verdict.
+  - `PreviewRegistry.describe` attaches the result as `port_conflict` to every loopback item it
+    returns, and logs a warning once per change of the listener set or answerer and once when it
+    clears.
+    It is never written into the registration or its mirror, because it is a reading of the
+    machine and would be stale on the next start.
+  - The pane draws it as its own grid row between the header and the frame: red when a foreign
+    process answers, amber when this session's server answers but shares the port, and neutral
+    when the answerer is unknown.
+    Details list every listener with its command, whose it is, and which one answered.
+    Processes marks the listener row (`shared_with`) and the Preview row.
+  - Nothing here stops a process.
+    A foreign listener is outside the ownership model that guards terminate, so the notice names
+    it and offers its PID rather than an action.
+  - A dual-stack `::` socket also accepts IPv4 unless it set `IPV6_V6ONLY`, which the socket
+    table does not report, so it is keyed at `::1` only; the answerer probe is what covers a
+    case the index misses.
 - **Live reload is the pane's, and it is on by default only for plain file servers.**
   A loopback server has no watcher mux can lease, because the daemon does not know which
   directory it serves. A live pane instead polls `POST /previews/{id}/revision` every 2s with
@@ -757,6 +797,11 @@ with its viewport presets, refresh, copy-URL, external open, and capture.
   (`preview_revision`, `preview_relative_path`), `frontend/src/previewLocation.ts` (the
   re-validation of the bridge's report), `tests/test_preview_entry.py`,
   `frontend/test/previewLocation.test.ts`
+- Shared ports: `src/swe_mux/processes.py` (`index_listeners`, `probe_listener_answerer`,
+  `ProcessInspector.port_conflict`, `PreviewRegistry.describe`), `frontend/src/previewPortConflict.ts`
+  (the notice wording), `tests/test_preview_port_conflict.py` (including two real processes
+  sharing a port on Windows), `frontend/test/previewPortConflict.test.ts`,
+  `frontend/test/renderer/preview-port-conflict.spec.ts`
 - Paused previews after a renderer recovery: `frontend/src/rendererRecovery.ts`,
   `frontend/src/RecoveryBanner.tsx`, `frontend/test/rendererRecovery.test.ts`
 - Headless capture (optional Playwright): `src/swe_mux/preview_capture.py`,

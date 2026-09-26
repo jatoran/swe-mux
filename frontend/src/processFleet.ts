@@ -9,7 +9,7 @@
  * Pure, and free of `.tsx` imports, so the node test runner can load it.
  */
 
-export type RowListener = { host: string; port: number; loopback: boolean; url: string }
+export type RowListener = { host: string; port: number; loopback: boolean; url: string; shared_with?: number[] }
 export type RowConnection = {
   local_host: string; local_port: number; remote_host: string; remote_port: number
 }
@@ -79,6 +79,24 @@ export type Preview = {
   /** Loopback only: a plain file server with no reload of its own, so the pane
    *  follows changes by default. */
   static_server?: boolean
+  /** Loopback only, live: more than one process listens on this port. `null` or
+   *  absent means one process owns it (or an older daemon that cannot tell). */
+  port_conflict?: PortConflict | null
+}
+
+export type PortConflictListener = {
+  pid: number; executable: string; command: string; started_at: number | null
+  session_id: string | null; project_id: string | null; evidence_state: string | null
+  /** This process belongs to the session the preview is attributed to. */
+  owner: boolean
+}
+
+export type PortConflict = {
+  host: string; port: number; listeners: PortConflictListener[]
+  /** The process that accepted the daemon's probe connection, when the OS could say. */
+  answering_pid: number | null
+  /** Whether that process is the preview's own session's; `null` when unknown. */
+  answering_is_owner: boolean | null
 }
 
 /** What a Preview is called on a tab, a sidebar row, and its own header.

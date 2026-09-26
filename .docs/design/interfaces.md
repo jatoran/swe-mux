@@ -2694,6 +2694,10 @@ Registration deduplicates by canonical Project endpoint and records the session 
 Automatic Project listener discovery creates `listed=false` route identities for cross-service rewriting.
 A bounded, cached HTTP probe promotes browser-facing HTML endpoints to `listed=true`; explicit registration promotes any accepted endpoint.
 `GET /previews` returns listed items only, plus session-scoped raw listener candidates when requested with `?session=`.
+Every loopback item in that list, and the `preview` a loopback `POST /previews` returns, carries a live `port_conflict`: `null` when one process listens on its port, otherwise `{host, port, listeners: [{pid, executable, command, started_at, session_id, project_id, evidence_state, owner}], answering_pid, answering_is_owner}`.
+`owner` marks a listener belonging to the preview's session, and `answering_pid` is the listener that accepted the daemon's probe connection (`null`, with `answering_is_owner: null`, when the OS could not say).
+It is a reading of the machine, never stored with the registration (`features/processes-and-previews.md` § Shared ports).
+A process snapshot's listener carries `shared_with: [pid]` when other processes listen on the same address.
 `attach=true` opens or activates the stable Preview leaf beside the owner, and closing the leaf leaves the listed registration intact.
 Sandboxed Preview fetch/XHR/WebSocket traffic to another registered Project service is rewritten through that service's `/preview/{id}/…` route.
 A loopback destination on one of swe-mux's own ports (the daemon's, the PTY supervisor's, the desktop shell's WebView2 debugging port) is refused with `409 {"error", "code": "preview_destination_reserved"}`, unless its path is `/preview/{id}/…` naming an existing registration, which is returned instead.

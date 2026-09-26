@@ -4,6 +4,7 @@ import { api } from './api'
 import { captureUnavailableNote, type CaptureResult } from './previewCapture'
 import { copyPreparedText } from './terminalClipboard'
 import { isStaticPreview, previewLabel, type Preview } from './processFleet'
+import { portConflictNotice } from './previewPortConflict'
 import { rendererRecovery } from './rendererRecovery'
 import {
   PREVIEW_LIVE_POLL_MS, PREVIEW_OPEN_PAGE_EVENT, previewPagePath, previewRoute, readPreviewLocation,
@@ -46,6 +47,10 @@ export function PreviewPane({ preview, onClose }: { preview: Preview; onClose: (
   const shownUrl = route + shownPath
   const fallbackWidth = viewport === 'mobile' ? 390 : viewport === 'tablet' ? 834 : 1280
   const label = previewLabel(preview)
+  // Another process holding this port is the one fact that explains a preview
+  // showing a page this session never served, so it is drawn above the frame.
+  const conflict = isStatic ? null : portConflictNotice(preview.port_conflict)
+  const [conflictOpen,setConflictOpen] = useState(false)
   // Static previews follow the served directory. Loopback ones follow by default
   // only when the server is a plain file server: a dev server with HMR reloads the
   // page itself, and a second reload from here would discard its state.
@@ -238,8 +243,23 @@ export function PreviewPane({ preview, onClose }: { preview: Preview; onClose: (
     return () => { stopped = true; clearInterval(timer) }
   }, [isStatic, live, paused, preview.id])
 
-  return <section class={`preview-pane viewport-${viewport}`}>
+  return <section class={`preview-pane viewport-${viewport}${conflict?' has-port-conflict':''}`}>
     <header><div><span>[PREVIEW]</span><strong title={preview.url}>{label}</strong><small>{preview.source}</small></div><nav><button onClick={()=>setViewport('mobile')}>mobile</button><button onClick={()=>setViewport('tablet')}>tablet</button><button onClick={()=>setViewport('responsive')}>fit</button><button onClick={reloadShown}>refresh</button><button class={live?'active':''} aria-pressed={live} title={live?(isStatic?'Reloading when the served files change':'Reloading when the page or its assets change on the server'):'Not following file changes'} onClick={()=>setLive(value=>!value)}>live</button><button onClick={()=>void navigator.clipboard.writeText(new URL(shownUrl,location.href).toString())}>copy</button><button onClick={()=>window.open(shownUrl,'_blank','noopener,noreferrer')}>external</button><button aria-label="Close preview" onClick={onClose}>×</button></nav></header>
+    {conflict && <div class={`preview-port-conflict ${conflict.severity}`} role="alert" data-testid="preview-port-conflict">
+      <div class="preview-port-conflict-headline">
+        <strong>{conflict.headline}</strong>
+        <button type="button" aria-expanded={conflictOpen} onClick={()=>setConflictOpen(value=>!value)}>{conflictOpen?'hide':'details'}</button>
+      </div>
+      {conflictOpen && <>
+        <ul>{conflict.listeners.map(item => <li key={item.pid} class={item.answering?'answering':''}>
+          <span class="preview-port-conflict-pid">PID {item.pid}</span>
+          <code title={item.label}>{item.label}</code>
+          <small>{item.detail}{item.answering?' · answering':''}</small>
+          <button type="button" onClick={()=>void navigator.clipboard.writeText(String(item.pid))}>copy PID</button>
+        </li>)}</ul>
+        <small>{conflict.remedy}</small>
+      </>}
+    </div>}
     <div class="preview-frame">
       {paused
         ? <div class="preview-paused" role="status" data-testid="preview-paused">

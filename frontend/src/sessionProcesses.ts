@@ -1,4 +1,6 @@
-export type ListenerLike = { host: string; port: number; loopback: boolean; url: string }
+/** `shared_with` names other processes listening on this same address; which of them a
+ *  client reaches is the OS's choice, so the server at this URL may not be this process. */
+export type ListenerLike = { host: string; port: number; loopback: boolean; url: string; shared_with?: number[] }
 export type ProcessWithListeners = {
   pid: number
   exited_at?: number
@@ -6,7 +8,7 @@ export type ProcessWithListeners = {
   /** False means the backend retained the process only as rejected/stale evidence. */
   server_eligible?: boolean
 }
-export type DetectedServer = { pid: number; host: string; port: number; url: string }
+export type DetectedServer = { pid: number; host: string; port: number; url: string; shared_with?: number[] }
 
 /**
  * Loopback listener candidates derived from a session process snapshot.
@@ -35,6 +37,7 @@ export function detectedServers<T extends ProcessWithListeners>(processes: T[]):
         host: listener.host,
         port: listener.port,
         url: listener.url,
+        ...(listener.shared_with?.length ? { shared_with: listener.shared_with } : {}),
       })
     }
   }

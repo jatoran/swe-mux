@@ -15,6 +15,12 @@ The release procedure that maintains this file is [`RELEASING.md`](RELEASING.md)
 
 ## [Unreleased]
 
+### Added
+
+- **A preview says when another process is listening on its port.**
+  On Windows a Python server can start on a port another process already holds without any error, and then never receive a request, so its preview showed the other process's page instead.
+  The preview now names every process on the port and which one actually answered, and Processes marks the shared listener.
+
 ## [0.2.9] - 2026-09-25
 
 ### Added

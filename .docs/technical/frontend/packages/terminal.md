@@ -165,6 +165,8 @@ The viewport mounts at the registration's `entry` and then follows the page the 
 A link click for an already-open preview dispatches `PREVIEW_OPEN_PAGE_EVENT`, which returns the pane to the linked page even when the entry did not change.
 Plain-text URLs (the web-links addon) and OSC 8 hyperlinks (`term.options.linkHandler`) must share one handler: an OSC 8 link renders as a label with no URL text to regex, which is how a Codex-announced server had no clickable route to a Preview.
 The link event carries the `original` URI beside the normalized one, because a link to swe-mux itself is refused with `409 preview_destination_reserved` and `App.tsx` then opens the original in a new window.
+A registration's `port_conflict` becomes a notice row between the header and the frame (`previewPortConflict.ts` words it; `.preview-pane.has-port-conflict` adds the grid row, so it never covers the page it explains).
+`test/renderer/preview-port-conflict.spec.ts` holds that layout in real Chromium.
 
 `rendererRecovery.ts`, `RecoveryBanner.tsx`
 

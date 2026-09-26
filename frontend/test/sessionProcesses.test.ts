@@ -69,6 +69,13 @@ test('an IPv6-only server still gets a row', () => {
   assert.deepEqual(rows.map(row => row.host), ['::1'])
 })
 
+test('a listener sharing its port says which other processes hold it', () => {
+  const rows = detectedServers([
+    { pid: 11, listeners: [{ ...listener(8766), shared_with: [136796] }, listener(9000)] },
+  ])
+  assert.deepEqual(rows.map(row => [row.port, row.shared_with]), [[8766, [136796]], [9000, undefined]])
+})
+
 test('rows are ordered by port so they do not move between samples', () => {
   const rows = detectedServers([
     { pid: 11, listeners: [listener(8080)] },

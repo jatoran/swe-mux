@@ -1092,7 +1092,16 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
         <h2><a href="https://github.com/jatoran/swe-mux/compare/v0.2.9...HEAD">Unreleased</a></h2>
         <span class="fill"></span>
       </div>
-      <p class="prose">Nothing yet.</p>
+      <div class="relgroups">
+        <div><span class="k">Added</span> <span class="sep">1 entry</span></div>
+      </div>
+      <details class="relmore">
+        <summary>all 1 entry</summary>
+        <div class="changetype">Added</div>
+        <ul class="bullets">
+          <li><span><b>A preview says when another process is listening on its port.</b> On Windows a Python server can start on a port another process already holds without any error, and then never receive a request, so its preview showed the other process's page instead. The preview now names every process on the port and which one actually answered, and Processes marks the shared listener.</span></li>
+        </ul>
+      </details>
     </div>
     <div class="rel">
       <div class="relhead">

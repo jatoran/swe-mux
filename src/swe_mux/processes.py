@@ -87,6 +87,16 @@ PREVIEW_LOOPBACK_HOSTS = {"127.0.0.1", "::1"}
 # is left alone, because it genuinely is not reachable on loopback.
 WILDCARD_LOOPBACK_HOSTS = {"0.0.0.0": "127.0.0.1", "::": "::1", "::ffff:0.0.0.0": "127.0.0.1"}
 LISTENER_LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
+# How long one answer to "which process accepts a connection on this shared port"
+# is reused while the set of listening processes is unchanged. The answer costs a
+# TCP connection to the contested server plus one socket-table read, and the
+# preview list that asks for it is polled; the listener set changing (one of them
+# exits, a new one binds) invalidates it immediately regardless.
+PORT_CONFLICT_RECHECK_SECONDS = 15.0
+PORT_CONFLICT_CONNECT_TIMEOUT_SECONDS = 0.5
+# A listener's command line as a port conflict reports it. Enough to recognise a
+# server by its program and arguments without shipping a whole environment dump.
+PORT_CONFLICT_COMMAND_CHARS = 400
 
 
 def own_executable() -> str | None:
@@ -128,6 +138,80 @@ def listener_record(host: str, port: int) -> dict[str, Any]:
         "loopback": resolved in LISTENER_LOOPBACK_HOSTS,
         "url": f"http://{'[' + resolved + ']' if ':' in resolved else resolved}:{port}/",
     }
+
+
+def index_listeners(conn_map: dict[int, list[Any]]) -> dict[tuple[str, int], frozenset[int]]:
+    """Every listening ``(host, port)`` on the machine and the processes bound to it.
+
+    Keyed at the address a client dials, exactly as `listener_record` reports it, so a
+    wildcard bind and a loopback bind of the same port land on the same key. Two
+    distinct processes under one key is a *shared port*: Windows lets a socket with
+    ``SO_REUSEADDR`` - which every Python standard-library server sets - bind a port
+    another process already holds, silently, and the kernel then hands each new
+    connection to one of them. A server started second on such a port starts cleanly
+    and never receives a request.
+    """
+    listening = getattr(psutil, "CONN_LISTEN", "LISTEN")
+    index: dict[tuple[str, int], set[int]] = {}
+    for pid, connections in conn_map.items():
+        for connection in connections:
+            if connection.status != listening or not connection.laddr:
+                continue
+            record = listener_record(str(connection.laddr.ip), int(connection.laddr.port))
+            index.setdefault((record["host"], record["port"]), set()).add(pid)
+    return {key: frozenset(pids) for key, pids in index.items()}
+
+
+def _server_side_pid(host: str, port: int, client_port: int) -> int | None:
+    """The process holding the accepted end of our own connection to ``host:port``.
+
+    The connection table names the owner of the server-side socket, which is the
+    process whose listener the kernel chose - the only direct evidence of who a
+    client of a shared port is actually talking to. Unprivileged Linux and macOS
+    report no pid for another user's socket, which reads as unknown, never as an
+    answer.
+    """
+    if psutil is None:
+        return None
+    try:
+        rows = psutil.net_connections(kind="tcp6" if ":" in host else "tcp4")
+    except (psutil.AccessDenied, psutil.NoSuchProcess, OSError):
+        return None
+    for row in rows:
+        if (
+            row.laddr
+            and row.raddr
+            and int(row.laddr.port) == port
+            and int(row.raddr.port) == client_port
+            and row.pid
+        ):
+            return int(row.pid)
+    return None
+
+
+async def probe_listener_answerer(host: str, port: int) -> int | None:
+    """Open one connection to ``host:port`` and report which process accepted it.
+
+    Nothing is sent: the connection exists only so the socket table has a
+    server-side row to read, and it is closed immediately. ``None`` when the port
+    does not accept or the table cannot name the owner.
+    """
+    try:
+        _, writer = await asyncio.wait_for(
+            asyncio.open_connection(host, port), PORT_CONFLICT_CONNECT_TIMEOUT_SECONDS
+        )
+    except (OSError, TimeoutError):
+        return None
+    try:
+        sockname = writer.get_extra_info("sockname")
+        client_port = int(sockname[1]) if sockname else 0
+        if not client_port:
+            return None
+        return await asyncio.to_thread(_server_side_pid, host, port, client_port)
+    finally:
+        writer.close()
+        with suppress(OSError, ConnectionError):
+            await writer.wait_closed()
 
 
 @dataclass(slots=True)
@@ -307,6 +391,15 @@ class ProcessInspector:
         # collection. Reaches detached descendants the parent walk cannot; see
         # _tree_handles and SessionManager.job_process_ids.
         self._job_pids: dict[str, list[int]] = {}
+        # (host, port) -> every process listening there, machine-wide, from the same
+        # socket table the pass already reads. Session attribution only ever looks
+        # at a session's own processes, so without this a foreign server holding the
+        # same port as a session's server - the one that actually answers - was
+        # invisible to everything that decides what a Preview shows.
+        self._listen_index: dict[tuple[str, int], frozenset[int]] = {}
+        # (host, port) -> (listener set, monotonic time, answering pid) for the last
+        # answerer probe of a shared port; see PORT_CONFLICT_RECHECK_SECONDS.
+        self._answerers: dict[tuple[str, int], tuple[frozenset[int], float, int | None]] = {}
         # Bounded, deduplicated diagnostics for ownership decisions. These are
         # intentionally command-free and also go to the durable rolling daemon log.
         self._ownership_diagnostics: list[dict[str, Any]] = []
@@ -534,6 +627,99 @@ class ProcessInspector:
     def live_listeners(self) -> set[tuple[str, int, str]]:
         """`(session_id, port, host)` for every listener seen by the last reconcile."""
         return set(self._listeners)
+
+    def listener_pids(self, host: str, port: int) -> frozenset[int]:
+        """Every process listening at ``host:port`` machine-wide, as of the last sample."""
+        return self._listen_index.get((host, port), frozenset())
+
+    async def port_conflict(
+        self, host: str, port: int, *, session_id: str
+    ) -> dict[str, Any] | None:
+        """Describe a port more than one process is listening on, or ``None``.
+
+        ``session_id`` is the session a Preview of this port believes it is showing;
+        each listener says whether it belongs to that session, and the answer says
+        whether the process that actually accepted a probe connection does. That
+        last fact is the one a reader needs: a Preview whose owner's server never
+        receives a request renders whatever the other process serves, with nothing
+        on screen to say it is not the application they launched.
+        """
+        pids = self.listener_pids(host, port)
+        if len(pids) < 2:
+            self._answerers.pop((host, port), None)
+            return None
+        now = time.monotonic()
+        cached = self._answerers.get((host, port))
+        fresh = cached is not None and now - cached[1] < PORT_CONFLICT_RECHECK_SECONDS
+        if cached is not None and fresh and cached[0] == pids:
+            answering = cached[2]
+        else:
+            answering = await probe_listener_answerer(host, port)
+            self._answerers[(host, port)] = (pids, now, answering)
+        listeners = await asyncio.to_thread(self._describe_listener_pids, sorted(pids))
+        for listener in listeners:
+            listener["owner"] = listener.get("session_id") == session_id
+        owner_pids = {int(item["pid"]) for item in listeners if item["owner"]}
+        return {
+            "host": host,
+            "port": port,
+            "listeners": listeners,
+            "answering_pid": answering if answering in pids else None,
+            "answering_is_owner": (answering in owner_pids) if answering in pids else None,
+        }
+
+    def _describe_listener_pids(self, pids: list[int]) -> list[dict[str, Any]]:
+        """Name each process on a shared port, owned by a session or not.
+
+        A foreign process is exactly the interesting case - an orphaned server from a
+        session that has since ended, or one started outside swe-mux - so it is read
+        straight from the OS rather than skipped for lacking attribution. The read is
+        paid only when a port is actually shared.
+        """
+        owned = {
+            item.pid: item
+            for item in self.owned.values()
+            if item.exited_at is None and item.attribution_version >= PROCESS_ATTRIBUTION_VERSION
+        }
+        described: list[dict[str, Any]] = []
+        for pid in pids:
+            item = owned.get(pid)
+            if item is not None:
+                described.append(
+                    {
+                        "pid": pid,
+                        "executable": item.executable,
+                        "command": item.command[:PORT_CONFLICT_COMMAND_CHARS],
+                        "started_at": item.started_at,
+                        "session_id": item.session_id,
+                        "project_id": item.project_id,
+                        "evidence_state": item.evidence_state,
+                    }
+                )
+                continue
+            entry: dict[str, Any] = {
+                "pid": pid,
+                "executable": "",
+                "command": "",
+                "started_at": None,
+                "session_id": None,
+                "project_id": None,
+                "evidence_state": None,
+            }
+            if psutil is not None:
+                try:
+                    process = psutil.Process(pid)
+                    with process.oneshot():
+                        entry["executable"] = process.name()
+                        entry["started_at"] = float(process.create_time())
+                        with suppress(psutil.AccessDenied):
+                            entry["command"] = " ".join(process.cmdline())[
+                                :PORT_CONFLICT_COMMAND_CHARS
+                            ]
+                except (psutil.NoSuchProcess, psutil.AccessDenied, OSError):
+                    pass
+            described.append(entry)
+        return described
 
     # Grace between an annotation appearing and the process tree being trusted to
     # refute it: a launch's child may not exist yet on the pass that races it.
@@ -1136,6 +1322,7 @@ class ProcessInspector:
         # net_connections() per process would rescan the entire table for every one of
         # potentially hundreds of descendants each tick.
         conn_map = self._connections_by_pid()
+        self._listen_index = index_listeners(conn_map)
         self._refresh_tree()
         daemon_candidates = (
             self._infrastructure_handles()
@@ -1743,9 +1930,14 @@ class ProcessInspector:
             if not connection.laddr:
                 continue
             if connection.status == psutil.CONN_LISTEN:
-                listeners.append(
-                    listener_record(str(connection.laddr.ip), int(connection.laddr.port))
-                )
+                record = listener_record(str(connection.laddr.ip), int(connection.laddr.port))
+                others = self._listen_index.get((record["host"], record["port"]), frozenset())
+                if len(others - {pid}) > 0:
+                    # Another process holds this same port. Which of them a client
+                    # reaches is the kernel's choice, so the row says so rather than
+                    # presenting this one as the server at that address.
+                    record["shared_with"] = sorted(others - {pid})
+                listeners.append(record)
             elif connection.status == psutil.CONN_ESTABLISHED and connection.raddr:
                 established.append(
                     {
@@ -2292,6 +2484,9 @@ class PreviewRegistry:
         self._listener_seen: dict[str, float] = {}
         self._preview_probe = preview_probe or probe_browser_preview
         self._preview_probe_state: dict[str, tuple[str, int, float]] = {}
+        # preview id -> (listening pids, answering pid) last logged as a shared port,
+        # so the warning fires when a conflict appears or changes rather than per poll.
+        self._conflicts_logged: dict[str, tuple[tuple[int, ...], int | None]] = {}
         # The loopback ports swe-mux itself serves on - the daemon's own port and
         # whatever its infrastructure (supervisor, desktop WebView2) listens on. A
         # callable because the infrastructure half is only known after sampling.
@@ -2869,12 +3064,67 @@ class PreviewRegistry:
         self._persist()
         return item
 
+    async def describe(self, item: PreviewRegistration) -> dict[str, Any]:
+        """A registration as the browser receives it: the record plus live facts.
+
+        ``port_conflict`` is a reading of the machine, not part of the registration,
+        so it is never mirrored to disk; it is recomputed on every read from the last
+        process sample. ``None`` means one process owns the port - or, for a static
+        preview, that there is no port at all.
+        """
+        snapshot = item.snapshot()
+        conflict = None
+        check = getattr(self.inspector, "port_conflict", None)
+        if check is not None and item.kind == "loopback" and item.port not in self.reserved_ports():
+            try:
+                conflict = await check(
+                    item.host, item.port, session_id=item.session_id
+                )
+            except Exception:  # noqa: BLE001 - a diagnostic must never hide a preview
+                log.exception("preview port conflict check failed preview_id=%s", item.id)
+        self._note_conflict(item, conflict)
+        snapshot["port_conflict"] = conflict
+        return snapshot
+
+    def _note_conflict(self, item: PreviewRegistration, conflict: dict[str, Any] | None) -> None:
+        """Log a shared port once when it appears or changes, and once when it clears."""
+        if conflict is None:
+            if self._conflicts_logged.pop(item.id, None) is not None:
+                log.info(
+                    "preview port no longer shared preview_id=%s port=%d", item.id, item.port
+                )
+            return
+        pids = tuple(int(listener["pid"]) for listener in conflict["listeners"])
+        signature = (pids, conflict["answering_pid"])
+        if self._conflicts_logged.get(item.id) == signature:
+            return
+        self._conflicts_logged[item.id] = signature
+        log.warning(
+            "preview port shared by %d processes preview_id=%s session_id=%s project_id=%s "
+            "host=%s port=%d pids=%s answering_pid=%s answering_is_owner=%s",
+            len(pids),
+            item.id,
+            item.session_id,
+            item.project_id,
+            item.host,
+            item.port,
+            ",".join(str(pid) for pid in pids),
+            conflict["answering_pid"],
+            conflict["answering_is_owner"],
+            extra={
+                "preview_id": item.id,
+                "port": item.port,
+                "listeners": conflict["listeners"],
+            },
+        )
+
     def remove(self, preview_id: str) -> None:
         if preview_id not in self.items:
             raise NotFound(preview_id, kind="preview")
         removed = self.items.pop(preview_id)
         self._listener_seen.pop(preview_id, None)
         self._preview_probe_state.pop(preview_id, None)
+        self._conflicts_logged.pop(preview_id, None)
         # Removing an approved preview is a decision that must outlive the daemon,
         # or the next restart would bring back the one the user just deleted.
         if removed.source != "detected":
@@ -2891,11 +3141,12 @@ class PreviewRegistry:
                 for listener in process["listeners"]
                 if listener["loopback"]
             ]
+        listed = [
+            item
+            for item in self.items.values()
+            if item.listed and (not session_id or item.session_id == session_id)
+        ]
         return {
-            "items": [
-                item.snapshot()
-                for item in self.items.values()
-                if item.listed and (not session_id or item.session_id == session_id)
-            ],
+            "items": list(await asyncio.gather(*(self.describe(item) for item in listed))),
             "candidates": candidates,
         }
