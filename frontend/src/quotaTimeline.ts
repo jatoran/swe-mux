@@ -17,6 +17,7 @@ import type {
   QuotaUsageDay,
   QuotaUsageInterval,
   QuotaUsageSource,
+  QuotaWindowSources,
 } from './usageAnalytics'
 
 export type QuotaWindowName = 'session'|'weekly'
@@ -60,6 +61,37 @@ export const QUOTA_BILLING_LABELS: Record<QuotaUsageBilling, string> = {
   switched: 'switched during the interval',
   uncertain: 'switched without a record of when',
   per_session: 'billed per session, by the account each was started under',
+}
+
+/** A source of a window's current usage: the four attributed ones, and what came before attribution. */
+export type QuotaShareSource = QuotaUsageSource | 'untracked'
+
+export const QUOTA_SHARE_SOURCES: readonly QuotaShareSource[] = [...QUOTA_SOURCES, 'untracked']
+
+export const QUOTA_SHARE_LABELS: Record<QuotaShareSource, string> = {...QUOTA_SOURCE_LABELS, untracked: 'untracked'}
+
+export const QUOTA_SHARE_DETAIL: Record<QuotaShareSource, string> = {
+  ...QUOTA_SOURCE_DETAIL,
+  untracked: 'used before swe-mux was attributing this window',
+}
+
+export type WindowShare = {source: QuotaShareSource; points: number}
+
+/**
+ * The parts of a window's current usage, in drawing order, each in points of the whole
+ * quota. Parts below a twentieth of a point are float noise from the daemon's scaling.
+ */
+export function windowShares(sources: QuotaWindowSources): WindowShare[] {
+  return QUOTA_SHARE_SOURCES
+    .map(source => ({source, points: sources[source] ?? 0}))
+    .filter(share => share.points >= 0.05)
+}
+
+/** `56% swe-mux sessions · 30% used elsewhere · <1% unclear`, in drawing order. */
+export function describeWindowShares(shares: readonly WindowShare[]): string {
+  return shares
+    .map(share => `${share.points < 0.5 ? '<1' : Math.round(share.points)}% ${QUOTA_SHARE_LABELS[share.source]}`)
+    .join(' · ')
 }
 
 /** One drawn stretch of an attribution lane, in percentage points of one window. */

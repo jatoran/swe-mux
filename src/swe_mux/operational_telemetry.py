@@ -27,8 +27,8 @@ from .harness import (
 from .models import MuxEvent
 from .opencode_store import conversation_records
 from .opencode_store import conversation_watermark as store_watermark
+from .quota_usage import QUOTA_WINDOWS, QuotaUsageMixin, usage_interval_public
 from .quota_usage import SCHEMA as QUOTA_USAGE_SCHEMA
-from .quota_usage import QuotaUsageMixin, usage_interval_public
 from .sqlite_store import (
     connect_or_quarantine,
     database_operation_lock,
@@ -1637,7 +1637,12 @@ class OperationalTelemetryStore(QuotaUsageMixin):
             ).fetchall()
             result: dict[str, dict[str, Any]] = {}
             for row in rows:
-                result[str(row["account_id"])] = _quota_public(dict(row))
+                public = _quota_public(dict(row))
+                for window in QUOTA_WINDOWS:
+                    sources = self._window_sources(row, window) if public[window] else None
+                    if sources is not None:
+                        public[window]["sources"] = sources
+                result[str(row["account_id"])] = public
             return result
 
         return await self._run(op)

@@ -2814,6 +2814,10 @@ system auth state as `saved | external | signed_out | unreadable`; saved selecti
 from the system auth file rather than restored from registry memory. Explicit selection changes
 only the provider's system auth file; polling covers saved active and inactive accounts.
 Quota fields are derived from the newest durable sample.
+Once attribution covers a window, `quota.session.sources` and `quota.weekly.sources` split that
+reading by where it came from: `{since, reset_seen, swe_mux, outside, elsewhere, uncertain,
+untracked}` in percentage points that sum to `used_percent`
+(`features/operational-telemetry.md` § Quota usage attribution).
 
 Every provider-accounts route answers with the same whole payload the browser replaces its
 state with, durable quota readings and unreviewed reset alert included; a mutation that

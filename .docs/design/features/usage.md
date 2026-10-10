@@ -62,6 +62,8 @@ Collection settings, cache clearing, and source provenance live in a disclosure.
 ## Quota views
 
 Current shows saved-account cards with selected-account markers, remaining capacity, percent used, reset countdowns with their absolute reset time, and reading freshness.
+Under each attributed window (weekly and 5-hour), a bar on the limit's own 0-100 scale splits what the window has used since it began by source - swe-mux sessions, not swe-mux, used elsewhere, unclear, and untracked for usage from before attribution covered it - with the same parts in words and when the window began (`operational-telemetry.md` § Quota usage attribution).
+An account attribution has not reached yet shows its plain reading and no split.
 The account-management link opens Settings → Accounts; this surface does not duplicate account switching.
 Every Quota view names a window the same way: Weekly, 5-hour, and Fable weekly.
 
@@ -78,7 +80,7 @@ The chart exists to answer what percent of a window each account had used at a g
 - Reset markers carry the account, the before and after values, and the observed time.
 - Under the time axis, one source lane per account shows where each rise came from (`operational-telemetry.md` § Quota usage attribution): swe-mux sessions, not swe-mux, used elsewhere, or unclear.
   A cell is a rising interval or a UTC day, stacked by the share of its points from each source; raw rises of one source less than 90 minutes apart are drawn as one period, because a whole-percent window ticks up once every few polls while the usage behind the tick accrued across all of them.
-  Under the lanes, each account's rise over the range is given as shares by source, and the readout names where the rise ending at the inspected reading (or on the inspected day) came from.
+  Under the lanes, each account's charted window as it stands now gets the same split as its Current card, whatever range is charted; then each account's rise over the range is given as shares by source, and the readout names where the rise ending at the inspected reading (or on the inspected day) came from.
 
 The readings disclosure is a newest-first table with the charted window's column first; a daily cell gives the day's first and last reading, plus its peak when that differs.
 Resets shows recorded movements and confirmation/review state.

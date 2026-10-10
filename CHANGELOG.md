@@ -30,9 +30,12 @@ The release procedure that maintains this file is [`RELEASING.md`](RELEASING.md)
   A lane under the chart marks, for every account, which rises came from swe-mux sessions, which the account's swe-mux sessions do not explain, and which happened while this computer was not using the account at all (another device, claude.ai, or another login); each account's rise over the range is summed by source beneath it.
   Each interval is attributed once from the requests swe-mux sessions billed to that account, so opening or refreshing the chart reads stored results.
   Quota → Attribution lists the same rises, and replaces an estimate that credited any session of a provider to whichever of its accounts moved.
+- **Each account says how much of its current window was used here and elsewhere.**
+  Under the weekly and 5-hour readings on Quota → Current, and for every charted account under the History chart, a bar on the limit's own scale splits what the window has used since it began into swe-mux sessions, not swe-mux, used elsewhere, and untracked, with when the window began.
 
 ### Fixed
 
+- **A one-point dip in a quota reading is no longer counted as a reset.** Codex sometimes reads a point or two lower inside the same window and climbs back, and each dip was booked as a fresh climb from zero, so a 57% to 56% dip added 56 points of usage to that account's attribution. Stored attribution is recomputed once at the next start.
 - **Quota → Attribution loads again.** Its request carried two query strings and was refused on every load.
 - **Codex telemetry events keep their real time.** Codex sends an empty event time, and every such event was being filed at 1970.
 

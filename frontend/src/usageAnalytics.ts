@@ -84,6 +84,10 @@ export type ResetEvent = {
 export type QuotaUsageSource = 'swe_mux'|'outside'|'elsewhere'|'uncertain'
 export type QuotaUsageParts = {rise:number|null;reset?:boolean}&Record<QuotaUsageSource,number>
 export type QuotaUsageBilling = 'selected'|'not_selected'|'switched'|'uncertain'|'per_session'
+/** Where an account reading's current window usage came from (`quota_usage._window_sources`).
+ *  The parts and `untracked` - usage from before attribution covered the window - sum to the
+ *  reading; `since` is when the window began, observed when `reset_seen`. */
+export type QuotaWindowSources = Record<QuotaUsageSource|'untracked',number>&{since:number;reset_seen:boolean}
 /** One quota interval: two consecutive readings of one account. */
 export type QuotaUsageInterval = {
   sample_id:number

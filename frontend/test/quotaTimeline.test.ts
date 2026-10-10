@@ -3,6 +3,8 @@ import test from 'node:test'
 import {
   describePoints,
   describeShares,
+  describeWindowShares,
+  windowShares,
   formatQuotaDay,
   formatQuotaPercent,
   mergeUsageCells,
@@ -22,7 +24,7 @@ import {
   utcDayNoon,
   type QuotaReading,
 } from '../src/quotaTimeline.ts'
-import type { QuotaRawPoint, QuotaUsageDay, QuotaUsageInterval, QuotaUsageParts } from '../src/usageAnalytics.ts'
+import type { QuotaRawPoint, QuotaUsageDay, QuotaUsageInterval, QuotaUsageParts, QuotaWindowSources } from '../src/usageAnalytics.ts'
 
 const at = (iso: string) => Date.parse(iso)/1000
 const raw = (sampled_at: number, weekly: number|null, extra: Partial<QuotaRawPoint> = {}): QuotaRawPoint => ({
@@ -32,6 +34,18 @@ const raw = (sampled_at: number, weekly: number|null, extra: Partial<QuotaRawPoi
   session: null, ...extra,
 })
 const reading = (time: number, used = 10): QuotaReading => ({time, used})
+
+test('a window\'s current usage is drawn and worded per source, noise dropped and slivers kept visible', () => {
+  const sources: QuotaWindowSources = {
+    since: 0, reset_seen: true, swe_mux: 55.9, outside: 0, elsewhere: 30.04, uncertain: 0.3, untracked: 0.01,
+  }
+  const shares = windowShares(sources)
+  // Drawing order, so the bar and the words read the same way; the 0.01 is scaling noise.
+  assert.deepEqual(shares.map(share => share.source), ['swe_mux', 'elsewhere', 'uncertain'])
+  assert.equal(describeWindowShares(shares), '56% swe-mux sessions · 30% used elsewhere · <1% unclear')
+  assert.equal(describeWindowShares(windowShares({...sources, swe_mux: 0, elsewhere: 0, uncertain: 0, untracked: 4})), '4% untracked')
+  assert.deepEqual(windowShares({...sources, swe_mux: 0, elsewhere: 0, uncertain: 0}), [])
+})
 
 test('raw readings drop failed samples, sort by time, and keep the reset instant they were read with', () => {
   const readings = quotaReadings([raw(300, 40), raw(100, 20), raw(200, null)], 'weekly')

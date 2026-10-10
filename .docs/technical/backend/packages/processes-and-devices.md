@@ -108,9 +108,10 @@ It remains readable while canonical activity migration runs.
 
 `quota_usage_intervals`: per quota interval, the swe-mux usage billed to the account and each
 window's rise split into `swe_mux`, `outside`, `elsewhere`, and `uncertain`.
-Pure rules (`window_rise`, `billed_spans`, `Evidence`, `split_rise`, `calibrated_rate`) plus
-`QuotaUsageMixin`, mixed into `OperationalTelemetryStore`, which owns the background loop, the
-startup catch-up, and the series/snapshot reads.
+Pure rules (`window_rise`, `billed_spans`, `Evidence`, `split_rise`, `calibrated_rate`,
+`window_shares`) plus `QuotaUsageMixin`, mixed into `OperationalTelemetryStore`, which owns the
+background loop, the startup catch-up, the series/snapshot reads, and each account reading's
+current-window split (`_window_sources`, read by `latest_quota_by_account`).
 Its ledger side is two methods on `LedgerQueryMixin`, reached through
 `CanonicalTelemetryService`; it never opens a ledger file itself.
 

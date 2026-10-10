@@ -56,8 +56,17 @@ log = logging.getLogger(__name__)
 T = TypeVar("T")
 
 QUOTA_USAGE_LOOP = "quota-usage-attribution"
-QUOTA_USAGE_VERSION = 1
+#: Rows older than this are recomputed by the next catch-up. 2: a small fall inside one
+#: window stopped counting as a reset (`window_rise`).
+QUOTA_USAGE_VERSION = 2
 QUOTA_WINDOWS = ("session", "weekly")
+#: How long each window runs, which bounds how early the current one can have begun.
+WINDOW_SECONDS = {"session": 5 * 3600.0, "weekly": 7 * 86400.0}
+#: A fall this small inside one window is the provider correcting itself, not a reset.
+#: Measured 2026-10-10 over two months of readings: every fall of one or two points kept
+#: its reset time (Codex reads 57%, then 56%, then climbs back), while every real reset
+#: either passed its reset time, fell to zero, or fell by four points or more.
+DIP_MAX_POINTS = 3.0
 USAGE_SOURCES = ("swe_mux", "outside", "elsewhere", "uncertain")
 #: Selection changes the daemon records (`provider_accounts`): an explicit switch, and a
 #: live login it found changed underneath it.
@@ -142,17 +151,27 @@ class QuotaUsageSource(Protocol):
 # -- pure rules ------------------------------------------------------------------------
 
 
-def window_rise(before: float | None, after: float | None) -> tuple[float | None, bool]:
+def window_rise(
+    before: float | None,
+    after: float | None,
+    *,
+    resets_at: float | None = None,
+    at: float | None = None,
+) -> tuple[float | None, bool]:
     """How far a window climbed between two readings, and whether it reset in between.
 
-    A reset counts as a climb from zero: a window that rolled over and reads 3% rose
-    3 points in that interval, not fell 40.
+    `resets_at` is when the window the earlier reading belonged to was due to reset, and
+    `at` is when the later reading was taken. The window reset if that time passed, or
+    if it fell to zero or by more than `DIP_MAX_POINTS`; a smaller fall is a correction
+    inside one window and rose nothing. A reset counts as a climb from zero: a window
+    that rolled over and reads 3% rose 3 points in that interval, not fell 40.
     """
     if before is None or after is None:
         return None, False
-    if after >= before:
-        return after - before, False
-    return after, True
+    rolled = resets_at is not None and at is not None and at >= resets_at
+    if rolled or (after < before and (after <= 0 or before - after > DIP_MAX_POINTS)):
+        return after, True
+    return max(0.0, after - before), False
 
 
 def billed_spans(
@@ -347,6 +366,20 @@ def usage_interval_public(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
             for window in QUOTA_WINDOWS
         },
     }
+
+
+def window_shares(used: float, parts: dict[str, float]) -> dict[str, float]:
+    """Divide a reading's `used` between the sources whose rises built it.
+
+    The parts are the rises attributed since the window began. They fall short of the
+    reading when attribution started after the window did, which is `untracked`; they
+    overshoot it by each dip's climb back (`window_rise`), and are scaled down to it.
+    """
+    total = sum(parts.values())
+    if total > used:
+        scale = used / total if total > 0 else 0.0
+        return {**{source: parts[source] * scale for source in parts}, "untracked": 0.0}
+    return {**parts, "untracked": used - total}
 
 
 #: The columns `usage_interval_public` reads, as SQL aggregates over one UTC day.
@@ -579,6 +612,52 @@ class QuotaUsageMixin:
             grouped.setdefault(key, []).append(usage_interval_public(row))
         return grouped
 
+    def _window_sources(self, sample: sqlite3.Row, window: str) -> dict[str, Any] | None:
+        """Where the current `window` usage of one reading came from.
+
+        The window began at the last reset attributed inside its length, or - with none -
+        a window's length before the provider's reset time (before the reading, when the
+        provider gives none). A Claude reset that comes early keeps the old reset time, so
+        an observed reset is the better answer whenever there is one.
+        """
+        used = sample[f"{window}_used"]
+        if used is None or sample["status"] != "ready":
+            return None
+        at = float(sample["sampled_at"])
+        resets_at = sample[f"{window}_reset_at"]
+        began = (float(resets_at) if resets_at else at) - WINDOW_SECONDS[window]
+        series = (
+            sample["provider"],
+            sample["account_id"],
+            sample["provider_account_uuid"] or "",
+        )
+        scope = (
+            "FROM quota_usage_intervals WHERE provider=? AND account_id=? "
+            "AND provider_account_uuid=? AND interval_end>=? AND interval_end<=?"
+        )
+        reset_at = self._db.execute(
+            f"SELECT MAX(interval_end) {scope} AND {window}_reset=1",  # noqa: S608
+            (*series, began, at),
+        ).fetchone()[0]
+        since = float(reset_at) if reset_at is not None else began
+        sums = self._db.execute(
+            "SELECT "  # noqa: S608
+            + ",".join(f"SUM({window}_{source})" for source in USAGE_SOURCES)
+            + f" {scope}",
+            (*series, since, at),
+        ).fetchone()
+        shares = window_shares(
+            float(used),
+            {source: float(sums[index] or 0.0) for index, source in enumerate(USAGE_SOURCES)},
+        )
+        return {
+            # When the window began: the reading that saw it reset, or the reset time's
+            # arithmetic when no reset was seen (`reset_seen`).
+            "since": since,
+            "reset_seen": reset_at is not None,
+            **{source: round(value, 3) for source, value in shares.items()},
+        }
+
     def _trailing_usage_pairs(self, sample_id: int) -> list[tuple[sqlite3.Row, sqlite3.Row]]:
         current = self._db.execute(
             "SELECT * FROM quota_samples WHERE id=?", (sample_id,)
@@ -768,7 +847,12 @@ class QuotaUsageMixin:
                 usage.active_seconds,
             ]
             for window in QUOTA_WINDOWS:
-                rise, reset = window_rise(previous[f"{window}_used"], current[f"{window}_used"])
+                rise, reset = window_rise(
+                    previous[f"{window}_used"],
+                    current[f"{window}_used"],
+                    resets_at=previous[f"{window}_reset_at"],
+                    at=interval_end,
+                )
                 clean = (
                     billing in ("selected", "per_session")
                     and rise is not None

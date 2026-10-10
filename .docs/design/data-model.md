@@ -186,7 +186,8 @@ Fields and invariants: `features/daemon-resilience.md`.
   `quota_reset_events` retains reset/correlation evidence plus nullable durable user
   review (`manual_usage | discarded`, timestamp); `quota_usage_intervals` holds one row per
   pair of consecutive samples with the swe-mux usage billed to the account and each window's
-  rise split by source (`features/operational-telemetry.md` § Quota usage attribution).
+  rise split by source (`features/operational-telemetry.md` § Quota usage attribution); its
+  `version` column marks rows a changed rule must recompute, which the startup catch-up does.
 - `notification_decisions`: append-only, content-free notification planning and delivery evidence.
   Each row carries a candidate id, decision time, source event time and sequence, session, event type, category, stage, optional device profile, planner verdict, actual outcome, and stable reason code.
   It never stores notification text, terminal content, subscription endpoints, settings payloads, or credentials.

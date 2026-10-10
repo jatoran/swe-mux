@@ -7,12 +7,15 @@ import { serverNow } from './serverClock.ts'
 import type { ProviderAccount, ProviderAccountsStatus } from './ProviderAccounts'
 import {
   QUOTA_BILLING_LABELS,
+  QUOTA_SHARE_DETAIL,
+  QUOTA_SHARE_LABELS,
   QUOTA_SOURCE_DETAIL,
   QUOTA_SOURCE_LABELS,
   QUOTA_SOURCES,
   QUOTA_WINDOW_LABELS,
   describePoints,
   describeShares,
+  describeWindowShares,
   formatQuotaDay,
   formatQuotaInstant,
   formatQuotaPercent,
@@ -31,6 +34,7 @@ import {
   usageCells,
   usageTotals,
   utcDayOf,
+  windowShares,
   type QuotaReading,
   type QuotaWindowName,
   type UsageCell,
@@ -43,6 +47,7 @@ import {
   type QuotaSeries,
   type QuotaSeriesStatus,
   type QuotaUsageInterval,
+  type QuotaWindowSources,
   type ResetEvent,
 } from './usageAnalytics'
 
@@ -108,6 +113,33 @@ function usageTitle(label:string,cell:UsageCell,daily:boolean,now:number):string
   return `${label} · ${when}: rose ${formatQuotaPercent(cell.total)} · ${describePoints(cell.parts)}${requests}${cost}`
 }
 
+/**
+ * One account's current window, split by where its usage came from: a bar on the quota's
+ * own 0-100 scale, so each part's width is its share of the whole limit, and the same
+ * parts in words.
+ */
+function WindowShares({sources,windowLabel}:{sources:QuotaWindowSources;windowLabel:string}) {
+  const shares=windowShares(sources)
+  if(!shares.length)return null
+  const now=serverNow()
+  const words=describeWindowShares(shares)
+  const began=`${sources.reset_seen?'since its reset':'since it began'}, ${formatQuotaInstant(sources.since,now)}`
+  return <div class="quota-window-shares">
+    <div class="quota-share-bar" role="img" aria-label={`${windowLabel} window ${began}: ${words}`}>
+      {shares.map(share=><span
+        key={share.source}
+        class={`quota-source-${share.source}`}
+        style={{width:`${Math.min(100,share.points)}%`}}
+        title={`${formatQuotaPercent(share.points)} ${QUOTA_SHARE_LABELS[share.source]}: ${QUOTA_SHARE_DETAIL[share.source]}`}
+      />)}
+    </div>
+    <small>
+      {shares.map(share=><span key={share.source} class="quota-share-part"><i class={`quota-source-${share.source}`}/>{describeWindowShares([share])}</span>)}
+      <span class="quota-share-since">{began}</span>
+    </small>
+  </div>
+}
+
 function QuotaChart({
   windowName,
   status,
@@ -127,6 +159,7 @@ function QuotaChart({
     return {
       key:seriesKey(series),
       label:seriesLabel(accounts,series),
+      account:accountFor(accounts,series),
       color:palette[index%palette.length],
       readings:quotaReadings(series.points,windowName),
       // Each rising interval, for the readout; joined into stretches, for the lane.
@@ -136,6 +169,11 @@ function QuotaChart({
   }),[status,windowName,accounts,daily])
   const lanes=lines.filter(line=>line.lane.length)
   const sources=QUOTA_SOURCES.filter(source=>lanes.some(line=>line.lane.some(cell=>cell.parts[source]>0)))
+  // Each account's window as it stands now, from its latest reading, whatever range is charted.
+  const windowsNow=lines.flatMap(line=>{
+    const reading=line.account?.quota?.[windowName]
+    return reading?.sources&&windowShares(reading.sources).length?[{line,used:reading.used_percent,sources:reading.sources}]:[]
+  })
   const height=CHART.height+(lanes.length?LANES.top+lanes.length*LANES.step:0)
   const instants=useMemo(()=>readingInstants(lines.map(line=>line.readings),daily?0:60),[lines,daily])
   // Daemon clock: readings are daemon-stamped, and an axis bound taken from a browser
@@ -251,7 +289,14 @@ function QuotaChart({
           />)}
         </svg>
       </div>
-      {lanes.length>0&&<div class="quota-sources">
+      {windowsNow.length>0&&<div class="quota-sources quota-window-now">
+        <table><caption>Each account's {windowLabel.toLowerCase()} window now: what it has used since the window began, by source</caption><tbody>{windowsNow.map(({line,used,sources:split})=><tr key={line.key}>
+          <th scope="row"><i style={{background:line.color}}/>{line.label}</th>
+          <td><WindowShares sources={split} windowLabel={windowLabel}/></td>
+          <td class="quota-value">{formatQuotaPercent(used)} used</td>
+        </tr>)}</tbody></table>
+      </div>}
+      {lanes.length>0&&<div class="quota-sources quota-range-sources">
         <ul class="quota-source-legend" aria-label="Sources">{sources.map(source=><li key={source} title={QUOTA_SOURCE_DETAIL[source]}>
           <i class={`quota-source-${source}`}/>{QUOTA_SOURCE_LABELS[source]}
         </li>)}</ul>
@@ -376,6 +421,7 @@ function AccountCards({status,accounts}:{status:ProviderAccountsStatus;accounts:
           <small>{window?`${formatQuotaPercent(window.used_percent)} used · `:''}{window?.resets_at
             ?window.resets_at<=now?'reset due; awaiting a reading':`resets in ${formatResetRemaining(window.resets_at,now)} (${formatQuotaInstant(window.resets_at,now)})`
             :'reset time unavailable'}</small>
+          {window?.sources&&<WindowShares sources={window.sources} windowLabel={QUOTA_WINDOW_LABELS[key]}/>}
         </div>
       })}
       {quota?.error&&<p class="usage-error">{quota.error}</p>}

@@ -14,9 +14,10 @@ import { emitTutorialAction } from './tutorial'
 import { harnessMark } from './harnessIcons'
 import { harnessDisplayName } from './harnessRegistry'
 import { RefreshIcon } from './railIcons'
+import type { QuotaWindowSources } from './usageAnalytics'
 
 export type ProviderName=string
-type QuotaWindow={used_percent:number;window_minutes:number;resets_at?:number|null}
+type QuotaWindow={used_percent:number;window_minutes:number;resets_at?:number|null;sources?:QuotaWindowSources|null}
 type AccountQuota={session?:QuotaWindow|null;weekly?:QuotaWindow|null;fable?:QuotaWindow|null;status:string;error?:string|null;refreshed_at?:number;attempted_at?:number;source?:string;plan?:string|null}
 type IdentitySource='token'|'cli'|'file'
 type AccountConflict={kind:'duplicate_account';provider_account_id:string;primary_id:string;is_primary:boolean;account_ids:string[]}

@@ -29,6 +29,7 @@ from swe_mux.quota_usage import (
     catch_up_chunks,
     split_rise,
     window_rise,
+    window_shares,
 )
 from swe_mux.telemetry_queries import QUOTA_TURN_LOOKBACK
 from tests.support.settle import until
@@ -40,6 +41,33 @@ def test_a_reset_counts_as_a_climb_from_zero() -> None:
     assert window_rise(10.0, 14.0) == (4.0, False)
     assert window_rise(40.0, 3.0) == (3.0, True)
     assert window_rise(None, 3.0) == (None, False)
+    # Claude resets early to zero and keeps the old reset time.
+    assert window_rise(87.0, 0.0, resets_at=5000.0, at=100.0) == (0.0, True)
+    # The reset time passed between the readings: a new window, even reading the same.
+    assert window_rise(5.0, 5.0, resets_at=150.0, at=200.0) == (5.0, True)
+
+
+def test_a_small_fall_inside_one_window_is_a_correction_not_a_reset() -> None:
+    # Measured on Codex: 57%, then 56% with the same reset time, then back to 57%.
+    # Read as a reset, the 56% would count as 56 points of fresh usage.
+    assert window_rise(57.0, 56.0, resets_at=5000.0, at=100.0) == (0.0, False)
+    assert window_rise(100.0, 98.0) == (0.0, False)
+    assert window_rise(8.0, 4.0, resets_at=5000.0, at=100.0) == (4.0, True)
+
+
+def test_window_shares_add_up_to_the_reading() -> None:
+    parts = {"swe_mux": 4.0, "outside": 2.0, "elsewhere": 0.0, "uncertain": 0.0}
+    # Attribution began after the window did: the rest is untracked.
+    assert window_shares(9.0, parts) == {**parts, "untracked": 3.0}
+    # A dip's climb back counted twice: scaled down to the reading.
+    assert window_shares(3.0, parts) == {
+        "swe_mux": 2.0,
+        "outside": 1.0,
+        "elsewhere": 0.0,
+        "uncertain": 0.0,
+        "untracked": 0.0,
+    }
+    assert window_shares(0.0, dict.fromkeys(parts, 0.0))["untracked"] == 0.0
 
 
 def test_billing_follows_recorded_switches_and_refuses_an_unrecorded_one() -> None:
@@ -195,6 +223,7 @@ async def sample(
     at: float,
     session: float | None,
     weekly: float | None = 0.0,
+    weekly_resets: float | None = None,
     active: bool,
 ) -> int:
     result = await store.record_quota_sample(
@@ -203,7 +232,9 @@ async def sample(
         quota={
             "status": "ready",
             "session": None if session is None else {"used_percent": session},
-            "weekly": None if weekly is None else {"used_percent": weekly},
+            "weekly": (
+                None if weekly is None else {"used_percent": weekly, "resets_at": weekly_resets}
+            ),
         },
         sampled_at=at,
         account_active=active,
@@ -431,6 +462,59 @@ async def test_daily_series_sums_each_utc_day_by_source(
     assert usage["session"]["rise"] == 5.0
     assert (usage["session"]["swe_mux"], usage["session"]["outside"]) == (2.0, 3.0)
     assert usage["weekly"]["swe_mux"] == 1.0
+
+
+async def test_an_account_reading_says_where_its_current_window_usage_came_from(
+    store: OperationalTelemetryStore, db_path: Path
+) -> None:
+    base = 1_800_000_000.0
+    # Evidence begins after the second reading, so what the window used before is untracked.
+    ledger = FakeLedger(coverage=base + 1000)
+    store.start_quota_usage(ledger)
+    resets = base + 7 * 86400
+
+    async def weekly(step: int, used: float) -> int:
+        return await sample(
+            store,
+            account="a",
+            at=base + step * 900,
+            session=None,
+            weekly=used,
+            weekly_resets=resets,
+            active=True,
+        )
+
+    await weekly(0, 1.0)
+    await weekly(1, 3.0)
+    ledger.request("claude", base + 1500, "run-1")
+    ids = [await weekly(2, 7.0), await weekly(3, 9.0), await weekly(4, 8.0)]
+    ledger.request("claude", base + 4000, "run-2")
+    ids.append(await weekly(5, 9.0))
+    rows = await settled(db_path, ids)
+    assert (rows[ids[2]]["weekly_rise"], rows[ids[2]]["weekly_reset"]) == (0.0, 0)
+
+    sources = (await store.latest_quota_by_account())["a"]["weekly"]["sources"]
+    assert sources == {
+        "since": resets - 7 * 86400,
+        "reset_seen": False,
+        "swe_mux": 5.0,
+        "outside": 2.0,
+        "elsewhere": 0.0,
+        "uncertain": 0.0,
+        # The 1% before the first reading and the 2 points before evidence began, less
+        # the dip's climb back, which was counted again.
+        "untracked": 2.0,
+    }
+
+    # An early reset to zero starts the window over, whatever the reset time says.
+    reset = await weekly(6, 0.0)
+    ledger.request("claude", base + 6000, "run-3")
+    after = await weekly(7, 3.0)
+    await settled(db_path, [reset, after])
+    sources = (await store.latest_quota_by_account())["a"]["weekly"]["sources"]
+    assert sources["since"] == base + 6 * 900
+    assert sources["reset_seen"] is True
+    assert (sources["swe_mux"], sources["untracked"]) == (3.0, 0.0)
 
 
 async def test_retention_and_account_purge_take_the_intervals_with_them(

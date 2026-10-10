@@ -109,6 +109,15 @@
 .quota-source-outside{fill:var(--amber);background:var(--amber)}
 .quota-source-elsewhere{fill:var(--red);background:var(--red)}
 .quota-source-uncertain{fill:var(--muted);background:var(--muted)}
+.quota-source-untracked{background:repeating-linear-gradient(135deg,var(--muted) 0 2px,transparent 2px 5px)}
+/* Outranks `.quota-capacity>div`, the card's label row, which would make this a flex row. */
+.quota-window-shares,.quota-capacity>.quota-window-shares{display:grid;gap:4px;min-width:0}
+.quota-share-bar{display:flex;height:6px;background:var(--line);overflow:hidden}
+.quota-share-bar>span{flex:none;height:100%;cursor:help}
+.quota-window-shares>small{display:flex;flex-wrap:wrap;gap:2px 12px;color:var(--muted);line-height:1.5}
+.quota-share-part{display:inline-flex;align-items:center;gap:5px;white-space:nowrap}
+.quota-share-part>i{display:inline-block;width:8px;height:8px;flex:none}
+.quota-share-since{white-space:nowrap}
 .quota-sources{margin-top:10px;padding-top:10px;border-top:1px solid var(--line);min-width:0}
 .quota-source-legend{display:flex;flex-wrap:wrap;gap:6px 16px;margin:0 0 8px;padding:0;list-style:none;font-size:12px;color:var(--muted)}
 .quota-source-legend>li{display:flex;align-items:center;gap:6px;cursor:help}

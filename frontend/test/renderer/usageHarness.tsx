@@ -96,7 +96,16 @@ const ACCOUNTS = {
     {
       id: 'account-claude', provider: 'claude', label: 'work', created_at: NOW, updated_at: NOW,
       // 91% of a 5h window: the tightest reading, so this is the one the tile has to pick.
-      quota: { status: 'ready', session: { used_percent: 91.4, window_minutes: 300, resets_at: NOW + 3300 }, weekly: { used_percent: 38.2, window_minutes: 10080, resets_at: NOW + 300_000 }, refreshed_at: NOW },
+      quota: {
+        status: 'ready',
+        session: { used_percent: 91.4, window_minutes: 300, resets_at: NOW + 3300 },
+        // Where this week's 38.2% came from; parts sum to the reading.
+        weekly: {
+          used_percent: 38.2, window_minutes: 10080, resets_at: NOW + 300_000,
+          sources: { since: NOW + 300_000 - 604_800, reset_seen: true, swe_mux: 24, outside: 1.2, elsewhere: 11, uncertain: 0, untracked: 2 },
+        },
+        refreshed_at: NOW,
+      },
     },
     {
       id: 'account-codex', provider: 'codex', label: 'personal', created_at: NOW, updated_at: NOW,

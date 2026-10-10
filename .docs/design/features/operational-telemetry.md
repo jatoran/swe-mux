@@ -305,6 +305,12 @@ A background loop (`quota-usage-attribution`) does the work off the poll path, a
 - **Sources** per window: `swe_mux` when swe-mux runs billed to the account were active; `elsewhere` when the account follows the selection and was not selected at all, so nothing on this computer could have billed it; `outside` when the account was in use here but swe-mux does not explain the rise.
 - **Calibration** splits a rise only with evidence: points per usage unit are drawn per account and window from its last 300 clean intervals (selected throughout, no reset, at most 40 minutes, swe-mux usage present), needing 8 intervals and 20 (5-hour) or 8 (weekly) points of total rise.
   With a rate, a rise exceeding the prediction by at least 2 points and 40% of the rise has the excess called `outside`; a single whole-percent step never is.
+- **Resets** (`window_rise`): a window reset when the earlier reading's reset time passed, or when it fell to zero or by more than 3 points, and a reset counts as a climb from zero.
+  A smaller fall is the provider correcting itself inside one window and rose nothing: over two months of readings every one- or two-point fall kept its reset time (Codex reads 57%, then 56%, then climbs back), while a Claude reset that comes early keeps its old reset time and falls to zero.
+  Until row version 2 every fall was a reset, so a 57-to-56 dip was booked as 56 points of fresh usage; `QUOTA_USAGE_VERSION` makes the next catch-up recompute every older row.
+- **The current window** (`_window_sources`) is answered from the same rows on each provider-accounts read: the window began at the last reset attributed inside its length, or a window's length before the provider's reset time when none was, and its sources are the sums since then.
+  They are scaled to the reading so they add up to it: usage from before attribution covered the window is `untracked`, and a sum past the reading (a dip's climb back counts again) is scaled down.
+  A handful of indexed sums per account; nothing is stored for it.
 - Measured 2026-10-10 over three days and two Claude accounts: per-interval request cost predicted the selected account's 5-hour rise at r=0.955 with no lag, while the other account stayed flat, and the stored split reproduced a manual transcript analysis within four points.
 
 ## Transcript reconciliation
@@ -408,6 +414,7 @@ POST /api/processes/action {session_id, pid, identity_id, action}
 The operational snapshot is bounded to 1–1,000 rows per collection and returns
 `interpretation: observational_correlation_only`. Provider-account responses carry
 `reset_alert` as the true unreviewed `count` plus up to 100 evidence `items`, newest first.
+Each account's `quota.session` and `quota.weekly` carry `sources` once attribution covers them: `since`, `reset_seen`, and points of the reading per `swe_mux`, `outside`, `elsewhere`, `uncertain`, and `untracked`, which sum to `used_percent` (§ Quota usage attribution).
 Process snapshots expose evidence states
 `active|exited|escaped|suspected_orphan|stale|inaccessible`, stable attribution provenance, derived server eligibility, and bounded ownership diagnostics.
 The quota-series endpoint applies provider, local account, and epoch-range filters in SQLite instead of truncating a global sample list in the browser.

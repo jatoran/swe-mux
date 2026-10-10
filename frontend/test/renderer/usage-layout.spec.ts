@@ -224,7 +224,7 @@ test('each account gets a source lane, a range split, and a source in the readou
   await expect(chart.locator('.quota-lane-track')).toHaveCount(2)
   await expect(chart.locator('.quota-source-legend li')).toHaveText(['swe-mux sessions','not swe-mux','used elsewhere'])
   expect(await chart.locator('svg rect.quota-source-elsewhere').count()).toBeGreaterThan(0)
-  const totals=chart.locator('.quota-sources tbody tr')
+  const totals=chart.locator('.quota-range-sources tbody tr')
   await expect(totals).toHaveCount(2)
   await expect(totals.first()).toContainText(/\d+% swe-mux sessions/)
   await expect(totals.first()).toContainText('used elsewhere')
@@ -237,6 +237,32 @@ test('each account gets a source lane, a range split, and a source in the readou
   await expect(chart.locator('.quota-chart-header small')).toContainText('(local time)')
   expect(await chart.locator('svg rect.quota-source-swe_mux').count()).toBeGreaterThan(0)
   await expect(chart.locator('.quota-readout .quota-detail').first()).toContainText(/rose \d+% since the reading before: \d+% /)
+})
+
+test('an account\'s current weekly window says how much of it was used here and elsewhere', async ({page})=>{
+  await page.setViewportSize({width:1200,height:900})
+  await openSegment(page,'Quota')
+  // The account card: one bar on the quota's own scale, and the same parts in words.
+  const card=page.locator('.quota-account-card').filter({hasText:'work'})
+  const weekly=card.locator('.quota-capacity').filter({hasText:'Weekly window'})
+  const shares=weekly.locator('.quota-window-shares')
+  await expect(shares.locator('.quota-share-part')).toHaveText(['24% swe-mux sessions','1% not swe-mux','11% used elsewhere','2% untracked'])
+  await expect(shares.locator('.quota-share-bar')).toHaveAttribute('aria-label',/^Weekly window since its reset, .+: 24% swe-mux sessions · 1% not swe-mux · 11% used elsewhere · 2% untracked$/)
+  await expect(shares).toContainText('since its reset')
+  await expect(shares.locator('.quota-share-bar > span')).toHaveCount(4)
+  const bar=(await shares.locator('.quota-share-bar').boundingBox())!
+  const mine=(await shares.locator('.quota-share-bar > .quota-source-swe_mux').boundingBox())!
+  // 24 points of a 100-point limit draws as about a quarter of the bar.
+  expect(mine.width/bar.width).toBeCloseTo(0.24,1)
+  // An account with no attribution yet shows its plain reading and nothing invented.
+  await expect(page.locator('.quota-account-card').filter({hasText:'personal'}).locator('.quota-window-shares')).toHaveCount(0)
+
+  // The history chart answers the same question for every charted account.
+  await page.getByRole('tab',{name:'History',exact:true}).click()
+  const now=page.locator('.quota-chart .quota-window-now tbody tr')
+  await expect(now).toHaveCount(1)
+  await expect(now).toContainText('24% swe-mux sessions')
+  await expect(now.locator('.quota-value')).toHaveText('38.2% used')
 })
 
 test('the attribution list reads the stored intervals through a well-formed request', async ({page})=>{

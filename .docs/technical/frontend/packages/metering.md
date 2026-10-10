@@ -22,7 +22,8 @@ Secondary navigation retains short visible tabs, and extra filters use a bounded
 `QuotaAnalytics.tsx` owns Current, History, Resets, and Attribution and fetches only the evidence needed by the selected view.
 Current readings are reloaded once a minute while the document is visible; quota provider polling remains owned by the backend.
 That minute reload keeps the previous series on screen until its replacement lands, and only a changed provider, account, range, or point resolution discards it, so the History chart neither flashes nor loses the moment being inspected.
-`quotaTimeline.ts` is the History chart's pure half: readings per window, the requested-range axis domain, outage gap splitting, calendar ticks in local time or UTC days, as-of inspection, the source-lane cells and their merging, totals, and wording, and the shared window names and time wording.
+`quotaTimeline.ts` is the History chart's pure half: readings per window, the requested-range axis domain, outage gap splitting, calendar ticks in local time or UTC days, as-of inspection, the source-lane cells and their merging, totals, and wording, the current-window shares (`windowShares`) the account cards and the chart both draw, and the shared window names and time wording.
+The current-window split arrives on the provider-accounts payload (`quota.<window>.sources`, typed `QuotaWindowSources`), so Current fetches nothing extra for it.
 It is tested by `frontend/test/quotaTimeline.test.ts`; the rendered chart, its defaults, and its readout are covered by `frontend/test/renderer/usage-layout.spec.ts`.
 Attribution requests 500 recent rows filtered by provider/account, then labels and applies its date filter to that bounded result.
 
