@@ -165,4 +165,52 @@ test('mobile usage expands exact totals without widening the dialog', async ({pa
   await page.getByRole('tab',{name:'History',exact:true}).click()
   await expect(page.locator('.quota-account-card')).toHaveCount(0)
   await expect(page.locator('.quota-chart')).toHaveCount(1)
+  await expect(page.locator('.quota-readout tbody tr')).toHaveCount(2)
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true)
+})
+
+test('quota history opens on the weekly window over the last 7 days and says what each line meant when', async ({page})=>{
+  await page.setViewportSize({width:1200,height:900})
+  await openSegment(page,'Quota')
+  await page.getByRole('tab',{name:'History',exact:true}).click()
+  const toolbar=page.locator('.analytics-toolbar')
+  await expect(toolbar.getByLabel('Range')).toHaveValue('7')
+  await expect(toolbar.getByLabel('Window')).toHaveValue('weekly')
+  const chart=page.locator('.quota-chart')
+  await expect(chart.locator('h3')).toHaveText('Weekly window · % of limit used')
+  await expect(chart.locator('.quota-chart-header small')).toContainText('(UTC days)')
+
+  // The axis names days, not just its two ends, and the readout starts on the newest reading.
+  await expect.poll(()=>chart.locator('.quota-tick-label').count()).toBeGreaterThanOrEqual(4)
+  const readout=page.locator('.quota-readout')
+  await expect(readout.locator('.analytics-badge')).toHaveText('Latest')
+  await expect(readout.locator('tbody tr')).toHaveCount(2)
+  await expect(readout.locator('.quota-value').first()).toHaveText(/^\d+(\.\d)?% used$/)
+  await expect(readout.locator('.quota-detail').first()).toContainText('reading')
+  const latest=await readout.locator('header strong').innerText()
+  expect(latest).toContain('(UTC day)')
+
+  // Pointing at the start of the axis reads an earlier day, and the way back is labelled.
+  const plot=chart.locator('svg')
+  const box=(await plot.boundingBox())!
+  await page.mouse.move(box.x+60,box.y+box.height/2)
+  await expect(readout.locator('header strong')).not.toHaveText(latest)
+  await readout.getByRole('button',{name:'Show latest'}).click()
+  await expect(readout.locator('header strong')).toHaveText(latest)
+
+  // The keyboard reaches the same readings.
+  await chart.locator('.quota-plot').focus()
+  await page.keyboard.press('Home')
+  await expect(readout.locator('header strong')).not.toHaveText(latest)
+  await page.keyboard.press('End')
+  await expect(readout.locator('header strong')).toHaveText(latest)
+
+  // Every reading is labelled by local time and says when the window was next due to reset.
+  await toolbar.getByLabel('Points').selectOption('raw')
+  await expect(chart.locator('.quota-chart-header small')).toContainText('(local time)')
+  await expect(readout.locator('header strong')).not.toContainText('UTC')
+  await expect(readout.locator('.quota-detail').first()).toContainText('next reset')
+  const readings=page.locator('.quota-readings')
+  await readings.locator('summary').click()
+  await expect(readings.locator('thead th')).toHaveText(['Time','Account','Weekly used','5-hour used'])
 })

@@ -384,7 +384,7 @@ the last good reading and changes no state.
 - The Usage dashboard queries durable quota history by provider, saved local account, date range, and raw/daily resolution.
 - Friendly saved-account labels are shown beside verified provider identity, while legacy samples without provider identity are marked unverified.
 - Quota separates Current, History, Resets, and Attribution.
-  History selects a 5-hour or weekly timeline with reset markers and expandable raw/daily summaries.
+  History opens on the weekly window over the last 7 days, can switch to the 5-hour window, and draws reset markers, a per-account readout of the moment being inspected, and expandable raw/daily readings (`usage.md` § Quota views).
 - These account-specific charts describe quota utilization only; they are not joined to `ccusage` historical token or model totals.
 - Removing the selected saved account removes mux ownership metadata and its private
   snapshot; live system auth remains untouched and becomes external.

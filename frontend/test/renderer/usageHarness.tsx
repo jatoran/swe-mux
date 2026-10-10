@@ -110,7 +110,6 @@ const ROUTES: Array<[string, unknown]> = [
   ['/api/telemetry/v2/runs', {matching:0,items:[],next_cursor:null}],
   ['/api/telemetry/v2/quality', {totals:{calls:0,with_duration:0},backends:[],versions:[],capabilities:{},parsers:[]}],
   ['/api/telemetry/v2/shadow', {legacy_dashboard_enabled:false}],
-  ['/api/telemetry/quota-series', {resolution:'daily',series:[],resets:[]}],
   ['/api/telemetry/workloads', TELEMETRY],
   ['/api/telemetry/operational', { schema_version: 1, interpretation: '', quota: { samples: [], resets: [], attributions: [], rollups: [] }, tools: { metrics: [], skills: [], unknown_or_unmapped: 0, parser_version: 'v1', parser_versions: {}, coverage: [] }, compactions: [] }],
   ['/api/automation/dashboard', DASHBOARD],
@@ -118,10 +117,66 @@ const ROUTES: Array<[string, unknown]> = [
   ['/api/usage', USAGE],
 ]
 
+// Quota history over whatever range the view asked for: a 15-minute poll of two accounts,
+// each weekly window climbing to its own reset, with the matching daily UTC rollups. Built
+// from the request's `since`/`until` because the view bounds its query on the live clock.
+const QUOTA_ACCOUNTS = [
+  { id: 'account-claude', provider: 'claude', uuid: 'uuid-claude', rate: 0.95, offset: 2 * 86400 },
+  { id: 'account-codex', provider: 'codex', uuid: 'uuid-codex', rate: 0.6, offset: 5 * 86400 },
+]
+const WEEK = 7 * 86400
+const weeklyUsed = (time: number, account: typeof QUOTA_ACCOUNTS[number]) =>
+  Math.round(((time + account.offset) % WEEK) / WEEK * 100 * account.rate)
+const sessionUsed = (time: number) => Math.round((time % 18000) / 18000 * 70)
+
+function quotaSeries(path: string) {
+  const query = new URL(path, 'http://harness').searchParams
+  const until = Number(query.get('until')) || Date.now() / 1000
+  const since = Number(query.get('since')) || until - WEEK
+  const resolution = query.get('resolution') === 'raw' ? 'raw' : 'daily'
+  const first = Math.ceil(since / 900) * 900
+  const series = QUOTA_ACCOUNTS.map(account => {
+    const samples: Array<Record<string, unknown>> = []
+    for (let time = first; time <= until; time += 900) {
+      samples.push({
+        id: time, provider: account.provider, account_id: account.id, provider_account_uuid: account.uuid,
+        sampled_at: time, status: 'ready', freshness: 'fresh', raw_precision: 0, active: true,
+        session: { used_percent: sessionUsed(time), resets_at: Math.ceil(time / 18000) * 18000 },
+        weekly: { used_percent: weeklyUsed(time, account), resets_at: time - ((time + account.offset) % WEEK) + WEEK },
+      })
+    }
+    if (resolution === 'raw') return { provider: account.provider, account_id: account.id, provider_account_uuid: account.uuid, identity: 'verified', points: samples }
+    const days = new Map<string, Array<Record<string, unknown>>>()
+    for (const sample of samples) {
+      const day = new Date((sample.sampled_at as number) * 1000).toISOString().slice(0, 10)
+      days.set(day, [...(days.get(day) || []), sample])
+    }
+    const used = (sample: Record<string, unknown>, window: string) => (sample[window] as { used_percent: number }).used_percent
+    const points = [...days].map(([day, rows]) => ({
+      provider: account.provider, account_id: account.id, provider_account_uuid: account.uuid, day, samples: rows.length, errors: 0,
+      ...Object.fromEntries(['session', 'weekly'].flatMap(window => {
+        const values = rows.map(row => used(row, window))
+        return [[`${window}_first`, values[0]], [`${window}_last`, values[values.length - 1]], [`${window}_min`, Math.min(...values)], [`${window}_max`, Math.max(...values)]]
+      })),
+    }))
+    return { provider: account.provider, account_id: account.id, provider_account_uuid: account.uuid, identity: 'verified', points }
+  })
+  const resets = QUOTA_ACCOUNTS.flatMap(account => {
+    const observed = until - ((until + account.offset) % WEEK)
+    return observed >= since ? [{
+      id: `reset-${account.id}`, provider: account.provider, account_id: account.id, window: 'weekly',
+      before_value: Math.round(100 * account.rate), after_value: 0, observed_at: observed, expected_reset_at: observed,
+      classification: 'scheduled', confidence: 'high', confirmed: 1,
+    }] : []
+  })
+  return { schema_version: 1, interpretation: 'quota_utilization_not_token_usage', resolution, since, until, series, resets }
+}
+
 window.fetch = (async (input: RequestInfo | URL) => {
   const path = String(typeof input === 'string' ? input : input instanceof URL ? input.pathname : input.url)
   const match = ROUTES.find(([route]) => path.startsWith(route))
-  return new Response(JSON.stringify(match ? match[1] : {}), { status: 200, headers: { 'Content-Type': 'application/json' } })
+  const body = path.startsWith('/api/telemetry/quota-series') ? quotaSeries(path) : match ? match[1] : {}
+  return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } })
 }) as typeof fetch
 
 document.body.style.margin = '0'

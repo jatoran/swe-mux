@@ -61,9 +61,23 @@ Collection settings, cache clearing, and source provenance live in a disclosure.
 
 ## Quota views
 
-Current shows saved-account cards with selected-account markers, remaining capacity, reset countdowns, and reading freshness.
+Current shows saved-account cards with selected-account markers, remaining capacity, percent used, reset countdowns with their absolute reset time, and reading freshness.
 The account-management link opens Settings → Accounts; this surface does not duplicate account switching.
-History shows one selected quota window and expandable raw or daily readings.
+Every Quota view names a window the same way: Weekly, 5-hour, and Fable weekly.
+
+History opens on the **Weekly** window over the **last 7 days**, with one point per UTC day; the toolbar switches to the 5-hour window, a 30-day, 90-day, or all-retained range, and every raw reading.
+The chart exists to answer what percent of a window each account had used at a given time, so its labelling follows from that question:
+
+- The time axis spans the requested range rather than only the readings, with calendar ticks, so where a point sits says when it was read.
+- Raw readings are drawn and labelled in the viewer's local time.
+- Daily points are UTC calendar days, because the daemon rolls up by `date(sampled_at,'unixepoch')` and the browser cannot re-bucket them; each sits at its day's UTC noon and is always labelled as a UTC day.
+- A line breaks across an outage (more than three times an account's median raw spacing, at least 30 minutes, or a missing day) instead of claiming a percentage nobody read.
+- A readout under the chart lists every account's percent used at the inspected moment, defaulting to the newest reading; hovering, tapping, dragging, or the arrow, Home, and End keys move it.
+- Raw readouts use as-of semantics: each account shows its latest reading at or before the moment, with that reading's own time when it differs, and the window's next reset as reported with it.
+- Daily readouts never borrow another day's value, and add the day's first reading, peak, and sample count.
+- Reset markers carry the account, the before and after values, and the observed time.
+
+The readings disclosure is a newest-first table with the charted window's column first; a daily cell gives the day's first and last reading, plus its peak when that differs.
 Resets shows recorded movements and confirmation/review state.
 Attribution shows the latest 500 movements matching the provider/account filter, further restricted to the chosen date range, and explicitly labels this bounded sample.
 Quota history is account-specific; ccusage history is not joined to it.
@@ -138,10 +152,10 @@ The API's workload summary is used to populate filter choices, not presented as 
 - Overview: `frontend/src/UsageOverview.tsx`, `frontend/src/usagePots.ts`
 - Agents: `frontend/src/UsageDashboardView.tsx` (`UsageAgentsView`), `frontend/src/UsageModelBreakdown.tsx`
 - Automation: `frontend/src/AutomationSpendView.tsx`, `frontend/src/automationCost.ts`
-- Quota: `frontend/src/QuotaAnalytics.tsx`, `frontend/src/providerAccountDisplay.ts`
+- Quota: `frontend/src/QuotaAnalytics.tsx`, `frontend/src/quotaTimeline.ts`, `frontend/src/providerAccountDisplay.ts`
 - Shared presentation: `frontend/src/AnalyticsPrimitives.tsx`, `frontend/src/analytics.css`
 - Historical analytics helpers: `frontend/src/usageAnalytics.ts`, `frontend/src/analyticsPresentation.ts`
 - Operational store: `src/swe_mux/operational_telemetry.py`; frontend shapes: `frontend/src/operationalTelemetry.ts`
 - Fixtures and tests: `tests/fixtures/usage/`, `tests/test_usage_phase4.py`,
   `tests/test_frontend_usage_phase5_contract.py`, `frontend/test/usagePots.test.ts`,
-  `frontend/test/renderer/usage-layout.spec.ts`
+  `frontend/test/quotaTimeline.test.ts`, `frontend/test/renderer/usage-layout.spec.ts`

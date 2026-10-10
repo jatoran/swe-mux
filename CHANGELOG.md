@@ -21,6 +21,12 @@ The release procedure that maintains this file is [`RELEASING.md`](RELEASING.md)
   On Windows a Python server can start on a port another process already holds without any error, and then never receive a request, so its preview showed the other process's page instead.
   The preview now names every process on the port and which one actually answered, and Processes marks the shared listener.
 
+### Changed
+
+- **Quota history opens on the weekly window over the last 7 days, and says when each percentage was true.**
+  The chart's time axis is labelled with days, and a readout under it lists every account's percent used at the moment you point at, tap, or step to with the arrow keys, with the reading's own time and the window's next reset.
+  Daily points are labelled as UTC days, a line no longer bridges a stretch with no readings, and the readings list is a table of time, account, and percent used per window.
+
 ## [0.2.9] - 2026-09-25
 
 ### Added

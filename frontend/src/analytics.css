@@ -85,10 +85,38 @@
 .quota-capacity>div{display:flex;gap:8px;justify-content:space-between}
 .quota-capacity meter{width:100%;height:10px;accent-color:var(--accent)}
 .quota-capacity>small{color:var(--muted)}
-.quota-reading{padding:12px 0;border-top:1px solid var(--line)}
-.quota-reading>strong,.quota-reading>span,.quota-reading>small{display:block;overflow-wrap:anywhere;margin-bottom:6px}
-.analytics-content .quota-chart{width:100%;min-width:0}
-.analytics-content .quota-chart-legend{font-size:12px;line-height:1.5}
+.quota-grid-line{stroke:var(--line);stroke-width:1;vector-effect:non-scaling-stroke}
+.quota-chart{width:100%;min-width:0;border:1px solid var(--line);padding:12px;background:var(--panel2)}
+.quota-chart-header{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:4px 12px}
+.analytics-content .quota-chart h3{margin:0}
+.quota-chart-header>small{color:var(--muted)}
+.analytics-content .quota-chart-explainer{margin:6px 0 10px;color:var(--muted);font-size:12px}
+.quota-chart>p{color:var(--muted)}
+.quota-plot:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.quota-chart svg{display:block;width:100%;height:auto;min-width:0;overflow:visible;cursor:crosshair;touch-action:pan-y;user-select:none}
+.quota-chart svg text{fill:var(--muted);font-family:inherit;font-size:11px}
+.quota-tick-line{stroke:var(--line);stroke-width:1;stroke-opacity:.5;vector-effect:non-scaling-stroke}
+.quota-line{fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;vector-effect:non-scaling-stroke}
+.quota-point{stroke:var(--panel2);stroke-width:1}
+.quota-reset-marker{stroke:#94a3b8;stroke-width:1;stroke-dasharray:3 3;vector-effect:non-scaling-stroke}
+.quota-reset-marker.unexpected{stroke:#f472b6;stroke-width:2}
+.quota-reset-marker.scheduled{stroke:#a3e635}
+.quota-inspect-line{stroke:var(--text);stroke-opacity:.55;stroke-width:1;vector-effect:non-scaling-stroke;pointer-events:none}
+.quota-inspect-point{stroke:var(--panel2);stroke-width:2;pointer-events:none}
+.quota-readout{margin-top:10px;padding-top:10px;border-top:1px solid var(--line);min-width:0}
+.quota-readout>header{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:6px;min-height:34px}
+.quota-readout table,.quota-readings table{width:100%;border-collapse:collapse;font-size:12px}
+.quota-readout th,.quota-readout td,.quota-readings th,.quota-readings td{padding:6px;text-align:left;vertical-align:baseline;border-top:1px solid var(--line);overflow-wrap:anywhere}
+.quota-readout th{font-weight:400}
+.quota-readout th>i{display:inline-block;width:10px;height:10px;margin-right:8px}
+.quota-readout .quota-value{white-space:nowrap;font-weight:600;font-variant-numeric:tabular-nums}
+.quota-readout .quota-detail{color:var(--muted)}
+.quota-readout>small{display:block;margin-top:8px;color:var(--muted);line-height:1.5}
+.quota-readings-scroll{max-width:100%;overflow-x:auto;margin-top:10px}
+.quota-readings thead th{color:var(--muted);font-weight:400;border-top:0}
+.quota-readings .quota-value{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
+.quota-readings td>small{display:block;margin-top:2px;color:var(--muted);white-space:normal}
+.quota-readings>button{margin-top:8px}
 .analytics-content .usage-table-scroll{max-width:100%;overflow:auto}
 .analytics-panel .usage-pots{grid-template-columns:repeat(3,minmax(0,1fr))}
 .analytics-panel .usage-pot{padding:14px;min-width:0}
@@ -129,6 +157,11 @@
 :where(:root[data-workspace-layout="mobile"]) .analytics-run-card>button:not(.analytics-run-open){margin-top:10px}
 :where(:root[data-workspace-layout="mobile"]) .analytics-export-list{grid-template-columns:1fr}
 :where(:root[data-workspace-layout="mobile"]) .quota-account-grid{grid-template-columns:1fr}
+:where(:root[data-workspace-layout="mobile"]) .quota-chart{padding:8px}
+:where(:root[data-workspace-layout="mobile"]) .quota-readout table,:where(:root[data-workspace-layout="mobile"]) .quota-readout tbody{display:block}
+:where(:root[data-workspace-layout="mobile"]) .quota-readout tr{display:grid;grid-template-columns:minmax(0,1fr) auto;border-top:1px solid var(--line)}
+:where(:root[data-workspace-layout="mobile"]) .quota-readout th,:where(:root[data-workspace-layout="mobile"]) .quota-readout td{border-top:0}
+:where(:root[data-workspace-layout="mobile"]) .quota-readout .quota-detail{grid-column:1/-1;padding-top:0}
 :where(:root[data-workspace-layout="mobile"]) .analytics-panel .usage-pots{grid-template-columns:1fr}
 :where(:root[data-workspace-layout="mobile"]) .analytics-panel .analytics-live-summary{display:grid;gap:9px}
 
