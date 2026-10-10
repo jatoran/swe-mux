@@ -27,6 +27,8 @@ from .harness import (
 from .models import MuxEvent
 from .opencode_store import conversation_records
 from .opencode_store import conversation_watermark as store_watermark
+from .quota_usage import SCHEMA as QUOTA_USAGE_SCHEMA
+from .quota_usage import QuotaUsageMixin, usage_interval_public
 from .sqlite_store import (
     connect_or_quarantine,
     database_operation_lock,
@@ -41,7 +43,7 @@ log = logging.getLogger(__name__)
 TELEMETRY_EVENT_LOOP = "operational-telemetry"
 TELEMETRY_RETENTION_LOOP = "telemetry-retention"
 
-TELEMETRY_SCHEMA_VERSION = 7
+TELEMETRY_SCHEMA_VERSION = 8
 TOOL_PARSER_VERSION = "phase2-v1"
 # Parser revisions, keyed by transcript *dialect* rather than by harness.
 #
@@ -273,30 +275,6 @@ CREATE INDEX IF NOT EXISTS idx_quota_resets_recent
 CREATE INDEX IF NOT EXISTS idx_quota_resets_pending
   ON quota_reset_events(provider,account_id,window,confirmed,observed_at DESC);
 
-CREATE TABLE IF NOT EXISTS quota_attributions (
-  sample_id INTEGER NOT NULL,
-  window TEXT NOT NULL,
-  provider TEXT NOT NULL,
-  account_id TEXT NOT NULL,
-  interval_start REAL NOT NULL,
-  interval_end REAL NOT NULL,
-  quota_delta REAL NOT NULL,
-  correlated_estimate REAL NOT NULL,
-  correlated_low REAL NOT NULL,
-  correlated_high REAL NOT NULL,
-  external_estimate REAL NOT NULL,
-  external_low REAL NOT NULL,
-  external_high REAL NOT NULL,
-  confidence TEXT NOT NULL,
-  sample_gap_seconds REAL NOT NULL,
-  concurrent_sessions INTEGER NOT NULL,
-  provider_lag_seconds REAL NOT NULL,
-  allocations_json TEXT NOT NULL,
-  caveats_json TEXT NOT NULL,
-  PRIMARY KEY(sample_id,window)
-);
-CREATE INDEX IF NOT EXISTS idx_quota_attribution_recent
-  ON quota_attributions(interval_end DESC);
 
 CREATE TABLE IF NOT EXISTS context_compactions (
   id TEXT PRIMARY KEY,
@@ -468,7 +446,7 @@ def _classify_quota_drop(
     return "unexpected", None
 
 
-class OperationalTelemetryStore:
+class OperationalTelemetryStore(QuotaUsageMixin):
     """Durable, bounded evidence store for Phase 2 operational telemetry."""
 
     def __init__(
@@ -499,6 +477,7 @@ class OperationalTelemetryStore:
         self._reset_alert_timers: dict[str, asyncio.Task[None]] = {}
         self.sessions: Any = None
         self.history: Any = None
+        self._init_quota_usage()
 
     def _open(self) -> sqlite3.Connection:
         db = sqlite3.connect(self.path, check_same_thread=False)
@@ -512,6 +491,7 @@ class OperationalTelemetryStore:
         with self._operation_lock:
             self._db = connect_or_quarantine(self.path, self._open)
             self._db.executescript(SCHEMA)
+            self._db.executescript(QUOTA_USAGE_SCHEMA)
             self._migrate_schema()
             self._repair_duplicate_process_ownership()
             self._repair_legacy_reset_classifications()
@@ -521,6 +501,11 @@ class OperationalTelemetryStore:
             self._db.commit()
 
     def _migrate_schema(self) -> None:
+        # Superseded by `quota_usage_intervals` (schema 8): it credited any session
+        # of the provider to whichever account moved, so it disagreed with the new
+        # rows wherever two accounts were in use. Derived data, so it is dropped
+        # rather than left to contradict them.
+        self._db.execute("DROP TABLE IF EXISTS quota_attributions")
         reset_columns = {
             str(row["name"])
             for row in self._db.execute("PRAGMA table_info(quota_reset_events)").fetchall()
@@ -691,6 +676,7 @@ class OperationalTelemetryStore:
         self._event_task = None
         await background.stop(TELEMETRY_RETENTION_LOOP)
         self._reconcile_task = None
+        await self.stop_quota_usage()
         # A held alert is evidence the user has not seen yet. Emitting it now beats
         # dropping it on a daemon restart the reload flow makes routine.
         await self.flush_reset_alerts()
@@ -1350,11 +1336,12 @@ class OperationalTelemetryStore:
                 sample_id = int(row["id"])
             else:
                 sample_id = int(cursor.lastrowid or 0)
-            generated = self._detect_resets_and_attribution(sample_id)
+            generated = self._detect_resets(sample_id)
             self._db.commit()
             return sample_id, generated
 
         sample_id, generated = await self._run(op)
+        self._note_quota_sample(sample_id)
         if self._event_bus:
             for item in generated:
                 if item.get("confirmed") and item.get("classification") == "unexpected":
@@ -1426,7 +1413,7 @@ class OperationalTelemetryStore:
         for provider in list(self._pending_reset_alerts):
             await self._emit_reset_alert(provider)
 
-    def _detect_resets_and_attribution(self, sample_id: int) -> list[dict[str, Any]]:
+    def _detect_resets(self, sample_id: int) -> list[dict[str, Any]]:
         current = self._db.execute(
             "SELECT * FROM quota_samples WHERE id=?", (sample_id,)
         ).fetchone()
@@ -1451,9 +1438,6 @@ class OperationalTelemetryStore:
             after = current[f"{window}_used"]
             if before is None or after is None:
                 continue
-            delta = float(after) - float(before)
-            if delta > 0:
-                self._record_attribution(current, previous, window, delta)
             pending = self._db.execute(
                 "SELECT * FROM quota_reset_events WHERE provider=? AND account_id=? AND window=? "
                 "AND classification='unexpected' AND confirmed=0 AND suppression_reason IS NULL "
@@ -1603,87 +1587,6 @@ class OperationalTelemetryStore:
             )
         return generated
 
-    def _record_attribution(
-        self, current: sqlite3.Row, previous: sqlite3.Row, window: str, delta: float
-    ) -> None:
-        start, end = float(previous["sampled_at"]), float(current["sampled_at"])
-        try:
-            rows = self._db.execute(
-                "SELECT h.id,h.project_id,h.model,h.tokens_in,h.tokens_out,"
-                "COUNT(e.seq) activity_events FROM history h JOIN events e ON e.session_id=h.id "
-                "WHERE h.backend=? AND e.ts>? AND e.ts<=? AND e.type IN "
-                "('turn_started','turn_ended','turn_aborted','tool_use','tool_result') "
-                "GROUP BY h.id,h.project_id,h.model,h.tokens_in,h.tokens_out",
-                (current["provider"], start, end),
-            ).fetchall()
-        except sqlite3.OperationalError:
-            # The store is independently migratable/testable. A quota sample must
-            # remain durable even when legacy history tables are not present yet.
-            rows = []
-        total_tokens = sum(
-            max(0, int(row["tokens_in"] or 0) + int(row["tokens_out"] or 0)) for row in rows
-        )
-        allocations: list[dict[str, Any]] = []
-        for row in rows:
-            tokens = max(0, int(row["tokens_in"] or 0) + int(row["tokens_out"] or 0))
-            weight = tokens / total_tokens if total_tokens else 1 / max(1, len(rows))
-            allocations.append(
-                {
-                    "session_id": row["id"],
-                    "project_id": row["project_id"],
-                    "model": row["model"],
-                    "activity_events": row["activity_events"],
-                    "native_tokens": tokens or None,
-                    "share_of_correlated_estimate": round(weight, 6),
-                    "quota_percent_estimate": round(delta * weight, 6),
-                }
-            )
-        active = bool(rows) and int(current["account_active"]) and int(previous["account_active"])
-        correlated = delta if active else 0.0
-        # Identity cannot be proven from subscription percentages. The full delta
-        # therefore remains inside both honest ranges even when the point estimate is
-        # distributed using explicit native token evidence.
-        correlated_low, correlated_high = (0.0, delta if rows else 0.0)
-        external = max(0.0, delta - correlated)
-        external_low, external_high = (0.0, delta)
-        gap = end - start
-        caveats = ["provider_quota_weighting_unknown", "shared_account_identity_unprovable"]
-        if len(rows) > 1:
-            caveats.append("concurrent_mux_sessions")
-        if gap > 30 * 60:
-            caveats.append("large_sample_gap")
-        if not rows:
-            caveats.append("no_mux_activity_in_interval")
-        confidence = "medium" if len(rows) == 1 and total_tokens and gap <= 30 * 60 else "low"
-        self._db.execute(
-            "INSERT OR REPLACE INTO quota_attributions"
-            "(sample_id,window,provider,account_id,interval_start,interval_end,quota_delta,"
-            "correlated_estimate,correlated_low,correlated_high,external_estimate,external_low,"
-            "external_high,confidence,sample_gap_seconds,concurrent_sessions,provider_lag_seconds,"
-            "allocations_json,caveats_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (
-                current["id"],
-                window,
-                current["provider"],
-                current["account_id"],
-                start,
-                end,
-                delta,
-                correlated,
-                correlated_low,
-                correlated_high,
-                external,
-                external_low,
-                external_high,
-                confidence,
-                gap,
-                len(rows),
-                min(gap, 15 * 60),
-                json.dumps(allocations),
-                json.dumps(caveats),
-            ),
-        )
-
     async def purge_account(
         self, provider: str, account_id: str, *, since: float | None = None
     ) -> dict[str, int]:
@@ -1699,7 +1602,7 @@ class OperationalTelemetryStore:
         tables = (
             ("quota_samples", "sampled_at"),
             ("quota_reset_events", "observed_at"),
-            ("quota_attributions", "interval_end"),
+            ("quota_usage_intervals", "interval_end"),
             ("quota_sample_rollups", None),
         )
 
@@ -1856,6 +1759,13 @@ class OperationalTelemetryStore:
                 for (item_provider, item_account, owner, _day), point in points.items():
                     grouped.setdefault((item_provider, item_account, owner), []).append(point)
 
+            usage = self._usage_for_series(
+                provider=provider,
+                account_id=account_id,
+                since=since,
+                until=until,
+                daily=resolution == "daily",
+            )
             series = []
             for (item_provider, item_account, owner), values in sorted(grouped.items()):
                 sort_key = "sampled_at" if resolution == "raw" else "day"
@@ -1867,6 +1777,7 @@ class OperationalTelemetryStore:
                         "provider_account_uuid": owner or None,
                         "identity": "verified" if owner else "legacy_unverified",
                         "points": ordered,
+                        "usage": usage.get((item_provider, item_account, owner), []),
                     }
                 )
 
@@ -1934,15 +1845,15 @@ class OperationalTelemetryStore:
                     (*args, limit),
                 ).fetchall()
             ]
-            attributions = []
-            for row in self._db.execute(
-                f"SELECT * FROM quota_attributions{where} ORDER BY interval_end DESC LIMIT ?",
-                (*args, limit),
-            ).fetchall():
-                item = dict(row)
-                item["allocations"] = json.loads(item.pop("allocations_json"))
-                item["caveats"] = json.loads(item.pop("caveats_json"))
-                attributions.append(item)
+            usage_where = f"{where} AND" if where else " WHERE"
+            usage_intervals = [
+                usage_interval_public(row)
+                for row in self._db.execute(
+                    f"SELECT * FROM quota_usage_intervals{usage_where} "  # noqa: S608
+                    "(session_rise>0 OR weekly_rise>0) ORDER BY interval_end DESC LIMIT ?",
+                    (*args, limit),
+                ).fetchall()
+            ]
             tool_rows = self._db.execute(
                 "SELECT backend,COALESCE(model,'unknown') model,COALESCE(project_id,'') project_id,"
                 "session_id,taxonomy,raw_tool,COUNT(*) events,"
@@ -1979,7 +1890,7 @@ class OperationalTelemetryStore:
                 "quota": {
                     "samples": samples,
                     "resets": resets,
-                    "attributions": attributions,
+                    "usage_intervals": usage_intervals,
                     "rollups": [
                         dict(row)
                         for row in self._db.execute(
@@ -2251,7 +2162,9 @@ class OperationalTelemetryStore:
             self._db.execute("DELETE FROM tool_events WHERE observed_at<?", (quota_cutoff,))
             self._db.execute("DELETE FROM context_compactions WHERE observed_at<?", (quota_cutoff,))
             self._db.execute("DELETE FROM quota_reset_events WHERE observed_at<?", (quota_cutoff,))
-            self._db.execute("DELETE FROM quota_attributions WHERE interval_end<?", (quota_cutoff,))
+            self._db.execute(
+                "DELETE FROM quota_usage_intervals WHERE interval_end<?", (quota_cutoff,)
+            )
             deleted_notification_decisions = self._db.execute(
                 "DELETE FROM notification_decisions WHERE decided_at<?", (quota_cutoff,)
             ).rowcount

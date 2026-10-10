@@ -22,7 +22,7 @@ Secondary navigation retains short visible tabs, and extra filters use a bounded
 `QuotaAnalytics.tsx` owns Current, History, Resets, and Attribution and fetches only the evidence needed by the selected view.
 Current readings are reloaded once a minute while the document is visible; quota provider polling remains owned by the backend.
 That minute reload keeps the previous series on screen until its replacement lands, and only a changed provider, account, range, or point resolution discards it, so the History chart neither flashes nor loses the moment being inspected.
-`quotaTimeline.ts` is the History chart's pure half: readings per window, the requested-range axis domain, outage gap splitting, calendar ticks in local time or UTC days, as-of inspection, and the shared window names and time wording.
+`quotaTimeline.ts` is the History chart's pure half: readings per window, the requested-range axis domain, outage gap splitting, calendar ticks in local time or UTC days, as-of inspection, the source-lane cells and their merging, totals, and wording, and the shared window names and time wording.
 It is tested by `frontend/test/quotaTimeline.test.ts`; the rendered chart, its defaults, and its readout are covered by `frontend/test/renderer/usage-layout.spec.ts`.
 Attribution requests 500 recent rows filtered by provider/account, then labels and applies its date filter to that bounded result.
 
@@ -39,7 +39,7 @@ Collection diagnostics contain field coverage, parser and reconciliation state, 
 `AutomationSpendView.tsx` remains shared with the Automation dashboard.
 Metered call costs remain primary; observed-agent estimates are labelled by their subset and collapsed.
 `automationCost.ts` owns its cost, count, cache, and duration formatting.
-`operationalTelemetry.ts` supplies the quota attribution types; Activity uses canonical v2 routes.
+`operationalTelemetry.ts` supplies the operational snapshot types (the quota half is `usage_intervals`, typed in `usageAnalytics.ts`); Activity uses canonical v2 routes.
 
 ## Bandwidth, storage, and processes
 

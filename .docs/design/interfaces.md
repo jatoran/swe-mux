@@ -2845,11 +2845,13 @@ filed under; `…/purge-telemetry` discards a slot's durable rows, bounded by `s
 the period after a credential handover is bad (daily rollups have no instant to cut on and are
 left intact by a bounded purge). The operational endpoint caps
 `limit` to 1–1,000 per collection and returns quota samples/rollups/reset evidence,
-probabilistic attributions, tool/skill aggregates, parser coverage, and explicit compactions.
+`usage_intervals` (quota intervals that rose, newest first, with their swe-mux usage and
+source split), tool/skill aggregates, parser coverage, and explicit compactions.
 Its interpretation is always `observational_correlation_only`.
 Reset review is durable and audit-preserving: both resolutions remove the row from the active
 alert summary without deleting evidence; `manual_usage` is valid only for Codex rows.
 `/telemetry/quota-series` returns server-filtered account timelines with `interpretation: quota_utilization_not_token_usage`.
+Each series carries `usage`, its stored intervals that rose, or their per-UTC-day sums at daily resolution (`features/operational-telemetry.md` § API surface).
 Daily responses merge retained rollups with unpruned samples and keep different verified provider identities in a reused local account slot separate.
 
 ## Agent MCP surface

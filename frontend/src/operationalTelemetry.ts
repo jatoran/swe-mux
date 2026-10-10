@@ -1,6 +1,6 @@
 // Shapes for `/api/telemetry/operational`, which two dialogs now read for different halves.
 //
-// Usage -> Quota reads `quota.attributions`; Resources -> Fleet activity reads `tools` and
+// Usage -> Quota reads `quota.usage_intervals`; Resources -> Fleet activity reads `tools` and
 // `compactions`. The payload used to be fetched once because all of it lived in one segment
 // of one dialog. It no longer does, and threading it between two modals would couple them
 // for nothing: each is unmounted when its segment is not selected, and the endpoint is a
@@ -10,33 +10,7 @@
 // added to the tools payload has to reach the fleet view and a field added to the quota
 // payload has to reach the usage view, and a copy in each file is how those drift.
 
-export type QuotaAttribution = {
-  sample_id: number
-  window: string
-  provider: string
-  account_id: string
-  interval_start: number
-  interval_end: number
-  quota_delta: number
-  correlated_estimate: number
-  correlated_low: number
-  correlated_high: number
-  external_estimate: number
-  external_low: number
-  external_high: number
-  confidence: string
-  sample_gap_seconds: number
-  concurrent_sessions: number
-  provider_lag_seconds: number
-  allocations: Array<{
-    session_id: string
-    project_id?: string
-    model?: string
-    native_tokens?: number
-    quota_percent_estimate: number
-  }>
-  caveats: string[]
-}
+import type { QuotaUsageInterval } from './usageAnalytics'
 
 export type ToolMetric = {
   backend: string
@@ -92,7 +66,8 @@ export type OperationalStatus = {
   quota: {
     samples: unknown[]
     resets: unknown[]
-    attributions: QuotaAttribution[]
+    /** Intervals that rose, newest first (`quota_usage.py`). */
+    usage_intervals: QuotaUsageInterval[]
     rollups: unknown[]
   }
   tools: {

@@ -9,7 +9,15 @@
 //   `operational_telemetry.quota_series`). The browser cannot re-bucket it into local
 //   days, so it is drawn at that day's UTC noon and always labelled as a UTC day rather
 //   than silently presented as a local one.
-import type { QuotaDailyPoint, QuotaRawPoint, QuotaSeriesStatus } from './usageAnalytics'
+import type {
+  QuotaDailyPoint,
+  QuotaRawPoint,
+  QuotaSeriesStatus,
+  QuotaUsageBilling,
+  QuotaUsageDay,
+  QuotaUsageInterval,
+  QuotaUsageSource,
+} from './usageAnalytics'
 
 export type QuotaWindowName = 'session'|'weekly'
 export type QuotaZone = 'local'|'utc'
@@ -27,6 +35,127 @@ export const QUOTA_WINDOW_LABELS: Record<QuotaWindowName|'fable', string> = {
 /** The label for a window name the daemon sent, keeping an unknown one readable rather than blank. */
 export const quotaWindowLabel = (window: string): string =>
   QUOTA_WINDOW_LABELS[window as keyof typeof QUOTA_WINDOW_LABELS] ?? window
+
+/** Sources in drawing order: swe-mux first, so it sits at the base of every stacked cell. */
+export const QUOTA_SOURCES: readonly QuotaUsageSource[] = ['swe_mux', 'outside', 'elsewhere', 'uncertain']
+
+export const QUOTA_SOURCE_LABELS: Record<QuotaUsageSource, string> = {
+  swe_mux: 'swe-mux sessions',
+  outside: 'not swe-mux',
+  elsewhere: 'used elsewhere',
+  uncertain: 'unclear',
+}
+
+/** What each source claims, worded for a legend or a tooltip. */
+export const QUOTA_SOURCE_DETAIL: Record<QuotaUsageSource, string> = {
+  swe_mux: 'swe-mux sessions billed to this account were running',
+  outside: 'the account was in use here, but swe-mux sessions do not explain the rise: another app on this computer, or use elsewhere at the same time',
+  elsewhere: 'this computer was not using the account: another device, the provider\'s own apps, or another login',
+  uncertain: 'the account was switched in a way the daemon did not record',
+}
+
+export const QUOTA_BILLING_LABELS: Record<QuotaUsageBilling, string> = {
+  selected: 'selected here throughout',
+  not_selected: 'not selected here',
+  switched: 'switched during the interval',
+  uncertain: 'switched without a record of when',
+  per_session: 'billed per session, by the account each was started under',
+}
+
+/** One drawn stretch of an attribution lane, in percentage points of one window. */
+export type UsageCell = {
+  start: number
+  end: number
+  parts: Record<QuotaUsageSource, number>
+  total: number
+  requests: number
+  costUsd: number
+}
+
+const isDay = (row: QuotaUsageInterval | QuotaUsageDay): row is QuotaUsageDay => 'day' in row
+
+/** The rising intervals (or UTC days) of one window, ascending, as drawable cells. */
+export function usageCells(
+  usage: ReadonlyArray<QuotaUsageInterval | QuotaUsageDay> | undefined,
+  window: QuotaWindowName,
+): UsageCell[] {
+  const cells: UsageCell[] = []
+  for (const row of usage ?? []) {
+    const parts = Object.fromEntries(QUOTA_SOURCES.map(source => [source, Math.max(0, row[window][source] || 0)])) as Record<QuotaUsageSource, number>
+    const total = QUOTA_SOURCES.reduce((sum, source) => sum + parts[source], 0)
+    if (total <= 0) continue
+    const [start, end] = isDay(row) ? [utcDayNoon(row.day) - DAY / 2, utcDayNoon(row.day) + DAY / 2] : [row.start, row.end]
+    cells.push({start, end, parts, total, requests: row.requests, costUsd: row.cost_usd})
+  }
+  return cells.sort((a, b) => a.start - b.start)
+}
+
+/** The source a cell is entirely, or null when it is a mix. */
+export function soleSource(cell: UsageCell): QuotaUsageSource | null {
+  const present = QUOTA_SOURCES.filter(source => cell.parts[source] > 0)
+  return present.length === 1 ? present[0] : null
+}
+
+/**
+ * Join cells that are wholly one source into a single stretch across gaps up to `joinGap`.
+ *
+ * A week of fifteen-minute intervals is several hundred cells a pixel or two wide; a
+ * run of them from one source draws as one rectangle and reads as one period. The gap
+ * matters because providers report whole percents: a window ticks up once every few
+ * polls while the usage behind that tick accrued across all of them, so a short run of
+ * no-rise intervals between two rises of one source belongs to the same period. A mixed
+ * cell keeps its own stack, because what it says is that the mix happened there.
+ */
+export function mergeUsageCells(cells: readonly UsageCell[], joinGap = 1): UsageCell[] {
+  const merged: UsageCell[] = []
+  for (const cell of cells) {
+    const last = merged[merged.length - 1]
+    const source = soleSource(cell)
+    if (last && source && soleSource(last) === source && cell.start - last.end <= joinGap) {
+      merged[merged.length - 1] = {
+        start: last.start,
+        end: cell.end,
+        parts: {...last.parts, [source]: last.parts[source] + cell.parts[source]},
+        total: last.total + cell.total,
+        requests: last.requests + cell.requests,
+        costUsd: last.costUsd + cell.costUsd,
+      }
+    } else {
+      merged.push({...cell, parts: {...cell.parts}})
+    }
+  }
+  return merged
+}
+
+/** Points per source over a set of cells, and their total. */
+export function usageTotals(cells: readonly UsageCell[]): {parts: Record<QuotaUsageSource, number>; total: number} {
+  const parts = Object.fromEntries(QUOTA_SOURCES.map(source => [source, 0])) as Record<QuotaUsageSource, number>
+  for (const cell of cells) for (const source of QUOTA_SOURCES) parts[source] += cell.parts[source]
+  return {parts, total: QUOTA_SOURCES.reduce((sum, source) => sum + parts[source], 0)}
+}
+
+/** `65% swe-mux sessions · 35% used elsewhere`: shares of a total, largest first. */
+export function describeShares(parts: Record<QuotaUsageSource, number>, total: number): string {
+  if (total <= 0) return ''
+  return QUOTA_SOURCES
+    .filter(source => parts[source] > 0)
+    .sort((a, b) => parts[b] - parts[a])
+    .map(source => `${Math.round(parts[source] / total * 100)}% ${QUOTA_SOURCE_LABELS[source]}`)
+    .join(' · ')
+}
+
+/** `3 swe-mux sessions · 1 not swe-mux`: points per source, for one interval or day. */
+export function describePoints(parts: Record<QuotaUsageSource, number>): string {
+  return QUOTA_SOURCES
+    .filter(source => parts[source] > 0)
+    .map(source => `${formatQuotaPercent(parts[source])} ${QUOTA_SOURCE_LABELS[source]}`)
+    .join(' · ')
+}
+
+/** The cell a reading closes (raw) or the day it falls on (daily), if that one rose. */
+export function usageCellAt(cells: readonly UsageCell[], instant: number, daily: boolean): UsageCell | null {
+  return cells.find(cell => daily ? cell.start <= instant && instant < cell.end : Math.abs(cell.end - instant) < 1) ?? null
+}
 
 /** One plotted reading of one window on one account. */
 export type QuotaReading = {

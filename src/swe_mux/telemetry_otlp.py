@@ -237,13 +237,18 @@ def _attributes(items: Any) -> dict[str, Any]:
 
 
 def _timestamp(record: dict[str, Any]) -> float:
-    raw = record.get("timeUnixNano") or record.get("observedTimeUnixNano")
-    if raw is None:
-        return time.time()
-    try:
-        return int(raw) / 1_000_000_000
-    except (TypeError, ValueError):
-        return 0.0
+    # OTLP leaves `timeUnixNano` at zero when the producer did not set an event time,
+    # and Codex 0.153.0 does exactly that on every log record (as the string "0",
+    # which is truthy), stamping only `observedTimeUnixNano`. Taking the zero filed
+    # every Codex request at the epoch. Zero is "unknown" here, never an instant.
+    for key in ("timeUnixNano", "observedTimeUnixNano"):
+        try:
+            nanos = int(record.get(key) or 0)
+        except (TypeError, ValueError):
+            continue
+        if nanos > 0:
+            return nanos / 1_000_000_000
+    return time.time()
 
 
 def _boolean(value: Any) -> bool | None:

@@ -80,7 +80,7 @@ async def test_history_migration_adds_metadata_without_losing_rows(tmp_path: Pat
         "process_evidence",
         "quota_samples",
         "quota_reset_events",
-        "quota_attributions",
+        "quota_usage_intervals",
         "context_compactions",
         "tool_events",
         "transcript_telemetry_coverage",

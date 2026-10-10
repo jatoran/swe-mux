@@ -236,6 +236,18 @@ def _provider_profile(provider: ManagedProvider) -> _ProviderProfile:
     assert_never(provider)
 
 
+def switch_reaches_live(provider: str) -> bool:
+    """Whether a running session of `provider` bills whichever account is selected now.
+
+    True means the account billed for a request is the one selected when it was made;
+    false means it is the one selected when the session started. Unmanaged providers
+    have no switch at all.
+    """
+    if provider not in PROVIDERS:
+        return False
+    return _provider_profile(_provider(provider)).switch_reaches_live
+
+
 def _provider(value: str) -> Provider:
     if value not in PROVIDERS:
         raise ProviderAccountError("provider is not a managed harness")

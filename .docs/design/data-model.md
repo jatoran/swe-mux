@@ -184,8 +184,9 @@ Fields and invariants: `features/daemon-resilience.md`.
   Version 1 is legacy root-relative attribution; version 2 proves current per-edge causal validation or live Job Object membership.
 - `quota_samples` and `quota_sample_rollups`: durable raw observations and daily retention summaries keyed by local account slot and verified provider account identity.
   `quota_reset_events` retains reset/correlation evidence plus nullable durable user
-  review (`manual_usage | discarded`, timestamp); `quota_attributions` retains correlation
-  estimates.
+  review (`manual_usage | discarded`, timestamp); `quota_usage_intervals` holds one row per
+  pair of consecutive samples with the swe-mux usage billed to the account and each window's
+  rise split by source (`features/operational-telemetry.md` § Quota usage attribution).
 - `notification_decisions`: append-only, content-free notification planning and delivery evidence.
   Each row carries a candidate id, decision time, source event time and sequence, session, event type, category, stage, optional device profile, planner verdict, actual outcome, and stable reason code.
   It never stores notification text, terminal content, subscription endpoints, settings payloads, or credentials.

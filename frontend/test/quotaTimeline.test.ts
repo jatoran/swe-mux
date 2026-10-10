@@ -1,8 +1,14 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
+  describePoints,
+  describeShares,
   formatQuotaDay,
   formatQuotaPercent,
+  mergeUsageCells,
+  usageCellAt,
+  usageCells,
+  usageTotals,
   nearestInstant,
   quotaDomain,
   quotaDomainLabel,
@@ -16,7 +22,7 @@ import {
   utcDayNoon,
   type QuotaReading,
 } from '../src/quotaTimeline.ts'
-import type { QuotaRawPoint } from '../src/usageAnalytics.ts'
+import type { QuotaRawPoint, QuotaUsageDay, QuotaUsageInterval, QuotaUsageParts } from '../src/usageAnalytics.ts'
 
 const at = (iso: string) => Date.parse(iso)/1000
 const raw = (sampled_at: number, weekly: number|null, extra: Partial<QuotaRawPoint> = {}): QuotaRawPoint => ({
@@ -134,6 +140,68 @@ test('percentages keep the provider\'s precision and an absent one says so', () 
   assert.equal(formatQuotaPercent(99.96), '100%')
   assert.equal(formatQuotaPercent(null), 'no reading')
   assert.equal(formatQuotaPercent(undefined), 'no reading')
+})
+
+const window = (values: Partial<Record<'swe_mux'|'outside'|'elsewhere'|'uncertain', number>>): QuotaUsageParts => ({
+  rise: Object.values(values).reduce((sum, value) => sum + (value ?? 0), 0),
+  swe_mux: 0, outside: 0, elsewhere: 0, uncertain: 0, ...values,
+})
+const interval = (start: number, session: QuotaUsageParts, weekly = window({})): QuotaUsageInterval => ({
+  sample_id: start, provider: 'claude', account_id: 'a', start, end: start + 900, billing: 'selected',
+  requests: session.swe_mux ? 3 : 0, runs: 1, cost_usd: session.swe_mux ? 1.5 : 0, session, weekly,
+})
+
+test('usage cells keep only rises of the charted window, in time order', () => {
+  const cells = usageCells([
+    interval(1800, window({elsewhere: 2})),
+    interval(0, window({swe_mux: 3})),
+    interval(900, window({}), window({swe_mux: 1})),
+  ], 'session')
+  assert.deepEqual(cells.map(cell => [cell.start, cell.end, cell.total]), [[0, 900, 3], [1800, 2700, 2]])
+  assert.deepEqual(usageCells(undefined, 'weekly'), [])
+  const day: QuotaUsageDay = {day: '2026-10-06', requests: 9, cost_usd: 4, session: window({swe_mux: 5, elsewhere: 4}), weekly: window({})}
+  const [daily] = usageCells([day], 'session')
+  // A day's cell is its whole UTC day, so it lines up with that day's slot on the axis.
+  assert.deepEqual([daily.start, daily.end], [at('2026-10-06T00:00:00Z'), at('2026-10-07T00:00:00Z')])
+})
+
+test('back-to-back cells of one source become one stretch; a mixed cell stays its own', () => {
+  const cells = usageCells([
+    interval(0, window({swe_mux: 2})),
+    interval(900, window({swe_mux: 3})),
+    interval(1800, window({swe_mux: 1, outside: 4})),
+    interval(2700, window({elsewhere: 2})),
+    interval(3600, window({elsewhere: 1})),
+    // A polling gap: the same source on the far side of it is a separate stretch.
+    interval(9000, window({elsewhere: 1})),
+  ], 'session')
+  const merged = mergeUsageCells(cells)
+  assert.deepEqual(merged.map(cell => [cell.start, cell.end, cell.total]), [
+    [0, 1800, 5], [1800, 2700, 5], [2700, 4500, 3], [9000, 9900, 1],
+  ])
+  assert.equal(merged[0].requests, 6)
+  // Whole-percent windows tick up every few polls; a short quiet run joins the period.
+  // The 75-minute quiet run before 9000 joins at a 90-minute gap and not at 30.
+  assert.deepEqual(mergeUsageCells(cells, 90 * 60).map(cell => [cell.start, cell.end]), [[0, 1800], [1800, 2700], [2700, 9900]])
+  assert.deepEqual(mergeUsageCells(cells, 30 * 60).map(cell => [cell.start, cell.end]), [[0, 1800], [1800, 2700], [2700, 4500], [9000, 9900]])
+  const totals = usageTotals(merged)
+  assert.equal(totals.total, 14)
+  assert.deepEqual(totals.parts, {swe_mux: 6, outside: 4, elsewhere: 4, uncertain: 0})
+})
+
+test('sources are described as shares over a range and as points for one interval', () => {
+  assert.equal(describeShares({swe_mux: 216, outside: 4, elsewhere: 114, uncertain: 0}, 334), '65% swe-mux sessions · 34% used elsewhere · 1% not swe-mux')
+  assert.equal(describeShares({swe_mux: 0, outside: 0, elsewhere: 0, uncertain: 0}, 0), '')
+  assert.equal(describePoints({swe_mux: 2, outside: 0, elsewhere: 0, uncertain: 1}), '2% swe-mux sessions · 1% unclear')
+})
+
+test('a reading finds the interval it closes; a daily point finds its day', () => {
+  const cells = usageCells([interval(0, window({swe_mux: 2})), interval(900, window({elsewhere: 1}))], 'session')
+  assert.equal(usageCellAt(cells, 1800, false)?.parts.elsewhere, 1)
+  assert.equal(usageCellAt(cells, 1700, false), null)
+  const days = usageCells([{day: '2026-10-06', requests: 0, cost_usd: 0, session: window({elsewhere: 4}), weekly: window({})}], 'session')
+  assert.equal(usageCellAt(days, at('2026-10-06T12:00:00Z'), true)?.total, 4)
+  assert.equal(usageCellAt(days, at('2026-10-07T12:00:00Z'), true), null)
 })
 
 test('days carry the year only when it is not the current one, and every window has one name', () => {

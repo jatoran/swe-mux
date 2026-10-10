@@ -109,6 +109,10 @@ PAGE_EXTRA_FILTERS: dict[str, tuple[str, ...]] = {
     "evidence": ("run_id", "event_type", "source_kind"),
 }
 FINDING_VERDICTS = ("useful", "noise", "already_known")
+#: How far before a quota interval a still-running turn may have started and count as
+#: activity inside it. Bounds the turn lookup, and keeps a turn the ledger never saw
+#: end from reading as presence forever.
+QUOTA_TURN_LOOKBACK = 6 * 3600.0
 
 Filters = dict[str, str]
 Span = tuple[str, float, float, str | None]
@@ -683,6 +687,83 @@ class LedgerQueryMixin:
 
     def provider_metrics(self) -> list[dict[str, Any]]:
         return self._query_all("SELECT * FROM telemetry_provider_metrics ORDER BY observed_at")
+
+    # -- quota usage evidence ---------------------------------------------------
+
+    def quota_usage_evidence(
+        self, backend: str, from_ts: float, to_ts: float
+    ) -> dict[str, list[tuple[Any, ...]]]:
+        """What mux-owned runs of one harness did in `(from_ts, to_ts]`, for quota attribution.
+
+        Two kinds of evidence, both index-served and bounded by the window:
+        model requests (`finished_at, run_id, session_id, cost_usd, token_weight`),
+        which carry quantity, and turns overlapping the window (`run_id, session_id,
+        started_at, finished_at`), which carry only presence and are what a harness
+        without request telemetry can offer. Turns are looked up from
+        `QUOTA_TURN_LOOKBACK` before the window, so a turn that began earlier and is
+        still running counts.
+
+        `token_weight` is millions of price-weighted tokens (cached reads at a tenth,
+        cache writes at 1.25, output at five times input), for a harness that reports
+        tokens but no cost. It is only ever compared with itself, per account.
+        """
+
+        requests: list[tuple[Any, ...]] = []
+        turns: list[tuple[Any, ...]] = []
+        for period in self._periods(from_ts - QUOTA_TURN_LOOKBACK, to_ts):
+            connection = self._segment(period)
+            requests.extend(
+                tuple(row)
+                for row in connection.execute(
+                    "SELECT finished_at,run_id,session_id,cost_usd,"
+                    "(MAX(0,COALESCE(input_tokens,0)-COALESCE(cache_read_tokens,0))"
+                    "+0.1*COALESCE(cache_read_tokens,0)+1.25*COALESCE(cache_write_tokens,0)"
+                    "+5.0*COALESCE(output_tokens,0))/1e6 FROM telemetry_model_requests "
+                    "WHERE finished_at>? AND finished_at<=? AND +backend=? AND origin='mux_owned'",
+                    (from_ts, to_ts, backend),
+                ).fetchall()
+            )
+            turns.extend(
+                tuple(row)
+                for row in connection.execute(
+                    "SELECT run_id,session_id,started_at,finished_at FROM telemetry_turns "
+                    "WHERE started_at>? AND started_at<=? AND +backend=? AND origin='mux_owned' "
+                    "AND (finished_at IS NULL OR finished_at>?)",
+                    (from_ts - QUOTA_TURN_LOOKBACK, to_ts, backend, from_ts),
+                ).fetchall()
+            )
+        requests.sort(key=lambda row: float(row[0]))
+        return {"requests": requests, "turns": turns}
+
+    def quota_usage_coverage(self, backend: str | None = None) -> float | None:
+        """The earliest instant this ledger holds mux-owned activity, for one harness or any.
+
+        An interval before it is not "no swe-mux usage" but "no evidence either way",
+        and attribution must not be written for it.
+        """
+
+        earliest: float | None = None
+        scope = " AND +backend=?" if backend is not None else ""
+        arguments: tuple[Any, ...] = (backend,) if backend is not None else ()
+        for period in self._periods():
+            connection = self._segment(period)
+            # `> 0`: evidence that arrived without a timestamp was filed at the epoch,
+            # and must not make the whole history look covered.
+            for sql in (
+                f"SELECT started_at FROM telemetry_turns WHERE started_at>0{scope} "
+                "AND origin='mux_owned' ORDER BY started_at LIMIT 1",
+                "SELECT finished_at FROM telemetry_model_requests "
+                f"WHERE finished_at>0{scope} AND origin='mux_owned' ORDER BY finished_at LIMIT 1",
+            ):
+                row = connection.execute(sql, arguments).fetchone()
+                if row is not None:
+                    found = float(row[0])
+                    earliest = found if earliest is None else min(earliest, found)
+            if earliest is not None:
+                # Periods come back oldest first, so the first one holding any
+                # activity holds the earliest.
+                break
+        return earliest
 
     # -- summaries --------------------------------------------------------------
 

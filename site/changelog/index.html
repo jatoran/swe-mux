@@ -1094,10 +1094,11 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
       </div>
       <div class="relgroups">
         <div><span class="k">Added</span> <span class="sep">1 entry</span></div>
-        <div><span class="k">Changed</span> <span class="sep">1 entry</span></div>
+        <div><span class="k">Changed</span> <span class="sep">2 entries</span></div>
+        <div><span class="k">Fixed</span> <span class="sep">2 entries</span></div>
       </div>
       <details class="relmore">
-        <summary>all 2 entries</summary>
+        <summary>all 5 entries</summary>
         <div class="changetype">Added</div>
         <ul class="bullets">
           <li><span><b>A preview says when another process is listening on its port.</b> On Windows a Python server can start on a port another process already holds without any error, and then never receive a request, so its preview showed the other process's page instead. The preview now names every process on the port and which one actually answered, and Processes marks the shared listener.</span></li>
@@ -1105,6 +1106,12 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
         <div class="changetype">Changed</div>
         <ul class="bullets">
           <li><span><b>Quota history opens on the weekly window over the last 7 days, and says when each percentage was true.</b> The chart's time axis is labelled with days, and a readout under it lists every account's percent used at the moment you point at, tap, or step to with the arrow keys, with the reading's own time and the window's next reset. Daily points are labelled as UTC days, a line no longer bridges a stretch with no readings, and the readings list is a table of time, account, and percent used per window.</span></li>
+          <li><span><b>Quota history shows where each rise came from.</b> A lane under the chart marks, for every account, which rises came from swe-mux sessions, which the account's swe-mux sessions do not explain, and which happened while this computer was not using the account at all (another device, claude.ai, or another login); each account's rise over the range is summed by source beneath it. Each interval is attributed once from the requests swe-mux sessions billed to that account, so opening or refreshing the chart reads stored results. Quota → Attribution lists the same rises, and replaces an estimate that credited any session of a provider to whichever of its accounts moved.</span></li>
+        </ul>
+        <div class="changetype">Fixed</div>
+        <ul class="bullets">
+          <li><span><b>Quota → Attribution loads again.</b> Its request carried two query strings and was refused on every load.</span></li>
+          <li><span><b>Codex telemetry events keep their real time.</b> Codex sends an empty event time, and every such event was being filed at 1970.</span></li>
         </ul>
       </details>
     </div>

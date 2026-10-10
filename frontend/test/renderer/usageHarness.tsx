@@ -111,7 +111,6 @@ const ROUTES: Array<[string, unknown]> = [
   ['/api/telemetry/v2/quality', {totals:{calls:0,with_duration:0},backends:[],versions:[],capabilities:{},parsers:[]}],
   ['/api/telemetry/v2/shadow', {legacy_dashboard_enabled:false}],
   ['/api/telemetry/workloads', TELEMETRY],
-  ['/api/telemetry/operational', { schema_version: 1, interpretation: '', quota: { samples: [], resets: [], attributions: [], rollups: [] }, tools: { metrics: [], skills: [], unknown_or_unmapped: 0, parser_version: 'v1', parser_versions: {}, coverage: [] }, compactions: [] }],
   ['/api/automation/dashboard', DASHBOARD],
   ['/api/provider-accounts', ACCOUNTS],
   ['/api/usage', USAGE],
@@ -128,6 +127,19 @@ const WEEK = 7 * 86400
 const weeklyUsed = (time: number, account: typeof QUOTA_ACCOUNTS[number]) =>
   Math.round(((time + account.offset) % WEEK) / WEEK * 100 * account.rate)
 const sessionUsed = (time: number) => Math.round((time % 18000) / 18000 * 70)
+const SOURCES = ['swe_mux', 'outside', 'elsewhere', 'uncertain'] as const
+// Where each rise came from: the claude account is used elsewhere in the small hours
+// (UTC), the codex account outside swe-mux late in the morning, swe-mux otherwise.
+const sourceOf = (time: number, account: typeof QUOTA_ACCOUNTS[number]) => {
+  const hour = new Date(time * 1000).getUTCHours()
+  if (account.provider === 'claude' && hour >= 2 && hour < 6) return 'elsewhere'
+  if (account.provider === 'codex' && hour >= 10 && hour < 12) return 'outside'
+  return 'swe_mux'
+}
+const rise = (before: number, after: number) => after >= before ? after - before : after
+const parts = (amount: number, source: string) => ({
+  rise: amount, reset: false, ...Object.fromEntries(SOURCES.map(item => [item, item === source ? amount : 0])),
+})
 
 function quotaSeries(path: string) {
   const query = new URL(path, 'http://harness').searchParams
@@ -145,13 +157,37 @@ function quotaSeries(path: string) {
         weekly: { used_percent: weeklyUsed(time, account), resets_at: time - ((time + account.offset) % WEEK) + WEEK },
       })
     }
-    if (resolution === 'raw') return { provider: account.provider, account_id: account.id, provider_account_uuid: account.uuid, identity: 'verified', points: samples }
+    const used = (sample: Record<string, unknown>, window: string) => (sample[window] as { used_percent: number }).used_percent
+    const intervals = samples.slice(1).map((sample, index) => {
+      const previous = samples[index], end = sample.sampled_at as number, source = sourceOf(end, account)
+      const session = rise(used(previous, 'session'), used(sample, 'session'))
+      const weekly = rise(used(previous, 'weekly'), used(sample, 'weekly'))
+      return {
+        sample_id: end, provider: account.provider, account_id: account.id, provider_account_uuid: account.uuid,
+        start: previous.sampled_at, end, billing: source === 'elsewhere' ? 'not_selected' : 'selected',
+        requests: source === 'swe_mux' ? 40 : 0, runs: source === 'swe_mux' ? 1 : 0, cost_usd: source === 'swe_mux' ? 6.5 : 0,
+        session: parts(session, source), weekly: parts(weekly, source),
+      }
+    }).filter(item => item.session.rise > 0 || item.weekly.rise > 0)
+    if (resolution === 'raw') return { provider: account.provider, account_id: account.id, provider_account_uuid: account.uuid, identity: 'verified', points: samples, usage: intervals }
     const days = new Map<string, Array<Record<string, unknown>>>()
     for (const sample of samples) {
       const day = new Date((sample.sampled_at as number) * 1000).toISOString().slice(0, 10)
       days.set(day, [...(days.get(day) || []), sample])
     }
-    const used = (sample: Record<string, unknown>, window: string) => (sample[window] as { used_percent: number }).used_percent
+    const usageDays = new Map<string, typeof intervals>()
+    for (const item of intervals) {
+      const day = new Date(item.end * 1000).toISOString().slice(0, 10)
+      usageDays.set(day, [...(usageDays.get(day) || []), item])
+    }
+    const sum = (items: typeof intervals, window: 'session' | 'weekly') => Object.fromEntries(
+      ['rise', ...SOURCES].map(key => [key, items.reduce((total, item) => total + Number((item[window] as Record<string, unknown>)[key]), 0)]),
+    )
+    const usage = [...usageDays].map(([day, items]) => ({
+      day, requests: items.reduce((total, item) => total + item.requests, 0),
+      cost_usd: items.reduce((total, item) => total + item.cost_usd, 0),
+      session: sum(items, 'session'), weekly: sum(items, 'weekly'),
+    }))
     const points = [...days].map(([day, rows]) => ({
       provider: account.provider, account_id: account.id, provider_account_uuid: account.uuid, day, samples: rows.length, errors: 0,
       ...Object.fromEntries(['session', 'weekly'].flatMap(window => {
@@ -159,7 +195,7 @@ function quotaSeries(path: string) {
         return [[`${window}_first`, values[0]], [`${window}_last`, values[values.length - 1]], [`${window}_min`, Math.min(...values)], [`${window}_max`, Math.max(...values)]]
       })),
     }))
-    return { provider: account.provider, account_id: account.id, provider_account_uuid: account.uuid, identity: 'verified', points }
+    return { provider: account.provider, account_id: account.id, provider_account_uuid: account.uuid, identity: 'verified', points, usage }
   })
   const resets = QUOTA_ACCOUNTS.flatMap(account => {
     const observed = until - ((until + account.offset) % WEEK)
@@ -172,10 +208,28 @@ function quotaSeries(path: string) {
   return { schema_version: 1, interpretation: 'quota_utilization_not_token_usage', resolution, since, until, series, resets }
 }
 
+// The operational snapshot's quota half is the last two days of the same intervals, newest first.
+function operational() {
+  const until = Date.now() / 1000
+  const raw = quotaSeries(`/api/telemetry/quota-series?resolution=raw&since=${until - 2 * 86400}&until=${until}`)
+  const usage = raw.series.flatMap(item => (item.usage || []) as Array<{ end: number }>).sort((a, b) => b.end - a.end)
+  return {
+    schema_version: 1, interpretation: '', quota: { samples: [], resets: [], usage_intervals: usage, rollups: [] },
+    tools: { metrics: [], skills: [], unknown_or_unmapped: 0, parser_version: 'v1', parser_versions: {}, coverage: [] }, compactions: [],
+  }
+}
+
+// Every URL the dialog asked for, so a spec can check how a request was built.
+const requested: string[] = []
+Object.assign(window, { requested })
+
 window.fetch = (async (input: RequestInfo | URL) => {
   const path = String(typeof input === 'string' ? input : input instanceof URL ? input.pathname : input.url)
+  requested.push(path)
   const match = ROUTES.find(([route]) => path.startsWith(route))
-  const body = path.startsWith('/api/telemetry/quota-series') ? quotaSeries(path) : match ? match[1] : {}
+  const body = path.startsWith('/api/telemetry/quota-series') ? quotaSeries(path)
+    : path.startsWith('/api/telemetry/operational') ? operational()
+    : match ? match[1] : {}
   return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } })
 }) as typeof fetch
 

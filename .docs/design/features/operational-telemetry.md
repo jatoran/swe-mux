@@ -13,8 +13,9 @@ use, or claim that quota movement proves a person's activity.
   ownership key. Persisted command data is SHA-256 only, never command text.
 - Quota samples preserve provider/account, sample time, session/weekly values and reset
   times, source, freshness, raw precision, error, selected-account state, and auth state.
-- Quota attribution means mux-owned activity overlapped a sampled quota interval. It is not
-  causal billing data or shared-account identity proof.
+- Quota attribution means mux-owned requests billed to the account fell inside a sampled
+  quota interval, or that the account could not have been billed from this computer at all.
+  It is not causal billing data or shared-account identity proof.
 - Compaction counts require explicit provider-native records. A token decrease remains
   `unknown`.
 - Tool metrics require explicit native hook/transcript records. Skill metrics additionally
@@ -34,8 +35,12 @@ SQLite connection:
   The primary key includes the verified provider account UUID, so a reused local account slot cannot merge different credential owners into one day.
 - `quota_reset_events`: before/after evidence, expected/observed time, classification,
   confirmation, confidence, suppression reason, and nullable durable user review status/time.
-- `quota_attributions`: estimate/range, explicit external remainder, overlapping session
-  count, sample gap, provider-lag allowance, optional native-token allocation, and caveats.
+- `quota_usage_intervals`: one row per pair of consecutive ready samples of one account
+  (keyed by the closing sample): how the account was billed, the swe-mux requests, runs,
+  cost, and active seconds billed to it, and per window the rise split into `swe_mux`,
+  `outside`, `elsewhere`, and `uncertain` points (§ Quota usage attribution).
+  It replaced `quota_attributions` in schema 8, which credited any session of a provider to
+  whichever of its accounts moved and is dropped on open.
 - `context_compactions`: deduplicated explicit compaction evidence with backend capability,
   confidence, parser version, Project, model, run, and source identity.
 - `tool_events`: deduplicated calls/results with raw name, normalized taxonomy, success,
@@ -286,10 +291,21 @@ enumeration.
    Review state is durable and server-side, so dismissing an alert on one device silences it on
    every device, and it is shown in the evidence log.
 
-Positive quota deltas produce probabilistic attribution records. Mux session overlap defines
-the correlated range; unclaimed movement remains an explicit external/unassigned range.
-Explicit native tokens may weight allocation among overlapping mux sessions, but never
-translate transcript tokens into provider quota weighting.
+### Quota usage attribution
+
+Each quota interval is attributed once, when its closing sample lands, and once more at the next sample so ledger evidence that arrived late still counts (`src/swe_mux/quota_usage.py`).
+Reading a chart reads stored rows; nothing scans transcripts or recomputes on view.
+A background loop (`quota-usage-attribution`) does the work off the poll path, and at startup first catches up every covered interval that has no current row, oldest first, in chunks of at most 192 intervals and two days of evidence.
+
+- **Evidence** is the canonical ledger's mux-owned model requests (quantity: `cost_usd` where the provider reports it, else price-weighted tokens) and turns (presence only, for a harness without request telemetry), read by two index-served queries bounded by the interval (`telemetry_queries.quota_usage_evidence`).
+  An interval that ends before the ledger's first evidence for the provider is left unattributed: that is "no evidence", not "no swe-mux usage".
+- **Billing** follows the provider (`provider_accounts.switch_reaches_live`).
+  A Claude request bills whichever account was selected when it was made, so selection spans come from the samples' `account_active` plus the recorded `provider_account_selected`/`provider_account_reconciled` events inside the interval; when the samples say the selection changed and no event says when, the interval is `uncertain`.
+  A Codex request bills the account its session was spawned under: the live record's spawn stamp, else the account selected when the run's history row opened.
+- **Sources** per window: `swe_mux` when swe-mux runs billed to the account were active; `elsewhere` when the account follows the selection and was not selected at all, so nothing on this computer could have billed it; `outside` when the account was in use here but swe-mux does not explain the rise.
+- **Calibration** splits a rise only with evidence: points per usage unit are drawn per account and window from its last 300 clean intervals (selected throughout, no reset, at most 40 minutes, swe-mux usage present), needing 8 intervals and 20 (5-hour) or 8 (weekly) points of total rise.
+  With a rate, a rise exceeding the prediction by at least 2 points and 40% of the rise has the excess called `outside`; a single whole-percent step never is.
+- Measured 2026-10-10 over three days and two Claude accounts: per-interval request cost predicted the selected account's 5-hour rise at r=0.955 with no lag, while the other account stayed flat, and the stored split reproduced a manual transcript analysis within four points.
 
 ## Transcript reconciliation
 
@@ -350,7 +366,7 @@ records must be sanitized into the versioned fixture corpus.
 
 `/api/telemetry/operational` is read by two dialogs, for different halves of one payload.
 
-- **Usage → Quota** takes `quota.attributions`, beside the quota charts and the reset log (`usage.md`).
+- **Usage → Quota** takes `quota.usage_intervals` for its Attribution list; the History chart reads the same rows through `quota-series` (`usage.md`).
 - **Usage & activity → Activity** takes `tools` and `compactions`, and browses canonical runs, tools, checks, context, and patterns through `/api/telemetry/v2/*` (`ui.md`).
 
 The split follows the question rather than the endpoint.
@@ -398,6 +414,7 @@ The quota-series endpoint applies provider, local account, and epoch-range filte
 Daily resolution combines retained rollups with current raw samples and returns one series per verified provider identity.
 Raw resolution defaults to the last seven days when `since` is omitted.
 Its `interpretation` is `quota_utilization_not_token_usage`.
+Each series carries `usage`: its stored intervals that rose (`start`, `end`, `billing`, `requests`, `runs`, `cost_usd`, and per window `rise`, `reset`, `swe_mux`, `outside`, `elsewhere`, `uncertain`), or at daily resolution the same sums per UTC day of the interval's end (`day` in place of `start`/`end`).
 
 ## Configuration
 
@@ -425,6 +442,8 @@ or session lifecycle.
 ## Key files
 
 - Store and native reconciliation: `src/swe_mux/operational_telemetry.py`
+- Quota usage attribution: `src/swe_mux/quota_usage.py`; its ledger reads:
+  `quota_usage_evidence` and `quota_usage_coverage` in `src/swe_mux/telemetry_queries.py`
 - Canonical ledger schema and migrations: `src/swe_mux/telemetry_schema.py`
 - Canonical ledger write path (identity, precedence, rollups, seals): `src/swe_mux/telemetry_ledger.py`
 - Canonical ledger queries, filters, and exports: `src/swe_mux/telemetry_queries.py`

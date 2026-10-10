@@ -473,6 +473,18 @@ class CanonicalTelemetryService:
         result: dict[str, Any] = await self._call(self.ledger.export_page, **arguments)
         return result
 
+    async def quota_usage_evidence(
+        self, backend: str, from_ts: float, to_ts: float
+    ) -> dict[str, list[tuple[Any, ...]]]:
+        result: dict[str, list[tuple[Any, ...]]] = await self._call(
+            self.ledger.quota_usage_evidence, backend, from_ts, to_ts
+        )
+        return result
+
+    async def quota_usage_coverage(self, backend: str | None = None) -> float | None:
+        result: float | None = await self._call(self.ledger.quota_usage_coverage, backend)
+        return result
+
     async def parser_signatures(self) -> list[dict[str, Any]]:
         result: list[dict[str, Any]] = await self._call(self.ledger.parser_signatures)
         return result

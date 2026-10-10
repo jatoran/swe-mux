@@ -104,6 +104,19 @@ It remains readable while canonical activity migration runs.
 
 **Not:** the canonical cross-session activity ledger or long-term detailed analytics.
 
+## `quota_usage.py`
+
+`quota_usage_intervals`: per quota interval, the swe-mux usage billed to the account and each
+window's rise split into `swe_mux`, `outside`, `elsewhere`, and `uncertain`.
+Pure rules (`window_rise`, `billed_spans`, `Evidence`, `split_rise`, `calibrated_rate`) plus
+`QuotaUsageMixin`, mixed into `OperationalTelemetryStore`, which owns the background loop, the
+startup catch-up, and the series/snapshot reads.
+Its ledger side is two methods on `LedgerQueryMixin`, reached through
+`CanonicalTelemetryService`; it never opens a ledger file itself.
+
+**Not:** quota polling (`provider_accounts.py`), which account a provider bills
+(`provider_accounts.switch_reaches_live` owns that), or any read of transcripts.
+
 ## `telemetry_schema.py`
 
 The catalog and segment schemas, the versioned additive migrations that bring an older file to

@@ -986,7 +986,7 @@ async def test_store_reclassifies_legacy_late_observed_reset(phase2_path: Path) 
     reopened.close()
 
 
-async def test_rounding_lag_external_activity_and_uncertain_movements_remain_explicit(
+async def test_rounding_and_uncertain_movements_remain_explicit(
     phase2_path: Path,
 ) -> None:
     store = OperationalTelemetryStore(phase2_path)
@@ -1021,72 +1021,7 @@ async def test_rounding_lag_external_activity_and_uncertain_movements_remain_exp
         item for item in snapshot["quota"]["samples"] if item["weekly"]["used_percent"] == 10.4
     )
     assert rounded["raw_precision"] == 1
-    attribution = snapshot["quota"]["attributions"][-1]
-    assert attribution["correlated_estimate"] == 0
-    assert attribution["external_estimate"] == pytest.approx(0.4)
-    assert "large_sample_gap" in attribution["caveats"]
-    assert "no_mux_activity_in_interval" in attribution["caveats"]
     store.close()
-
-
-async def test_probabilistic_attribution_preserves_external_remainder_and_ambiguity(
-    phase2_path: Path,
-) -> None:
-    path = phase2_path
-    history = HistoryIndex(path)
-    events = EventBus(history.append_event)
-    for identity in ("session-a", "session-b"):
-        record = SessionRecord(
-            identity,
-            identity,
-            "project-a",
-            "codex",
-            identity,
-            ".",
-            "codex.exe",
-            [],
-            tokens_in=100 if identity == "session-a" else 300,
-            tokens_out=0,
-            agent_run_id=identity,
-        )
-        await history.session_started(record, None)
-        await events.emit("turn_started", session_id=identity, source="fixture", scope="root")
-
-    store = OperationalTelemetryStore(path)
-    base = time.time() - 60
-    await store.record_quota_sample(
-        provider="codex",
-        account_id="account-a",
-        quota={"session": None, "weekly": {"used_percent": 10}, "status": "ready"},
-        sampled_at=base,
-        account_active=True,
-        auth_state="saved",
-    )
-    # Events must fall inside the sampled interval.
-    await events.emit("tool_use", session_id="session-a", source="fixture", tool="shell")
-    await events.emit("tool_use", session_id="session-b", source="fixture", tool="shell")
-    await store.record_quota_sample(
-        provider="codex",
-        account_id="account-a",
-        quota={"session": None, "weekly": {"used_percent": 14}, "status": "ready"},
-        sampled_at=time.time() + 1,
-        account_active=True,
-        auth_state="saved",
-    )
-    store.close()
-    store = OperationalTelemetryStore(path)
-    snapshot = await store.snapshot()
-    item = snapshot["quota"]["attributions"][0]
-    assert item["quota_delta"] == 4
-    assert item["correlated_low"] == 0
-    assert item["correlated_high"] == 4
-    assert item["external_low"] == 0
-    assert item["external_high"] == 4
-    assert item["concurrent_sessions"] == 2
-    assert [round(row["quota_percent_estimate"], 2) for row in item["allocations"]] == [1, 3]
-    assert "shared_account_identity_unprovable" in item["caveats"]
-    store.close()
-    history.close()
 
 
 async def test_explicit_compaction_tool_and_skill_events_are_durable(

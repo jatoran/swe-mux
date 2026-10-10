@@ -1912,6 +1912,9 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
     canonical_telemetry.start(
         events, sessions=sessions, legacy_database=config.database_path, history=history
     )
+    # Each quota interval is attributed once, from the ledger's mux-owned requests, when
+    # its closing sample lands; the chart reads the stored rows (`quota_usage.py`).
+    telemetry.start_quota_usage(canonical_telemetry)
 
     automation_gate_cache: dict[str, tuple[float, frozenset[str]]] = {}
     publish(app, {keys.AUTOMATION_GATE_CACHE: automation_gate_cache})

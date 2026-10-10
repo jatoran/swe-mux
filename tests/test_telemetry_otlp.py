@@ -372,6 +372,22 @@ def test_codex_0_153_0_export_separates_nested_execution_from_model_calls() -> N
     assert len({item.payload["native_conversation_id"] for item in requests}) == 2
 
 
+def test_codex_events_are_dated_by_observed_time_when_event_time_is_zero() -> None:
+    # Codex 0.153.0 sends `timeUnixNano: "0"` on every record and stamps only
+    # `observedTimeUnixNano`. Reading the zero filed its requests at the epoch.
+    events, _signatures = _reduce_capture(CODEX_CAPTURE, "codex")
+    observed = {
+        int(record["observedTimeUnixNano"]) / 1_000_000_000
+        for payload in _capture(CODEX_CAPTURE)
+        for resource in payload["resourceLogs"]
+        for scope in resource["scopeLogs"]
+        for record in scope["logRecords"]
+    }
+    assert events
+    assert all(event.ts in observed for event in events)
+    assert min(event.ts for event in events) > 1_700_000_000
+
+
 def test_codex_http_and_websocket_failures_become_failed_model_requests() -> None:
     failed_http = otlp_log_events(
         batch(

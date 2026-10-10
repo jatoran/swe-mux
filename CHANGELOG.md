@@ -26,6 +26,15 @@ The release procedure that maintains this file is [`RELEASING.md`](RELEASING.md)
 - **Quota history opens on the weekly window over the last 7 days, and says when each percentage was true.**
   The chart's time axis is labelled with days, and a readout under it lists every account's percent used at the moment you point at, tap, or step to with the arrow keys, with the reading's own time and the window's next reset.
   Daily points are labelled as UTC days, a line no longer bridges a stretch with no readings, and the readings list is a table of time, account, and percent used per window.
+- **Quota history shows where each rise came from.**
+  A lane under the chart marks, for every account, which rises came from swe-mux sessions, which the account's swe-mux sessions do not explain, and which happened while this computer was not using the account at all (another device, claude.ai, or another login); each account's rise over the range is summed by source beneath it.
+  Each interval is attributed once from the requests swe-mux sessions billed to that account, so opening or refreshing the chart reads stored results.
+  Quota → Attribution lists the same rises, and replaces an estimate that credited any session of a provider to whichever of its accounts moved.
+
+### Fixed
+
+- **Quota → Attribution loads again.** Its request carried two query strings and was refused on every load.
+- **Codex telemetry events keep their real time.** Codex sends an empty event time, and every such event was being filed at 1970.
 
 ## [0.2.9] - 2026-09-25
 

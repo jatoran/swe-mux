@@ -80,12 +80,41 @@ export type ResetEvent = {
   review_status?:'seen'|'manual_usage'|'discarded'|null
   reviewed_at?:number|null
 }
+/** Where a window's rise came from (`quota_usage.py`); values are percentage points. */
+export type QuotaUsageSource = 'swe_mux'|'outside'|'elsewhere'|'uncertain'
+export type QuotaUsageParts = {rise:number|null;reset?:boolean}&Record<QuotaUsageSource,number>
+export type QuotaUsageBilling = 'selected'|'not_selected'|'switched'|'uncertain'|'per_session'
+/** One quota interval: two consecutive readings of one account. */
+export type QuotaUsageInterval = {
+  sample_id:number
+  provider:string
+  account_id:string
+  provider_account_uuid?:string|null
+  start:number
+  end:number
+  billing:QuotaUsageBilling
+  requests:number
+  runs:number
+  cost_usd:number
+  session:QuotaUsageParts
+  weekly:QuotaUsageParts
+}
+/** The intervals that ended on one UTC day, summed. */
+export type QuotaUsageDay = {
+  day:string
+  requests:number
+  cost_usd:number
+  session:QuotaUsageParts
+  weekly:QuotaUsageParts
+}
 export type QuotaSeries = {
   provider:string
   account_id:string
   provider_account_uuid?:string|null
   identity:'verified'|'legacy_unverified'
   points:Array<QuotaRawPoint|QuotaDailyPoint>
+  /** Only intervals that rose; absent from a daemon older than the attribution. */
+  usage?:Array<QuotaUsageInterval|QuotaUsageDay>
 }
 export type QuotaSeriesStatus = {
   schema_version:number

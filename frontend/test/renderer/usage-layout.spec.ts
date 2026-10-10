@@ -214,3 +214,45 @@ test('quota history opens on the weekly window over the last 7 days and says wha
   await readings.locator('summary').click()
   await expect(readings.locator('thead th')).toHaveText(['Time','Account','Weekly used','5-hour used'])
 })
+
+test('each account gets a source lane, a range split, and a source in the readout', async ({page})=>{
+  await page.setViewportSize({width:1200,height:900})
+  await openSegment(page,'Quota')
+  await page.getByRole('tab',{name:'History',exact:true}).click()
+  const chart=page.locator('.quota-chart')
+  // One lane per account under the axis, drawn in the fills the legend names.
+  await expect(chart.locator('.quota-lane-track')).toHaveCount(2)
+  await expect(chart.locator('.quota-source-legend li')).toHaveText(['swe-mux sessions','not swe-mux','used elsewhere'])
+  expect(await chart.locator('svg rect.quota-source-elsewhere').count()).toBeGreaterThan(0)
+  const totals=chart.locator('.quota-sources tbody tr')
+  await expect(totals).toHaveCount(2)
+  await expect(totals.first()).toContainText(/\d+% swe-mux sessions/)
+  await expect(totals.first()).toContainText('used elsewhere')
+  await expect(chart.locator('.quota-readout .quota-detail').first()).toContainText(/rose \d+% this day: /)
+
+  // Every reading names where the rise that ended at it came from. The harness's 5-hour
+  // window rises at every poll; its weekly window moves a fraction of a point per poll.
+  await page.locator('.analytics-toolbar').getByLabel('Points').selectOption('raw')
+  await page.locator('.analytics-toolbar').getByLabel('Window').selectOption('session')
+  await expect(chart.locator('.quota-chart-header small')).toContainText('(local time)')
+  expect(await chart.locator('svg rect.quota-source-swe_mux').count()).toBeGreaterThan(0)
+  await expect(chart.locator('.quota-readout .quota-detail').first()).toContainText(/rose \d+% since the reading before: \d+% /)
+})
+
+test('the attribution list reads the stored intervals through a well-formed request', async ({page})=>{
+  await page.setViewportSize({width:1200,height:900})
+  await openSegment(page,'Quota')
+  await page.getByRole('tab',{name:'Attribution',exact:true}).click()
+  const items=page.locator('.attribution-log details')
+  await expect(items.first()).toBeVisible()
+  await expect(items.first().locator('summary')).toContainText(/(Weekly|5-hour) \+\d+%/)
+  await items.first().locator('summary').click()
+  await expect(items.first()).toContainText('This account')
+  await expect(page.locator('.attribution-log')).toContainText('Correlation does not establish who used an account')
+  // The shared path carries a query of its own; a second `?` made every load a 400.
+  const requested=await page.evaluate(()=>(window as unknown as {requested:string[]}).requested)
+  const operational=requested.filter(url=>url.startsWith('/api/telemetry/operational'))
+  expect(operational.length).toBeGreaterThan(0)
+  for(const url of operational)expect(url.split('?').length).toBe(2)
+  expect(new URL(operational[0],'http://x').searchParams.get('limit')).toBe('500')
+})
