@@ -3992,9 +3992,10 @@ Fix one positioning line and use it verbatim everywhere.
   clean-machine failures: r/ClaudeAI, r/ChatGPTCoding, r/LocalLLaMA, the Claude Developers
   Discord.
   Fix what they hit before widening.
-- [ ] Show HN once install is smooth: one shot, Tuesday-Thursday morning ET,
-  "Show HN: swe-mux - <positioning line>", present in the comments all day.
-  A good run compounds through GitHub Trending for about a week.
+- [x] Show HN, posted 2026-09-27 as "A terminal multiplexer for coding agents optimized for
+  mobile": 3 points and no discussion. A second, materially different attempt is planned only
+  after another channel has shown which story draws interest (the campaign plan in
+  `.private/marketing/`, operator-private).
 - [ ] Product Hunt and X after: short clips of specific moments outperform announcement
   posts, and the multi-agent-orchestration audience on X is the target demographic.
 - [ ] Ongoing multipliers, none time-critical: newsletter submissions (Console.dev has a
@@ -4016,9 +4017,10 @@ Fix one positioning line and use it verbatim everywhere.
   rather than leaving readers to infer it.
 - [ ] Work the full venue checklist; every item has a draft in `.private/marketing/`
   (operator-private since 2026-09-07; primary checkout only):
-  - Blog (swemux.dev/blog, cross-posted to dev.to and Hashnode): the launch post, the
-    session-preserving-runtime story, the land queue, status detection, phone-and-voice
-    fleet control, and serverless update propagation - staggered weekly, not dumped.
+  - Blog (the operator's own blog, adambandel.com, cross-posted to dev.to with a canonical
+    link; the swemux.dev blog stays switched off): the launch post, the
+    session-preserving-runtime story, the land queue, status detection, the first public CI
+    run, and serverless update propagation - staggered weekly, not dumped.
   - Launch sequence: r/ClaudeAI + r/ChatGPTCoding + r/LocalLLaMA + Claude Developers
     Discord (soft launch) → Show HN → Product Hunt → X launch thread.
   - Forums and feeds, one post each: r/programming (the engineering posts, never the
