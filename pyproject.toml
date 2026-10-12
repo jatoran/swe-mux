@@ -54,6 +54,22 @@ classifiers = [
 # installed copy answers the question without needing the repository.
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE", "THIRD-PARTY-NOTICES.md"]
+# PyPI search reads these; they match the GitHub topics, so both places answer
+# the same queries. Name only harnesses the project has native status for.
+keywords = [
+  "coding-agents",
+  "claude-code",
+  "codex",
+  "opencode",
+  "pi",
+  "ai-agents",
+  "terminal-multiplexer",
+  "terminal",
+  "tailscale",
+  "pwa",
+  "git-worktree",
+  "self-hosted",
+]
 dependencies = [
   "aiohttp>=3.11",
   # Module-scope imports in `push.py`, which the daemon imports at startup, so
