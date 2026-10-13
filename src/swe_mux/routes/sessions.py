@@ -1022,6 +1022,41 @@ async def _install_replacement(
         manager.sessions.pop(session.record.id, None)
         raise
 
+    # The layout write is the commit point: the replacement is live and in the pane,
+    # so nothing below may raise into a caller that would report the swap as failed.
+    manager.sessions.pop(old.record.id, None)
+    attachment_locks = app.get(keys.ATTACHMENT_LOCKS, {})
+    for key in tuple(attachment_locks):
+        if key[1] == old.record.id:
+            attachment_locks.pop(key, None)
+    try:
+        await _retire_replaced_session(
+            app,
+            old=old,
+            session=session,
+            resumed=resumed,
+            relation=relation,
+            discard_media=discard_media,
+        )
+    except Exception:
+        log.exception(
+            "session_replacement_cleanup_failed replaced=%s session_id=%s relation=%s",
+            old.record.id,
+            session.record.id,
+            relation,
+        )
+
+
+async def _retire_replaced_session(
+    app: web.Application,
+    *,
+    old: Session,
+    session: Session,
+    resumed: bool,
+    relation: str,
+    discard_media: bool,
+) -> None:
+    """The durable bookkeeping after a committed swap: lineage, recovery, media."""
     source_run_id = old.record.agent_run_id or old.record.id
     child_run_id = session.record.agent_run_id or session.record.id
     if resumed and child_run_id != source_run_id:
@@ -1031,11 +1066,6 @@ async def _install_replacement(
             relation,
             {"backend": old.record.backend, "project_id": old.record.project_id},
         )
-    manager.sessions.pop(old.record.id, None)
-    attachment_locks = app.get(keys.ATTACHMENT_LOCKS, {})
-    for key in tuple(attachment_locks):
-        if key[1] == old.record.id:
-            attachment_locks.pop(key, None)
     recovery: SessionRecoveryStore | None = app.get(keys.SESSION_RECOVERY)
     if recovery is not None:
         await recovery.discard(old.record.id)
@@ -1315,7 +1345,9 @@ async def restart_session(request: web.Request) -> web.Response:
             assessment.force_allowed,
         )
         payload = assessment.payload()
-        return json_response({"error": payload["reason"], **payload}, 409)
+        return json_response(
+            {"error": payload["reason"], "session_id": old.record.id, **payload}, 409
+        )
     if row is None:  # `history_unavailable` is an identity refusal, so this cannot pass
         raise RuntimeError("restart permitted without the conversation's history row")
     old.restart_in_progress = True
@@ -1410,14 +1442,35 @@ async def _restart_in_place(
         )
     session = outcome.session
     resumed_at = time.monotonic()
-    await _install_replacement(
-        app,
-        old=old,
-        session=session,
-        resumed=True,
-        relation=RESTART_LINEAGE_RELATION,
-        discard_media=False,
-    )
+    try:
+        await _install_replacement(
+            app,
+            old=old,
+            session=session,
+            resumed=True,
+            relation=RESTART_LINEAGE_RELATION,
+            discard_media=False,
+        )
+    except Exception as exc:
+        # Anything escaping the helper was raised before its commit point, so the
+        # replacement is already stopped and the old pane is still in the layout: the
+        # same outcome as a refused resume, reported the same way.
+        unexpected = not isinstance(exc, ValueError)
+        if unexpected:
+            log.exception(
+                "session_restart_replace_crashed operation_id=%s session_id=%s replacement=%s",
+                operation_id,
+                record.id,
+                session.record.id,
+            )
+        return await _restart_failed(
+            app,
+            old,
+            operation_id=operation_id,
+            code="restart_replace_failed",
+            message=f"the resumed agent could not take the pane's place: {exc}",
+            status=500 if unexpected else 409,
+        )
     finished = time.monotonic()
     timings = {
         "exit_ms": round((exited_at - started) * 1000),

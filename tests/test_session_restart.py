@@ -369,12 +369,16 @@ def _install_fakes(
         app[keys.SESSIONS].sessions[replacement.record.id] = replacement
         return SimpleNamespace(session=replacement, attempts=1)
 
-    async def media_must_survive(_app: Any, _identity: str) -> None:
-        raise AssertionError("a restarted conversation's media must not be discarded")
+    # Recorded rather than raised: cleanup after the layout commit is best-effort, so
+    # an assertion raised in here would be logged and swallowed instead of failing.
+    seen["media_discarded"] = []
+
+    async def record_media_discard(_app: Any, identity: str) -> None:
+        seen["media_discarded"].append(identity)
 
     monkeypatch.setattr(session_routes.terminal, "_end_session_gracefully", fake_end)
     monkeypatch.setattr(session_routes, "resume_run", fake_resume)
-    monkeypatch.setattr(session_routes, "_discard_session_media", media_must_survive)
+    monkeypatch.setattr(session_routes, "_discard_session_media", record_media_discard)
     return seen
 
 
@@ -406,6 +410,8 @@ async def test_restart_resumes_the_same_conversation_into_the_same_pane(
     assert project.layout["root"]["active_child_id"] == "restarted-agent"
     # The resumed pane inherited the run, so there is no new run to link.
     assert app[keys.AUTOMATION_STORE].edges == []
+    # The conversation continues, so the media it was handed must survive.
+    assert seen["media_discarded"] == []
     event = app[keys.EVENTS].payload("session_restarted")
     assert event["replaced"] == old.record.id
     assert event["forced"] is False
@@ -438,6 +444,7 @@ async def test_a_busy_agent_is_refused_until_a_human_forces_it(
     assert refused.status == 409
     body = json.loads(cast(Any, refused).body)
     assert body["code"] == "agent_working"
+    assert body["session_id"] == old.record.id
     assert body["force_allowed"] is True
     assert [item["code"] for item in body["blockers"]] == ["agent_working", "queue_pending"]
     assert len(body["would_lose"]) == 2
@@ -490,6 +497,79 @@ async def test_a_failed_resume_leaves_the_ended_pane_and_its_resume_button(
     assert layout_terminal_ids(project.layout) == [old.record.id, "unrelated-live"]
     assert app[keys.EVENTS].payload("session_restart_failed")["code"] == "resume_failed"
     assert "session_restarted" not in app[keys.EVENTS].types()
+
+
+async def test_a_failed_layout_write_stops_the_replacement_and_keeps_the_ended_pane(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    old = _session()
+    app = _app(tmp_path, old)
+    _install_fakes(monkeypatch, app, old)
+
+    async def failing_update(_identity: str, **_changes: Any) -> Any:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(app[keys.PROJECTS], "update", failing_update)
+
+    response = await restart_session(_request(app, old.record.id))
+
+    assert response.status == 500
+    body = json.loads(cast(Any, response).body)
+    assert body["code"] == "restart_replace_failed"
+    assert body["stopped"] is True
+    sessions = app[keys.SESSIONS]
+    assert sessions.stopped == ["restarted-agent"]
+    assert "restarted-agent" not in sessions.sessions
+    assert old.record.id in sessions.sessions
+    project = app[keys.PROJECTS].projects["default"]
+    assert layout_terminal_ids(project.layout) == [old.record.id, "unrelated-live"]
+    assert app[keys.EVENTS].payload("session_restart_failed")["code"] == "restart_replace_failed"
+
+
+async def test_a_project_removed_mid_restart_is_a_refusal_not_a_crash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    old = _session()
+    app = _app(tmp_path, old)
+    seen = _install_fakes(monkeypatch, app, old)
+    original_resume = session_routes.resume_run
+
+    async def resume_then_remove_project(row: dict[str, Any], **kwargs: Any) -> Any:
+        outcome = await original_resume(row, **kwargs)
+        app[keys.PROJECTS].projects.clear()
+        return outcome
+
+    monkeypatch.setattr(session_routes, "resume_run", resume_then_remove_project)
+
+    response = await restart_session(_request(app, old.record.id))
+
+    assert "resume_row" in seen
+    assert response.status == 409
+    assert json.loads(cast(Any, response).body)["code"] == "restart_replace_failed"
+    assert app[keys.SESSIONS].stopped == ["restarted-agent"]
+    assert old.record.id in app[keys.SESSIONS].sessions
+
+
+async def test_bookkeeping_after_the_layout_commit_cannot_fail_the_restart(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    old = _session()
+    app = _app(tmp_path, old)
+    _install_fakes(monkeypatch, app, old, new=_new_session("run-2"))
+
+    async def failing_lineage(*_args: Any) -> None:
+        raise OSError("database is locked")
+
+    monkeypatch.setattr(app[keys.AUTOMATION_STORE], "add_lineage", failing_lineage)
+
+    response = await restart_session(_request(app, old.record.id))
+
+    # The replacement is live and in the pane; reporting failure would strand it.
+    assert response.status == 201
+    assert app[keys.SESSIONS].stopped == []
+    assert old.record.id not in app[keys.SESSIONS].sessions
+    project = app[keys.PROJECTS].projects["default"]
+    assert layout_terminal_ids(project.layout) == ["restarted-agent", "unrelated-live"]
 
 
 async def test_a_teardown_that_never_settles_is_reported_rather_than_raced(
