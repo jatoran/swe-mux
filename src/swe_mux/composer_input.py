@@ -113,11 +113,21 @@ class ComposerState:
     looks exact would be read as one. ``since`` is the instant the composer last
     went from empty to non-empty, in epoch seconds, and is what a row renders.
     ``in_paste`` carries an unterminated bracketed paste into the next write.
+
+    ``submits`` counts every write classified as a submit and ``last_submit_at``
+    dates the latest, in epoch seconds. They are the switch watcher's evidence
+    that the CLI was handed a line it could act on (`/new`, `/resume`, a prompt):
+    a conversation cannot move without one, so an idle pane with no submit since
+    its transcript was last written has nothing to look for
+    (`SessionManager._switch_evidence_at`). Counted whether or not the CLI took it,
+    because over-reporting costs one cheap probe and under-reporting a missed switch.
     """
 
     chars: int = 0
     since: float = 0.0
     in_paste: bool = False
+    submits: int = 0
+    last_submit_at: float = 0.0
 
     @property
     def pending(self) -> bool:
@@ -292,6 +302,9 @@ def apply_composer_write(state: ComposerState, write: ComposerWrite, now: float)
     state.in_paste = write.in_paste
     if write.kind == "none":
         return None
+    if write.kind == "submit":
+        state.submits += 1
+        state.last_submit_at = now
     was_pending = state.pending
     if write.kind in {"submit", "clear"}:
         state.chars = 0

@@ -27,7 +27,9 @@ log = logging.getLogger(__name__)
 
 
 async def get_onboarding(request: web.Request) -> web.Response:
-    return json_response(onboarding.read_state(request.app[keys.CONFIG]))
+    # In a worker: a file read that may initialize (and fsync) the record, and on
+    # first use the installation identity, which probes PATH (`onboarding.py`).
+    return json_response(await asyncio.to_thread(onboarding.read_state, request.app[keys.CONFIG]))
 
 
 async def patch_onboarding(request: web.Request) -> web.Response:
@@ -39,7 +41,7 @@ async def patch_onboarding(request: web.Request) -> web.Response:
     action = body.pop("action", "progress")
     if action not in {"progress", "restart", "fresh", "reuse"}:
         return json_response({"error": "unknown setup action"}, 422)
-    current = onboarding.read_state(config)
+    current = await asyncio.to_thread(onboarding.read_state, config)
     if revision != current["revision"]:
         return json_response(
             {"error": "Setup changed on another device. Reload and try again.", "state": current},
@@ -54,7 +56,7 @@ async def patch_onboarding(request: web.Request) -> web.Response:
         elif action == "reuse":
             body.update(step="finish", status="active", hidden=False)
         elif action == "fresh":
-            backup = onboarding.backup_preferences(config)
+            backup = await asyncio.to_thread(onboarding.backup_preferences, config)
             defaults = Config(data_dir=config.data_dir)
             # Keep the connection and process identity stable while clients are
             # attached. Fresh preferences never mutate repositories or accounts.
@@ -95,7 +97,7 @@ async def patch_onboarding(request: web.Request) -> web.Response:
                 tour_status="pending",
                 tour_step="welcome",
             )
-        state = onboarding.change_state(config, body, revision)
+        state = await asyncio.to_thread(onboarding.change_state, config, body, revision)
         if state["status"] == "complete" and not config.harness_setup_complete:
             update_config(config, {"harness_setup_complete": True})
     except ValueError as exc:

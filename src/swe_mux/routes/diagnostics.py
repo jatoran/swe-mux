@@ -447,6 +447,11 @@ async def get_background_health(request: web.Request) -> web.Response:
             # A cache that stops sharing reads as misses climbing with the fleet
             # and `slow_scans` counting; the loop_lag above is where that lands.
             "transcript_scans": request.app[keys.SESSIONS].transcript_scans.snapshot(),
+            # What the switch watcher spent and skipped (`session.py`
+            # `_watch_transcript_switch`): an idle fleet reads as `*_skipped`
+            # climbing and `process_proofs`/`heuristic_searches` flat. Also the
+            # rollout identity cache and, on Windows, the per-process handle query.
+            "transcript_observation": request.app[keys.SESSIONS].observation_cost_snapshot(),
             # Whether each bound listener still has its socket, and how many times
             # one had to be re-created (`listener_guard.py`). Absent on a daemon
             # started without `__main__.serve` (tests build the app directly).

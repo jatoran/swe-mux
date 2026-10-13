@@ -21,11 +21,13 @@ are dropped: a deleted file is a fact about history, not something the explorer 
 
 Everything here is bounded - one status call, one log call capped at `COMMIT_SCAN` commits,
 and at most `CANDIDATE_LIMIT` existence checks - so the cost does not grow with repository
-size or age.
+size or age. None of it runs on the event loop: the Git calls are async subprocesses and
+the existence checks run in a worker.
 """
 
 from __future__ import annotations
 
+import asyncio
 import os
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -248,7 +250,11 @@ async def read_recent_files(
         )
 
     patterns = list(ignore_patterns)
-    items = merge_candidates(
+    # In a worker: the existence filter is up to `CANDIDATE_LIMIT` stats, and on the
+    # event loop that was a frame in the 2026-10-12 stall dumps - one Recent view
+    # opened on a slow disk held every terminal in the daemon.
+    items = await asyncio.to_thread(
+        merge_candidates,
         working,
         committed,
         prefix=prefix,

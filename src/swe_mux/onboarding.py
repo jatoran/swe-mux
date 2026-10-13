@@ -8,11 +8,13 @@ and an unreadable record is preserved before a replacement is created.
 from __future__ import annotations
 
 import copy
+import functools
 import json
 import logging
 import math
 import os
 import shutil
+import threading
 import time
 from pathlib import Path
 from typing import Any, cast
@@ -40,8 +42,24 @@ STATUSES = ("active", "deferred", "complete")
 QUESTS = ("project", "session", "phone", "voice", "desktop", "worktrees", "provider", "permissions")
 TOUR_STATUSES = ("pending", "active", "deferred", "complete")
 
+#: Serializes every read-modify-write of `onboarding.json`. The routes run these in
+#: worker threads (file I/O with an fsync is not event-loop work), so two requests
+#: can now overlap where the loop used to serialize them, and `change_state`'s
+#: revision check must stay atomic with its write. Re-entrant because
+#: `change_state` reads through `read_state`, which may itself initialize the file.
+_STATE_LOCK = threading.RLock()
 
+
+@functools.cache
 def installation_identity() -> str:
+    """The resolved environment root of the install this process runs from.
+
+    Computed once per process: it names the running interpreter's own install,
+    which cannot change under it, and computing it probes every PATH entry for
+    every shipped command (`detect_install_location`) and resolves a path. That
+    ran on every `GET /api/onboarding`, on the event loop, and showed up in the
+    2026-10-12 stall dumps.
+    """
     from .install_location import detect_install_location
 
     location = detect_install_location()
@@ -81,6 +99,11 @@ def write_state(config: Config, state: dict[str, Any]) -> None:
 
 def read_state(config: Config, *, installation: str | None = None) -> dict[str, Any]:
     identity = installation if installation is not None else installation_identity()
+    with _STATE_LOCK:
+        return _read_state(config, identity)
+
+
+def _read_state(config: Config, identity: str) -> dict[str, Any]:
     path = config.data_dir / "onboarding.json"
     try:
         state = json.loads(path.read_text(encoding="utf-8"))
@@ -297,11 +320,17 @@ def validate_provider_draft(provider: Any) -> None:
 
 def change_state(config: Config, patch: dict[str, Any], revision: int) -> dict[str, Any]:
     validate_patch(patch)
-    current = read_state(config)
-    if revision != current["revision"]:
-        raise ValueError("onboarding changed on another client; reload and try again")
-    state = {**copy.deepcopy(current), **patch, "revision": revision + 1, "updated_at": time.time()}
-    write_state(config, state)
+    with _STATE_LOCK:
+        current = read_state(config)
+        if revision != current["revision"]:
+            raise ValueError("onboarding changed on another client; reload and try again")
+        state = {
+            **copy.deepcopy(current),
+            **patch,
+            "revision": revision + 1,
+            "updated_at": time.time(),
+        }
+        write_state(config, state)
     log.info(
         "onboarding progress saved",
         extra={

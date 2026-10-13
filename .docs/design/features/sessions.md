@@ -437,6 +437,10 @@ and reattachable browser viewports.
     transcript
     additionally requires that this session's own PTY produced output around the time the
     candidate appeared. An outside CLI leaves our PTY silent, which is what distinguishes it.
+    It also runs only when there is something to find: within two minutes of a submitted line
+    or turn hook that the followed transcript does not record, or for a provisional binding.
+    An idle pane walks no directory and proves no process ownership
+    (`status-detection.md`, Codex branch and rewind recovery).
   - **Unresolved siblings block.** Another live session in the same cwd makes a fresh
     transcript ambiguous — but only while it *is* ambiguous. A same-backend sibling is ruled
     out per candidate when its own transcript was still being written after the candidate
