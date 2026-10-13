@@ -940,11 +940,15 @@ def test_the_transcript_tab_reads_and_only_reads() -> None:
     assert "let scrollMemory" in view
     assert "useState" not in view
 
-    # Refreshed after the observer consumes a user message and when the assistant turn
-    # ends. A timer would re-read a whole transcript to learn nothing most of the time.
+    # Refreshed after the observer consumes a user message, while the agent appends, and
+    # when the assistant turn ends. A timer would re-read the conversation to learn
+    # nothing most of the time; the only scheduled read is the loader's backoff retry of
+    # a read that came back unfinished (`transcriptLoader.ts`).
     assert "TURN_ENDED_EVENT" in tab and "turn_ended" in source("App.tsx")
     assert "TRANSCRIPT_CHANGED_EVENT" in tab and "transcript_message" in source("App.tsx")
+    assert "TRANSCRIPT_APPENDED_EVENT" in tab and "transcript_appended" in source("App.tsx")
     assert "setInterval" not in tab
+    assert "setInterval" not in source("transcriptLoader.ts")
     assert "session.regenerateTitle" in source("App.tsx")
     assert "/title/regenerate" in source("App.tsx")
 
@@ -980,8 +984,12 @@ def test_the_transcript_tab_reads_and_only_reads() -> None:
         assert "TranscriptToolCalls" in surface
         assert "showToolCalls" in surface
     tool_calls = source("TranscriptToolCalls.tsx")
-    assert "transcriptToolInputText(call.input)" in tool_calls
+    # One formatter for an input History carries and one the reader reads on demand.
+    assert "transcriptToolInputText(lazy ? inputs.get(call.id) : call.input)" in tool_calls
     assert '<details class="transcript-tool-call"' in tool_calls
+    # An input is drawn only while its call is open: a long session's tool calls toggled
+    # on used to lay out every input as preformatted text.
+    assert "{isOpen && (" in tool_calls
     # Deliberately not the same formatter the history *list* uses: a row with no
     # timestamp still owes the reader an explanation, while a message stamp that
     # cannot be rendered is simply omitted (`{stamp&&<time…>}`).

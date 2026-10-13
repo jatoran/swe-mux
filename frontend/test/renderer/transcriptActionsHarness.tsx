@@ -46,12 +46,72 @@ const TRANSCRIPT = {
   reason: null,
 }
 
+// `?long=1` stands in for a daemon that pages and answers deltas
+// (`routes/scan_timeline.session_transcript`): a 450-message conversation read 200 at a
+// time from the tail, `before=` for older pages, `since=` for what changed. Each
+// message after the first is preceded by one tool call, whose input is only served by
+// `/transcript/tool-calls`. `window.__transcriptAppend()` adds a message as an agent
+// would, and `window.__transcriptRequests` records every query the reader sent.
+const long = params.get('long') === '1'
+const conversation = Array.from({ length: 450 }, (_, index) => ({
+  ...message(index, index % 2 ? 'assistant' : 'user', `Message number ${index}. ${'Words to give it height. '.repeat(index % 3 + 1)}`),
+  preceding_tool_calls: index ? 1 : 0,
+  preceding_tools: index ? [{ id: `call-${index}`, name: 'Bash' }] : [],
+}))
+const stamps = conversation.map(() => 1)
+let seq = 1
+const requests: string[] = []
+Object.assign(window, {
+  __transcriptRequests: requests,
+  __transcriptAppend: (text: string) => {
+    seq += 1
+    const index = conversation.length
+    conversation.push({ ...message(index, 'assistant', text), preceding_tool_calls: 0, preceding_tools: [] })
+    stamps.push(seq)
+  },
+})
+
+function pagedTranscript(query: URLSearchParams) {
+  const page = (start: number, end: number, kind: string, extra: object = {}) => ({
+    ...TRANSCRIPT,
+    messages: conversation.slice(start, end),
+    generation: 'h.1', seq, total: conversation.length, has_older: start > 0,
+    page: kind, delta: kind === 'delta', replace_from: null, reset: false, ...extra,
+  })
+  const limit = Number(query.get('limit') || 200)
+  const before = query.get('before')
+  const since = query.get('since')
+  if (since !== null && query.get('generation') === 'h.1') {
+    const oldest = conversation.findIndex(item => item.message_id === query.get('oldest'))
+    const floor = Math.max(0, oldest)
+    const first = stamps.findIndex((stamp, index) => index >= floor && stamp > Number(since))
+    return first < 0
+      ? page(floor, floor, 'delta', { has_older: floor > 0 })
+      : page(first, conversation.length, 'delta', { has_older: floor > 0, replace_from: conversation[first].message_id })
+  }
+  const end = before ? conversation.findIndex(item => item.message_id === before) : conversation.length
+  return page(Math.max(0, end - limit), end, before ? 'older' : 'tail')
+}
+
 window.fetch = (async (input: RequestInfo | URL) => {
-  const path = String(typeof input === 'string' ? input : input instanceof URL ? input.pathname : input.url)
+  const raw = String(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url)
+  const url = new URL(raw, location.href)
+  const path = url.pathname
+  let body: unknown
   // No clips: the markers render in their resting state, which is the state whose width
   // the header gutter has to clear. Which state a marker is in is `transcriptAudio`'s
   // business and is tested there.
-  const body = path.includes('/voice/clips') ? { items: [] } : bound ? TRANSCRIPT : {...TRANSCRIPT,messages:[],reason:'no_transcript'}
+  if (path.includes('/voice/clips')) body = { items: [] }
+  else if (path.endsWith('/transcript/tool-calls')) {
+    const id = url.searchParams.get('message_id')
+    const found = conversation.find(item => item.message_id === id)
+    body = found
+      ? { calls: found.preceding_tools.map(tool => ({ ...tool, input: { command: `ls ${found.ordinal}` } })), reason: null }
+      : { calls: [], reason: 'message_unavailable' }
+  } else if (long) {
+    requests.push(url.search)
+    body = pagedTranscript(url.searchParams)
+  } else body = bound ? TRANSCRIPT : { ...TRANSCRIPT, messages: [], reason: 'no_transcript' }
   return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } })
 }) as typeof fetch
 

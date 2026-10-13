@@ -119,10 +119,13 @@ test('the reader plays an existing clip and never regenerates it', () => {
   // And the whole reply plays, not the first file of it.
   assert.match(tab, /playClipGroup\(clip, clip\.session_id\)/)
   // Replies only. A prompt is something the operator wrote.
-  assert.match(tab, /audioRequested && message\.role === 'assistant'/)
+  // (`audioRequests` is `null` exactly while read aloud is off; see below.)
+  assert.match(tab, /audioRequests !== null && message\.role === 'assistant'/)
+  assert.match(tab, /audioRequests=\{audioIndex \? audioRequests : null\}/)
   // A per-item surface carries no gate: off means the markers are simply not drawn,
   // and the one gate for the master switch lives in the voice panel's `tts` tab.
-  assert.match(tab, /const audioIndex = readAloud \? indexTranscriptAudio\(clips\) : null/)
+  // Memoised per clip list, so an unchanged row is not re-rendered for a new index.
+  assert.match(tab, /const audioIndex = useMemo\(\(\) => readAloud \? indexTranscriptAudio\(clips\) : null/)
   assert.doesNotMatch(tab, /GrantGate/)
 })
 

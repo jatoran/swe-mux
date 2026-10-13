@@ -1,12 +1,27 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
+  clearTranscriptCache,
   expandedTranscriptMessageIds,
   forgetTranscriptScroll,
   groupTranscriptMessages,
   isPinnedToBottom,
+  mergeTranscript,
+  readTranscriptCache,
+  recallTranscriptAnchor,
   recallTranscriptScroll,
   rememberTranscriptScroll,
+  TRANSCRIPT_PAGE_SIZE,
+  TRANSCRIPT_RENDER_STEP,
+  transcriptArrivals,
+  transcriptCacheKey,
+  transcriptIndexingLabel,
+  transcriptOlderQuery,
+  transcriptReasonRetries,
+  transcriptRefreshQuery,
+  transcriptRenderCount,
+  writeTranscriptCache,
+  type SessionTranscript,
   parseTranscriptExpansions,
   serializeTranscriptExpansions,
   setTranscriptMessageExpanded,
@@ -272,6 +287,185 @@ test('every empty state says which kind of nothing it is', () => {
   assert.match(transcriptEmptyMessage('no_transcript'), /has not written its first message/)
   assert.match(transcriptEmptyMessage('unreadable'), /could not be read/)
   assert.match(transcriptEmptyMessage('agent_bridge_unavailable'), /terminal boundary/)
+  // A first read of a long conversation still running: "soon", not "broken".
+  assert.match(transcriptEmptyMessage('indexing'), /for the first time/)
   // Loaded, and genuinely empty: a fresh agent nobody has spoken to yet.
   assert.match(transcriptEmptyMessage(null), /Nothing has been said/)
+})
+
+test('a first read in progress says how far it has got', () => {
+  assert.match(transcriptIndexingLabel({ read_bytes: 42, total_bytes: 100 }), /\(42%\)/)
+  assert.doesNotMatch(transcriptIndexingLabel({ read_bytes: 0, total_bytes: 0 }), /%/)
+  assert.doesNotMatch(transcriptIndexingLabel(undefined), /%/)
+  // Progress past the size taken at the start (the file grew) never reads over 100%.
+  assert.match(transcriptIndexingLabel({ read_bytes: 150, total_bytes: 100 }), /\(100%\)/)
+})
+
+// ---------------------------------------------------------------- incremental reading
+
+const reading = (over: Partial<SessionTranscript> = {}): SessionTranscript => ({
+  session_id: 's1', backend: 'claude', messages: [], hidden: 0, truncated: false, reason: null,
+  generation: 'g.0', seq: 4, total: 0, has_older: false, page: 'tail', delta: false, replace_from: null,
+  ...over,
+})
+const at = (ordinal: number, text = `m${ordinal}`, over: Partial<TranscriptMessage> = {}) =>
+  message({ message_id: `offset:${ordinal}`, ordinal, text, ...over })
+
+test('a reader asks for a delta it can extend, and for the tail otherwise', () => {
+  assert.equal(transcriptRefreshQuery(null), `limit=${TRANSCRIPT_PAGE_SIZE}`)
+  // An older daemon names no generation: every ask is for a whole window.
+  assert.equal(transcriptRefreshQuery(reading({ generation: undefined, seq: undefined })), `limit=${TRANSCRIPT_PAGE_SIZE}`)
+  // A reason is not a reading to extend.
+  assert.equal(transcriptRefreshQuery(reading({ reason: 'unreadable' })), `limit=${TRANSCRIPT_PAGE_SIZE}`)
+  const held = reading({ messages: [at(7), at(8)] })
+  assert.deepEqual(Object.fromEntries(new URLSearchParams(transcriptRefreshQuery(held))), {
+    since: '4', generation: 'g.0', oldest: 'offset:7',
+  })
+  assert.deepEqual(Object.fromEntries(new URLSearchParams(transcriptRefreshQuery(reading()))), {
+    since: '4', generation: 'g.0',
+  })
+})
+
+test('older pages are asked for from the oldest message held, and only while there are some', () => {
+  assert.equal(transcriptOlderQuery(null), null)
+  assert.equal(transcriptOlderQuery(reading({ messages: [at(7)], has_older: false })), null)
+  assert.deepEqual(
+    Object.fromEntries(new URLSearchParams(transcriptOlderQuery(reading({ messages: [at(7)], has_older: true })) || '')),
+    { limit: String(TRANSCRIPT_PAGE_SIZE), before: 'offset:7' },
+  )
+})
+
+test('a delta replaces from its first changed message and keeps every other row as it was', () => {
+  const first = at(1)
+  const second = at(2, 'working', { turn_complete: false })
+  const current = reading({ messages: [first, second], seq: 4, total: 2 })
+  const incoming = reading({
+    page: 'delta', delta: true, seq: 6, total: 3, replace_from: 'offset:2',
+    messages: [at(2, 'working', { turn_complete: true }), at(3)],
+  })
+  const merged = mergeTranscript(current, incoming)
+  assert.ok(merged)
+  assert.deepEqual(merged.messages.map(item => item.message_id), ['offset:1', 'offset:2', 'offset:3'])
+  assert.equal(merged.messages[1].turn_complete, true)
+  // The untouched row is the same object, which is what lets its memoised row skip.
+  assert.equal(merged.messages[0], first)
+  assert.equal(merged.seq, 6)
+  assert.equal(merged.total, 3)
+})
+
+test('an unchanged message inside a replaced run keeps its identity too', () => {
+  const kept = at(2)
+  const current = reading({ messages: [at(1), kept] })
+  const merged = mergeTranscript(current, reading({
+    page: 'delta', seq: 5, replace_from: 'offset:2', messages: [at(2), at(3)],
+  }))
+  assert.equal(merged?.messages[1], kept)
+})
+
+test('an empty delta changes the reading and not the messages', () => {
+  const current = reading({ messages: [at(1)], has_older: true })
+  const merged = mergeTranscript(current, reading({ page: 'delta', seq: 9, replace_from: null, messages: [], has_older: false }))
+  assert.equal(merged?.messages, current.messages)
+  assert.equal(merged?.seq, 9)
+  assert.equal(merged?.has_older, true, 'what is held decides whether there is more above it')
+})
+
+test('a delta of new messages only is appended after the newest held', () => {
+  // The common case while an agent works: nothing held changed, so the first changed
+  // message is one the reader has never seen.
+  const current = reading({ messages: [at(1), at(2)] })
+  const merged = mergeTranscript(current, reading({ page: 'delta', seq: 5, replace_from: 'offset:3', messages: [at(3), at(4)] }))
+  assert.deepEqual(merged?.messages.map(item => item.ordinal), [1, 2, 3, 4])
+  assert.equal(merged?.messages[1], current.messages[1])
+})
+
+test('a delta that cannot be joined asks for the tail instead of guessing', () => {
+  const current = reading({ messages: [at(1)] })
+  // From another generation: the daemon rebuilt its reading.
+  assert.equal(mergeTranscript(current, reading({ page: 'delta', generation: 'g.1', replace_from: 'offset:1', messages: [at(1)] })), null)
+  // Past the newest held, with a gap the reader cannot see across.
+  assert.equal(mergeTranscript(current, reading({ page: 'delta', replace_from: 'offset:99', messages: [at(99)] })), null)
+  // Before the oldest held.
+  assert.equal(mergeTranscript(reading({ messages: [at(5)] }), reading({ page: 'delta', replace_from: 'offset:4', messages: [at(4)] })), null)
+  // A place that holds another message than the delta says.
+  assert.equal(mergeTranscript(current, reading({ page: 'delta', replace_from: 'record:x', messages: [message({ message_id: 'record:x', ordinal: 1 })] })), null)
+  // A first change named but not sent.
+  assert.equal(mergeTranscript(current, reading({ page: 'delta', replace_from: 'offset:1', messages: [] })), null)
+})
+
+test('an older page goes above what is held, once', () => {
+  const current = reading({ messages: [at(3), at(4)], has_older: true, total: 4 })
+  const merged = mergeTranscript(current, reading({
+    page: 'older', has_older: false, total: 4, messages: [at(1), at(2), at(3)],
+  }))
+  assert.deepEqual(merged?.messages.map(item => item.ordinal), [1, 2, 3, 4])
+  assert.equal(merged?.has_older, false)
+  assert.equal(merged?.seq, current.seq, 'the reading it extends is still the one held')
+  assert.equal(mergeTranscript(current, reading({ page: 'older', generation: 'g.9', messages: [at(1)] })), null)
+})
+
+test('a reset, a tail, and an older daemon replace the reading whole', () => {
+  const current = reading({ messages: [at(1), at(2)] })
+  const tail = reading({ page: 'tail', reset: true, generation: 'g.1', messages: [at(5)] })
+  assert.equal(mergeTranscript(current, tail), tail)
+  const legacy = { session_id: 's1', backend: 'claude', messages: [at(8)], hidden: 0, truncated: false, reason: null }
+  assert.equal(mergeTranscript(current, legacy), legacy)
+})
+
+test('a read that failed for now leaves the column as it was', () => {
+  const current = reading({ messages: [at(1)] })
+  assert.equal(mergeTranscript(current, reading({ reason: 'indexing', messages: [] })), current)
+  assert.equal(mergeTranscript(current, reading({ reason: 'unreadable', messages: [] })), current)
+  // A fact about the session is shown, though: the pane is no longer an agent's.
+  const gone = reading({ reason: 'not_agent', messages: [] })
+  assert.equal(mergeTranscript(current, gone), gone)
+  assert.ok(transcriptReasonRetries('indexing'))
+  assert.ok(transcriptReasonRetries('unreadable'))
+  assert.ok(!transcriptReasonRetries('no_transcript'))
+})
+
+test('news is counted from the newest message, so older pages are not news', () => {
+  const messages = [at(1), at(2), at(3), at(4)]
+  assert.equal(transcriptArrivals(messages, 'offset:2'), 2)
+  assert.equal(transcriptArrivals(messages, 'offset:4'), 0)
+  assert.equal(transcriptArrivals(messages, null), null)
+  assert.equal(transcriptArrivals(messages, 'offset:99'), null)
+})
+
+test('the column draws a bounded number of groups, growing a step at a time', () => {
+  assert.equal(transcriptRenderCount(500, 0), TRANSCRIPT_RENDER_STEP)
+  assert.equal(transcriptRenderCount(500, TRANSCRIPT_RENDER_STEP * 2), TRANSCRIPT_RENDER_STEP * 2)
+  assert.equal(transcriptRenderCount(10, 1000), 10)
+  assert.equal(transcriptRenderCount(0, 60), 0)
+})
+
+test('the scroll memory keeps the message the reader was on, beside the offset', () => {
+  forgetTranscriptScroll()
+  rememberTranscriptScroll('sess-1', 420, { messageId: 'offset:9', delta: 12, rendered: 120 })
+  assert.deepEqual(recallTranscriptAnchor('sess-1'), { messageId: 'offset:9', delta: 12, rendered: 120 })
+  assert.equal(recallTranscriptScroll('sess-1'), 420)
+  assert.equal(recallTranscriptAnchor('sess-2'), null)
+  rememberTranscriptScroll('sess-1', 10)
+  assert.equal(recallTranscriptAnchor('sess-1'), null, 'an offset taken over no message has no anchor')
+  forgetTranscriptScroll()
+})
+
+test('the last few readings are kept, newest use first, and never a reason', () => {
+  clearTranscriptCache()
+  const keys = Array.from({ length: 8 }, (_, index) => transcriptCacheKey(`s${index}`, 'run', 'native'))
+  keys.forEach((key, index) => writeTranscriptCache(key, reading({ session_id: `s${index}` })))
+  // Six kept: the two written first are gone.
+  assert.equal(readTranscriptCache(keys[0]), null)
+  assert.equal(readTranscriptCache(keys[1]), null)
+  assert.equal(readTranscriptCache(keys[2])?.session_id, 's2')
+  // Reading one makes it the most recent, so the next write evicts another.
+  writeTranscriptCache(transcriptCacheKey('s9', 'run', 'native'), reading())
+  assert.ok(readTranscriptCache(keys[2]))
+  assert.equal(readTranscriptCache(keys[3]), null)
+  // A reason replaces what was kept rather than being kept: it is re-asked anyway.
+  writeTranscriptCache(keys[2], reading({ reason: 'no_transcript' }))
+  assert.equal(readTranscriptCache(keys[2]), null)
+  // A rebinding (fork, rollover) is a different conversation, so a different key.
+  assert.notEqual(transcriptCacheKey('s1', 'run', 'a'), transcriptCacheKey('s1', 'run', 'b'))
+  clearTranscriptCache()
 })

@@ -30,6 +30,69 @@ test('a newly bound fork transcript replaces the empty view without a new run or
   await expect(messages(page)).toHaveCount(3)
 })
 
+test.describe('a long conversation', () => {
+  test.use({ viewport: { width: 900, height: 800 } })
+
+  const column = (page: Page) => page.locator('.transcript-tab-body')
+  const requests = (page: Page) => page.evaluate(() => (window as unknown as { __transcriptRequests: string[] }).__transcriptRequests)
+  const openLong = async (page: Page) => {
+    await page.goto('/transcript-actions-harness.html?long=1')
+    await expect(messages(page).last()).toContainText('Message number 449')
+  }
+
+  test('opens at its newest message and draws only the trailing rows', async ({ page }) => {
+    await openLong(page)
+    const drawn = await messages(page).count()
+    // A page of 200 is loaded; a bounded run of it is drawn.
+    expect(drawn).toBeGreaterThan(0)
+    expect(drawn).toBeLessThan(200)
+    await expect.poll(() => column(page).evaluate(element =>
+      element.scrollHeight - element.scrollTop - element.clientHeight)).toBeLessThan(50)
+    expect(await requests(page)).toEqual(['?limit=200'])
+  })
+
+  test('scrolling up draws and then loads earlier messages, keeping the one being read in place', async ({ page }) => {
+    await openLong(page)
+    for (let step = 0; step < 30; step++) {
+      const firstId = await messages(page).first().getAttribute('data-message-id')
+      await column(page).evaluate(element => { element.scrollTop = 0 })
+      const row = page.locator(`.transcript-message[data-message-id="${firstId}"]`)
+      const top = await row.evaluate(element => element.getBoundingClientRect().top)
+      // Rows arrive above it, and it does not move: the reader is still on it.
+      await expect.poll(async () => (await messages(page).first().getAttribute('data-message-id')) !== firstId).toBe(true)
+      expect(Math.abs((await row.evaluate(element => element.getBoundingClientRect().top)) - top)).toBeLessThanOrEqual(2)
+      if ((await requests(page)).some(query => query.includes('before='))) break
+    }
+    // An older page was asked for from the oldest message held.
+    expect((await requests(page)).find(query => query.includes('before='))).toContain('before=m250')
+  })
+
+  test('an append mid-turn arrives as a delta and is followed at the bottom', async ({ page }) => {
+    await openLong(page)
+    await page.evaluate(() => {
+      (window as unknown as { __transcriptAppend: (text: string) => void }).__transcriptAppend('Freshly appended words.')
+      window.dispatchEvent(new CustomEvent('mux:transcript-appended', { detail: { sessionId: 's1' } }))
+    })
+    await expect(messages(page).last()).toContainText('Freshly appended words.')
+    const asked = await requests(page)
+    expect(asked.at(-1)).toContain('since=1')
+    expect(asked.at(-1)).toContain('generation=h.1')
+    await expect.poll(() => column(page).evaluate(element =>
+      element.scrollHeight - element.scrollTop - element.clientHeight)).toBeLessThan(50)
+  })
+
+  test('a tool call names itself until opened, then reads its input', async ({ page }) => {
+    await openLong(page)
+    await page.getByLabel('Tool calls').check()
+    const call = page.locator('.transcript-tool-call').last()
+    await expect(call.locator('summary')).toHaveText('Bash')
+    // Nothing is drawn for an input nobody has opened.
+    await expect(page.locator('.transcript-tool-call pre')).toHaveCount(0)
+    await call.locator('summary').click()
+    await expect(call.locator('pre')).toContainText('ls 449')
+  })
+})
+
 test.describe('pointer', () => {
   test.use({ viewport: { width: 900, height: 800 } })
 

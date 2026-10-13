@@ -282,17 +282,35 @@ function transcriptPayload(sessionId: string): unknown {
   const reason = !target ? 'no_transcript'
     : target.backend === 'shell' ? 'not_agent'
       : messages.length ? null : 'no_transcript'
+  // Tool calls are named and not carried, as the daemon sends them: their inputs come
+  // from `/transcript/tool-calls` when a disclosure opens (`transcriptToolCallsPayload`).
+  const shown = reason === 'not_agent' ? [] : messages.map(message => message.preceding_tools
+    ? { ...message, preceding_tools: message.preceding_tools.map(({ id, name }) => ({ id, name })) }
+    : message)
   return {
     session_id: sessionId,
     agent_run_id: target?.agent_run_id ?? null,
     backend: target?.backend ?? '',
-    messages: reason === 'not_agent' ? [] : messages,
+    messages: shown,
     trailing_tool_calls: [],
     hidden: reason ? 0 : 4,
     abandoned_messages: 0,
     truncated: false,
     reason,
+    // One page holds the whole demo conversation. No `generation`, so the reader asks
+    // for the tail each time rather than a delta - what an older daemon looks like.
+    total: shown.length,
+    has_older: false,
   }
+}
+
+/** `GET /api/sessions/{id}/transcript/tool-calls`: the inputs at one seam of the reader. */
+function transcriptToolCallsPayload(sessionId: string, messageId: string | null): unknown {
+  if (messageId === null) return { calls: [], reason: null }
+  const found = (state.transcripts[sessionId] ?? []).find(message => message.message_id === messageId)
+  return found
+    ? { calls: found.preceding_tools ?? [], reason: null }
+    : { calls: [], reason: 'message_unavailable' }
 }
 
 /**
@@ -913,6 +931,13 @@ const ROUTES: Route[] = [
   {
     method: 'GET', pattern: /^\/api\/sessions\/([^/]+)\/transcript$/,
     handler: match => transcriptPayload(decodeURIComponent(match[1])),
+  },
+  {
+    method: 'GET', pattern: /^\/api\/sessions\/([^/]+)\/transcript\/tool-calls$/,
+    handler: (match, _body, url) => transcriptToolCallsPayload(
+      decodeURIComponent(match[1]),
+      url.searchParams.get('trailing') === '1' ? null : url.searchParams.get('message_id'),
+    ),
   },
   {
     method: 'GET', pattern: /^\/api\/sessions\/([^/]+)\/branch-points$/,

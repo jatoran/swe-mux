@@ -1,27 +1,35 @@
 import { Fragment, type VNode } from 'preact'
-import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks'
+import { memo } from 'preact/compat'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { agentTargetName } from './agentTargets'
 import { api } from './api'
 import { withoutClipboardCapture } from './clipboardHistory'
 import { useModalFocus } from './modalFocus'
 import { CheckIcon, CopyIcon, SelectTextIcon } from './railIcons'
 import { copyPreparedText } from './terminalClipboard'
+import { TranscriptLoader } from './transcriptLoader'
 import { TranscriptToolCalls } from './TranscriptToolCalls'
 import {
   expandedTranscriptMessageIds,
   groupTranscriptMessages,
   isPinnedToBottom,
   parseTranscriptExpansions,
+  readTranscriptCache,
+  recallTranscriptAnchor,
   recallTranscriptScroll,
   rememberTranscriptScroll,
   serializeTranscriptExpansions,
   setTranscriptMessageExpanded,
   transcriptAbandonedLabel,
+  transcriptArrivals,
+  transcriptCacheKey,
   transcriptClamped,
   transcriptConversationText,
   transcriptEmptyMessage,
+  transcriptIndexingLabel,
   transcriptLiveMessages,
   transcriptMatchesQuery,
+  transcriptRenderCount,
   transcriptSearchParts,
   transcriptSelectedSlice,
   transcriptSelectionActive,
@@ -29,12 +37,18 @@ import {
   transcriptTimestampIso,
   transcriptTimestampLabel,
   transcriptToolBoundaryLabel,
+  writeTranscriptCache,
+  TRANSCRIPT_APPENDED_EVENT,
   TRANSCRIPT_CHANGED_EVENT,
   TRANSCRIPT_EXPANSION_KEY,
+  TRANSCRIPT_RENDER_STEP,
+  TRANSCRIPT_RESYNC_EVENT,
   TURN_ENDED_EVENT,
   type SessionTranscript,
   type TranscriptGroup,
   type TranscriptMessage,
+  type TranscriptScrollAnchor,
+  type TranscriptToolCall,
 } from './transcriptView'
 import {
   indexTranscriptAudio, transcriptAudioClip, transcriptAudioHint, transcriptAudioMark,
@@ -60,12 +74,22 @@ import { clipParts } from './voiceGroups'
 // PTY, and the session exactly as they were; the one thing playback spends - a
 // summary's model call - is named on the chip before it is pressed, and its
 // verbatim twin spends nothing (`design/features/voice.md`).
+//
+// Reading is incremental (`design/features/transcript-branches.md`, "Reading"): the
+// tab opens on the newest page, drawn at once from the last reading of this session
+// if there is one, then asks the daemon only for what changed. Older pages load as
+// the reader scrolls up into them, and only the trailing groups of what is loaded
+// are drawn, growing as the reader scrolls.
 
 const COPIED_FLASH_MS = 1200
 /** Copy-all's key in the flash state, where per-message keys are ordinals. */
 const COPY_ALL = -1
 /** The select sheet's key in that same state, which its own button reads. */
 const COPY_SELECTION = -2
+/** Within this many pixels of the top, the column draws or loads what is above. */
+const GROW_THRESHOLD_PX = 600
+const EMPTY_MESSAGES: TranscriptMessage[] = []
+const EMPTY_TOOLS: TranscriptToolCall[] = []
 
 const readTranscriptExpansions = () => {
   try {
@@ -82,6 +106,36 @@ const writeTranscriptExpansions = (entries: ReturnType<typeof readTranscriptExpa
     // Storage can be unavailable in private or locked-down browser contexts.
     // The component state still preserves the choice for this mount.
   }
+}
+
+// Tool inputs read for one seam, kept for the life of the page. A seam's calls are
+// fixed once the message after it exists, so a reopened disclosure, or the same
+// session read again later, costs nothing. Bounded, oldest first.
+const TOOL_INPUT_CACHE_ENTRIES = 200
+const toolInputCache = new Map<string, Promise<TranscriptToolCall[]>>()
+
+function seamToolInputs(sessionId: string, runId: string, messageId: string | null): Promise<TranscriptToolCall[]> {
+  const query = messageId === null ? 'trailing=1' : `message_id=${encodeURIComponent(messageId)}`
+  const request = () => api<{ calls: TranscriptToolCall[]; reason: string | null }>(
+    'GET', `/api/sessions/${encodeURIComponent(sessionId)}/transcript/tool-calls?${query}`,
+  ).then(result => {
+    if (result.reason) throw new Error(result.reason)
+    return result.calls
+  })
+  // The calls after the newest message are still being made: never cached.
+  if (messageId === null) return request()
+  const key = JSON.stringify([sessionId, runId, messageId])
+  const hit = toolInputCache.get(key)
+  if (hit) return hit
+  const pending = request()
+  toolInputCache.set(key, pending)
+  pending.catch(() => toolInputCache.delete(key))
+  while (toolInputCache.size > TOOL_INPUT_CACHE_ENTRIES) {
+    const oldest = toolInputCache.keys().next().value
+    if (oldest === undefined) break
+    toolInputCache.delete(oldest)
+  }
+  return pending
 }
 
 /**
@@ -172,28 +226,37 @@ function MessageAudioChips({ audio, requested, onSpeak, onPlay }: {
   })}</>
 }
 
-function Message({ message, copied, expanded, query, audio, audioRequested, revealed, onReveal, onCopy, onExpand, onSelectText, onSpeak, onPlay }: {
-  message: TranscriptMessage
-  copied: boolean
-  expanded: boolean
-  query: string
-  /** Clips that already speak this message, by kind; `undefined` while read aloud is off. */
-  audio: MessageAudio | undefined
-  /** Kinds this reader has asked for and not yet seen land. */
-  audioRequested: readonly VoiceContent[] | null
-  /** Touch only: this is the message whose chip row a tap has opened. */
-  revealed: boolean
+/** What a row can do. One stable object per mounted tab, so a memoised row only
+ *  re-renders when something about its own message changed. */
+type MessageActions = Readonly<{
   onReveal: (ordinal: number) => void
   onCopy: (message: TranscriptMessage) => void
   onExpand: (messageId: string) => void
   onSelectText: (message: TranscriptMessage) => void
   onSpeak: (message: TranscriptMessage, kind: VoiceContent) => void
   onPlay: (clip: VoiceClip) => void
+}>
+
+const Message = memo(function Message({ message, copied, expanded, query, audio, audioRequests, revealed, actions }: {
+  message: TranscriptMessage
+  copied: boolean
+  expanded: boolean
+  query: string
+  /** Clips that already speak this message, by kind; `undefined` while read aloud is off. */
+  audio: MessageAudio | undefined
+  /** Every `<messageId>:<kind>` this reader has asked for; `null` while read aloud is off. */
+  audioRequests: readonly string[] | null
+  /** Touch only: this is the message whose chip row a tap has opened. */
+  revealed: boolean
+  actions: MessageActions
 }) {
   const clamped = transcriptClamped(message.text) && !expanded && !query
   const stamp = transcriptTimestampLabel(message.ts)
   const kind = transcriptSpeaker(message.role) === 'you' ? 'message' : 'reply'
-  const chips = audioRequested && message.role === 'assistant'
+  const chips = audioRequests !== null && message.role === 'assistant'
+  const requested = chips
+    ? TRANSCRIPT_AUDIO_KINDS.filter(item => audioRequests.includes(`${message.message_id}:${item}`))
+    : []
   const classes = ['transcript-message', message.role]
   // The gutter the header keeps clear of the floating chip row is sized to what that row
   // actually holds, which is two icon buttons unless this reply also carries the audio pair.
@@ -202,7 +265,8 @@ function Message({ message, copied, expanded, query, audio, audioRequested, reve
   return <article
     class={classes.join(' ')}
     data-message-ordinal={message.ordinal}
-    onClick={() => onReveal(message.ordinal)}
+    data-message-id={message.message_id}
+    onClick={() => actions.onReveal(message.ordinal)}
   >
     {/* Stops a press on a chip from closing the row it is in - the tap that opened this
         one is the same event the article listens for. Inert with a mouse, where hover
@@ -212,21 +276,21 @@ function Message({ message, copied, expanded, query, audio, audioRequested, reve
         class="transcript-copy transcript-copy-icon"
         aria-label={`Select text from this ${kind}`}
         title={`Select part of this ${kind}`}
-        onClick={() => onSelectText(message)}
+        onClick={() => actions.onSelectText(message)}
       ><SelectTextIcon /></button>
       <button
         class={copied ? 'transcript-copy transcript-copy-icon copied' : 'transcript-copy transcript-copy-icon'}
         aria-label={copied ? `Copied this ${kind}` : `Copy this ${kind}`}
         title={copied ? 'Copied' : `Copy this ${kind}`}
-        onClick={() => onCopy(message)}
+        onClick={() => actions.onCopy(message)}
       >{copied ? <CheckIcon /> : <CopyIcon />}</button>
       {/* Replies only: read aloud speaks what the agent said, and a prompt is
           something the operator wrote. */}
       {chips && <MessageAudioChips
         audio={audio}
-        requested={audioRequested}
-        onSpeak={kind => onSpeak(message, kind)}
-        onPlay={onPlay}
+        requested={requested}
+        onSpeak={item => actions.onSpeak(message, item)}
+        onPlay={actions.onPlay}
       />}
     </div>
     <header>
@@ -241,12 +305,12 @@ function Message({ message, copied, expanded, query, audio, audioRequested, reve
     {transcriptClamped(message.text) && !query && <button class="transcript-expand" onClick={event => {
       // Unfolding a long reply is not a request for its chip row.
       event.stopPropagation()
-      onExpand(message.message_id)
+      actions.onExpand(message.message_id)
     }}>
       {expanded ? 'Show less' : 'Show more'}
     </button>}
   </article>
-}
+})
 
 /**
  * One run of abandoned messages, folded to a line the reader can open.
@@ -260,14 +324,15 @@ function Message({ message, copied, expanded, query, audio, audioRequested, reve
  * Collapsed by default and not remembered between mounts: an abandoned branch is
  * something to check once, not a preference.
  */
-function AbandonedRun({ messages, open, onToggle, renderMessage }: {
+function AbandonedRun({ groupKey, messages, open, onToggle, renderMessage }: {
+  groupKey: string
   messages: TranscriptMessage[]
   open: boolean
   onToggle: () => void
   renderMessage: (message: TranscriptMessage) => VNode
 }) {
   const label = transcriptAbandonedLabel(messages.length)
-  return <section class={open ? 'transcript-abandoned open' : 'transcript-abandoned'}>
+  return <section class={open ? 'transcript-abandoned open' : 'transcript-abandoned'} data-message-id={groupKey}>
     <button type="button" aria-expanded={open} onClick={onToggle}>
       <span class="transcript-abandoned-mark" aria-hidden="true">{open ? '▾' : '▸'}</span>
       {label}
@@ -276,6 +341,34 @@ function AbandonedRun({ messages, open, onToggle, renderMessage }: {
       {messages.map(message => <Fragment key={message.message_id}>{renderMessage(message)}</Fragment>)}
     </div>}
   </section>
+}
+
+const groupKey = (group: TranscriptGroup): string =>
+  group.kind === 'abandoned' ? group.key : group.message.message_id
+
+/** The anchored row at the top of the view, and how far into it the view sits.
+ *
+ * A binary search over the anchored rows in document order, which is top-to-bottom:
+ * reading offsets is a layout read, and a long column has hundreds of rows. */
+function topAnchor(element: HTMLElement, rendered: number): TranscriptScrollAnchor | null {
+  const rows = element.querySelectorAll<HTMLElement>(':scope > [data-message-id], :scope > * > [data-message-id]')
+  if (!rows.length) return null
+  const top = element.scrollTop
+  let low = 0
+  let high = rows.length - 1
+  while (low < high) {
+    const middle = (low + high) >> 1
+    const row = rows[middle]
+    if (row.offsetTop + row.offsetHeight <= top) low = middle + 1
+    else high = middle
+  }
+  const row = rows[low]
+  const messageId = row.dataset.messageId
+  return messageId ? { messageId, delta: top - row.offsetTop, rendered } : null
+}
+
+function anchoredRow(element: HTMLElement, messageId: string): HTMLElement | null {
+  return element.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(messageId)}"]`)
 }
 
 export function TranscriptTab({ session, readAloud = false }: {
@@ -289,6 +382,10 @@ export function TranscriptTab({ session, readAloud = false }: {
   const [data, setData] = useState<SessionTranscript | null>(null)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  const [olderLoading, setOlderLoading] = useState(false)
+  // Copy all, Select and a search over everything first walk back to the first message.
+  const [wholePending, setWholePending] = useState(false)
+  const [renderCount, setRenderCount] = useState(TRANSCRIPT_RENDER_STEP)
   const [unseen, setUnseen] = useState(0)
   const [copied, setCopied] = useState<number | null>(null)
   const [expansion, setExpansion] = useState<{ scope: string; messageIds: string[] }>({ scope: '', messageIds: [] })
@@ -314,43 +411,42 @@ export function TranscriptTab({ session, readAloud = false }: {
   const body = useRef<HTMLDivElement>(null)
   const manualArea = useRef<HTMLTextAreaElement>(null)
   const searchOrigin = useRef<{ sessionId: string; scrollTop: number } | null>(null)
+  const loaderRef = useRef<TranscriptLoader | null>(null)
   // Refs rather than state: the scroll placement below runs in a layout effect and
   // must read the value this render was laid out with, not a queued update.
   const pinned = useRef(true)
   const selecting = useRef(false)
   const placedFor = useRef('')
-  const shown = useRef(0)
-  const requestSequence = useRef(0)
+  // The newest message the column has accounted for, which is what "new" is counted from.
+  const newest = useRef<string | null>(null)
+  // The first drawn group at the last layout: a different one now means rows were added
+  // above the reader, whose place `anchor` holds.
+  const firstDrawn = useRef<string | null>(null)
+  const anchor = useRef<TranscriptScrollAnchor | null>(null)
+  // The oldest message when an older page last failed to arrive: automatic growth stops
+  // there until something changes, so a failing read is not retried in a tight loop.
+  const olderStalled = useRef<string | null>(null)
   const query = search.sessionId === sessionId ? search.value : ''
   const normalizedQuery = query.trim()
   const transcriptRunId = runId || (data?.session_id === sessionId ? data.agent_run_id : '') || 'legacy'
   const expansionScope = JSON.stringify([sessionId, transcriptRunId])
   const expanded = expansion.scope === expansionScope ? expansion.messageIds : []
 
-  const load = async (id: string) => {
-    const sequence = ++requestSequence.current
-    setLoading(true)
-    try {
-      const result = await api<SessionTranscript>('GET', `/api/sessions/${id}/transcript`)
-      if (sequence !== requestSequence.current) return
-      setData(result)
-      setError('')
-    } catch (cause) {
-      if (sequence !== requestSequence.current) return
-      setError(cause instanceof Error ? cause.message : String(cause))
-    } finally {
-      if (sequence === requestSequence.current) setLoading(false)
-    }
-  }
-
   // A rollover (`/clear`, `/new`) swaps the transcript under the same pane, so the
   // run id belongs beside the session id. A fresh fork's initial binding changes
   // only the native id, and must replace its empty "no transcript" reading too.
   useEffect(() => {
-    setData(null); setUnseen(0); setError('')
+    const key = transcriptCacheKey(sessionId, runId, nativeId)
+    const cached = sessionId ? readTranscriptCache(key) : null
+    setData(cached); setUnseen(0); setError('')
     setOpenBranches([])
+    setOlderLoading(false); setWholePending(false)
+    setRenderCount(sessionId ? recallTranscriptAnchor(sessionId)?.rendered ?? TRANSCRIPT_RENDER_STEP : TRANSCRIPT_RENDER_STEP)
     placedFor.current = ''
-    shown.current = 0
+    newest.current = null
+    firstDrawn.current = null
+    anchor.current = null
+    olderStalled.current = null
     selecting.current = false
     setSelectionLive(false)
     // The sheet holds a snapshot of text from the conversation being left behind, so it
@@ -360,8 +456,25 @@ export function TranscriptTab({ session, readAloud = false }: {
     // transcript. In-flight requests go with it: their markers belong to messages that
     // are no longer on screen.
     setClips([]); setAudioRequests([])
-    if (sessionId) void load(sessionId)
-    return () => { requestSequence.current++ }
+    if (!sessionId) { setLoading(false); return }
+    const loader = new TranscriptLoader(
+      queryString => api<SessionTranscript>('GET', `/api/sessions/${encodeURIComponent(sessionId)}/transcript?${queryString}`),
+      (reading, failure) => {
+        if (reading) writeTranscriptCache(key, reading)
+        setData(reading)
+        setError(failure)
+        setLoading(false)
+      },
+      cached,
+    )
+    loaderRef.current = loader
+    // A cached reading is drawn at once; "Reading transcript…" is only for a first sight.
+    setLoading(!cached)
+    loader.refresh()
+    return () => {
+      loader.dispose()
+      if (loaderRef.current === loader) loaderRef.current = null
+    }
   }, [sessionId, runId, nativeId])
 
   // The run's audio. `limit` is the store's own ceiling: a conversation with more clips
@@ -420,47 +533,106 @@ export function TranscriptTab({ session, readAloud = false }: {
     })
   }, [expansionScope])
 
-  // The observer signals after it has consumed a user record, avoiding both timer
-  // polling and the race where UserPromptSubmit arrives before the transcript write.
-  // Turn end remains the assistant-message boundary.
+  // Every reason to look again is a trigger, and the loader turns any number of them
+  // arriving together into one request. The observer signals after it has consumed a
+  // user record (`transcript_message`), while the agent writes (`transcript_appended`,
+  // throttled by the daemon), and at turn end; a reconnect across a gap, and the tab
+  // coming back to the foreground, re-ask once because events may have been missed.
   useEffect(() => {
     if (!sessionId) return
-    const onTurnEnded = (event: Event) => {
+    const onEvent = (event: Event) => {
       const detail = (event as CustomEvent<{ sessionId?: string }>).detail
       if (detail?.sessionId && detail.sessionId !== sessionId) return
-      void load(sessionId)
+      loaderRef.current?.refresh()
     }
-    window.addEventListener(TRANSCRIPT_CHANGED_EVENT, onTurnEnded)
-    window.addEventListener(TURN_ENDED_EVENT, onTurnEnded)
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') loaderRef.current?.refresh()
+    }
+    const names = [TRANSCRIPT_CHANGED_EVENT, TURN_ENDED_EVENT, TRANSCRIPT_APPENDED_EVENT, TRANSCRIPT_RESYNC_EVENT]
+    for (const name of names) window.addEventListener(name, onEvent)
+    document.addEventListener('visibilitychange', onVisible)
     return () => {
-      window.removeEventListener(TRANSCRIPT_CHANGED_EVENT, onTurnEnded)
-      window.removeEventListener(TURN_ENDED_EVENT, onTurnEnded)
+      for (const name of names) window.removeEventListener(name, onEvent)
+      document.removeEventListener('visibilitychange', onVisible)
     }
   }, [sessionId])
+
+  const messages = data?.messages || EMPTY_MESSAGES
+  const liveMessages = useMemo(() => transcriptLiveMessages(messages), [messages])
+  const visibleMessages = useMemo(
+    () => normalizedQuery ? messages.filter(message => transcriptMatchesQuery(message, normalizedQuery)) : messages,
+    [messages, normalizedQuery],
+  )
+  // Under a search the reader asked for every match, so abandoned messages stand
+  // on their own rather than inside a fold nothing would reveal them through.
+  const groups: TranscriptGroup[] = useMemo(() => normalizedQuery
+    ? visibleMessages.map(message => ({ kind: 'message', message }) as const)
+    : groupTranscriptMessages(visibleMessages), [visibleMessages, normalizedQuery])
+  // Every match is drawn under a search; otherwise the trailing groups only.
+  const drawn = normalizedQuery ? groups.length : transcriptRenderCount(groups.length, renderCount)
+  const drawStart = groups.length - drawn
+  const hasOlder = !!data?.has_older
+  const moreAbove = !normalizedQuery && (drawStart > 0 || hasOlder)
+
+  const oldestLoaded = messages[0]?.message_id || ''
+  // Draw, or load, what is above the reader. Drawn first: everything loaded is already
+  // in memory, and only once it is all drawn does the column ask the daemon for more.
+  // `deliberate` is a press of the button; scrolling and filling a short column are not,
+  // and they stop at a page that failed to load rather than asking again in a loop.
+  const growUp = (deliberate = false) => {
+    const loader = loaderRef.current
+    if (normalizedQuery || !loader) return
+    if (drawStart > 0) {
+      setRenderCount(current => Math.max(current, drawn) + TRANSCRIPT_RENDER_STEP)
+      return
+    }
+    if (!hasOlder || olderLoading) return
+    if (!deliberate && olderStalled.current === oldestLoaded) return
+    setOlderLoading(true)
+    void loader.loadOlder().then(grew => {
+      setOlderLoading(false)
+      olderStalled.current = grew ? null : oldestLoaded
+      if (grew) setRenderCount(current => Math.max(current, drawn) + TRANSCRIPT_RENDER_STEP)
+    })
+  }
 
   // Where a load leaves the viewport. First sight of a session opens at its newest
   // message; returning to a session still focused restores where reading stopped
   // (the drawer unmounts this body on every tab switch, so that memory lives
-  // outside the component). After that, only a reader already at the bottom is
-  // carried along by new messages — otherwise the position holds and the arrival
-  // is offered as a button, because yanking the column mid-sentence every time an
-  // agent speaks is what makes a live log unreadable.
+  // outside the component), by the message that was at the top of the view. After
+  // that, only a reader already at the bottom is carried along by new messages -
+  // otherwise the position holds and the arrival is offered as a button, because
+  // yanking the column mid-sentence every time an agent speaks is what makes a live
+  // log unreadable. Rows drawn above the reader (an older page, a step up the column)
+  // keep the message they were reading where it was.
   useLayoutEffect(() => {
     const element = body.current
     if (!element || !data) return
+    // What sits above the first drawn group counts too: the "Earlier messages" row
+    // leaving when the last page lands moves everything under it.
+    const first = `${moreAbove}|${groups[drawStart] ? groupKey(groups[drawStart]) : ''}`
+    const latest = messages.length ? messages[messages.length - 1].message_id : null
     if (placedFor.current !== sessionId) {
       placedFor.current = sessionId
-      const remembered = recallTranscriptScroll(sessionId)
-      element.scrollTop = remembered === null ? element.scrollHeight : remembered
+      const remembered = recallTranscriptAnchor(sessionId)
+      const row = remembered ? anchoredRow(element, remembered.messageId) : null
+      const offset = recallTranscriptScroll(sessionId)
+      element.scrollTop = row && remembered
+        ? row.offsetTop + remembered.delta
+        : offset === null ? element.scrollHeight : offset
       pinned.current = isPinnedToBottom(element.scrollTop, element.scrollHeight, element.clientHeight)
-      shown.current = data.messages.length
+      anchor.current = topAnchor(element, drawn)
+      newest.current = latest
+      firstDrawn.current = first
       setUnseen(0)
       return
     }
-    const arrived = data.messages.length - shown.current
-    shown.current = data.messages.length
+    const arrived = transcriptArrivals(messages, newest.current)
+    newest.current = latest
+    const grewAbove = first !== firstDrawn.current
+    firstDrawn.current = first
     if (normalizedQuery) {
-      if (arrived > 0) setUnseen(current => current + arrived)
+      if (arrived) setUnseen(current => current + arrived)
       return
     }
     // Following the bottom is suspended while the reader is holding a selection. Moving
@@ -471,10 +643,25 @@ export function TranscriptTab({ session, readAloud = false }: {
     if (pinned.current && !selecting.current) {
       element.scrollTop = element.scrollHeight
       setUnseen(0)
-    } else if (arrived > 0) {
-      setUnseen(current => current + arrived)
+    } else {
+      if (grewAbove && anchor.current) {
+        // An absolute target, not a shift: a browser that already anchored the
+        // scroll itself has put the row exactly here, and this changes nothing.
+        const row = anchoredRow(element, anchor.current.messageId)
+        if (row) element.scrollTop = row.offsetTop + anchor.current.delta
+      }
+      if (arrived) setUnseen(current => current + arrived)
     }
-  }, [data])
+    anchor.current = topAnchor(element, drawn)
+  }, [data, drawn])
+
+  // A column too short to scroll cannot be scrolled up into, so it draws or loads what
+  // is above it by itself until it fills the view or there is nothing more.
+  useLayoutEffect(() => {
+    const element = body.current
+    if (!element || !data || !moreAbove || olderLoading) return
+    if (element.scrollHeight <= element.clientHeight + 1) growUp()
+  })
 
   // Search is an ephemeral lens over the conversation, not a new reading place.
   // Start each query at its first match and restore the normal scroll offset when
@@ -499,8 +686,10 @@ export function TranscriptTab({ session, readAloud = false }: {
     if (!element || !sessionId) return
     if (normalizedQuery) return
     pinned.current = isPinnedToBottom(element.scrollTop, element.scrollHeight, element.clientHeight)
-    rememberTranscriptScroll(sessionId, element.scrollTop)
+    anchor.current = topAnchor(element, drawn)
+    rememberTranscriptScroll(sessionId, element.scrollTop, anchor.current)
     if (pinned.current) setUnseen(0)
+    if (moreAbove && element.scrollTop < GROW_THRESHOLD_PX) growUp()
   }
 
   const jumpToLatest = () => {
@@ -508,11 +697,12 @@ export function TranscriptTab({ session, readAloud = false }: {
     if (!element) return
     element.scrollTop = element.scrollHeight
     pinned.current = true
-    rememberTranscriptScroll(sessionId, element.scrollTop)
+    anchor.current = topAnchor(element, drawn)
+    rememberTranscriptScroll(sessionId, element.scrollTop, anchor.current)
     setUnseen(0)
   }
 
-  const copy = async (text: string, key: number) => {
+  const copy = async (text: string, key: number): Promise<boolean> => {
     // The textarea is the synchronous fallback `copyPreparedText` selects when the
     // async clipboard is unavailable (an insecure-context phone), so it has to hold
     // the text before the call rather than after a failure.
@@ -522,26 +712,47 @@ export function TranscriptTab({ session, readAloud = false }: {
     // ring exists to hand back. The suppression only has to span the synchronous
     // part of the copy, which is where both capture hooks fire.
     const ok = await withoutClipboardCapture(() => copyPreparedText(text, manualArea.current))
-    if (!ok) { setError('The browser refused the copy. Select the text and copy it manually.'); return }
+    if (!ok) { setError('The browser refused the copy. Select the text and copy it manually.'); return false }
     setError('')
     setCopied(key)
     window.setTimeout(() => setCopied(current => (current === key ? null : current)), COPIED_FLASH_MS)
+    return true
   }
 
-  const toggleExpand = (messageId: string) => {
-    const shouldExpand = !expanded.includes(messageId)
-    const entries = setTranscriptMessageExpanded(
-      readTranscriptExpansions(),
-      sessionId,
-      transcriptRunId,
-      messageId,
-      shouldExpand,
-    )
-    writeTranscriptExpansions(entries)
-    setExpansion({
-      scope: expansionScope,
-      messageIds: expandedTranscriptMessageIds(entries, sessionId, transcriptRunId),
-    })
+  /** The whole conversation's live messages, walking back to its first page if needed. */
+  const wholeConversation = async (): Promise<TranscriptMessage[] | null> => {
+    const loader = loaderRef.current
+    if (!loader?.current?.has_older) return transcriptLiveMessages(loader?.current?.messages || messages)
+    setWholePending(true)
+    try {
+      const complete = await loader.loadAll()
+      if (!complete) {
+        setError('The whole conversation could not be read just now. Try again in a moment.')
+        return null
+      }
+      return transcriptLiveMessages(loader.current?.messages || [])
+    } finally {
+      setWholePending(false)
+    }
+  }
+
+  const copyAll = async () => {
+    if (!hasOlder) { await copy(transcriptConversationText(liveMessages), COPY_ALL); return }
+    const whole = await wholeConversation()
+    if (!whole || !session) return
+    const text = transcriptConversationText(whole)
+    // The pages took a moment, and a browser that wants the copy inside the click's own
+    // turn refuses it now. The sheet's button is a fresh click, so it always works.
+    if (!(await copy(text, COPY_ALL))) {
+      setError('')
+      setSheet({ title: agentTargetName(session), text })
+    }
+  }
+
+  const selectAll = async () => {
+    if (!session) return
+    const whole = await wholeConversation()
+    if (whole) setSheet({ title: agentTargetName(session), text: transcriptConversationText(whole) })
   }
 
   const toggleBranch = (key: string) => setOpenBranches(keys =>
@@ -557,28 +768,6 @@ export function TranscriptTab({ session, readAloud = false }: {
     setSearch({ sessionId, value })
   }
 
-  if (!session) return <p class="drawer-empty">Focus a session to read its conversation.</p>
-
-  const messages = data?.messages || []
-  const liveMessages = transcriptLiveMessages(messages)
-  const abandonedCount = messages.length - liveMessages.length
-  const trailingToolCalls = data?.trailing_tool_calls || []
-  const availableToolCalls = messages.reduce(
-    (total, message) => total + (message.preceding_tools?.length || 0),
-    trailingToolCalls.length,
-  )
-  const visibleMessages = normalizedQuery
-    ? messages.filter(message => transcriptMatchesQuery(message, normalizedQuery))
-    : messages
-  // Under a search the reader asked for every match, so abandoned messages stand
-  // on their own rather than inside a fold nothing would reveal them through.
-  const groups: TranscriptGroup[] = normalizedQuery
-    ? visibleMessages.map(message => ({ kind: 'message', message }) as const)
-    : groupTranscriptMessages(visibleMessages)
-  const stale = data?.observation_stale_since
-  const audioIndex = readAloud ? indexTranscriptAudio(clips) : null
-  const requestedFor = (messageId: string): VoiceContent[] =>
-    TRANSCRIPT_AUDIO_KINDS.filter(kind => audioRequests.includes(`${messageId}:${kind}`))
   const playMessageClip = (clip: VoiceClip) => {
     unlockPlayback()
     // The whole reply, not its opening segment: a long reply is stored in pieces
@@ -637,24 +826,69 @@ export function TranscriptTab({ session, readAloud = false }: {
       setAudioRequests(current => current.filter(item => item !== key))
     }
   }
+
+  const toggleExpand = (messageId: string) => {
+    const shouldExpand = !expanded.includes(messageId)
+    const entries = setTranscriptMessageExpanded(
+      readTranscriptExpansions(),
+      sessionId,
+      transcriptRunId,
+      messageId,
+      shouldExpand,
+    )
+    writeTranscriptExpansions(entries)
+    setExpansion({
+      scope: expansionScope,
+      messageIds: expandedTranscriptMessageIds(entries, sessionId, transcriptRunId),
+    })
+  }
+
+  // The latest closures, behind one object that never changes identity.
+  const latestActions = useRef<MessageActions | null>(null)
+  latestActions.current = {
+    onReveal: ordinal => setOpenActions(current => (current === ordinal ? null : ordinal)),
+    onCopy: item => void copy(item.text, item.ordinal),
+    onExpand: toggleExpand,
+    onSelectText: item => setSheet({
+      title: `${transcriptSpeaker(item.role)}${transcriptTimestampLabel(item.ts) ? ` · ${transcriptTimestampLabel(item.ts)}` : ''}`,
+      text: item.text,
+    }),
+    onSpeak: (item, kind) => void speakMessage(item, kind),
+    onPlay: playMessageClip,
+  }
+  const actions = useMemo<MessageActions>(() => ({
+    onReveal: ordinal => latestActions.current?.onReveal(ordinal),
+    onCopy: item => latestActions.current?.onCopy(item),
+    onExpand: messageId => latestActions.current?.onExpand(messageId),
+    onSelectText: item => latestActions.current?.onSelectText(item),
+    onSpeak: (item, kind) => latestActions.current?.onSpeak(item, kind),
+    onPlay: clip => latestActions.current?.onPlay(clip),
+  }), [])
+  const audioIndex = useMemo(() => readAloud ? indexTranscriptAudio(clips) : null, [readAloud, clips])
+
+  if (!session) return <p class="drawer-empty">Focus a session to read its conversation.</p>
+
+  const abandonedCount = messages.length - liveMessages.length
+  const trailingToolCalls = data?.trailing_tool_calls || EMPTY_TOOLS
+  const availableToolCalls = messages.reduce(
+    (total, message) => total + (message.preceding_tools?.length || 0),
+    trailingToolCalls.length,
+  )
+  const stale = data?.observation_stale_since
+  const unloaded = Math.max(0, (data?.total ?? messages.length) - messages.length)
   const renderMessage = (message: TranscriptMessage) => <Message
     message={message}
     copied={copied === message.ordinal}
     expanded={expanded.includes(message.message_id)}
     query={normalizedQuery}
     audio={audioIndex?.get(message.message_id)}
-    audioRequested={audioIndex ? requestedFor(message.message_id) : null}
+    audioRequests={audioIndex ? audioRequests : null}
     revealed={openActions === message.ordinal}
-    onReveal={ordinal => setOpenActions(current => (current === ordinal ? null : ordinal))}
-    onCopy={item => void copy(item.text, item.ordinal)}
-    onExpand={toggleExpand}
-    onSpeak={(item, kind) => void speakMessage(item, kind)}
-    onPlay={playMessageClip}
-    onSelectText={item => setSheet({
-      title: `${transcriptSpeaker(item.role)}${transcriptTimestampLabel(item.ts) ? ` · ${transcriptTimestampLabel(item.ts)}` : ''}`,
-      text: item.text,
-    })}
+    actions={actions}
   />
+  const emptyText = data?.reason === 'indexing'
+    ? transcriptIndexingLabel(data.progress)
+    : transcriptEmptyMessage(data?.reason ?? null, session.backend)
   return <div class={selectionLive ? 'transcript-tab transcript-selecting' : 'transcript-tab'}>
     <div class="transcript-tab-head">
       {/* The message count, and only the count. The session's name is the pane heading
@@ -669,6 +903,7 @@ export function TranscriptTab({ session, readAloud = false }: {
               ? `${visibleMessages.length} of ${messages.length} messages`
               : `${liveMessages.length} message${liveMessages.length === 1 ? '' : 's'}`}
           {!normalizedQuery && abandonedCount > 0 ? ` · ${abandonedCount} abandoned` : ''}
+          {unloaded > 0 ? ` · ${unloaded} earlier not loaded` : ''}
           {data && data.hidden > 0 ? ` · ${data.hidden} CLI record${data.hidden === 1 ? '' : 's'} hidden` : ''}
         </span>
       </div>
@@ -676,16 +911,16 @@ export function TranscriptTab({ session, readAloud = false }: {
           is what makes a span *across* messages copyable at all: in the sheet it is one
           flat buffer, so there is no scroller for a handle drag to lose its anchor in. */}
       <button
-        disabled={!liveMessages.length}
+        disabled={!liveMessages.length || wholePending}
         title="Select part of the conversation"
-        onClick={() => setSheet({ title: agentTargetName(session), text: transcriptConversationText(liveMessages) })}
+        onClick={() => void selectAll()}
       >Select</button>
       <button
         class={copied === COPY_ALL ? 'copied' : ''}
-        disabled={!liveMessages.length}
+        disabled={!liveMessages.length || wholePending}
         title="Copy the whole conversation, with speakers"
-        onClick={() => void copy(transcriptConversationText(liveMessages), COPY_ALL)}
-      >{copied === COPY_ALL ? 'Copied' : 'Copy all'}</button>
+        onClick={() => void copyAll()}
+      >{wholePending ? 'Loading…' : copied === COPY_ALL ? 'Copied' : 'Copy all'}</button>
       <label class="transcript-tool-toggle">
         <input
           type="checkbox"
@@ -726,33 +961,48 @@ export function TranscriptTab({ session, readAloud = false }: {
       This pane's transcript link went stale {new Date(stale * 1000).toLocaleTimeString()}. What follows may belong to another conversation.
     </p> : null}
     {error && <p class="transcript-note error" role="alert">{error}</p>}
-    {data?.truncated && <p class="transcript-note">Older messages are not loaded. The full conversation is in History.</p>}
+    {normalizedQuery && hasOlder && <p class="transcript-note">
+      Searching the {messages.length} loaded messages.{' '}
+      <button type="button" class="transcript-note-action" disabled={wholePending} onClick={() => void wholeConversation()}>
+        {wholePending ? 'Loading…' : `Load the ${unloaded} earlier ones`}
+      </button>
+    </p>}
     <div class="transcript-tab-body" ref={body} onScroll={onScroll}>
+      {moreAbove && <button type="button" class="transcript-older" disabled={olderLoading} onClick={() => growUp(true)}>
+        {olderLoading ? 'Loading earlier messages…' : 'Earlier messages'}
+      </button>}
       {messages.length
         ? visibleMessages.length
-          ? groups.map((group, index) => group.kind === 'abandoned'
-            ? <AbandonedRun
-              key={group.key}
-              messages={group.messages}
-              open={openBranches.includes(group.key)}
-              onToggle={() => toggleBranch(group.key)}
-              renderMessage={renderMessage}
-            />
-            : <Fragment key={group.message.message_id}>
-              {/* Only in the unfiltered column. Under a search the neighbours are
-                  whatever matched, so "12 tool calls" between them would describe
-                  a gap the reader is not looking at. */}
-              {!normalizedQuery && index > 0 && group.message.preceding_tool_calls > 0 && (
-                showToolCalls && group.message.preceding_tools?.length
-                  ? <TranscriptToolCalls calls={group.message.preceding_tools} />
-                  : <p class="transcript-tool-boundary">{transcriptToolBoundaryLabel(group.message.preceding_tool_calls)}</p>
-              )}
-              {renderMessage(group.message)}
-            </Fragment>)
+          ? groups.slice(drawStart).map((group, offset) => {
+            const index = drawStart + offset
+            return group.kind === 'abandoned'
+              ? <AbandonedRun
+                key={group.key}
+                groupKey={group.key}
+                messages={group.messages}
+                open={openBranches.includes(group.key)}
+                onToggle={() => toggleBranch(group.key)}
+                renderMessage={renderMessage}
+              />
+              : <Fragment key={group.message.message_id}>
+                {/* Only in the unfiltered column. Under a search the neighbours are
+                    whatever matched, so "12 tool calls" between them would describe
+                    a gap the reader is not looking at. */}
+                {!normalizedQuery && (index > 0 || hasOlder) && group.message.preceding_tool_calls > 0 && (
+                  showToolCalls && group.message.preceding_tools?.length
+                    ? <TranscriptToolCalls
+                      calls={group.message.preceding_tools}
+                      load={() => seamToolInputs(sessionId, transcriptRunId, group.message.message_id)}
+                    />
+                    : <p class="transcript-tool-boundary">{transcriptToolBoundaryLabel(group.message.preceding_tool_calls)}</p>
+                )}
+                {renderMessage(group.message)}
+              </Fragment>
+          })
           : <p class="drawer-empty">No messages match “{normalizedQuery}”.</p>
-        : !loading && !(showToolCalls && trailingToolCalls.length) && <p class="drawer-empty">{transcriptEmptyMessage(data?.reason ?? null, session.backend)}</p>}
+        : !loading && !(showToolCalls && trailingToolCalls.length) && <p class="drawer-empty">{emptyText}</p>}
       {!normalizedQuery && trailingToolCalls.length > 0 && (showToolCalls
-        ? <TranscriptToolCalls calls={trailingToolCalls} />
+        ? <TranscriptToolCalls calls={trailingToolCalls} load={() => seamToolInputs(sessionId, transcriptRunId, null)} />
         : <p class="transcript-tool-boundary">{transcriptToolBoundaryLabel(trailingToolCalls.length)}</p>)}
     </div>
     {!normalizedQuery && unseen > 0 && <button class="transcript-jump" onClick={jumpToLatest}>

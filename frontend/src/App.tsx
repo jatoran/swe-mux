@@ -196,7 +196,7 @@ import { emitTutorialAction, firstRunSurface, mobileTutorialChrome, type Tutoria
 import { HelpModal } from './HelpModal'
 import { HELP_TOPICS, helpCommandId, helpTopicForDrawer } from './helpTopics'
 import { applyTheme, configureCustomTheme, type CustomTheme, type ThemeName } from './theme'
-import { TRANSCRIPT_CHANGED_EVENT, TURN_ENDED_EVENT } from './transcriptView'
+import { TRANSCRIPT_APPENDED_EVENT, TRANSCRIPT_CHANGED_EVENT, TRANSCRIPT_RESYNC_EVENT, TURN_ENDED_EVENT } from './transcriptView'
 import { fleetEventAction, rowPatchOf } from './eventRefresh'
 import { loadedUiBuildId, uiUpdateReloadReady, uiUpdateRequired } from './uiBuild'
 import { applyNoteEditorConfig } from './noteEditorSettings'
@@ -2599,7 +2599,11 @@ export function App() {
             // A cold watermark closes the subscribe/snapshot race. A wide reconnect
             // gap likewise needs one authoritative snapshot. Cursor-only frames mean
             // the skipped records were audit hooks and require no state refresh.
-            if (event.type !== 'events_cursor') queueRefresh()
+            if (event.type !== 'events_cursor') {
+              queueRefresh()
+              // The transcript reader may have missed the cues it reads on, too.
+              window.dispatchEvent(new CustomEvent(TRANSCRIPT_RESYNC_EVENT))
+            }
             return
           }
           // Catch-up events (marked replay by the daemon) are a historical resync sent on
@@ -2634,6 +2638,7 @@ export function App() {
           }
           if (event.type === 'turn_ended') window.dispatchEvent(new CustomEvent(TURN_ENDED_EVENT, { detail: { sessionId: event.session_id } }))
           if (event.type === 'transcript_message') window.dispatchEvent(new CustomEvent(TRANSCRIPT_CHANGED_EVENT, { detail: { sessionId: event.session_id } }))
+          if (event.type === 'transcript_appended') window.dispatchEvent(new CustomEvent(TRANSCRIPT_APPENDED_EVENT, { detail: { sessionId: event.session_id } }))
           // The daemon replaced a finished reply's segments with the single clip
           // they were always one of. Nothing plays here; the lists refetch so the
           // reply stops being addressed by ids that are on their way out.

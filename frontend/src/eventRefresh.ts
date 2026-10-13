@@ -60,6 +60,10 @@ const EVENT_HANDLED_WITHOUT_FLEET_REFRESH = new Set([
   'terminal_repaint_requested',
   'tool_result',
   'tool_use',
+  // Both are cues for the drawer's transcript reader, which reads its own endpoint.
+  // `transcript_appended` arrives every two seconds per working agent; routed to a
+  // fleet refresh it would re-read all five slices that often for nothing.
+  'transcript_appended',
   'transcript_message',
   'assistant_turn_queued',
   'voice_clip_failed',

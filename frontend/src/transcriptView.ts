@@ -54,16 +54,24 @@ export type TranscriptGroup =
   | Readonly<{ kind: 'message'; message: TranscriptMessage }>
   | Readonly<{ kind: 'abandoned'; key: string; messages: TranscriptMessage[] }>
 
-/** Why there is nothing to read. `null` means the transcript loaded. */
-export type TranscriptReason = 'not_agent' | 'no_transcript' | 'unreadable' | 'agent_bridge_unavailable' | null
+/** Why there is nothing to read. `null` means the transcript loaded.
+ *
+ * `indexing` is a first read of a very long conversation that has not finished yet:
+ * it keeps running on the daemon, so the answer is "ask again shortly". */
+export type TranscriptReason = 'not_agent' | 'no_transcript' | 'unreadable' | 'agent_bridge_unavailable' | 'indexing' | null
+
+export type TranscriptIndexProgress = Readonly<{ read_bytes: number; total_bytes: number; building?: boolean }>
 
 export type SessionTranscript = {
   session_id: string
   agent_run_id?: string | null
   backend: string
   observation_stale_since?: number | null
+  /** A contiguous run of the conversation ending at its newest message: the tail page,
+   *  plus whatever older pages the reader has scrolled up into. */
   messages: TranscriptMessage[]
-  /** Calls made after the newest conversational message. */
+  /** Calls made after the newest conversational message. Named, never with inputs:
+   *  `/transcript/tool-calls` reads those when a disclosure opens. */
   trailing_tool_calls?: TranscriptToolCall[]
   /** Records the daemon classified as CLI machinery rather than conversation. */
   hidden: number
@@ -71,12 +79,35 @@ export type SessionTranscript = {
   abandoned_messages?: number
   truncated: boolean
   reason: TranscriptReason
+  /** Opaque token naming the daemon's reading; a delta is only valid against the same one.
+   *  Absent from an older daemon, which answers every request with a whole window. */
+  generation?: string | null
+  /** The reading's revision, which `since` asks for changes after. */
+  seq?: number | null
+  /** Messages in the whole conversation, loaded or not. */
+  total?: number
+  /** Messages exist before the oldest one in `messages`. */
+  has_older?: boolean
+  page?: 'tail' | 'older' | 'delta' | null
+  delta?: boolean
+  /** On a delta: the first message to replace; everything from it on is in `messages`. */
+  replace_from?: string | null
+  /** The daemon could not honour the request's cursor or generation and sent a fresh tail. */
+  reset?: boolean
+  progress?: TranscriptIndexProgress
 }
 
 /** Dispatched by the events socket when a session finishes a turn, which is the
  *  only moment its conversation can have gained a message. */
 export const TURN_ENDED_EVENT = 'mux:turn-ended'
 export const TRANSCRIPT_CHANGED_EVENT = 'mux:transcript-changed'
+/** The daemon saw the conversation grow mid-turn (`transcript_appended`, throttled). */
+export const TRANSCRIPT_APPENDED_EVENT = 'mux:transcript-appended'
+/** The events socket reconnected across a gap: every reader re-asks once. */
+export const TRANSCRIPT_RESYNC_EVENT = 'mux:transcript-resync'
+
+/** Messages a reader asks for at a time: the tail it opens on, and each older page. */
+export const TRANSCRIPT_PAGE_SIZE = 200
 
 /** A reader lands at the newest message; only a deliberate scroll up overrides that. */
 export const TRANSCRIPT_BOTTOM_SLACK = 48
@@ -176,9 +207,17 @@ function transcriptTimestampDate(value: TranscriptTimestamp): Date | null {
   return Number.isNaN(date.getTime()) ? null : date
 }
 
+// One formatter for every transcript timestamp. `toLocaleString` with options builds a
+// new `Intl.DateTimeFormat` per call - locale negotiation and pattern compilation each
+// time - and a column of a few hundred messages paid that a few hundred times a render.
+let timestampFormat: Intl.DateTimeFormat | null = null
+
 /** Full local date and time shared by live and historical transcript messages. */
 export function transcriptTimestampLabel(value: TranscriptTimestamp): string {
-  return transcriptTimestampDate(value)?.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) || ''
+  const date = transcriptTimestampDate(value)
+  if (!date) return ''
+  timestampFormat ??= new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' })
+  return timestampFormat.format(date)
 }
 
 export function transcriptTimestampIso(value: TranscriptTimestamp): string | undefined {
@@ -271,14 +310,32 @@ export function transcriptSelectedSlice(text: string, start: number, end: number
   return from === to ? text : text.slice(from, to)
 }
 
+/** Where reading stopped, by the message on screen rather than by pixels alone.
+ *
+ * An offset is only meaningful against the exact column it was taken from, and this
+ * column changes between mounts: older pages load above, the rendered window grows,
+ * and folds open. The message at the top of the view, and how far into it the view
+ * sat, survive all of that; the offset is the fallback for a message that has gone. */
+export type TranscriptScrollAnchor = Readonly<{
+  messageId: string
+  /** Pixels from the message's top edge to the view's top edge. */
+  delta: number
+  /** How many trailing groups of the column were rendered, so the anchor is drawn again. */
+  rendered: number
+}>
+
 // One slot, not a map. The rule is "keep my place while I am on this session, and
 // start at the newest message when I move to another one", so remembering more than
 // the current session would be remembering something nobody asked to keep — and a
 // map keyed by session id is a leak that grows for the life of the tab.
-let scrollMemory: { sessionId: string; offset: number } | null = null
+let scrollMemory: { sessionId: string; offset: number; anchor: TranscriptScrollAnchor | null } | null = null
 
-export function rememberTranscriptScroll(sessionId: string, offset: number): void {
-  scrollMemory = { sessionId, offset }
+export function rememberTranscriptScroll(
+  sessionId: string,
+  offset: number,
+  anchor: TranscriptScrollAnchor | null = null,
+): void {
+  scrollMemory = { sessionId, offset, anchor }
 }
 
 /** The remembered offset for this session, or `null` to open at the newest message. */
@@ -286,8 +343,179 @@ export function recallTranscriptScroll(sessionId: string): number | null {
   return scrollMemory?.sessionId === sessionId ? scrollMemory.offset : null
 }
 
+/** The remembered anchor for this session, when the place was taken over a message. */
+export function recallTranscriptAnchor(sessionId: string): TranscriptScrollAnchor | null {
+  return scrollMemory?.sessionId === sessionId ? scrollMemory.anchor : null
+}
+
 export function forgetTranscriptScroll(): void {
   scrollMemory = null
+}
+
+/** Groups rendered at once, and how many more each step up the column draws.
+ *
+ * Every loaded message is in memory and searchable; drawing them is what costs. A
+ * phone opening a 200-message page paid layout for all 200 before the first frame,
+ * and the reader looks at the last screenful. */
+export const TRANSCRIPT_RENDER_STEP = 60
+
+/** How many trailing groups to render: at least the step, never more than exist. */
+export function transcriptRenderCount(groups: number, requested: number): number {
+  return Math.max(0, Math.min(groups, Math.max(TRANSCRIPT_RENDER_STEP, requested)))
+}
+
+/** The query string that brings `current` up to date, or opens the conversation.
+ *
+ * A reading the daemon can extend asks for a delta - everything changed since its
+ * `seq`, for messages from its oldest loaded one on - and an older daemon, or a
+ * reading with nothing in it, asks for the tail. */
+export function transcriptRefreshQuery(current: SessionTranscript | null): string {
+  if (current && !current.reason && current.generation && typeof current.seq === 'number') {
+    const params = new URLSearchParams({ since: String(current.seq), generation: current.generation })
+    const oldest = current.messages[0]?.message_id
+    if (oldest) params.set('oldest', oldest)
+    return params.toString()
+  }
+  return new URLSearchParams({ limit: String(TRANSCRIPT_PAGE_SIZE) }).toString()
+}
+
+/** The query string for the page before the oldest loaded message, or `null` if none. */
+export function transcriptOlderQuery(current: SessionTranscript | null): string | null {
+  const oldest = current?.messages[0]?.message_id
+  if (!current || current.reason || !current.has_older || !oldest) return null
+  return new URLSearchParams({ limit: String(TRANSCRIPT_PAGE_SIZE), before: oldest }).toString()
+}
+
+/** Whether a reason means "try again", as opposed to a state to show. */
+export const transcriptReasonRetries = (reason: TranscriptReason): boolean =>
+  reason === 'indexing' || reason === 'unreadable'
+
+const withCounts = (reading: SessionTranscript, messages: TranscriptMessage[]): SessionTranscript => ({
+  ...reading,
+  messages,
+  abandoned_messages: messages.reduce((count, message) => count + (message.abandoned ? 1 : 0), 0),
+})
+
+/**
+ * Fold one answer from the daemon into the reading the reader holds.
+ *
+ * Returns `null` when the two cannot be joined honestly - a delta whose first changed
+ * message the reader does not hold - which the caller answers by asking for the tail.
+ *
+ * Messages the answer did not change keep their object identity, so a memoised row
+ * for an unchanged message does not re-render when the conversation grows.
+ */
+export function mergeTranscript(current: SessionTranscript | null, incoming: SessionTranscript): SessionTranscript | null {
+  // A transient failure to read says nothing about the conversation: keep what is on
+  // screen rather than blanking a column the reader may be in the middle of.
+  if (incoming.reason && transcriptReasonRetries(incoming.reason) && current?.messages.length && !current.reason) {
+    return current
+  }
+  if (incoming.reason || !current || current.reason) return incoming
+  const sameReading = !!incoming.generation && incoming.generation === current.generation
+  if (incoming.page === 'delta' && !incoming.reset) {
+    if (!sameReading) return null
+    const first = incoming.messages[0]
+    if (!first) {
+      // Nothing changed - or the delta claims a first change it did not send.
+      if (incoming.replace_from) return null
+      return withCounts({ ...incoming, has_older: current.has_older }, current.messages)
+    }
+    if (incoming.replace_from && incoming.replace_from !== first.message_id) return null
+    // Spliced by position. An ordinal is a message's place in the whole conversation,
+    // and within one generation a place keeps its message, so the first changed message
+    // is either one held (replaced from there) or the one just after the newest held
+    // (appended). Anywhere else is a gap this reader cannot see across.
+    const held = current.messages
+    const cut = held.length ? first.ordinal - held[0].ordinal : 0
+    if (cut < 0 || cut > held.length) return null
+    if (cut < held.length && held[cut].message_id !== first.message_id) return null
+    // Unchanged messages inside the replaced run keep their identity too.
+    const previous = new Map(held.slice(cut).map(message => [message.message_id, message]))
+    const merged = [
+      ...held.slice(0, cut),
+      ...incoming.messages.map(message => {
+        const old = previous.get(message.message_id)
+        return old && sameMessage(old, message) ? old : message
+      }),
+    ]
+    return withCounts({ ...incoming, has_older: current.has_older }, merged)
+  }
+  if (incoming.page === 'older' && !incoming.reset) {
+    if (!sameReading) return null
+    const held = new Set(current.messages.map(message => message.message_id))
+    const older = incoming.messages.filter(message => !held.has(message.message_id))
+    return withCounts({ ...current, has_older: incoming.has_older, total: incoming.total }, [...older, ...current.messages])
+  }
+  return incoming
+}
+
+function sameMessage(left: TranscriptMessage, right: TranscriptMessage): boolean {
+  return left.text === right.text
+    && left.role === right.role
+    && left.ts === right.ts
+    && left.abandoned === right.abandoned
+    && left.turn_complete === right.turn_complete
+    && left.turn_id === right.turn_id
+    && left.phase === right.phase
+    && left.ordinal === right.ordinal
+    && left.preceding_tool_calls === right.preceding_tool_calls
+    && (left.preceding_tools || []).map(tool => tool.id).join('\0') === (right.preceding_tools || []).map(tool => tool.id).join('\0')
+}
+
+/** How many messages arrived after the one that was newest, or `null` if it is gone.
+ *
+ * Counted from the newest message rather than from the list's length, because older
+ * pages loading above the reader also lengthen the list and are not news. */
+export function transcriptArrivals(messages: readonly TranscriptMessage[], previousNewest: string | null): number | null {
+  if (previousNewest === null) return null
+  for (let index = messages.length - 1; index >= 0; index--) {
+    if (messages[index].message_id === previousNewest) return messages.length - 1 - index
+  }
+  return null
+}
+
+/** What the column says while the daemon is still on its first read of a long conversation. */
+export function transcriptIndexingLabel(progress: TranscriptIndexProgress | undefined): string {
+  const total = progress?.total_bytes || 0
+  const read = Math.min(total, progress?.read_bytes || 0)
+  const share = total > 0 ? ` (${Math.floor((read / total) * 100)}%)` : ''
+  return `Reading this long conversation for the first time${share}…`
+}
+
+// The last few conversations read, so returning to one draws it at once and then asks
+// only for what changed. A handful rather than every session: each holds every page
+// the reader scrolled into, and the drawer reads one session at a time.
+const TRANSCRIPT_CACHE_ENTRIES = 6
+const transcriptCache = new Map<string, SessionTranscript>()
+
+/** Which conversation a cached reading belongs to: the pane, its run, and its binding. */
+export const transcriptCacheKey = (sessionId: string, runId: string, nativeId: string): string =>
+  JSON.stringify([sessionId, runId, nativeId])
+
+export function readTranscriptCache(key: string): SessionTranscript | null {
+  const hit = transcriptCache.get(key)
+  if (!hit) return null
+  transcriptCache.delete(key)
+  transcriptCache.set(key, hit)
+  return hit
+}
+
+export function writeTranscriptCache(key: string, reading: SessionTranscript): void {
+  // Only a reading worth drawing again: a reason is re-asked anyway, and caching one
+  // would show "not written yet" for a conversation that has since started.
+  if (reading.reason) { transcriptCache.delete(key); return }
+  transcriptCache.delete(key)
+  transcriptCache.set(key, reading)
+  while (transcriptCache.size > TRANSCRIPT_CACHE_ENTRIES) {
+    const oldest = transcriptCache.keys().next().value
+    if (oldest === undefined) break
+    transcriptCache.delete(oldest)
+  }
+}
+
+export function clearTranscriptCache(): void {
+  transcriptCache.clear()
 }
 
 /** What the copy button puts on the clipboard: the message, and nothing else.
@@ -385,6 +613,7 @@ export function transcriptEmptyMessage(reason: TranscriptReason, backend?: strin
     ? 'This is a shell session, so it has no agent conversation to read.'
     : 'This session has no agent conversation to read.'
   if (reason === 'no_transcript') return 'This agent has not written its first message yet.'
-  if (reason === 'unreadable') return 'The native transcript could not be read just now. It will retry on the next turn.'
+  if (reason === 'unreadable') return 'The native transcript could not be read just now. Retrying.'
+  if (reason === 'indexing') return transcriptIndexingLabel(undefined)
   return 'Nothing has been said in this conversation yet.'
 }

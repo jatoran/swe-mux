@@ -14,6 +14,10 @@ test('high-volume observation events do not refetch the whole fleet', () => {
   // No fleet slice carries quota; the account views poll their own endpoint.
   assert.equal(fleetEventAction(frame('provider_quota_refreshed')), 'none')
   assert.equal(fleetEventAction(frame('terminal_paste_trace', 's1')), 'none')
+  // The transcript reader's cues: one every two seconds per working agent, and the
+  // reader reads its own endpoint. A fleet refresh each would be five reads for nothing.
+  assert.equal(fleetEventAction(frame('transcript_appended', 's1')), 'none')
+  assert.equal(fleetEventAction(frame('transcript_message', 's1')), 'none')
 })
 
 test('the readiness stream patches one row instead of refetching the fleet', () => {

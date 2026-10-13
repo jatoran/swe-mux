@@ -4986,8 +4986,22 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .transcript-note{flex:none;margin:0;padding:6px 9px;border-bottom:1px solid var(--line);color:var(--muted);font-size:8px;line-height:1.45}
 .transcript-note.warn{color:var(--amber);background:color-mix(in srgb,var(--amber) 12%,transparent)}
 .transcript-note.error{color:var(--red);background:color-mix(in srgb,var(--red) 12%,transparent)}
-.transcript-tab-body{flex:1 1 auto;min-height:0;overflow-y:auto;overscroll-behavior:contain}
+/* Positioned so a row's `offsetTop` is measured from the column, which is what the
+   reader's scroll anchor (`TranscriptTab.tsx`) records and restores. */
+.transcript-tab-body{position:relative;flex:1 1 auto;min-height:0;overflow-y:auto;overscroll-behavior:contain}
 .transcript-message{padding:8px 9px;border-bottom:1px solid var(--line)}
+/* Rows out of view skip layout and paint. Only where the browser anchors scrolling:
+   a skipped row takes its real height as it nears the view, and without anchoring that
+   change would move the text the reader is looking at. `auto` remembers each row's
+   last real height, so a row is estimated only until it has been drawn once. */
+@supports (overflow-anchor:auto){
+  .transcript-tab .transcript-message{content-visibility:auto;contain-intrinsic-size:auto 120px}
+}
+.transcript-older{display:block;width:100%;padding:6px 9px;border:0;border-bottom:1px solid var(--line);background:none;color:var(--muted);font:inherit;font-size:8px;text-transform:uppercase;letter-spacing:.08em;cursor:pointer}
+.transcript-older:hover:not(:disabled){color:var(--text)}
+.transcript-older:disabled{cursor:progress}
+.transcript-note-action{padding:0;border:0;background:none;color:var(--accent);font:inherit;cursor:pointer}
+.transcript-note-action:disabled{color:var(--muted);cursor:progress}
 /* The user's turns carry the tint. An agent's replies are the bulk of the column, so
    tinting those would tint everything and distinguish nothing. */
 .transcript-message.user{background:color-mix(in srgb,var(--accent) 7%,transparent)}
@@ -5062,6 +5076,7 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .transcript-tool-call{min-width:0;border:1px solid var(--line);background:var(--bg);color:var(--muted);font-size:9px}
 .transcript-tool-call>summary,.transcript-tool-call-empty{padding:6px 8px;color:var(--text);font-family:'JetBrains Mono',Consolas,monospace;overflow-wrap:anywhere}
 .transcript-tool-call>summary{cursor:pointer;-webkit-user-select:none;user-select:none}
+.transcript-tool-call-status{margin:0;padding:6px 8px;border-top:1px solid var(--line);color:var(--muted);font-size:9px}
 .transcript-tool-call>pre{max-height:320px;margin:0;padding:8px;border-top:1px solid var(--line);overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;color:#9da8b5;font:9px/1.5 'JetBrains Mono',Consolas,monospace}
 .transcript-jump{position:absolute;right:12px;bottom:12px;z-index:4;min-height:26px;padding:0 10px;border:1px solid var(--accent);border-radius:13px;background:var(--panel);color:var(--accent);font:inherit;font-size:9px;cursor:pointer;box-shadow:0 2px 10px rgba(0,0,0,.35)}
 /* Off-screen, not `display:none`: the synchronous copy fallback has to be able to focus
