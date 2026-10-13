@@ -25,6 +25,9 @@
 - **What counts as a change.** Inside the Git directory only state that `git status` or `rev-parse` read: `HEAD`, `index`, `packed-refs`, `refs/`, the merge/cherry-pick/revert/bisect/rebase markers, and their per-worktree copies under `worktrees/<name>/`.
   Lock files, objects, logs, and the monitor's own `--no-optional-locks` reads change nothing that matters and are ignored, so a read never triggers the next one.
   In the working tree, a path Git ignores is not a change: the monitor reads the repository's own ignore listing (`git ls-files --others --ignored --exclude-standard --directory`), refreshed when a `.gitignore` changes and otherwise every 15 minutes, plus a fixed set of dependency and build directories that are noise in any repository (`node_modules`, `.venv`, `__pycache__`, and the like).
+  The listing has its own 64 MiB output cap (`IGNORED_LISTING_LIMIT_BYTES`), because `--directory` collapses only a directory ignored whole: a checkout whose pipeline writes ignored files beside tracked ones lists each file, and one measured 2026-10-13 listed 130,892 of them in 17.2 MB.
+  Under the shared 16 MiB cap that listing failed on every refresh, so the noisiest checkout was the one with no ignore rules at all.
+  The rules keep at most 5,000 entries, directories before single files, and are parsed in a worker thread.
 - **Watches are shared and live off the loop.** Checkouts are covered by a minimal set of roots: a primary checkout with linked worktrees nested inside it is one watch, and a Git directory shared by several worktrees is watched once.
   Each watch runs on its own daemon thread (watchfiles' synchronous `watch`), classifies a batch with pure string work, and posts only "this checkout changed" to the event loop, so no per-path work and no filesystem resolve ever reaches it.
   The checkout layout a watch needs (toplevel, Git directory, common directory) is resolved once per `(cwd, git dir, common dir)` in a worker thread and memoized, where the linked-worktree name used to call `realpath` on the loop on every read.
@@ -49,15 +52,19 @@
   The diff therefore runs when the change set actually moves, not once per session and not once
   per read, and every session sharing a checkout reads one measurement.
   A clean tree answers 0/0 with no subprocess at all.
-- A diff that **failed** is memoized on the same fingerprint, and re-tested only after
-  `DIFFSTAT_FAILURE_RETRY_SECONDS` (600s) in case load rather than size caused it.
-  Measured 2026-10-12, a checkout with 1,485 modified files, several of them JSON of 100k+ lines,
-  needed 13s for this diff and as long again for its branch comparison; both hit the 4s timeout on
-  every read and nothing remembered it, so every read spawned two diffs that each burned 4s of CPU
-  before being killed (reads every 30s detached, every 5s with a pane open). The same checkout now
-  reads in 0.55s after the first attempt, and its counts stay `None`.
-  Unlike the Map's rule below (a refused reading is never memoized), a time bound is safe here:
-  the monitor's reads take no lock, and the bound caps how long a transient failure is believed.
+- A diff that **failed** is memoized too, and always re-tested once `DIFFSTAT_FAILURE_RETRY_SECONDS` (600s) passes, in case load rather than size caused it.
+  Measured 2026-10-12, a checkout with 1,485 modified files, several of them JSON of 100k+ lines, needed 13s for this diff and as long again for its branch comparison.
+  Both hit the 4s timeout on every read and nothing remembered it, so every read spawned two diffs that each burned 4s of CPU before being killed (reads every 30s detached, every 5s with a pane open).
+  What else lets a failure be asked sooner depends on what kind it is:
+  - **A size failure** (the timeout, or the output cap) stands until the change set shrinks to half the entries it failed on, or the tree goes clean.
+    Churn in *what* changed does not release it, because adding a file to a change set never made it cheaper to count.
+    Keyed on the exact fingerprint instead, 158 of 192 timed-out diffs on that checkout ran again inside their 600s (2026-10-13), each time an agent added a file to its 1,871-entry change set.
+    Halving bounds the extra attempts a shrinking set can cost to the logarithm of its size.
+  - **A refusal** (any other exit code) stands for its exact fingerprint, as a success does, because a different change set is a different question.
+  - **A merge base Git could not find** is keyed on the two commits it was asked about, since nothing in the working tree can change that answer.
+
+  The log lines (`git_diffstat_unavailable`, `git_comparison_diffstat_unavailable`) carry the change set's size and `shrink_to`, the size that earns the next attempt.
+  Unlike the Map's rule below (a refused reading is never memoized), a time bound is safe here: the monitor's reads take no lock, and the bound caps how long a transient failure is believed.
 - The counts cover **tracked** changes only: an untracked file raises the dirty count but has no
   content to compare, so it contributes no lines.
 - `added`/`removed` are `None` when the measurement could not be made — no HEAD yet, or a failed

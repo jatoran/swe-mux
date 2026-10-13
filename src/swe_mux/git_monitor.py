@@ -35,6 +35,14 @@ IGNORED_LISTING_TIMEOUT_SECONDS = 15.0
 #: back, so a capture that lost its middle is not a smaller answer - it is a wrong
 #: one, and is reported as `GIT_OUTPUT_CAPPED` rather than returned.
 GIT_OUTPUT_LIMIT_BYTES = 16 * 1024 * 1024
+#: The ignored-path listing's own cap, for the same reason its timeout is longer: it
+#: is read once per checkout every 15 minutes, not on every poll. Measured
+#: 2026-10-13, a checkout whose pipeline writes ignored files beside tracked ones
+#: lists 130,892 of them one by one (`--directory` collapses only a directory that
+#: is ignored whole), 17.2 MB in 0.68s. Under the shared cap that listing failed on
+#: every refresh, which left the checkout with the most noise as the one checkout
+#: with no ignore rules at all.
+IGNORED_LISTING_LIMIT_BYTES = 64 * 1024 * 1024
 #: Beside the reserved 124 for a timeout, and for the same reason: a caller has to
 #: be able to tell "Git could not answer" from "Git answered nothing".
 GIT_OUTPUT_CAPPED = 125
@@ -51,7 +59,10 @@ def _normalized_path(value: str) -> str:
 
 
 async def _git(
-    cwd: str, *args: str, timeout_seconds: float = GIT_TIMEOUT_SECONDS
+    cwd: str,
+    *args: str,
+    timeout_seconds: float = GIT_TIMEOUT_SECONDS,
+    output_limit: int = GIT_OUTPUT_LIMIT_BYTES,
 ) -> tuple[int, str]:
     """Run one bounded, **read-only** Git query and always reap the subprocess.
 
@@ -84,7 +95,7 @@ async def _git(
             ("git", "--no-optional-locks", "-C", cwd, *args),
             label="git",
             timeout_seconds=timeout_seconds,
-            output_limit=GIT_OUTPUT_LIMIT_BYTES,
+            output_limit=output_limit,
             stderr_limit=GIT_OUTPUT_LIMIT_BYTES,
             # Whatever caused this query: an HTTP request's id when one is in
             # flight, the poll's own minted id inside the monitor loop, and empty
@@ -97,7 +108,7 @@ async def _git(
     if outcome.timed_out:
         return 124, f"git timed out after {timeout_seconds:g}s"
     if outcome.truncated:
-        return GIT_OUTPUT_CAPPED, f"git output exceeded {GIT_OUTPUT_LIMIT_BYTES} bytes"
+        return GIT_OUTPUT_CAPPED, f"git output exceeded {output_limit} bytes"
     code = outcome.exit_code or 0
     output = outcome.stdout if code == 0 else outcome.stderr or outcome.stdout
     return code, output.decode("utf-8", "replace").strip()
@@ -614,25 +625,73 @@ _compare_ref_cache: OrderedDict[tuple[str, str | None], tuple[float, str | None]
 #: Seconds a resolved comparison ref is trusted before being inferred again.
 COMPARE_REF_TTL_SECONDS = 60.0
 
-#: Seconds a line count Git could not produce for one fingerprint is left alone
-#: before it is attempted again. Measured 2026-10-12: a checkout with 1,485 modified
+#: Seconds a line count Git could not produce is left alone before it is attempted
+#: again, whatever else holds. Measured 2026-10-12: a checkout with 1,485 modified
 #: files, several of them JSON documents of 100k+ lines, needs 13s for
 #: `git diff --numstat HEAD` and as long again for its branch comparison. Both hit
 #: `GIT_TIMEOUT_SECONDS` on every read, and nothing remembered that, so every read
 #: of that checkout - every 30s detached, every 5s with a pane open - spawned two
 #: diffs that each burned 4s of CPU and were then killed, for an answer that never
-#: arrived. The fingerprint is what decides that the work is worth trying again;
-#: this bound only re-tests a failure that load, rather than size, may have caused.
+#: arrived. This bound re-tests a failure that load, rather than size, may have
+#: caused; `_Failure` says what else lets one be asked sooner.
 DIFFSTAT_FAILURE_RETRY_SECONDS = 600.0
 
-#: root -> (dirty_hash, retry at). A diffstat that failed for this change set.
-_diffstat_failures: OrderedDict[str, tuple[str | None, float]] = OrderedDict()
+#: Exit codes that say a change set was too big to count, rather than that Git
+#: refused: the timeout and the output cap. Such a failure is a property of how
+#: much changed, so it outlives churn in *what* changed. Measured 2026-10-13 on the
+#: same checkout, with the failure keyed on the exact fingerprint: 158 of 192
+#: timed-out diffs ran again inside their 600s, because each file an agent added to
+#: a 1,871-entry change set moved the fingerprint without making the count any
+#: cheaper.
+_SIZE_FAILURES = frozenset({124, GIT_OUTPUT_CAPPED})
 
-#: (root, ref) -> ((compare oid, head, dirty_hash), retry at). The same, for the
-#: branch-scoped comparison.
-_compare_failures: OrderedDict[
-    tuple[str, str], tuple[tuple[str, str, str | None], float]
-] = OrderedDict()
+
+@dataclass(slots=True, frozen=True)
+class _Failure:
+    """A count Git could not produce, and what has to move before it is asked again.
+
+    A refusal (a bad revision, a missing object) stands for exactly the fingerprint
+    it failed on, because a different change set is a different question. A size
+    failure (`_SIZE_FAILURES`) instead stands until the change set has shrunk to
+    `shrink_to` entries: committing or discarding most of it is what can make it
+    countable, and adding to it is not. Either is re-tested once `retry_at` passes.
+    """
+
+    fingerprint: object
+    retry_at: float
+    shrink_to: int | None = None
+
+    def stands(self, fingerprint: object, dirty: int, now: float) -> bool:
+        if now >= self.retry_at:
+            return False
+        if self.shrink_to is not None:
+            return dirty > self.shrink_to
+        return fingerprint == self.fingerprint
+
+
+def _shrink_floor(code: int, dirty: int) -> int | None:
+    """For a diff that ran out of budget, the change-set size that earns another try.
+
+    Half the set it failed on, which bounds what a shrinking set can cost to the
+    logarithm of its size. A set that failed empty (a comparison of committed work
+    alone) has nowhere to shrink to, so only the bound re-tests it. None for every
+    other failure, which follows its fingerprint instead.
+    """
+    if code not in _SIZE_FAILURES:
+        return None
+    return dirty // 2 if dirty else -1
+
+
+#: root -> the HEAD diffstat that failed.
+_diffstat_failures: OrderedDict[str, _Failure] = OrderedDict()
+
+#: (root, ref) -> the branch-scoped comparison's diff that failed.
+_compare_failures: OrderedDict[tuple[str, str], _Failure] = OrderedDict()
+
+#: (root, ref) -> a merge base Git could not find: unrelated histories, a shallow
+#: clone, a timeout. It depends on the two commits alone, so it is keyed on them,
+#: and nothing in the working tree can ask it again.
+_merge_base_failures: OrderedDict[tuple[str, str], _Failure] = OrderedDict()
 
 
 def reset_diffstat_cache() -> None:
@@ -643,6 +702,7 @@ def reset_diffstat_cache() -> None:
     _layout_memo.clear()
     _diffstat_failures.clear()
     _compare_failures.clear()
+    _merge_base_failures.clear()
 
 
 def _trim(cache: OrderedDict[Any, Any]) -> None:
@@ -650,24 +710,24 @@ def _trim(cache: OrderedDict[Any, Any]) -> None:
         cache.popitem(last=False)
 
 
-def _failure_standing[K, F](
-    failures: OrderedDict[K, tuple[F, float]], key: K, fingerprint: F
+def _failure_standing[K](
+    failures: OrderedDict[K, _Failure], key: K, fingerprint: object, dirty: int
 ) -> bool:
-    """Whether `key` already failed for exactly `fingerprint`, recently enough to skip."""
+    """Whether an earlier failure for `key` still answers this read without Git."""
     entry = failures.get(key)
     if entry is None:
         return False
-    if entry[0] != fingerprint or entry[1] <= monotonic():
+    if not entry.stands(fingerprint, dirty, monotonic()):
         del failures[key]
         return False
     failures.move_to_end(key)
     return True
 
 
-def _record_failure[K, F](
-    failures: OrderedDict[K, tuple[F, float]], key: K, fingerprint: F
+def _record_failure[K](
+    failures: OrderedDict[K, _Failure], key: K, fingerprint: object, shrink_to: int | None
 ) -> None:
-    failures[key] = (fingerprint, monotonic() + DIFFSTAT_FAILURE_RETRY_SECONDS)
+    failures[key] = _Failure(fingerprint, monotonic() + DIFFSTAT_FAILURE_RETRY_SECONDS, shrink_to)
     failures.move_to_end(key)
     _trim(failures)
 
@@ -712,33 +772,39 @@ def parse_numstat(output: str) -> tuple[int, int]:
 
 
 async def _read_diffstat(
-    cwd: str, root: str, dirty_hash: str | None, has_head: bool
+    cwd: str, root: str, dirty_hash: str | None, dirty: int, has_head: bool
 ) -> tuple[int | None, int | None]:
     """Lines added/removed vs HEAD, memoized on the working-tree fingerprint.
 
     A clean tree is answered without touching git at all: no change set means no
     changed lines, and that is the common case across an idle fleet. A failure is
-    memoized too (`DIFFSTAT_FAILURE_RETRY_SECONDS`), because a change set too large
-    to count inside the timeout stays too large on the next read.
+    memoized too (`_Failure`), because a change set too large to count inside the
+    timeout stays too large on the next read. A clean tree is the one reading that
+    proves a size failure obsolete, so it forgets one outright.
     """
     if not has_head:
         return None, None
     if dirty_hash is None:
+        _diffstat_failures.pop(root, None)
         _memoize_diffstat(root, None, 0, 0)
         return 0, 0
     cached = _memoized_diffstat(root, dirty_hash)
     if cached is not None:
         return cached
-    if _failure_standing(_diffstat_failures, root, dirty_hash):
+    if _failure_standing(_diffstat_failures, root, dirty_hash, dirty):
         return None, None
     code, output = await _git(cwd, "diff", "--numstat", "HEAD")
     if code:
-        _record_failure(_diffstat_failures, root, dirty_hash)
+        shrink_to = _shrink_floor(code, dirty)
+        _record_failure(_diffstat_failures, root, dirty_hash, shrink_to)
         log.info(
-            "git_diffstat_unavailable root=%s code=%d retry_s=%.0f diagnostic=%s",
+            "git_diffstat_unavailable root=%s code=%d dirty=%d retry_s=%.0f shrink_to=%s "
+            "diagnostic=%s",
             root,
             code,
+            dirty,
             DIFFSTAT_FAILURE_RETRY_SECONDS,
+            shrink_to,
             output[:200],
         )
         return None, None
@@ -788,6 +854,7 @@ async def _read_comparison(
     ref_oid: str | None,
     head: str | None,
     dirty_hash: str | None,
+    dirty: int,
 ) -> tuple[int | None, int | None, int | None]:
     """Working tree versus its merge base with `ref`, memoized on what moves it.
 
@@ -797,24 +864,28 @@ async def _read_comparison(
 
     Every failure answers `None` rather than 0. A zero here would claim a branch
     identical to its base, which is the one thing a reader would act on. And every
-    failure is memoized on the same fingerprint a success is, for the reason
-    `_read_diffstat` gives: a branch that diverged too far to count in time has not
-    converged by the next read.
+    failure is memoized, for the reason `_read_diffstat` gives: a branch that
+    diverged too far to count in time has not converged by the next read. A merge
+    base that could not be found is keyed on the two commits it was asked about,
+    since nothing else can change the answer.
     """
     if ref is None or ref_oid is None or head is None:
         return None, None, None
     key = (root, ref)
+    commits = (ref_oid, head)
     fingerprint = (ref_oid, head, dirty_hash)
     cached = _compare_memo.get(key)
     if cached is not None and cached[0] == fingerprint:
         _compare_memo.move_to_end(key)
         return cached[1], cached[2], cached[3]
-    if _failure_standing(_compare_failures, key, fingerprint):
+    if _failure_standing(_merge_base_failures, key, commits, dirty) or _failure_standing(
+        _compare_failures, key, fingerprint, dirty
+    ):
         return None, None, None
     base_code, base = await _git(cwd, "merge-base", ref_oid, head)
     base = base.strip()
     if base_code or not base:
-        _record_failure(_compare_failures, key, fingerprint)
+        _record_failure(_merge_base_failures, key, commits, None)
         log.info(
             "git_merge_base_unavailable root=%s ref=%s code=%d retry_s=%.0f diagnostic=%s",
             root,
@@ -826,14 +897,17 @@ async def _read_comparison(
         return None, None, None
     code, output = await _git(cwd, "diff", "--numstat", base)
     if code:
-        _record_failure(_compare_failures, key, fingerprint)
+        shrink_to = _shrink_floor(code, dirty)
+        _record_failure(_compare_failures, key, fingerprint, shrink_to)
         log.info(
-            "git_comparison_diffstat_unavailable root=%s ref=%s code=%d retry_s=%.0f "
-            "diagnostic=%s",
+            "git_comparison_diffstat_unavailable root=%s ref=%s code=%d dirty=%d retry_s=%.0f "
+            "shrink_to=%s diagnostic=%s",
             root,
             ref,
             code,
+            dirty,
             DIFFSTAT_FAILURE_RETRY_SECONDS,
+            shrink_to,
             output[:200],
         )
         return None, None, None
@@ -889,19 +963,20 @@ async def read_git_reading(cwd: str, compare_override: str | None = None) -> Git
         else (None, None)
     )
     dirty_hash = _dirty_hash(porcelain)
-    added, removed = await _read_diffstat(cwd, root, dirty_hash, commit is not None)
+    dirty = len(porcelain.splitlines())
+    added, removed = await _read_diffstat(cwd, root, dirty_hash, dirty, commit is not None)
     resolved_oid = compare_oid.strip() if compare_ref and not compare_code else ""
     if compare_ref and not resolved_oid:
         # The ref was cached from an earlier poll and has since been deleted or
         # rewritten. Re-infer next tick rather than reporting nothing until TTL.
         _forget_comparison_ref(root, compare_override)
     compare_added, compare_removed, compare_files = await _read_comparison(
-        cwd, root, compare_ref, resolved_oid or None, commit, dirty_hash
+        cwd, root, compare_ref, resolved_oid or None, commit, dirty_hash, dirty
     )
     return GitReading(
         GitState(
             branch,
-            len(porcelain.splitlines()),
+            dirty,
             ahead,
             behind,
             worktree=worktree,
@@ -1285,6 +1360,7 @@ async def _read_ignored_listing(toplevel: str) -> str | None:
         "--directory",
         "--no-empty-directory",
         timeout_seconds=IGNORED_LISTING_TIMEOUT_SECONDS,
+        output_limit=IGNORED_LISTING_LIMIT_BYTES,
     )
     if code:
         log.info(

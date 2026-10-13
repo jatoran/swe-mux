@@ -120,6 +120,22 @@ def test_ignored_listing_is_bounded() -> None:
     assert len(rules.directories) == 10
 
 
+def test_an_ignored_listing_over_its_bound_keeps_directories_ahead_of_files() -> None:
+    """A directory entry silences a subtree and a file entry one path.
+
+    Git lists in path order, so an in-order cut kept whatever sorted first: on a
+    checkout with 142,589 entries it kept 1,373 of 2,803 ignored directories.
+    """
+    files = [f"a-data/row{index}.json" for index in range(20)]
+    directories = [f"z-build{index}/" for index in range(4)]
+    rules = parse_ignored_listing("\n".join(files + directories), limit=10)
+    assert len(rules.directories) == 4
+    assert len(rules.files) == 6
+    assert rules.covers(["z-build3", "out.js"]), "a directory sorting last still counts"
+    assert rules.covers(["a-data", "row0.json"])
+    assert not rules.covers(["a-data", "row19.json"]), "files fill what the directories leave"
+
+
 def test_a_nested_worktree_is_attributed_to_itself_not_to_the_primary() -> None:
     """A linked worktree inside the primary's tree shares the primary's OS watch.
 

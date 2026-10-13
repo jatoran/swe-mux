@@ -171,19 +171,29 @@ def _controllable_clock(monkeypatch: pytest.MonkeyPatch) -> dict[str, float]:
     return now
 
 
-@pytest.mark.asyncio
-async def test_a_diffstat_git_cannot_produce_is_not_retried_until_the_tree_moves(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Measured 2026-10-12: a change set whose count needs 13s timed out on every read.
+def _porcelain(count: int) -> str:
+    return "\n".join(f" M file{index}.json" for index in range(count))
 
-    Nothing remembered the failure, so every read of that checkout spawned a diff
-    that burned the whole timeout and was killed. It is memoized on the same
-    fingerprint a success is, and re-tested only after a bound, in case load
-    rather than size was the cause.
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failure",
+    [(124, "git timed out after 4s"), (git_monitor.GIT_OUTPUT_CAPPED, "git output exceeded")],
+)
+async def test_a_diffstat_too_big_to_count_is_not_retried_while_its_change_set_churns(
+    monkeypatch: pytest.MonkeyPatch, failure: tuple[int, str]
+) -> None:
+    """Measured 2026-10-12 and again 2026-10-13, on one checkout.
+
+    First: a change set whose count needs 13s timed out on every read, and nothing
+    remembered it. Then, with the failure keyed on the exact fingerprint, 158 of 192
+    timed-out diffs still ran again inside the bound, because every file an agent
+    added to the 1,871-entry set moved the fingerprint. Running out of budget is a
+    property of *how much* changed, so only a set half the size, a clean tree, or
+    the bound earns another attempt.
     """
-    porcelain = {"value": " M huge.json"}
-    outcome = {"value": (124, "git timed out after 4s")}
+    porcelain = {"value": _porcelain(8)}
+    outcome = {"value": failure}
     numstat_calls: list[str] = []
     now = _controllable_clock(monkeypatch)
 
@@ -201,19 +211,111 @@ async def test_a_diffstat_git_cannot_produce_is_not_retried_until_the_tree_moves
     assert len(numstat_calls) == 1
 
     now["value"] += 60
-    second = await read_git_state("C:/repo")
-    assert (second.added, second.removed) == (None, None)
+    await read_git_state("C:/repo")
     assert len(numstat_calls) == 1, "the same change set is not asked again"
 
-    porcelain["value"] = " M huge.json\n M other.json"
+    porcelain["value"] = _porcelain(9)
     await read_git_state("C:/repo")
-    assert len(numstat_calls) == 2, "a different change set is a different question"
+    porcelain["value"] = _porcelain(5)
+    churned = await read_git_state("C:/repo")
+    assert len(numstat_calls) == 1, "a set that grew, or shrank a little, is no cheaper"
+    assert (churned.added, churned.removed) == (None, None)
+
+    porcelain["value"] = _porcelain(4)
+    await read_git_state("C:/repo")
+    assert len(numstat_calls) == 2, "half the set it failed on is worth asking about"
+
+    porcelain["value"] = _porcelain(3)
+    await read_git_state("C:/repo")
+    assert len(numstat_calls) == 2, "and that failure is measured from its own size"
 
     now["value"] += git_monitor.DIFFSTAT_FAILURE_RETRY_SECONDS
-    outcome["value"] = (0, "7\t2\thuge.json\n1\t0\tother.json")
+    outcome["value"] = (0, "7\t2\tfile0.json\n1\t0\tfile1.json")
     recovered = await read_git_state("C:/repo")
     assert len(numstat_calls) == 3, "a failure is re-tested once its bound passes"
     assert (recovered.added, recovered.removed) == (8, 2)
+
+
+@pytest.mark.asyncio
+async def test_a_clean_tree_forgets_a_diffstat_too_big_to_count(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A clean tree proves the old change set gone, so the next one is asked at once."""
+    porcelain = {"value": _porcelain(8)}
+    numstat_calls: list[str] = []
+    _controllable_clock(monkeypatch)
+
+    async def fake_git(cwd: str, *args: str, timeout_seconds: float = 4.0) -> tuple[int, str]:
+        del cwd, timeout_seconds
+        if args == ("diff", "--numstat", "HEAD"):
+            numstat_calls.append(porcelain["value"])
+            return 124, "git timed out after 4s"
+        return _fake_git_responses(porcelain["value"])[args]
+
+    monkeypatch.setattr(git_monitor, "_git", fake_git)
+    await read_git_state("C:/repo")
+    porcelain["value"] = ""
+    clean = await read_git_state("C:/repo")
+    assert (clean.added, clean.removed) == (0, 0)
+    assert len(numstat_calls) == 1, "a clean tree is counted without git"
+
+    porcelain["value"] = _porcelain(8)
+    await read_git_state("C:/repo")
+    assert len(numstat_calls) == 2, "a new change set after a clean tree is a new question"
+
+
+@pytest.mark.asyncio
+async def test_a_diffstat_git_refused_is_asked_again_when_the_change_set_moves(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A refusal, unlike a timeout, is about this exact tree, not about its size."""
+    porcelain = {"value": " M file.txt"}
+    numstat_calls: list[str] = []
+    now = _controllable_clock(monkeypatch)
+
+    async def fake_git(cwd: str, *args: str, timeout_seconds: float = 4.0) -> tuple[int, str]:
+        del cwd, timeout_seconds
+        if args == ("diff", "--numstat", "HEAD"):
+            numstat_calls.append(porcelain["value"])
+            return 128, "fatal: unable to read tree"
+        return _fake_git_responses(porcelain["value"])[args]
+
+    monkeypatch.setattr(git_monitor, "_git", fake_git)
+    await read_git_state("C:/repo")
+    now["value"] += 60
+    await read_git_state("C:/repo")
+    assert len(numstat_calls) == 1, "the same change set is not asked again"
+
+    porcelain["value"] = " M file.txt\n M other.txt"
+    await read_git_state("C:/repo")
+    assert len(numstat_calls) == 2, "a different change set is a different question"
+
+
+@pytest.mark.asyncio
+async def test_the_ignored_listing_has_more_room_than_an_ordinary_query(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Measured 2026-10-13: 130,892 individually ignored files made a 17.2 MB listing.
+
+    Under the shared 16 MiB cap it failed on every refresh, which left the checkout
+    with the most noise as the one checkout with no ignore rules at all.
+    """
+    limits: list[int] = []
+
+    async def fake_git(
+        cwd: str,
+        *args: str,
+        timeout_seconds: float = 4.0,
+        output_limit: int = git_monitor.GIT_OUTPUT_LIMIT_BYTES,
+    ) -> tuple[int, str]:
+        del cwd, args, timeout_seconds
+        limits.append(output_limit)
+        return 0, "dist/"
+
+    monkeypatch.setattr(git_monitor, "_git", fake_git)
+    assert await git_monitor._read_ignored_listing("C:/repo") == "dist/"
+    assert limits == [git_monitor.IGNORED_LISTING_LIMIT_BYTES]
+    assert git_monitor.IGNORED_LISTING_LIMIT_BYTES > git_monitor.GIT_OUTPUT_LIMIT_BYTES
 
 
 @pytest.mark.asyncio
@@ -420,18 +522,24 @@ async def test_unmeasurable_comparison_is_none_not_zero(
 
 
 @pytest.mark.asyncio
-async def test_a_comparison_git_cannot_produce_is_not_retried_until_something_moves(
+async def test_a_comparison_too_big_to_count_is_not_retried_until_it_could_have_shrunk(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A branch diverged too far to count in time stays that way on the next read."""
+    """A branch diverged too far to count in time stays that way on the next read.
+
+    Through a commit as well: committing moves work from the tree into the branch,
+    and the branch is exactly what this diff measures. Only a smaller change set or
+    the bound re-asks.
+    """
     head = {"value": _FULL_SHA}
+    porcelain = {"value": _porcelain(4)}
     merge_bases: list[str] = []
     diffs: list[str] = []
     now = _controllable_clock(monkeypatch)
 
     async def fake_git(cwd: str, *args: str, timeout_seconds: float = 4.0) -> tuple[int, str]:
         del cwd, timeout_seconds
-        responses = _comparison_git_responses(" M file.txt")
+        responses = _comparison_git_responses(porcelain["value"])
         responses[("rev-parse", "HEAD")] = (0, head["value"])
         responses[("merge-base", _BASE_REF_SHA, head["value"])] = (0, _MERGE_BASE_SHA)
         if args[0] == "merge-base":
@@ -455,21 +563,69 @@ async def test_a_comparison_git_cannot_produce_is_not_retried_until_something_mo
     await read_git_state("C:/repo")
     assert (len(merge_bases), len(diffs)) == (1, 1), "nothing moved, so nothing is re-run"
 
+    porcelain["value"] = _porcelain(5)
+    await read_git_state("C:/repo")
     head["value"] = "d" * 40
     await read_git_state("C:/repo")
-    assert (len(merge_bases), len(diffs)) == (2, 2), "a commit is a different question"
+    assert (len(merge_bases), len(diffs)) == (1, 1), "neither churn nor a commit shrinks it"
+
+    porcelain["value"] = _porcelain(2)
+    await read_git_state("C:/repo")
+    assert (len(merge_bases), len(diffs)) == (2, 2), "half the change set is worth asking"
+
+    now["value"] += git_monitor.DIFFSTAT_FAILURE_RETRY_SECONDS
+    await read_git_state("C:/repo")
+    assert (len(merge_bases), len(diffs)) == (3, 3), "and so is the bound passing"
+
+
+@pytest.mark.asyncio
+async def test_a_comparison_git_refused_is_asked_again_when_anything_moves(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A refused diff stands for its exact fingerprint, a commit included."""
+    head = {"value": _FULL_SHA}
+    diffs: list[str] = []
+    _controllable_clock(monkeypatch)
+
+    async def fake_git(cwd: str, *args: str, timeout_seconds: float = 4.0) -> tuple[int, str]:
+        del cwd, timeout_seconds
+        responses = _comparison_git_responses(" M file.txt")
+        responses[("rev-parse", "HEAD")] = (0, head["value"])
+        responses[("merge-base", _BASE_REF_SHA, head["value"])] = (0, _MERGE_BASE_SHA)
+        if args == ("diff", "--numstat", _MERGE_BASE_SHA):
+            diffs.append(head["value"])
+            return 128, "fatal: bad object"
+        return responses[args]
+
+    monkeypatch.setattr(git_monitor, "_git", fake_git)
+    _use_comparison(monkeypatch)
+    await read_git_state("C:/repo")
+    await read_git_state("C:/repo")
+    assert len(diffs) == 1
+    head["value"] = "d" * 40
+    await read_git_state("C:/repo")
+    assert len(diffs) == 2, "a commit is a different question"
 
 
 @pytest.mark.asyncio
 async def test_an_unrelated_base_is_not_asked_for_a_merge_base_on_every_read(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """A merge base depends on two commits and nothing else, so it is keyed on them.
+
+    Churn in the working tree used to re-ask it, because the failure shared the
+    comparison's fingerprint, which carries the tree.
+    """
     merge_bases = 0
+    head = {"value": _FULL_SHA}
+    porcelain = {"value": " M file.txt"}
+    _controllable_clock(monkeypatch)
 
     async def fake_git(cwd: str, *args: str, timeout_seconds: float = 4.0) -> tuple[int, str]:
         nonlocal merge_bases
         del cwd, timeout_seconds
-        responses = _comparison_git_responses(" M file.txt")
+        responses = _comparison_git_responses(porcelain["value"])
+        responses[("rev-parse", "HEAD")] = (0, head["value"])
         if args[0] == "merge-base":
             merge_bases += 1
             return 1, ""
@@ -477,10 +633,15 @@ async def test_an_unrelated_base_is_not_asked_for_a_merge_base_on_every_read(
 
     monkeypatch.setattr(git_monitor, "_git", fake_git)
     _use_comparison(monkeypatch)
-    for _ in range(3):
+    for index in range(3):
+        porcelain["value"] = _porcelain(index + 1)
         state = await read_git_state("C:/repo")
         assert state.compare_added is None
     assert merge_bases == 1
+
+    head["value"] = "d" * 40
+    await read_git_state("C:/repo")
+    assert merge_bases == 2, "a commit is the one thing that can change the answer"
 
 
 @pytest.mark.asyncio
