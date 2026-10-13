@@ -473,11 +473,33 @@ both of `history`'s metadata filters, interpolated raw text, so `land_store` als
   operational-telemetry transaction through the shared coordinator; History does not mutate
   another store's tables.
 
+## The canonical telemetry ledger: many files, one write lock
+
+The canonical ledger under `<data_dir>/telemetry/` is not a `mux.db` store and does not use `run_sqlite_operation`.
+It is one catalog plus a file per UTC month, so one write transaction touches several files, and each file has its own writer slot.
+`telemetry_service.py` runs three ledgers over the same files, each on its own worker thread with its own connections: live ingestion, maintenance (legacy imports, native reconciliation, rollups, seals), and queries.
+No connection is used by more than one thread, which is the rule above applied per ledger.
+
+They share one re-entrant lock (`telemetry_ledger.LedgerShared.write_lock`), held around every write transaction.
+SQLite's own locking is per file, so without it a batch that has written a segment and wants the catalog, against a rollup that holds the catalog and wants that segment, is a lock-order deadlock SQLite cannot see; both would sit out their 30-second busy timeout.
+Reads take no lock: WAL lets them run beside a writer, and the long ones (a rollup's entity scan, a seal's `quick_check` and SHA-256 of a multi-gigabyte month) are exactly what must not hold up ingestion.
+
+Three orderings make that safe without holding the lock across a read.
+
+- A batch commits its segments, then stamps and unseals the segments it wrote in the catalog, then commits the catalog, all under the lock.
+- A seal reads the segment's last-write stamp, runs its checks unlocked, and records the seal under the lock only `WHERE sealed_at IS NULL AND last_written_at=?` the stamp it read; a write in between wins.
+  Its WAL checkpoint also runs unlocked, because a `TRUNCATE` checkpoint waits out any reader still on an older snapshot, and only a write to that segment, which has had none for a week, can wait behind it.
+- A rollup reads its day, then writes it and deletes the day's dirty mark under the lock only `WHERE dirtied_at<=?` the time its read began, so a day dirtied during the read stays dirty.
+
+Every rule above about one worker per connection and bounded transactions still applies; the lock replaces the per-path operation lock, not the transaction discipline.
+
 ## Verification
 
 Tests should cover concurrent operations from different stores, exceptions after `BEGIN`,
 expected duplicate paths, and returning with an open transaction. A terminal spawn/PTY attach
 regression is valuable because these user-visible paths historically exposed leaked writer locks.
+
+The canonical ledger's orderings are tested with two ledgers over one shared lock in `tests/test_telemetry_storage.py`: an ingestion write that completes while a rollup sits paused inside its read, and a write landed between a seal's candidate read and its record.
 
 The two-daemon window has its own tests in `tests/test_diagnosability.py`, over a second real
 `sqlite3.connect` holding `BEGIN IMMEDIATE` — a second *connection*, not a second thread, because
@@ -491,6 +513,8 @@ what is being reproduced is contention the per-file lock cannot see.
 - `src/swe_mux/history.py`
 - `src/swe_mux/automation_store.py`
 - `src/swe_mux/operational_telemetry.py`
+- `src/swe_mux/telemetry_ledger.py`, `src/swe_mux/telemetry_service.py` - the canonical ledger's
+  shared write lock and its three worker threads (§ The canonical telemetry ledger).
 - `src/swe_mux/voice.py`
 - `src/swe_mux/prompt_queue.py`
 - `src/swe_mux/land_store.py` — land requests, their audit trail, and the `LandEvent` pairing that

@@ -240,6 +240,19 @@ The sibling symptom was brief refusals rather than lag: a client that times out 
 When a long-lived daemon feels slow, read the request rate per path in `access.log` and the event rate per type in `mux.db` (`events`) before profiling: a cost that is cheap per call and wrong per event is invisible in any single request and obvious in the counts.
 Then take a `py-spy record --gil --threads` profile, which shows only the thread holding the GIL and so names what is actually starving the loop.
 
+**Disk that is busy with nothing visible running: read the canonical telemetry block.**
+On 2026-10-12 the canonical ledger was reading about 330 GiB a day out of its own files, none of it on the loop, so no loop metric showed it.
+A month that kept receiving late entity evidence was resealed after every write that unsealed it - a `quick_check` and a SHA-256 of a 6 GiB segment, 27 times that day - and the writes came from the reconcilers re-inserting the 32 MiB tail of every growing transcript as new evidence on every pass (`development/TELEMETRY_HARDENING.md` § Seal loop and full re-reads).
+The same thread served live ingestion, which dropped 710 observations while it waited.
+`GET /api/diagnostics/background` → `canonical_telemetry` now answers it directly:
+
+- `seals` and `seal_invalidations` over the daemon's life, and `last_seal_seconds`; more than a handful of seals a week, or invalidations climbing with them, is the loop back.
+- `rejected_observations`, observations refused for a time before 2020 or more than two days ahead; non-zero names a producer with a broken clock, whose type and source are in the catalog's `rejected_observations` table and in the WARNING that logged the first.
+- `reconciliation.elapsed_s` for the last canonical pass; an incremental pass reads five minutes of appends, so seconds here mean something was read again from the start.
+- `provider_dropped`, live observations lost to a full ingest queue.
+
+The log says the same per event: `canonical telemetry segment ... sealed`/`unsealed: <reason>` at INFO, a seal of 30 seconds or more and a reconciliation pass of 30 seconds or more at WARNING, and `canonical telemetry re-read <run> from the start (<reason>)` when a transcript was replaced.
+
 ### 4. Profile, if the first three did not name the culprit
 
 `py-spy` attaches to the frozen daemon.
@@ -490,6 +503,12 @@ with the longest history of subtle identity bugs in this repository.
   remembers a resolved path for 30s. Both are counted on `/api/diagnostics/background`
   (`transcript_scans`), and a scan over a second is `transcript_scan_slow` at WARNING. The rule:
   a reading taken per session must be shared per *thing read*, and never taken on the loop.
+- **A window over a growing file is not a frame of reference.**
+  Anything numbered from where a bounded read starts (a line index, a sequence within the read) renumbers itself when the file grows and the window moves, so an idempotent insert keyed on it inserts everything again.
+  Number from the start of the file, and read past a cursor that verifies a sample of the file rather than trusting a size or an mtime (`telemetry_cursor.py`).
+- **An integrity check judged by the wrong clock repeats forever.**
+  A seal that becomes due by the age of a file's contents, and is invalidated by any write, re-reads the whole file after every write for as long as writes keep coming.
+  Judge it by when the file was last written, and invalidate only for a write that actually changed something.
 - **An unchanged arbitration is silence.** Several subsystems broadcast only on change, so
   "nothing was reported" is not evidence that nothing is wrong.
 - **`asyncio.to_thread` cannot be cancelled, and the loop joins what you abandon.** Cancelling
