@@ -1,8 +1,8 @@
 """Measure what canonical telemetry ingestion costs the daemon's event loop.
 
 The ledger's contract is that capture never runs on the loop that serves PTYs and
-HTTP: every SQLite call goes through one worker thread, and the loop only batches
-queue items. This script proves it with numbers rather than by reading the code:
+HTTP: every SQLite call goes through the service's worker threads (ingestion has
+its own), and the loop only batches queue items. This script proves it with numbers rather than by reading the code:
 it runs the real service on an event loop, drives observations at it, and samples
 loop lag with a 5 ms ticker the whole time - the same kind of ticker the daemon's
 stall watchdog uses. It prints the worst and the p99 lag alongside the number of
