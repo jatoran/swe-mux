@@ -24,6 +24,7 @@ from .harness import (
     reports_lifecycle_hooks,
 )
 from .harness_status import (
+    CLAUDE_STATUS_ROW_FIELDS,
     STATUS_EVENT,
     apply_claude_status_snapshot,
     apply_codex_rate_limits,
@@ -47,6 +48,7 @@ from .session import (
     standing_activity_kinds,
     transition_proof,
 )
+from .session_patch import session_patch
 from .text_safety import utf8_safe
 
 log = logging.getLogger(__name__)
@@ -4455,6 +4457,10 @@ async def _apply_status_snapshot(
         backend=record.backend,
         changed=changed,
         **status_summary(record),
+        # Every row field `apply_claude_status_snapshot` can write, whole, at the
+        # revision just published: the browser patches the row from this instead
+        # of re-reading the fleet, which this event did ~5,700 times a day.
+        **session_patch(session, CLAUDE_STATUS_ROW_FIELDS),
     )
 
 

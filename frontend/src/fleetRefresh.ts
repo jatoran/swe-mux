@@ -215,6 +215,122 @@ export function createEventRefreshScheduler(
   }
 }
 
+/**
+ * The per-row counterpart of the scheduler above, for events that changed one
+ * session's row without carrying its new values (`eventRefresh.ts`, `session`).
+ *
+ * Each id is read at most once per `SESSION_REFRESH_MIN_GAP_MS`, a burst for one id
+ * lands in one read, and at most `SESSION_REFRESH_MAX_CONCURRENT` reads run at once.
+ * When more than `SESSION_REFRESH_FLEET_THRESHOLD` rows are waiting together, one
+ * fleet read is cheaper than that many row reads and answers all of them, so the
+ * scheduler hands the whole set to it instead.
+ */
+export const SESSION_REFRESH_SETTLE_MS = 150
+export const SESSION_REFRESH_MIN_GAP_MS = 1_000
+export const SESSION_REFRESH_MAX_CONCURRENT = 4
+export const SESSION_REFRESH_FLEET_THRESHOLD = 8
+
+export type SessionRefreshScheduler = {
+  /** An event says this one row may have changed. Coalesces per id. */
+  request(sessionId: string): void
+  /** Drop anything scheduled. For teardown. */
+  cancel(): void
+}
+
+export function createSessionRefreshScheduler(
+  refreshRow: (sessionId: string) => Promise<void>,
+  refreshFleet: () => void,
+  options: EventRefreshSchedulerOptions = {},
+): SessionRefreshScheduler {
+  const now = options.now ?? (() => Date.now())
+  const setTimer = options.setTimer ?? ((run, delayMs) => setTimeout(run, delayMs))
+  const clearTimer = options.clearTimer ?? (handle => clearTimeout(handle as ReturnType<typeof setTimeout>))
+  /** Id -> the earliest moment its read may start. */
+  const due = new Map<string, number>()
+  const running = new Set<string>()
+  /** Requested again while its own read was in flight: that read may predate the change. */
+  const again = new Set<string>()
+  const lastStart = new Map<string, number>()
+  let timer: unknown = null
+  let timerAt = Number.POSITIVE_INFINITY
+  let cancelled = false
+
+  const arm = () => {
+    if (cancelled || due.size === 0 || running.size >= SESSION_REFRESH_MAX_CONCURRENT) return
+    const next = Math.min(...due.values())
+    if (timer !== null && timerAt <= next) return
+    if (timer !== null) clearTimer(timer)
+    timerAt = next
+    timer = setTimer(pump, Math.max(0, next - now()))
+  }
+
+  function pump() {
+    timer = null
+    timerAt = Number.POSITIVE_INFINITY
+    if (cancelled) return
+    const at = now()
+    for (const [id, start] of lastStart) if (at - start >= SESSION_REFRESH_MIN_GAP_MS) lastStart.delete(id)
+    const ready = [...due.entries()].filter(([, when]) => when <= at).sort((a, b) => a[1] - b[1])
+    for (const [id] of ready) {
+      if (running.size >= SESSION_REFRESH_MAX_CONCURRENT) break
+      due.delete(id)
+      start(id, at)
+    }
+    arm()
+  }
+
+  function start(id: string, at: number) {
+    running.add(id)
+    lastStart.set(id, at)
+    let read: Promise<void>
+    try {
+      read = refreshRow(id)
+    } catch (cause) {
+      read = Promise.reject(cause)
+    }
+    void read.catch(() => {}).then(() => {
+      running.delete(id)
+      if (cancelled) return
+      if (again.delete(id)) request(id)
+      else arm()
+    })
+  }
+
+  function request(id: string) {
+    if (cancelled || !id) return
+    if (running.has(id)) {
+      again.add(id)
+      return
+    }
+    if (due.has(id)) return
+    const earliest = Math.max(now() + SESSION_REFRESH_SETTLE_MS, (lastStart.get(id) ?? Number.NEGATIVE_INFINITY) + SESSION_REFRESH_MIN_GAP_MS)
+    due.set(id, earliest)
+    if (due.size > SESSION_REFRESH_FLEET_THRESHOLD) {
+      // A fleet read answers every waiting row at once. Rows already being read
+      // are left to finish; their result merges by revision like any other.
+      due.clear()
+      again.clear()
+      if (timer !== null) clearTimer(timer)
+      timer = null
+      timerAt = Number.POSITIVE_INFINITY
+      refreshFleet()
+      return
+    }
+    arm()
+  }
+
+  return {
+    request,
+    cancel: () => {
+      cancelled = true
+      due.clear()
+      again.clear()
+      if (timer !== null) clearTimer(timer)
+      timer = null
+    },
+  }
+}
+
 export type FleetRefreshOptions = {
   stallMs?: number
   /** Called when a cycle outran `stallMs` and was abandoned. */

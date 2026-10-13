@@ -148,7 +148,7 @@ import type { VoiceSessionCandidate } from './conversationTarget'
 import { autoplayEnabled, beginRequestedStream, cancelRequestedStream, closeRequestedStream, enqueueAutoplay, enqueueRequestedStreamClip, newVoiceStreamId, playAllHeldClips, playClipGroup, segmentPosition, setAutoplayEnabled, setPlaybackFocus, stopAllPlayback, stopSessionPlayback, unlockPlayback } from './voice'
 import { speakOnce } from './assistantSpeech'
 import { handleSessionSound, type NormalizedMuxEvent } from './sessionSounds'
-import { mergeSessionSnapshot, reconcileSessionSnapshots } from './sessionSnapshots'
+import { applySessionRowPatch, mergeSessionSnapshot, reconcileSessionSnapshots } from './sessionSnapshots'
 import {
   KILL_TOMBSTONE_TTL_MS, applyKillTombstones, clearableEndedSessions, expiredKillIds,
   killRemovedTheSession, nextActiveAfterKill, type KillTombstones,
@@ -161,7 +161,8 @@ import {
   type JoinAttempts,
 } from './sessionJoin'
 import {
-  createEventRefreshScheduler, createFleetRefreshController, describeFleetFailures, fetchFleetSlices,
+  FLEET_REFRESH_TIMEOUT_MS, createEventRefreshScheduler, createFleetRefreshController,
+  createSessionRefreshScheduler, describeFleetFailures, fetchFleetSlices,
   type FleetRefreshController,
 } from './fleetRefresh.ts'
 import { planFleetLayouts, type PendingSpawn } from './fleetLayouts.ts'
@@ -193,7 +194,7 @@ import { HelpModal } from './HelpModal'
 import { HELP_TOPICS, helpCommandId, helpTopicForDrawer } from './helpTopics'
 import { applyTheme, configureCustomTheme, type CustomTheme, type ThemeName } from './theme'
 import { TRANSCRIPT_CHANGED_EVENT, TURN_ENDED_EVENT } from './transcriptView'
-import { eventRequiresFleetRefresh } from './eventRefresh'
+import { fleetEventAction, rowPatchOf } from './eventRefresh'
 import { loadedUiBuildId, uiUpdateReloadReady, uiUpdateRequired } from './uiBuild'
 import { applyNoteEditorConfig } from './noteEditorSettings'
 import {
@@ -2472,6 +2473,41 @@ export function App() {
       if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(frame))
     })
     const queueRefresh = () => eventRefresh.request()
+    // The daemon generation the current socket's events belong to (`events_hello`).
+    // A row patch can only be ordered against a row read from the same generation.
+    let socketGeneration: string | null = null
+    // One row re-read alone, for an event that changed only that row. Anything it
+    // cannot answer - a session this tab does not hold, a 404, a failed read, a
+    // response that is not that row - falls back to the whole-fleet read, which is
+    // what every such event cost before.
+    const refreshSessionRow = async (sessionId: string): Promise<void> => {
+      if (!sessionsRef.current.some(item => item.id === sessionId)) { queueRefresh(); return }
+      let row: Session
+      try {
+        row = await api<Session>('GET', `/api/sessions/${encodeURIComponent(sessionId)}`, undefined, { timeoutMs: FLEET_REFRESH_TIMEOUT_MS })
+      } catch {
+        queueRefresh()
+        return
+      }
+      if (!row || typeof row !== 'object' || row.id !== sessionId) { queueRefresh(); return }
+      setSessions(items => items.map(item => item.id === sessionId ? mergeSessionSnapshot(item, row) : item))
+    }
+    const sessionRefresh = createSessionRefreshScheduler(refreshSessionRow, queueRefresh)
+    // An event that changed one row, routed by what it carries. Not for replays: a
+    // resumed socket queues one fleet read on open, which supersedes every replayed
+    // row change at once.
+    const applyRowEvent = (action: 'patch' | 'session', sessionId: string, payload: unknown) => {
+      const row = sessionsRef.current.find(item => item.id === sessionId)
+      if (!row) { queueRefresh(); return }
+      const patch = action === 'patch' ? rowPatchOf(payload) : null
+      if (!patch || applySessionRowPatch(row, patch, socketGeneration) === null) {
+        sessionRefresh.request(sessionId)
+        return
+      }
+      const generation = socketGeneration
+      setSessions(items => items.map(item =>
+        item.id === sessionId ? applySessionRowPatch(item, patch, generation) ?? item : item))
+    }
     const clearHandshakeWatchdog = () => {
       if (handshakeTimer === undefined) return
       window.clearTimeout(handshakeTimer)
@@ -2529,6 +2565,10 @@ export function App() {
           refreshSettings()
           void loadConfig(false)
           void loadNotifications(true)
+          // The fleet too, once: replayed row events are not re-applied one by one,
+          // and transient row updates (`delivery_readiness_changed`) are never
+          // replayed at all, so the gap is closed by one authoritative read.
+          queueRefresh()
         }
       }
       next.onerror = () => { if (socket === next) next.close() }
@@ -2538,6 +2578,7 @@ export function App() {
           const event = JSON.parse(String(message.data))
           if (event.type === 'events_hello') {
             setUiUpdateAvailable(uiUpdateRequired(loadedBuildId.current, event.ui_build_id))
+            socketGeneration = typeof event.daemon_generation === 'string' && event.daemon_generation ? event.daemon_generation : null
             return
           }
           if (event.type === 'events_ready' || event.type === 'events_cursor' || event.type === 'events_gap') {
@@ -2549,13 +2590,15 @@ export function App() {
             if (event.type !== 'events_cursor') queueRefresh()
             return
           }
-          if (eventRequiresFleetRefresh(event.type)) queueRefresh()
-          if (typeof event.seq === 'number' && event.seq > lastEventSeq.current) lastEventSeq.current = event.seq
           // Catch-up events (marked replay by the daemon) are a historical resync sent on
           // every (re)connect. They must drive state refresh but never re-fire live-only
           // effects like notification sounds or voice autoplay, or reopening the app would
           // replay old audio.
           const isReplay = event.replay === true
+          const action = fleetEventAction(event)
+          if (action === 'fleet') queueRefresh()
+          else if (action !== 'none' && !isReplay) applyRowEvent(action, String(event.session_id), event.payload)
+          if (typeof event.seq === 'number' && event.seq > lastEventSeq.current) lastEventSeq.current = event.seq
           const soundEvent=event as NormalizedMuxEvent
           const eventSession=sessionsRef.current.find(item=>item.id===soundEvent.session_id)
           const eventProject=projectsRef.current.find(item=>item.id===(eventSession?.project_id||String(soundEvent.payload?.project_id||'')))
@@ -2679,11 +2722,11 @@ export function App() {
           if(event.type==='queue_updated'||event.type==='queue_delivery'){window.dispatchEvent(new CustomEvent('mux:queue-changed',{detail:{sessionId:event.session_id}}));refreshQueueSummary()}
           if(event.type==='spawn_request_drafted'||event.type==='spawn_request_decided')window.dispatchEvent(new CustomEvent('mux:queue-changed',{detail:{projectId:event.payload?.project_id}}))
           // The drawer's Git tab refetches its worktree list off this. Branch/dirty/upstream
-          // already ride the session snapshots, so `git_changed` carries no state here —
-          // only *which Project* moved, which is the one thing the tab needs to decide
+          // reach the row through the event's own row patch (`applyRowEvent` above), so
+          // the tab needs only *which Project* moved, the one thing it uses to decide
           // whether the refetch is about the repository it is drawing. `git_changed` is
-          // raised by every session's five-second dirty tick, so an unfiltered listener
-          // was re-reading one Project's whole worktree map on another Project's poll.
+          // raised for every followed checkout that changes, so an unfiltered listener
+          // would re-read one Project's whole worktree map on another Project's edit.
           if(event.type==='worktree_created'||event.type==='worktree_removed'||event.type==='git_changed'||event.type==='git_provenance_changed')window.dispatchEvent(new CustomEvent('mux:git-changed',{detail:{projectId:String(event.payload?.project_id||'')}}))
           // The daemon serves its last worktree reading immediately and revalidates
           // behind it; this is that revalidation reporting that it disagreed. Its own
@@ -2725,7 +2768,7 @@ export function App() {
       nextAttemptAt: () => nextAttemptAt,
       reconnect,
     })
-    return () => { stopLivenessWatch(); presence.stop(); clearHandshakeWatchdog(); if (retry) clearTimeout(retry); eventRefresh.cancel();if(socket){socket.onclose=null;socket.close()} }
+    return () => { stopLivenessWatch(); presence.stop(); clearHandshakeWatchdog(); if (retry) clearTimeout(retry); eventRefresh.cancel(); sessionRefresh.cancel();if(socket){socket.onclose=null;socket.close()} }
   }, [])
 
   useEffect(() => {

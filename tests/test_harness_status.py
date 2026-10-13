@@ -35,6 +35,7 @@ from swe_mux.claude_status_line import (
 )
 from swe_mux.event_bus import EventBus
 from swe_mux.harness_status import (
+    CLAUDE_STATUS_ROW_FIELDS,
     CODEX_BASELINE_TOKENS,
     STATUS_EVENT,
     apply_claude_status_snapshot,
@@ -345,6 +346,58 @@ async def test_status_event_updates_the_record_without_moving_state() -> None:
     await apply_hook_observation(session, STATUS_EVENT, dict(CLAUDE_SNAPSHOT), events)
     assert session.published == 1
     assert [item for item in _drain(queue) if item.type == "harness_status"] == []
+
+
+async def test_status_event_carries_every_row_field_it_wrote_as_an_ordered_patch() -> None:
+    """The browser patches the row from this event instead of re-reading the fleet.
+
+    Each patched field is the snapshot's own serialization of it, and the revision is
+    the one `publish_update` stamped *before* the event: a REST snapshot at or past it
+    already contains these values, and one before it cannot roll them back.
+    """
+    session = fake_session()
+    session.revision = 0
+
+    def publish() -> None:
+        session.published += 1
+        session.revision += 1
+
+    session.publish_update = publish
+    events = EventBus()
+    queue = events.subscribe()
+
+    await apply_hook_observation(session, STATUS_EVENT, dict(CLAUDE_SNAPSHOT), events)
+
+    (emitted,) = [item for item in _drain(queue) if item.type == "harness_status"]
+    snapshot = session.record.snapshot()
+    assert emitted.payload["session_revision"] == session.revision == 1
+    assert emitted.payload["patch"] == {name: snapshot[name] for name in CLAUDE_STATUS_ROW_FIELDS}
+    assert emitted.payload["patch"]["harness_status"]["effort"] == "xhigh"
+    assert emitted.payload["patch"]["cost_usd"] == 1.2345
+    json.dumps(emitted.payload)  # crosses the /events websocket as JSON
+
+
+def test_harness_status_patch_covers_every_field_the_snapshot_writes() -> None:
+    """A field the status line moves but the patch omits would leave the row stale.
+
+    Every field of the documented snapshot is set to a value that differs from a
+    fresh record, so any row field `apply_claude_status_snapshot` can write shows up
+    in the before/after difference here.
+    """
+    rec = record()
+    before = rec.snapshot()
+    payload = {
+        **CLAUDE_SNAPSHOT,
+        "fast_mode": True,
+        "rate_limits": {
+            **CLAUDE_SNAPSHOT["rate_limits"],
+            "spend_limit": {"used_percentage": 12.0, "resets_at": 1_800_500_000},
+        },
+    }
+    apply_claude_status_snapshot(rec, payload, now=NOW)
+    after = rec.snapshot()
+    moved = {name for name in after if after[name] != before[name]}
+    assert moved == set(CLAUDE_STATUS_ROW_FIELDS)
 
 
 async def test_status_event_reports_a_failed_delegate_once(

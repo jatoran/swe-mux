@@ -80,35 +80,44 @@ from .support import _optional_json, refuse_agent_session_caller
 log = logging.getLogger(__name__)
 
 
+def _session_row(app: web.Application, session: Session, *, now: float) -> dict[str, Any]:
+    """One session as the fleet list serves it: the snapshot, ordered and enriched.
+
+    Shared by the list and the single-session read, so a browser that refreshes one
+    row (because an event told it only that row moved) gets exactly what a full
+    list would have given it for that row, revision and generation included.
+    """
+    item = session.record.snapshot()
+    item["_snapshot_generation"] = app[keys.DAEMON_GENERATION]
+    item["_snapshot_revision"] = session.revision
+    item["_snapshot_enriched"] = True
+    # This readiness is display-only and never authorizes a PTY write. Reuse a
+    # bounded classifier verdict so simultaneous browser refreshes cannot make
+    # GET /api/sessions repeatedly scan every live terminal on the event loop.
+    # On a fleet the readiness watcher is already following, that cache is
+    # warm from its last tick and this endpoint scans nothing at all.
+    delivery = app[keys.FLEET].readiness.evaluate(
+        session,
+        record_metrics=False,
+        snapshot_pty_cache_seconds=1.0,
+    )
+    item["delivery_readiness"] = delivery_summary(session.record, delivery, observed_at=now)
+    # Present only while something is actually sitting in the composer, so a
+    # client can treat presence as the whole signal. The character estimate
+    # stays server-side: it is inferred from keystrokes, and a number on
+    # screen would be read as a measurement (`composer_input.py`).
+    composer = getattr(session, "composer", None)
+    if composer is not None and composer.pending:
+        item["unsent_input"] = {"since": composer.since}
+    return item
+
+
 async def list_sessions(request: web.Request) -> web.Response:
     manager: SessionManager = request.app[keys.SESSIONS]
-    sessions = []
-    readiness = request.app[keys.FLEET].readiness
     now = time.time()
-    for session in manager.sessions.values():
-        item = session.record.snapshot()
-        item["_snapshot_generation"] = request.app[keys.DAEMON_GENERATION]
-        item["_snapshot_revision"] = session.revision
-        item["_snapshot_enriched"] = True
-        # This readiness is display-only and never authorizes a PTY write. Reuse a
-        # bounded classifier verdict so simultaneous browser refreshes cannot make
-        # GET /api/sessions repeatedly scan every live terminal on the event loop.
-        # On a fleet the readiness watcher is already following, that cache is
-        # warm from its last tick and this endpoint scans nothing at all.
-        delivery = readiness.evaluate(
-            session,
-            record_metrics=False,
-            snapshot_pty_cache_seconds=1.0,
-        )
-        item["delivery_readiness"] = delivery_summary(session.record, delivery, observed_at=now)
-        # Present only while something is actually sitting in the composer, so a
-        # client can treat presence as the whole signal. The character estimate
-        # stays server-side: it is inferred from keystrokes, and a number on
-        # screen would be read as a measurement (`composer_input.py`).
-        composer = getattr(session, "composer", None)
-        if composer is not None and composer.pending:
-            item["unsent_input"] = {"since": composer.since}
-        sessions.append(item)
+    sessions = [
+        _session_row(request.app, session, now=now) for session in manager.sessions.values()
+    ]
     await _decorate_generated_titles(request.app, sessions)
     for field in ("project_id", "state", "backend"):
         value = request.query.get(field.removesuffix("_id") if field == "project_id" else field)
@@ -546,9 +555,10 @@ async def spawn_session(request: web.Request) -> web.Response:
 
 
 async def get_session(request: web.Request) -> web.Response:
-    return json_response(
-        request.app[keys.SESSIONS].resolve(request.match_info["sid"]).record.snapshot()
-    )
+    session = request.app[keys.SESSIONS].resolve(request.match_info["sid"])
+    item = _session_row(request.app, session, now=time.time())
+    await _decorate_generated_titles(request.app, [item])
+    return json_response(item)
 
 
 async def patch_session(request: web.Request) -> web.Response:
