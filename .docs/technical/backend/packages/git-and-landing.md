@@ -44,8 +44,8 @@ Project-scoped comparison-ref inference and bounded review reads.
 
 Bounded read-only (`--no-optional-locks`) reads of every session's checkout for full HEAD, branch, dirty count, upstream divergence, worktree identity, root, HEAD-scoped diffstat, and merge-base comparison counts.
 A checkout is read when its watch reports a change, on a slow safety sweep, or on the old timed cadence while it has no live watch; `GitMonitor._due_cause` is the one place those rules live, and `status()` serves why each read happened (`design/features/git.md`).
-Also the memoized checkout layout the watches need, resolved off the loop; the row patch `git_changed` carries (`session_patch.py`);
-same-checkout previous-HEAD event evidence; bounded commit-range, changed-file, combined-merge-diff, excluded-range, and blob-digest readers for attribution; deduplication by `(cwd, comparison override)`; and memoization of both diffstats and of ref inference.
+It memoizes the checkout layout the watches need, resolved off the loop, and attaches the row patch `git_changed` carries (`session_patch.py`).
+Also same-checkout previous-HEAD event evidence; bounded commit-range, changed-file, combined-merge-diff, excluded-range, and blob-digest readers for attribution; deduplication by `(cwd, comparison override)`; and memoization of both diffstats and of ref inference.
 
 Every query runs through `bounded_subprocess.run_bounded`, so a repository large enough to answer with hundreds of megabytes cannot be held in the daemon's memory and a poll cancelled at shutdown cannot leave `git` running.
 Three codes, and they are not interchangeable to a caller: `124` is a timeout, `125` a capture that hit the output cap (every caller here parses what it gets, so a truncated answer must read as a failure rather than as a smaller repository), and anything else is Git's own.
