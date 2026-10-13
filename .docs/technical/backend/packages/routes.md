@@ -237,6 +237,7 @@ Also holds change-map seed admission and worktree-membership validation.
 
 Run history, backfills, scans, transcripts, resume, duplicates, and the event log.
 Also holds the live run-id sets and the conversation parsing the diagnostic bundle shares.
+The History reader's routes (`/detail`, `/messages`, `/matches`, `/notes`, `/tool-calls`) are registered two path segments deep under `/api/history/{sid}/`, because a one-segment `{sid}` GET would shadow the single-segment static paths other modules register under `/api/history/`.
 
 **Not:** indexing (`history.py`) or resume policy (`session_resume.py`).
 

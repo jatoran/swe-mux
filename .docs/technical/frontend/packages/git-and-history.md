@@ -163,10 +163,25 @@ Its final paragraph - the agent cannot approve what it wrote, a human presses ap
 
 ## History
 
-`HistoryBrowser.tsx`, `historyDetail.ts`, `TranscriptToolCalls.tsx`
+`HistoryBrowser.tsx`, `historyDetail.ts`, `historyMessages.ts`, `historyFeed.ts`, `TranscriptToolCalls.tsx`
 
 Filters, transcript review with shared transcript labels and timestamps, a default-off tool-name/input disclosure with no results, a non-shrinking responsive action bar ahead of collapsible run bands, run-filtered Git provenance, long-message folding and per-message copy, and backfill progress and actions.
-A held-conversation marker replaces Resume when a live CLI process still owns the row's conversation.
+A held-conversation marker replaces Resume when a live CLI process still owns the row's conversation, and an unavailable-transcript marker replaces it when `/detail` reports the conversation gone.
+
+`HistoryBrowser.tsx` is four memoized components, so an app-root render that changed nothing they draw stops at the browser.
+- `HistoryBrowser` owns the filters, the results and which conversation is selected; `App.tsx` hands it a memoized Project list and ref-backed handlers.
+- `HistoryList` and `HistoryRow` draw the results, keyed by id, with callbacks that never change identity.
+- `HistoryDetail` reads one conversation and is keyed by its id, so selecting another remounts it: nothing of the previous conversation survives, and its lifetime `AbortController` cancels every request the previous one had in flight.
+  It draws the header and Resume from the selected row, then loads `/detail`, `/messages`, `/matches`, `/notes`, lineage and provenance independently, and polls `/detail` while `transcript.indexing` holds.
+- `HistoryMessage` is one message, keyed by ordinal; every prop is a primitive or an object the window keeps across pages.
+
+`historyMessages.ts` is the reader's window over a conversation, pure so the paging rules are pinned by unit tests.
+- `mergeHistoryPage` joins a page from one edge, drops a page that no longer touches the edge it was asked from, keeps held messages' object identity, and cuts the far edge past `HISTORY_WINDOW_MAX` (360).
+- `historyWindowSpan`, `missingSpans`, `addSpan` and `clipSpans` decide which ordinal spans of tool calls to fetch and which to let go.
+- `historyReaderRows` places tool-only messages at their own ordinals, and only inside the window's span.
+The reader keeps its place by hand across a page landing above it (`keepPlace`, applied in a layout effect), so `.history-modal .messages` turns the browser's own scroll anchoring off.
+
+`historyFeed.ts` also owns the search debounce: `historySearchDelay` is 220 ms, or 450 ms while the last word is one letter.
 "Schedule Resume" starts nothing and hands the conversation to the Schedule tab, so it stays offered even while the row is held - a schedule fires later, when it may not be.
 
 `historyDetail.ts` is the detail view's section model, and it is pure so the rules that are easy to regress are pinned by a unit test rather than only by a screenshot.
@@ -175,7 +190,7 @@ A held-conversation marker replaces Resume when a live CLI process still owns th
   It is read when a conversation is opened rather than watched on a media query, so an expansion survives the reading and a window dragged across the breakpoint does not fold up what is being read.
 - `sectionKeysVisible` decides whether a band draws its summary line, and `HISTORY_QUIET_WHEN_CLOSED` is the one-entry list of bands that do not draw it while closed.
   The general rule holds while a summary is a count; Commits carries a whole commit subject and wrapped to a taller block than the band it labelled, so it is suppressed until the band is open and its rows say the same thing per commit.
-- `splitRecentScans` cuts the behavioural timeline to its two newest entries and sorts them itself, because the transcript route returns a run's records oldest-first and a mis-ordered preview reads as a run that did those things in that order.
+- `splitRecentScans` cuts the behavioural timeline to its two newest entries and sorts them itself, because `/notes` returns a run's records oldest-first and a mis-ordered preview reads as a run that did those things in that order.
   Ties keep the daemon's order, so equal timestamps stay stable across renders.
 - `commitsSummary` is what the Commits band says once it is open, picking the newest by `observedAt` rather than by position for the same reason.
 - `historyKeyStats` is the cut between what decides whether to open a conversation at all - what became of the run, what it ran on, when it last spoke, what it cost - and what is read once it is open.

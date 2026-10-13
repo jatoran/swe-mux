@@ -14,7 +14,16 @@ The shared schema, Project and layout persistence, run history, bounded post-sta
 `history_naming_rows` is the chunked bulk read behind display names for ended sessions.
 It is keyed by both row id and owning session id, where an exact row id outranks the session fallback, so the first run of a rolled-over session is not redirected to its last.
 
-**Not:** live PTY lifecycle, provenance evidence classification, or the naming rule itself (`session_titles.py`).
+The History reader's reads live here too:
+- `read_history_conversation` is the one seam through which History parses a native conversation.
+  Interactive reads pass `cached=True` and share `transcript_view`'s watermark-keyed cache; the indexer and the background reindex pass `False`, so walking thousands of conversations cannot evict a live reader's entry.
+- `transcript_index_state` answers what the index holds against the conversation's watermark and schedules `schedule_transcript_reindex` when it is behind.
+  The reindex runs on a one-thread pool, single-flight per run with a 30 s cooldown; `refresh_time_summaries` runs the listing's head/tail reads on a four-thread pool behind a bounded wait.
+  Both pools are threads rather than event-loop tasks so a job that outlives its request never calls into a closed loop, and `close` drains them before the database executor.
+  `wait_for_background` is for tests and nothing on a request path calls it.
+- `history_messages_page` pages `history_messages` by ordinal over `idx_history_messages_history`.
+
+**Not:** live PTY lifecycle, provenance evidence classification, the naming rule itself (`session_titles.py`), or parsing a transcript format (`transcript_view.py`).
 
 ### `history_backfill.py`
 

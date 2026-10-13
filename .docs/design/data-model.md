@@ -175,9 +175,11 @@ Fields and invariants: `features/daemon-resilience.md`.
   It exists because every session attached to a checkout watches the same reference move, so recording the move per session wrote one row each for sessions that had nothing to do with the commits involved — and a landing fast-forward, which authors nothing at all, wrote the most of them.
   A move is classified from the repository rather than accumulated from sightings, so the newest reading replaces the previous one outright; taking a maximum of the counts pinned a miscount in place where a later classifier fix could never displace it.
 - `history_messages`: derived role-aware user/assistant text, provider-native optional timestamp, and nullable materialized `ts_epoch` used for indexed message-time boundaries.
-  `history_messages_fts` provides Unicode token-prefix lookup and `history_messages_trigram` provides case-insensitive literal substring lookup.
+  `history_messages_fts` provides Unicode token-prefix lookup, with a `prefix='1 2 3'` index so one- to three-character prefixes do not walk the term list, and `history_messages_trigram` provides case-insensitive literal substring lookup.
   Both FTS5 tables are external-content derivatives of `history_messages` and stay synchronized by triggers.
-  `history_transcript_index` stores source mtime/size, parser version, message count, and index time so empty/unchanged transcripts remain incremental and MCP hit watermarks can reject stale pointers.
+  A run's messages are written in one transaction, so their row ids are contiguous and per-conversation lookups bound the FTS walk with `rowid BETWEEN`.
+  `history_transcript_index` stores the source watermark (mtime/size, or a harness's own pair), parser version, message count, index time, and the parse's `abandoned_messages` and `tool_calls` counts, so empty/unchanged transcripts remain incremental, MCP hit watermarks can reject stale pointers, and the History reader can describe a conversation without parsing it.
+  The two counts are `NULL` on a row indexed before they existed, which the reader treats as a reason to reindex once.
 - `events`: monotonically sequenced mux events.
 - `process_evidence`: bounded PID+creation-time fingerprints, owner/lineage/Job Object
   evidence, stable attribution version/source and confirmation times, mutable state/reason/confidence, and exit or ownership-rejection evidence; command text is never stored.

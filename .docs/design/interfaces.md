@@ -1657,8 +1657,8 @@ never counted as `preceding_tool_calls` for the live message that follows it.
 `trailing_tool_calls` preserves calls made after the newest prose message without inventing another message.
 `ordinal` numbers the returned window rather
 than the conversation, making it a display key and not an identity. Deliberately **not**
-`/history/{id}/transcript`, which reindexes the run's searchable messages and loads its
-annotations on every call: right for opening an entry once, wrong for a surface that refreshes on
+`/history/{id}/transcript`, which parses the whole conversation, reindexes the run's searchable
+messages when they are behind, and loads its annotations: right for reading an entry once, wrong for a surface that refreshes on
 every turn. This route only reads. Bounded twice — newest `limit` messages (default 200, max
 1000) and a 64 MB tail — with `truncated` set by either; the cap exists because Codex rollouts
 reach hundreds of MB. Nothing to show is a `200` with a `reason`
@@ -2306,6 +2306,11 @@ All three refuse as typed results that change nothing, rather than as protocol e
 GET    /history[?q=&scope=all|user|assistant|metadata&backend=&project=&state=&external=&time_basis=last_message|started&date_from=&date_to=&cursor=]
 GET    /history/projects
 GET    /history/{id}/transcript[?q=&scope=all|user|assistant|metadata]
+GET    /history/{id}/detail           {entry, transcript: index state}; never parses
+GET    /history/{id}/messages[?after=|before=|around=&limit=]   indexed messages by ordinal
+GET    /history/{id}/matches?q=&scope=all|user|assistant        {matches}
+GET    /history/{id}/notes            {annotations, scan_records}
+GET    /history/{id}/tool-calls[?from=&to=]   tool calls with inputs, by ordinal range
 GET    /history/backfills[?project_id=]
 POST   /history/backfills              {project_id}
 GET    /history/backfills/{job_id}
@@ -2327,9 +2332,29 @@ GET    /history/{id}/handoff
 A request carrying `q` is a **search** and is bounded and serialized; one without it is a listing and is neither (`features/history.md`).
 A search that outruns the daemon's ceiling answers `503 search_budget_exceeded` and is stopped mid-statement, so the refusal is also the release of the thread every other history read shares.
 A search whose client has already disconnected by the time it reaches the front of the queue answers `{items: [], next_cursor: null, abandoned: true}` without running; nothing reads that body, and it exists so the case is one branch rather than an exception.
+A listing's rows and `/detail`'s `entry` omit `argv_json`, which Resume reads from the stored row, and carry `generated_title_annotation` as `{stability}` only.
+The listing refreshes changed rows' time summaries for at most 250 ms and answers with what is stored for the rest; their reads land for the next listing.
+
+The History reader's routes answer from the run's row and its message index (`features/history.md`):
+
+- `GET /history/{id}/detail` returns `{entry, transcript}` without parsing anything.
+  `transcript` is `{available, indexed, current, indexing, message_count, abandoned_messages, tool_calls, indexed_at}`.
+  `current` compares the index's watermark with the conversation's; `indexing` is true while a background reindex runs, which this route schedules when the index is missing, behind, or older than the abandoned-message count.
+  `abandoned_messages` and `tool_calls` are `null` for an index written before they were recorded.
+  A conversation whose file is gone answers `200` with `available: false`, never `409`.
+- `GET /history/{id}/messages` returns `{messages: [{ordinal, role, ts, text}], has_more_before, has_more_after}`.
+  `ordinal` is the message's index in the parsed conversation, the same number a match carries, and a message with no text (only tool calls) has no entry, so ordinals have gaps.
+  Exactly one anchor applies: `around` returns half the page before the ordinal and the rest from it, `before` pages backward from an ordinal, `after` forward from one, and none starts at the beginning.
+  `limit` defaults to 60 and is clamped to 1-400; a non-integer anchor is a `400`.
+- `GET /history/{id}/matches` returns the in-conversation matches the browser steps through, bounded by the run's row-id range in the index.
+- `GET /history/{id}/notes` returns the run's annotations and its `scan_records`, loaded beside the conversation rather than with it.
+- `GET /history/{id}/tool-calls` returns `{messages: [{ordinal, role, ts, has_text, tool_calls: [{id, name, input}]}], mtime_ns, size}` for messages in the inclusive `from`/`to` ordinal range.
+  It is the one reader route that parses, through the shared watermark-keyed cache, and it answers `409 transcript_unavailable` when the conversation cannot be read.
+- `GET /history/{id}/transcript` keeps its whole-conversation shape for scripts and the CLI, and replaces the run's indexed messages only when the index's watermark does not match the parse it returns.
+
 Resume/review confirmation must target an existing Project and starts at its root.
-Every route that reads a run row's conversation - `GET /history/{id}/transcript`, `GET /history/{id}/branch-points`, `POST /history/{id}/resume` and a fork - resolves the conversation by id when the row's recorded `transcript_path` no longer exists, and writes the corrected path back to the row (`features/history.md`).
-A `409 transcript_unavailable` from any of them therefore means no file answers to that conversation id, not that mux lost track of where the CLI moved it.
+Every route that reads a run row's conversation - `GET /history/{id}/detail`, `GET /history/{id}/tool-calls`, `GET /history/{id}/transcript`, `GET /history/{id}/branch-points`, `POST /history/{id}/resume` and a fork - resolves the conversation by id when the row's recorded `transcript_path` no longer exists, and writes the corrected path back to the row (`features/history.md`).
+A `409 transcript_unavailable` from any of them, or `available: false` from `/detail`, therefore means no file answers to that conversation id, not that mux lost track of where the CLI moved it.
 `GET /sessions/{id}/transcript` does the same search for a session in a terminal state and never for a live one.
 Resume returns `409 conversation_live` (with the owning `session_id`) when a live session currently claims the row's native conversation; Branch, not resume, is the flow for forking a live conversation.
 It returns `409 conversation_held` (with `holder: {kind, pid, job_id, name}`) when a CLI process mux does not own holds the conversation — a Claude background agent is the case that occurs — because that CLI answers a second opener by exiting rather than by refusing to start.
@@ -2348,7 +2373,7 @@ transcript path; transcript bytes remain in the provider-owned file and are neve
 export. A missing or stale transcript pointer is reported explicitly.
 When the run's Project opts into `timeline_handoff` (Phase 7.7), the Progress section is regenerated
 phase-structured from the run's scan spine; otherwise it falls back to annotation summaries.
-The `GET /history/{id}/transcript` payload also carries the run's `scan_records` alongside its
+`GET /history/{id}/notes` (and the `GET /history/{id}/transcript` payload) carries the run's `scan_records` alongside its
 annotations, so the Run-notes view renders the behavioral spine (`features/scan-timeline.md`).
 History rows expose lifecycle `spawned_at`, nullable conversational `native_started_at`, nullable
 `last_message_at`, and nullable `last_message_role: user|assistant`. Start/last are chronological
