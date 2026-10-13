@@ -303,6 +303,23 @@ def test_the_index_reads_what_a_full_read_reads(
     assert expected, "the fixture must exercise something"
 
 
+def test_a_dialect_with_no_reducer_is_read_whole_and_still_right(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A format added to `transcript_view` before it gets a reducer here costs memory, not truth."""
+    monkeypatch.setattr(conversation_index, "_SLIMMERS", {})
+    path = write(tmp_path / "claude.jsonl", claude_conversation())
+    expected, hidden, _trailing = reference(path, "claude")
+    reading = ConversationIndexRegistry().snapshot(path, "claude")
+    assert [comparable(m) for m in reading.messages] == [comparable(m) for m in expected]
+    assert reading.hidden == hidden
+    tooled = next(m for m in expected if m["preceding_tools"])
+    assert calls_at(reading, tooled["message_id"]) == [
+        {"id": tool["id"], "name": tool["name"], "input": tool["input"]}
+        for tool in tooled["preceding_tools"]
+    ]
+
+
 @pytest.mark.parametrize(("backend", "events"), CONVERSATIONS)
 @pytest.mark.parametrize("shared", [True, False])
 def test_the_indexed_parse_is_the_full_parse_exactly(

@@ -129,6 +129,10 @@ _FUNCTION_ALLOWLIST: dict[str, str] = {
     # means "mux cannot do this here" and every reader of these tables states that.
     "transcript_view.py::<module>": "dialect-keyed scanner registry, not harnesses",
     "transcript_fork.py::<module>": "dialect-keyed writer registry, not harnesses",
+    # A dialect missing here is read whole, unskipped and as one file: slower, never wrong.
+    "conversation_index.py::<module>": (
+        "dialect-keyed record reducers, skip test and segment reader, not harnesses"
+    ),
     # Anchored dispatches whose `assert_never` the scanner cannot see from here.
     "adapters/__init__.py::build_agent_adapter": "adapter-family dispatch, assert_never anchored",
 }

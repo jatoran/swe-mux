@@ -260,12 +260,19 @@ def _slim_codex(event: dict[str, Any], ref: Callable[[int], ToolRef]) -> dict[st
     return {"type": kind, "timestamp": event.get("timestamp"), "payload": slim_payload}
 
 
+# Dialect-keyed, like `transcript_view`'s own tables: the key is the record format.
+# A dialect missing from any of these is read correctly, only less cheaply - records
+# kept whole, every line decoded, the file read as one segment - never wrongly.
 _SLIMMERS: dict[
     str, Callable[[dict[str, Any], Callable[[int], ToolRef]], dict[str, Any] | None]
 ] = {
     "claude": _slim_claude,
     "pi": _slim_pi,
     "codex": _slim_codex,
+}
+_SKIPPABLE: dict[str, Callable[[bytes], bool]] = {"codex": codex_line_is_skippable}
+_SEGMENTS: dict[str, Callable[[Path], list[tuple[Path, int]]]] = {
+    "codex": codex_history.segments,
 }
 
 
@@ -527,6 +534,8 @@ class ConversationIndex:
         self.backend = backend
         self.native_id = native_id
         self.dialect = transcript_dialect(backend)
+        self._slimmer = _SLIMMERS.get(self.dialect or "")
+        self._skippable = _SKIPPABLE.get(self.dialect or "")
         self.store = conversation_store_path(backend)
         self.lock = threading.Lock()
         self.stats = stats
@@ -667,11 +676,8 @@ class ConversationIndex:
         self._filled = None
         self.building = True
         try:
-            sources: list[tuple[Path, int]]
-            if self.dialect == "codex":
-                sources = codex_history.segments(path)
-            else:
-                sources = [(path, path.stat().st_size)]
+            segmenter = _SEGMENTS.get(self.dialect or "")
+            sources = segmenter(path) if segmenter else [(path, path.stat().st_size)]
             total = sum(length for _source, length in sources)
             self.progress = (0, total)
             self.segments = []
@@ -761,7 +767,8 @@ class ConversationIndex:
     def _decode(
         self, line: bytes, segment_index: int, segment: _Segment, start: int, end: int
     ) -> dict[str, Any] | None:
-        if self.dialect == "codex" and codex_line_is_skippable(line):
+        skippable = self._skippable
+        if skippable is not None and skippable(line):
             self.sniffed += 1
             return None
         try:
@@ -775,14 +782,13 @@ class ConversationIndex:
             return None
         if not isinstance(event, dict):
             return None
-        slimmer = _SLIMMERS.get(self.dialect or "")
-        if slimmer is None:
-            return None
+        slimmer = self._slimmer
 
         def ref(block: int) -> ToolRef:
             return (segment_index, start, end, block)
 
-        slim = slimmer(event, ref)
+        # A dialect with no reducer keeps its records whole: correct, just larger.
+        slim = slimmer(event, ref) if slimmer is not None else event
         if slim is None:
             return None
         slim[_OFFSET] = segment.base + start

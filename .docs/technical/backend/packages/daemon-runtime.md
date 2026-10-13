@@ -167,7 +167,8 @@ The types are annotations (`CONFIG: web.AppKey[Config]`) with the runtime type a
 
 ### `http_support.py`
 
-The transport primitives with no domain knowledge: the compact JSON response, conditional-request revalidation (`etag_matches`, and `revalidated_json`, which answers a matching `If-None-Match` with a `304` without building the body), response security headers, the loopback-peer check, one-shot task-failure logging, and the correlation-id names (`REQUEST_ID_HEADER`, the typed `REQUEST_ID_KEY` request slot, `ACCESS_LOG_FORMAT`).
+The transport primitives with no domain knowledge: the compact JSON response, conditional-request revalidation, response security headers, the loopback-peer check, one-shot task-failure logging, and the correlation-id names (`REQUEST_ID_HEADER`, the typed `REQUEST_ID_KEY` request slot, `ACCESS_LOG_FORMAT`).
+`revalidated_json` answers a matching `If-None-Match` (`etag_matches`, weak comparison) with a `304` without building the body.
 The header and the access format live together so the two spellings of the same id cannot drift apart.
 Outside `routes/` deliberately, because `preview_transport.py` streams its own response and needs the security headers, and a module below the route layer reaching up into `routes/` would invert the dependency direction the package boundary states.
 
