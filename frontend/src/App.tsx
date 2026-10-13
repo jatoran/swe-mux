@@ -19,6 +19,9 @@ import { EndedPaneBanner } from './EndedPaneBanner'
 import {
   canRestartCold, coldSessionSummary, inactiveSessionSummary, isColdSession, isInactiveSession,
 } from './coldSession.ts'
+import {
+  canOfferRestart, restartMenuView, restartRefusalMessage, type RestartEligibility,
+} from './restartAgent.ts'
 import { recordPaneVisits, warmPaneBudget, warmPaneIds } from './warmPanes'
 import { windowsPtyCompatibility, type TerminalRendererPreference, type WindowsPtyCompatibility } from './terminalRenderer'
 import { FILE_DRAFT_EVENT, ProjectResource, unsavedFilePaths } from './ProjectResource'
@@ -679,6 +682,15 @@ export function App() {
   // reported (`session_resume.RESUME_SETTLE_SECONDS`), so this window is seconds long and
   // has to be visible in the pane that started it.
   const [resumingId, setResumingId] = useState<string | null>(null)
+  // The live agent whose in-place restart is in flight (`session_restart.py`): graceful
+  // exit, teardown, then a proven resume, so seconds again, and one at a time.
+  const [restartingId, setRestartingId] = useState<string | null>(null)
+  // The daemon's answer for the session the menu is open on, read when the menu opens.
+  // The row is drawn from it rather than from client state, so it never offers a restart
+  // the daemon is about to refuse.
+  const [restartProbe, setRestartProbe] = useState<{ sessionId: string; eligibility: RestartEligibility | null } | null>(null)
+  // A forced restart takes two presses on the same row: the first reveals what it loses.
+  const [restartArmedId, setRestartArmedId] = useState<string | null>(null)
   const [confirmHideId, setConfirmHideId] = useState<string | null>(null)
   const [collapsedProjects, setCollapsedProjects] = useState<Set<string>>(() => loadCollapsedProjects(localStorage.getItem(COLLAPSED_PROJECTS_KEY)))
   const [mainMenuOpen, setMainMenuOpen] = useState(false)
@@ -5372,6 +5384,64 @@ export function App() {
     finally { setResumingId(current => current === session.id ? null : current) }
   }
 
+  // A live agent restarted in place: the daemon ends the CLI gracefully, waits for its
+  // teardown, and resumes the same conversation into the same pane (`session_restart.py`).
+  // Focus follows the pane rather than jumping to it, because a restart is often started
+  // from a menu on a session the operator is not looking at. `force` is only ever sent
+  // after the menu's second press, which is where the daemon's list of losses was shown.
+  const restartAgentSession = async (session: Session, force = false) => {
+    if (restartingId) return
+    setRestartingId(session.id)
+    setRestartArmedId(null)
+    setContextMenu(null)
+    try {
+      const { session: restarted } = await api<{ session: Session; replaced: string }>(
+        'POST', `/api/sessions/${session.id}/restart`, force ? { force: true } : {},
+      )
+      markProjectRecent(restarted.project_id)
+      startupOrigins.current[restarted.id] = performance.now()
+      setSessions(items => [...items.filter(item => item.id !== session.id && item.id !== restarted.id), restarted])
+      delete startupOrigins.current[session.id]
+      delete clientStartupTimingValues.current[session.id]
+      if (activeId === session.id) setActiveId(restarted.id)
+      if (focusedViewId === session.id) setFocusedViewId(restarted.id)
+      if (zoomedId === session.id) setZoomedId(restarted.id)
+    } catch (cause) {
+      const failure = cause as ApiError
+      setError(failure?.status === 409
+        ? restartRefusalMessage(failure.detail as { error?: string; force_allowed?: boolean } | undefined, failure.message)
+        : cause instanceof Error ? cause.message : String(cause))
+    } finally {
+      setRestartingId(current => current === session.id ? null : current)
+      // Success and a failure after the exit both changed the fleet; a refusal did not,
+      // but one refresh is cheaper than telling them apart.
+      await refresh()
+    }
+  }
+
+  // Ask the daemon whether the session under the menu can be restarted, once per menu
+  // opening. A probe rather than a snapshot field: the answer reads the queue, the land
+  // queue, the transcript and the process tree, and only this menu needs it.
+  const menuSessionId = contextMenu?.session.id
+  const menuOffersRestart = !!contextMenu && canOfferRestart(contextMenu.session)
+  useEffect(() => {
+    setRestartArmedId(null)
+    if (!menuSessionId || !menuOffersRestart) { setRestartProbe(null); return }
+    let cancelled = false
+    setRestartProbe({ sessionId: menuSessionId, eligibility: null })
+    api<RestartEligibility>('GET', `/api/sessions/${menuSessionId}/restart`)
+      .then(eligibility => { if (!cancelled) setRestartProbe({ sessionId: menuSessionId, eligibility }) })
+      .catch(cause => {
+        if (cancelled) return
+        const reason = `Could not check: ${cause instanceof Error ? cause.message : String(cause)}`
+        setRestartProbe({
+          sessionId: menuSessionId,
+          eligibility: { eligible: false, code: 'probe_failed', reason, force_allowed: false, blockers: [], would_lose: [] },
+        })
+      })
+    return () => { cancelled = true }
+  }, [menuSessionId, menuOffersRestart])
+
   // Delegated rather than reimplemented: the sidebar row and the tab strip resolve
   // the same question for every session at once (`voiceMode.ts`), and a second copy
   // here is how the pane and the list end up disagreeing about which sessions speak.
@@ -6310,6 +6380,10 @@ export function App() {
     { id: 'session.killImmediate', label: commandSession && isEndedSession(commandSession) ? 'Remove selected session from sidebar' : 'Kill and remove selected session immediately', category: 'session', available: !!commandSession, disabledReason: 'No session selected', run: () => commandSession && void killNow(commandSession) },
     { id: 'session.standDown', label: 'Stand down selected session', category: 'session', available: !!commandSession && !isEndedSession(commandSession), disabledReason: 'Select a live session', run: () => commandSession && void standDownSession(commandSession) },
     { id: 'session.resumeInactive', label: commandSession?.backend === 'shell' ? 'Restart inactive terminal' : 'Resume inactive session', category: 'session', available: !!commandSession && isInactiveSession(commandSession), disabledReason: 'Select an inactive session', run: () => commandSession && void resumeSession(commandSession) },
+    // Never forced from here: an override needs the losses on screen, which only the
+    // session menu's second press shows. No voice phrase, deliberately - ending a process
+    // is not something a misheard utterance should be able to do.
+    { id: 'session.restartAgent', label: 'Restart agent (fresh process, same conversation)', category: 'session', available: !!commandSession && canOfferRestart(commandSession) && restartingId === null, disabledReason: restartingId ? 'A restart is already running' : 'Select a live agent session', run: () => commandSession && void restartAgentSession(commandSession) },
     { id: 'session.clearEnded', label: `Remove all ended sessions from sidebar${clearEndedCount > 1 ? ` (${clearEndedCount})` : ''}`, category: 'session', available: clearEndedCount > 0, disabledReason: 'No ended sessions in this Project', run: () => void clearEndedSessions(clearEndedTarget) },
     { id: 'session.relaunch', label: 'Relaunch focused task terminal', category: 'session', available: !!active && !!active.relaunchable, disabledReason: 'Relaunch is available for task-launched terminals', run: () => active && void relaunchSession(active) },
     // Same endpoint, different framing: for a recovered shell this is not
@@ -8765,6 +8839,27 @@ export function App() {
       </MenuGroup>}
       <div class="context-rule" />
       <button class="menu-row" onClick={() => runNamedCommand('session.broadcastMembership')}><span class="menu-row-icon" aria-hidden="true"><BroadcastIcon/></span><span class="menu-row-label">{contextMenu.session.broadcast ? 'Remove from broadcast' : 'Add to broadcast'}</span></button>
+      {/* Restart in place: the row is drawn from the daemon's own probe, so it reads
+          unavailable (and says why, on the row itself for a touch screen with no
+          tooltip) exactly when the press would be refused. A forceable refusal takes
+          two presses, and the second row lists what the restart will lose. */}
+      {menuOffersRestart&&(()=>{
+        const target=contextMenu.session
+        const view=restartMenuView(
+          restartProbe?.sessionId===target.id?restartProbe.eligibility:null,
+          {armed:restartArmedId===target.id,running:restartingId===target.id},
+        )
+        const press=()=>{
+          if(view.action==='restart')runNamedCommand('session.restartAgent')
+          else if(view.action==='arm')setRestartArmedId(target.id)
+          else if(view.action==='force')void restartAgentSession(target,true)
+          else if(view.action==='explain')setError(view.title)
+        }
+        return <>
+          <button class="menu-row" data-variant={view.danger?'danger':undefined} aria-disabled={view.unavailable||undefined} title={view.title} onClick={press}><span class="menu-row-icon" aria-hidden="true"><RefreshIcon/></span><span class="menu-row-label">{view.label}</span></button>
+          {view.detail&&<div class="menu-row-detail">{view.detail}</div>}
+        </>
+      })()}
       {!isEndedSession(contextMenu.session)&&<button class="menu-row" onClick={() => runNamedCommand('session.standDown')}><span class="menu-row-icon" aria-hidden="true"><PowerIcon/></span><span class="menu-row-label">Stand down</span></button>}
       {/* One control, two marks: a live session is stopped (power), an ended one is
           only cleared off the list (bin). The label already switches; the icon has to

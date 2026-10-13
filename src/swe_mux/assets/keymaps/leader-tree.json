@@ -72,6 +72,7 @@
     "leader s j": "session.nextInProject",
     "leader s k": "session.previousInProject",
     "leader s r": "session.rename",
+    "leader s shift+r": "session.restartAgent",
     "leader s x": "session.kill",
     "leader s shift+x": "session.killImmediate",
     "leader s z": "session.clearEnded",
