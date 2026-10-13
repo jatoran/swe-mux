@@ -165,7 +165,7 @@ Its final paragraph - the agent cannot approve what it wrote, a human presses ap
 
 `HistoryBrowser.tsx`, `historyDetail.ts`, `historyMessages.ts`, `historyFeed.ts`, `TranscriptToolCalls.tsx`
 
-Filters, transcript review with shared transcript labels and timestamps, a default-off tool-name/input disclosure with no results, a non-shrinking responsive action bar ahead of collapsible run bands, run-filtered Git provenance, long-message folding and per-message copy, and backfill progress and actions.
+Filters, transcript review with shared transcript labels and timestamps, a default-off tool-name/input disclosure with no results (`TranscriptToolCalls.tsx`, shared with the drawer's reader: History hands it calls with inputs, and an input's `<pre>` exists only while its call is open), a non-shrinking responsive action bar ahead of collapsible run bands, run-filtered Git provenance, long-message folding and per-message copy, and backfill progress and actions.
 A held-conversation marker replaces Resume when a live CLI process still owns the row's conversation, and an unavailable-transcript marker replaces it when `/detail` reports the conversation gone.
 
 `HistoryBrowser.tsx` is four memoized components, so an app-root render that changed nothing they draw stops at the browser.
@@ -226,12 +226,30 @@ It is taken rather than read, so a reconnect cannot re-insert it, and bounded so
 
 ## Transcript reader
 
-`TranscriptTab.tsx`, `TranscriptToolCalls.tsx`, `transcriptView.ts`, `transcriptAudio.ts`
+`TranscriptTab.tsx`, `TranscriptToolCalls.tsx`, `transcriptLoader.ts`, `transcriptView.ts`, `transcriptAudio.ts`
 
 A write-nothing conversation reader.
-It reads `/api/sessions/{id}/transcript` on open, on rollover, on the observed-user `mux:transcript-changed` event, and on the assistant-boundary `mux:turn-ended` event, never on a timer.
 It offers local literal search plus per-message and whole-conversation copy.
-A default-off toggle replaces count-only tool seams with individually collapsed native call names and inputs; results, telemetry, and persistence remain outside this surface.
+A default-off toggle replaces count-only tool seams with individually collapsed native call names; a call's input is read from `/api/sessions/{id}/transcript/tool-calls` the first time its seam is opened, and its `<pre>` exists only while it is open.
+Results, telemetry, and persistence remain outside this surface.
+
+### Reading incrementally
+
+`transcriptLoader.ts` is the tab's one conversation with the daemon (`../../../design/features/conversation-index.md`).
+- **Triggers, not requests.** Open, rollover or rebinding, `mux:transcript-changed` (observed user record), `mux:turn-ended`, `mux:transcript-appended` (the daemon's throttled mid-turn cue), `mux:transcript-resync` (the events socket's `events_gap`/`events_ready`), and the tab returning to the foreground each call `refresh()`; any number arriving while a request is in flight become one follow-up, so a reconnect replaying forty turn ends costs two requests.
+  Never a timer, except the backoff retry of a read that came back `indexing`, `unreadable`, or failed.
+- **What to ask is decided at send time.** A reading the daemon can extend asks for a delta (`since`, `generation`, `oldest`); anything else asks for the tail.
+  `mergeTranscript` folds the answer in, keeping every unchanged message's object identity, and returns `null` for an answer it cannot join honestly, which the loader answers with a fresh tail while the column keeps what it shows.
+- **Older pages** (`loadOlder`, `loadAll`) are asked for with `before=` the oldest message held, one at a time; a second ask while one is on its way joins it.
+- **Drawn immediately on return.** `transcriptView.ts` keeps the last six readings (keyed by session, run and native id, never a reason) in a module-level cache, so reopening a session draws it at once and then asks only for what changed.
+
+`TranscriptTab.tsx` draws the trailing `TRANSCRIPT_RENDER_STEP` groups of what is loaded and grows the drawn run as the reader scrolls toward the top, asking for an older page only once everything loaded is drawn; a column too short to scroll fills itself.
+Rows drawn above the reader keep the message being read in place: the top message and the offset into it are recorded on every scroll and restored as an absolute position, which is idempotent with a browser's own scroll anchoring.
+The same anchor is the scroll memory across the drawer unmounting its body, with the drawn-row count, so the anchored message is drawn again on return.
+`Message` is memoised and every handler it receives is stable, so an append re-renders only the rows it changed.
+`.transcript-tab .transcript-message` uses `content-visibility:auto` only where `overflow-anchor` is supported, because a skipped row taking its real height near the view would otherwise move the text being read.
+Copy all and Select first walk back to the first message when older pages exist; a Copy refused because the walk outlasted the click's activation opens the select sheet with the whole text instead.
+A search covers the loaded messages and offers to load the rest.
 
 There is no insert, no send, and no `onDone`: a stray tap here must not become a message, and on mobile `onDone` would close the drawer after every copy.
 The rule bounds *what a tap can reach*, not the number of buttons - copy, select, and the per-message read-aloud markers all leave the conversation, the PTY, and the session untouched (`../../../design/features/ui.md`).
@@ -267,5 +285,5 @@ That is the browser's touch-selection controller, so no DOM or CSS change fixes 
 The chrome's `user-select:none` rule stays for its other half: it keeps speaker labels, timestamps, seam counts, and control labels off the clipboard for in-column drags, with the search input opting back in and the sticky controls hiding on touch while a selection is held.
 A live selection over the body is read from `selectionchange`, the only event a native selection-handle drag produces, and suspends the follow-scroll until it collapses, at which point the bottom-follow predicate is re-evaluated against the column's actual metrics.
 
-`transcriptView.ts` owns both event names, timestamp formatting, tool-input formatting, the bounded expansion model, the search matcher and highlight splitter, the bottom-follow predicate, the structural selection-active rule, and one-slot scroll memory, which has to outlive the host unmounting the body on each tab switch.
+`transcriptView.ts` owns the reader's event names, timestamp formatting through one shared `Intl.DateTimeFormat`, tool-input formatting, the bounded expansion model, the search matcher and highlight splitter, the bottom-follow predicate, the structural selection-active rule, the request queries and `mergeTranscript`, the reading cache, and one-slot anchored scroll memory, which has to outlive the host unmounting the body on each tab switch.
 Copies bypass the clipboard ring (`withoutClipboardCapture`), since kilobyte replies would evict the snippets it exists to hand back.

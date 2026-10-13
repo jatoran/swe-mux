@@ -539,6 +539,16 @@ Seeing this frame on an idle fleet is therefore a defect, and `transcript_observ
   The same audit moved Project registration and re-rooting, the onboarding record, and the
   Recent files existence filter into workers, each named in a stall dump of that day: a path on
   an unreachable provider costs the request that asked about it, never every terminal.
+- **A cache keyed on a growing file's watermark misses for exactly the files people watch.**
+  Until 2026-10-12 every human-facing transcript reader (the Transcript tab, branch points, Copy reply, read-aloud, History) re-decoded the whole conversation, up to a 64 MiB tail, on every ask, behind caches keyed on the file's watermark that a working agent changed on every append.
+  A 49 MB Claude transcript cost up to 2.4 s per open under daemon load, and two opens in nine hit the route's 5 s timeout and read as "unreadable".
+  `conversation_index.py` keeps one incremental reading per conversation instead (`design/features/conversation-index.md`), and `/api/diagnostics/background` reports it as `transcript_index`.
+  - `builds` counts first reads and `extends` reads that decoded only appended bytes; `unchanged` counts refreshes that found nothing new.
+    `builds` climbing with the fleet steady means indexes are being dropped and rebuilt: compare `estimated_bytes` with `budget_bytes` and read `evictions`.
+  - `rebuilds` counts files that were replaced under the index (Claude cancel/revert); each is logged as `transcript_index_rebuilt` with its reason.
+  - `lines_decoded`, `lines_sniffed` (Codex records skipped without decoding) and `bytes_read` say what the reads cost; `joined` counts readers that shared a read already in flight.
+  - `building` lists first reads in progress, with bytes read and total; a read slower than 2 s is `transcript_index_slow` at WARNING, and `worst_seconds` keeps the slowest.
+  - `tool_input_misses` counts tool inputs that could not be read back because their record moved; more than a handful means files are being rewritten under live readers.
 - **A window over a growing file is not a frame of reference.**
   Anything numbered from where a bounded read starts (a line index, a sequence within the read) renumbers itself when the file grows and the window moves, so an idempotent insert keyed on it inserts everything again.
   Number from the start of the file, and read past a cursor that verifies a sample of the file rather than trusting a size or an mtime (`telemetry_cursor.py`).

@@ -59,6 +59,7 @@
 - Mixed-view panes, tabs, drag/drop, and mobile projection: `features/workspace-layout.md`
 - History: `features/history.md`
 - Reading a transcript as the branching DAG it is: `features/transcript-branches.md`
+- Reading a conversation incrementally, shared by the Transcript tab, branching, read-aloud, Copy reply and History: `features/conversation-index.md`
 - Legacy hook compatibility: `features/meta-hooks.md`
 - Durable operational evidence: `features/operational-telemetry.md`
 - Process ownership and previews: `features/processes-and-previews.md`

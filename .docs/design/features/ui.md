@@ -2734,11 +2734,13 @@ The app-wide answer to "what is this", and the recovery path for the tour.
   what already happened is how a stray tap
   becomes a message nobody wrote. Copy is the only verb: per message, or the whole conversation
   with speakers.
+  The whole conversation means all of it: Copy all and Select first load any pages not yet read, and a copy the browser refuses because that took longer than the click's own turn opens the select sheet with the whole text instead.
   Its head row carries the message count and not the session name: the pane heading directly
   above already says which session this is, and printing it twice in twenty pixels of chrome
   made the count - the one thing this row knows that the heading does not - read as a
   subtitle of the name rather than as the state of the transcript.
   The top-bar search filters the already loaded messages with literal, case-insensitive matching, highlights every occurrence, and leaves whole-conversation copy unchanged.
+  While earlier messages are not loaded the search says so, and offers to load them.
   Search owns a temporary scroll position and clearing it restores the reader's prior place.
   A message's copy control sticks to the body's top-right edge while that message is being read, then yields when the message leaves the viewport.
   It is not in the resting column at all: these controls are chrome over what somebody said, and a column that carries a row of buttons above every reply is one the timestamps have to share their line with.
@@ -2769,8 +2771,8 @@ The app-wide answer to "what is this", and the recovery path for the tour.
   Source drift is measured against the current CLI process generation, not the latest conversation rollover.
 - **What the reader shows is a filtered conversation, not the transcript.** Tool calls are not
   rendered by default.
-  A `Tool calls` toggle replaces each count-only seam with individually collapsed native call names and input arguments, and it also exposes calls after the newest prose message.
-  Expanding a call reveals only its input; tool results, telemetry, and private reasoning never enter this projection.
+  A `Tool calls` toggle replaces each count-only seam with individually collapsed native call names, and it also exposes calls after the newest prose message.
+  Expanding a call reveals only its input, read from the daemon the first time any call at that seam is opened rather than carried in every page; tool results, telemetry, and private reasoning never enter this projection.
   The CLI machinery that both providers write into
   the transcript as `user` records: slash-command expansions and their output, `!` shell escapes,
   skill bodies injected mid-conversation, interrupt markers, Claude's `<system-reminder>` spans
@@ -2821,13 +2823,19 @@ The app-wide answer to "what is this", and the recovery path for the tour.
   A held selection counts as "not at the bottom" for as long as it is held, on the same
   principle: an agent finishing a turn is precisely when someone is selecting what it just said,
   and moving the column then destroys the selection outright.
-- It refreshes when the transcript observer consumes a user message (`transcript_message`) and at
-  the assistant turn boundary (`turn_ended`), never on a timer. The first event makes a submitted
-  prompt appear without waiting for the response; the second collects the completed answer.
-  Polling would re-read a whole transcript to learn nothing for most of an agent's working minute.
-  A pane whose conversation rolled over
-  (`/clear`, `/new`) reloads onto the new run; the retired conversation stays in History, which
-  is also where anything older than the loaded window lives.
+- It refreshes when the transcript observer consumes a user message (`transcript_message`), while
+  the agent writes (`transcript_appended`, at most every 2 s per session), at the assistant turn
+  boundary (`turn_ended`), after the events socket reconnects across a gap, and when the tab comes
+  back to the foreground - never on a timer. The first event makes a submitted prompt appear
+  without waiting for the response; the second shows a long turn as it happens rather than when
+  it ends; the third collects the completed answer.
+  Each refresh asks only for what changed since the reading it holds (`conversation-index.md`), and refreshes that arrive together are one request.
+  Reopening a session the tab has read recently draws it at once from the last reading and then catches up.
+  A first read of a very long conversation that is still running says so, with how far it has got, and retries by itself.
+  It opens on the newest page; scrolling toward the top draws earlier loaded messages a step at a
+  time and then loads the page before them, keeping the message being read where it was.
+  A pane whose conversation rolled over (`/clear`, `/new`) reloads onto the new run; the retired
+  conversation stays in History.
   History transcript messages use the same agent/you labels, full local timestamp, sticky per-message copy control, long-message Show more/Show less treatment, and default-off collapsed tool-call disclosures.
   A search-matched history message is temporarily unfolded so its result cannot remain behind the clamp.
 - A live auto-named agent's session menu includes **Regenerate title**. It requests a fresh

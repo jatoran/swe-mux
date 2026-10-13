@@ -15,8 +15,9 @@ The shared schema, Project and layout persistence, run history, bounded post-sta
 It is keyed by both row id and owning session id, where an exact row id outranks the session fallback, so the first run of a rolled-over session is not redirected to its last.
 
 The History reader's reads live here too:
-- `read_history_conversation` is the one seam through which History parses a native conversation.
-  Interactive reads pass `cached=True` and share `transcript_view`'s watermark-keyed cache; the indexer and the background reindex pass `False`, so walking thousands of conversations cannot evict a live reader's entry.
+- `read_history_conversation` is the one seam through which History reads a native conversation, and it reads through `conversation_index.indexed_parse`, whose output is a full parse's exactly, tool inputs included.
+  Interactive reads pass `cached=True`: they go through the shared registry and keep the result until the conversation changes.
+  The indexer and the background reindex pass `False`: they reuse an index a live reader already holds and otherwise read through a throwaway one, so walking thousands of conversations neither evicts a live reader's index nor pins anything.
 - `transcript_index_state` answers what the index holds against the conversation's watermark and schedules `schedule_transcript_reindex` when it is behind.
   The reindex runs on a one-thread pool, single-flight per run with a 30 s cooldown; `refresh_time_summaries` runs the listing's head/tail reads on a four-thread pool behind a bounded wait.
   Both pools are threads rather than event-loop tasks so a job that outlives its request never calls into a closed loop, and `close` drains them before the database executor.
@@ -42,19 +43,32 @@ The single user-triggered global native-history reconcile: one job at a time, sc
 ### `codex_history.py` and `reply_snapshot.py`
 
 `codex_history.py` resolves read-only pinned fork ancestry, bounded virtual pages, replacement-aware revision fingerprints, and cached native-record freshness.
-`reply_snapshot.py` selects a completed surviving answer from the shared reader projection and returns message, turn, and revision evidence for an explicit Copy request.
+`reply_snapshot.py` selects a completed surviving answer from a freshly refreshed conversation index, bracketed by two watermark reads that must agree, and returns message, turn, and revision evidence for an explicit Copy request.
 The route revalidates the live session identity after off-loop parsing.
+
+### `conversation_index.py`
+
+One incremental reading per conversation, shared by every human-facing reader: the Transcript tab, branch points, read-aloud, Copy reply, and History (`design/features/conversation-index.md`).
+
+- `ConversationIndex` keeps each record reduced to what the projections read, decodes only appended complete lines, re-checks prefix and boundary samples to notice a replaced file, and skips Codex records no projection reads without decoding them (`codex_line_is_skippable`).
+- `ConversationSnapshot` is one immutable reading: the merged reader messages with `positions`, per-message change `stamps`, `generation`/`seq`, and the `window`, `page` and `delta` payloads the session transcript route returns.
+- `ConversationIndexRegistry` (`REGISTRY`) bounds the fleet's indexes by an estimated byte budget, least recently used first, runs async refreshes single-flight on its own two-thread executor, and reports `status()` to `/api/diagnostics/background` as `transcript_index`.
+- Tool inputs stay in the file: `calls_at`/`tool_calls` read one seam's inputs back by reference, and `indexed_parse`/`parsed_tool_calls` serve the indexing projection with inputs read back by the same rule the full parse applies.
+
+**Not:** the projections themselves (`transcript_view.py`, which this runs over compact records rather than reimplementing), the bounded head/tail page readers (`transcript_message_page`, `transcript_time_summary`), or the observer's tail (`observation.JsonlTailer`).
 
 A Claude transcript is an append-only DAG, so the indexing projection drops the branches the conversation left and the human reader marks them.
 Neither may reconstruct the live branch from the parent chain alone, because a parallel tool batch parents each result to its own call and a chain walk would drop every result but the last.
 
 ### `transcript_view.py`
 
-Bounded harness conversation parsing, and normalized native tool names and inputs with results excluded.
+Harness conversation parsing and its projections, and normalized native tool names and inputs with results excluded.
 
 - **Branch linearization** (`_claude_live_uuids`, `_mark_abandoned_records`): the live branch is the newest record's ancestry plus the tool results, sidechains, and attachments hanging off it.
-- The human-readable `conversation_view` reduction: CLI machinery classified out, agent turns merged per tool-free segment and never across a branch boundary, call details carried at each boundary and after the newest message, byte and message capped, with its own LRU.
-- `conversation_cut_points`: the byte span each displayed message occupies and how many tool calls a cut there would leave unanswered, per dialect and `None` where no rule is measured, counting only calls the live branch made.
+- The human-readable `conversation_view` reduction: CLI machinery classified out, agent turns merged per tool-free segment and never across a branch boundary, call names carried at each boundary and after the newest message.
+  It is served from `conversation_index`, whose records carry a precomputed memo (`_MEMO_KEY`) and a tool reference (`_TOOL_REF_KEY`) in place of an input; every projection honours both and is byte-identical on a record decoded whole.
+- `native_tool_input` and `codex_call_input`: the one rule each for what a tool block's input is, shared by the projections and the index's read-back.
+- `conversation_cut_points` and `cut_points_from`: the byte span each displayed message occupies and how many tool calls a cut there would leave unanswered, per dialect and `None` where no rule is measured, counting only calls the live branch made.
   `resolve_cut_offset` turns a chosen message and side into that byte offset, and is shared by the interactive branch picker and a scheduled fork so the two cannot disagree about which cuts are legal.
 - `final_exchange` and `final_reply_text`: the one definition of "the agent's latest reply", shared by the reader tab, the rail's copy, and read-aloud.
 

@@ -290,7 +290,7 @@
   `/detail` compares the index's watermark with the conversation's, schedules a reindex when they differ, and answers with `transcript.indexing`.
   The reader shows what is indexed, polls `/detail` with a backoff, and reloads where the reader is when the reindex finishes.
   The reindex is single-flight per conversation, and it re-checks the watermark before it parses, because a session end or a reconcile may have indexed the conversation while the job queued.
-  It parses outside the shared transcript cache, so a reindex cannot evict a live reader's entry or pin a large conversation in memory.
+  It reads through the shared conversation index as a sweep (`features/conversation-index.md`): it reuses an index a live reader already holds and otherwise reads through a throwaway one, so a reindex cannot evict a live reader's index or pin a large conversation in memory.
   A conversation is reindexed at most once per 30 s (`REINDEX_COOLDOWN_SECONDS`), because a live one goes stale again the moment it is indexed and a polling reader would otherwise reparse it on every poll.
   The jobs run on thread pools rather than as event-loop tasks, so a job that outlives its request can never call back into a loop that has closed, and `HistoryIndex.close` drains them before it closes the database.
   An index written before the abandoned-message count existed is reindexed once on open, which is how `abandoned_messages` and `tool_calls` reach older conversations.
@@ -301,9 +301,9 @@
   The reader keeps its own place when a page lands above it, by hand: Safari has no scroll anchoring and Chromium skips anchoring at scroll position 0, which is exactly where a fling lands.
   A search match outside the window replaces the window with the page around the match, so stepping to the fortieth match of a long conversation is one page read rather than a scroll through everything before it.
   Opening a conversation from a search jumps to its first match; a reload under a finished reindex keeps the reader where they were.
-- **Tool calls are the one History read that still parses**, because their inputs are deliberately not indexed (`GET /history/{id}/tool-calls`).
+- **Tool calls are the one History read that still reads the conversation**, because their inputs are deliberately not indexed (`GET /history/{id}/tool-calls`).
   They are fetched only while the toggle is on, only for the ordinal span the window covers, and never twice for one span; spans the window leaves are let go.
-  The read goes through the cached parse, so paging through one conversation with the toggle on parses it once.
+  The read goes through the shared conversation index, which keeps the result with its inputs until the conversation changes, so paging through one conversation with the toggle on reads it once, and a live conversation's later pages cost only what was appended.
   A message that is nothing but tool calls has no indexed text, so the route returns it with `has_text: false` and the reader places it at its own ordinal.
 - **An open History browser re-renders only for what it draws.**
   It is mounted in the app root, which re-renders on every session status event in the fleet.
@@ -332,7 +332,7 @@
   run's indexed copy and keeps it current in the background, which is right for an ended
   conversation and wrong for a surface that refreshes on observed user messages and assistant
   turn boundaries.
-  Both parse the same native files through `transcript_view.py` and neither mutates them.
+  Both read the same native files through one conversation index (`features/conversation-index.md`) running the projections in `transcript_view.py`, and neither mutates them.
   History indexes everything text-shaped because search wants recall.
   The reader keeps conversational prose as its default projection.
   Neither indexes a turn the conversation branched away from: a Claude transcript is an
@@ -480,6 +480,7 @@
 - `src/swe_mux/history_backfill.py`
 - `src/swe_mux/history_scan.py`
 - `src/swe_mux/transcript_view.py` (branch linearization: `transcript-branches.md`)
+- `src/swe_mux/conversation_index.py` (the shared incremental reader behind `read_history_conversation`: `conversation-index.md`)
 - `src/swe_mux/transcript_fork.py`
 - `src/swe_mux/transcript_repair.py` (finding a conversation the CLI moved, and repairing its row)
 - `frontend/src/TranscriptTab.tsx`, `frontend/src/transcriptView.ts`

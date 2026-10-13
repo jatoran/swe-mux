@@ -1169,7 +1169,8 @@ POST   /broadcast/input
 POST   /sessions/{id}/attachments   multipart `file`; X-Mux-User-Gesture: terminal-attachment
 POST   /sessions/{id}/media         legacy image-only compatibility route
 GET    /sessions/{id}/last-reply
-GET    /sessions/{id}/transcript[?limit=]
+GET    /sessions/{id}/transcript[?limit=&before=|?since=&generation=&oldest=]
+GET    /sessions/{id}/transcript/tool-calls?message_id=|trailing=1
 GET    /sessions/{id}/skills[?refresh=1]
 GET    /sessions/{id}/agent-environment[?refresh=1]
 POST   /sessions/{id}/agent-environment/mcp-tools   {server, refresh?}
@@ -1682,39 +1683,64 @@ rather than fitting, which is what keeps two devices from resizing each other in
 It returns `{text, session_id, agent_run_id, native_session_id, turn_epoch, turn_id, message_id, phase, revision, selection_reason, previous_answer}`.
 Codex commentary, abandoned turns, and explicitly incomplete turns cannot win selection.
 Provisional, stale, and remote bindings return 409; a binding or turn-epoch change during parsing also returns 409 rather than pairing old text with a new run.
-The snapshot revision covers the readable projection and its source watermark, including inherited Codex history.
+The read is fresh: the conversation's index (`features/conversation-index.md`) is refreshed inside the request, between two watermark reads that must agree.
+A first read of a long conversation still running answers 409 with `code: "conversation_indexing"` rather than waiting out a timeout.
+The snapshot revision covers the source watermark, including inherited Codex history, and the selected message's id, turn and text.
 Copy requests validate the current conversation identity and discard superseded responses; terminal-output debounce and prefetch caches do not authorize copying.
 When the agent is working the action is labeled Copy previous answer, and clipboard denial retains the manual-copy path.
 `POST /sessions/{id}/reply-copy` records `{outcome, agent_run_id, native_session_id, turn_id, message_id, revision}` as a content-free `reply_copy` event.
 Valid outcomes are `copied`, `manual`, `superseded`, and `failed`.
 Neither route types into the PTY or stores another transcript copy.
 
-`GET /sessions/{id}/transcript` returns the live session's readable conversation for the drawer's
-Transcript tab: `{messages:[{ordinal,role,ts,text,preceding_tool_calls,preceding_tools:[{id,name,input}],abandoned?}], trailing_tool_calls:[{id,name,input}], hidden, abandoned_messages, truncated, observation_stale_since, reason}`.
-Tool calls stay outside conversational prose but carry their native names and input arguments for the default-off disclosure.
-Tool results and operational telemetry are never included.
-An agent's turn is merged into one message per *segment*, a segment being a run of records with no tool call
-between them (`transcript_view.conversation_view`, see `ui.md`); `hidden` counts what was withheld
-and `preceding_tool_calls` counts the tool calls between a message and the one before it, so
-neither the filtering nor the gap is ever invisible.
-`abandoned` marks a message on a branch the conversation left and `abandoned_messages` counts them
-in the returned window (`features/transcript-branches.md`).
-This is the one route that returns them at all: they are marked rather than dropped because a
-reader is entitled to see that their conversation branched, and folded rather than inlined
-because they are not what it says.
-A branch boundary never merges into an adjacent segment, and an abandoned turn's tool calls are
-never counted as `preceding_tool_calls` for the live message that follows it.
-`trailing_tool_calls` preserves calls made after the newest prose message without inventing another message.
-`ordinal` numbers the returned window rather
-than the conversation, making it a display key and not an identity. Deliberately **not**
-`/history/{id}/transcript`, which parses the whole conversation, reindexes the run's searchable
-messages when they are behind, and loads its annotations: right for reading an entry once, wrong for a surface that refreshes on
-every turn. This route only reads. Bounded twice — newest `limit` messages (default 200, max
-1000) and a 64 MB tail — with `truncated` set by either; the cap exists because Codex rollouts
-reach hundreds of MB. Nothing to show is a `200` with a `reason`
-(`not_agent`/`no_transcript`/`unreadable`), because a shell pane and an agent that has not spoken
-yet are ordinary states of a passive view, not failures. No redaction: unlike the MCP surface,
-the reader is the machine's owner and needs the literal text to copy.
+`GET /sessions/{id}/transcript` returns the live session's readable conversation for the drawer's Transcript tab, served from the conversation's index (`features/conversation-index.md`).
+
+```
+GET /sessions/{id}/transcript?limit=N                          newest N messages (tail page)
+GET /sessions/{id}/transcript?limit=N&before=<message_id>      N messages ending just before that one
+GET /sessions/{id}/transcript?since=<seq>&generation=<token>[&oldest=<message_id>]
+                                                               every message changed since that reading
+
+{session_id, agent_run_id, backend, observation_stale_since, reason, progress?,
+ messages:[{message_id, ordinal, role, ts, text, phase?, turn_id?, turn_complete?,
+            preceding_tool_calls, preceding_tools:[{id,name}], abandoned?}],
+ trailing_tool_calls:[{id,name}], hidden, abandoned_messages, truncated,
+ generation, seq, total, has_older, page:"tail"|"older"|"delta"|null, delta, replace_from, reset}
+```
+
+- `limit` defaults to 200 and is clamped to 1-1000; a non-integer `limit` or `since` is a `400`.
+- `ordinal` is a message's position in the whole conversation and `message_id` its identity; neither moves when the conversation grows.
+- `total` counts every message; `has_older` says messages exist before the oldest one returned, and `truncated` keeps that meaning for older clients.
+- `generation` is an opaque token naming the daemon's reading.
+  A rewrite of the file (Claude cancel/revert) or a change no splice can express mints a new one, and so does every rebuild of the index, so a token from before a daemon restart or an eviction never matches.
+- `seq` is the reading's revision.
+  A delta returns every message from the first one changed after `seq`, at or after `oldest`, and names it `replace_from`; the client replaces from that message on, or appends when it is the one after its newest.
+  An empty delta has `replace_from: null`.
+- A cursor or generation the reading cannot honour is answered with a fresh tail page and `reset: true`.
+- Every answer carries `ETag` and `Cache-Control: no-cache`; a matching `If-None-Match` is a `304` with no body, so a browser re-asking an unchanged reading costs neither side a payload.
+- Tool calls are named, never carried with their inputs, which were 88-96% of the payload's bytes for a disclosure that starts closed.
+  `GET /sessions/{id}/transcript/tool-calls` reads the inputs on demand.
+- Tool results and operational telemetry are never included.
+- An agent's turn is merged into one message per *segment*, a segment being a run of records with no tool call between them (`transcript_view.conversation_view`, see `ui.md`).
+  `hidden` counts what was withheld and `preceding_tool_calls` counts the tool calls between a message and the one before it, so neither the filtering nor the gap is ever invisible.
+- `abandoned` marks a message on a branch the conversation left and `abandoned_messages` counts them in the returned page (`features/transcript-branches.md`).
+  This is the one route that returns them at all: they are marked rather than dropped because a reader is entitled to see that their conversation branched, and folded rather than inlined because they are not what it says.
+- A branch boundary never merges into an adjacent segment, and an abandoned turn's tool calls are never counted as `preceding_tool_calls` for the live message that follows it.
+- `trailing_tool_calls` preserves calls made after the newest prose message without inventing another message.
+- Nothing to show is a `200` with a `reason`, because a shell pane and an agent that has not spoken yet are ordinary states of a passive view, not failures.
+  - `not_agent`, `no_transcript`, `agent_bridge_unavailable`: the state to show.
+  - `indexing`: a first read of a long conversation outlasted the request's 5 s wait; it keeps running, and `progress: {read_bytes, total_bytes, building}` says how far it has got.
+  - `unreadable`: the file could not be read; the client retries.
+- No redaction: unlike the MCP surface, the reader is the machine's owner and needs the literal text to copy.
+
+Deliberately **not** `/history/{id}/transcript`, which returns the whole conversation with every tool input plus the run's matches, annotations and scan records: right for a script that wants everything once, wrong for a surface that refreshes while an agent works.
+This route only reads.
+
+`GET /sessions/{id}/transcript/tool-calls?message_id=<id>` returns the calls between that message and the one before it, and `?trailing=1` the calls after the newest message: `{calls:[{id, name, input}], reason}`.
+Exactly one of the two parameters is required (`400` otherwise).
+`reason` is `null`, `not_agent`, `no_transcript`, `indexing` (with `progress`), `unreadable`, or `message_unavailable` for an id the current reading does not hold.
+An input is read back from the record that holds it and returned only while that record still carries the call id the reader showed; a call whose record was rewritten since answers `input: null` rather than another call's input.
+
+The daemon cues an open reader with a transient `transcript_appended` event (`{session_id}`), at most one per session every 2 s with the growth inside an interval announced when it closes, delivered to browser `/events` sockets only and never persisted.
 
 `GET /history/{id}/transcript` returns the same tool-use block subset inside native message content: `{type:"tool_use",id,name,input}`.
 Pure tool-call records remain reviewable even when they contain no prose.
@@ -2406,7 +2432,7 @@ The History reader's routes answer from the run's row and its message index (`fe
 - `GET /history/{id}/matches` returns the in-conversation matches the browser steps through, bounded by the run's row-id range in the index.
 - `GET /history/{id}/notes` returns the run's annotations and its `scan_records`, loaded beside the conversation rather than with it.
 - `GET /history/{id}/tool-calls` returns `{messages: [{ordinal, role, ts, has_text, tool_calls: [{id, name, input}]}], mtime_ns, size}` for messages in the inclusive `from`/`to` ordinal range.
-  It is the one reader route that parses, through the shared watermark-keyed cache, and it answers `409 transcript_unavailable` when the conversation cannot be read.
+  It is the one reader route that reads the conversation itself, through the shared conversation index (`features/conversation-index.md`), which keeps the result until the conversation changes; it answers `409 transcript_unavailable` when the conversation cannot be read.
 - `GET /history/{id}/transcript` keeps its whole-conversation shape for scripts and the CLI, and replaces the run's indexed messages only when the index's watermark does not match the parse it returns.
 
 Resume/review confirmation must target an existing Project and starts at its root.

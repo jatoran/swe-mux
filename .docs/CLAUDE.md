@@ -475,6 +475,14 @@
   `design/features/provider-accounts.md`, `design/features/backends.md`
 - Changing history, transcripts, or cross-vendor review: `design/features/history.md`,
   `design/interfaces.md`
+- Changing how a conversation is read for a person - the incremental index, the Transcript tab's
+  paging, deltas and loader, lazily read tool inputs, or History's conversation reads:
+  `design/features/conversation-index.md`, `design/interfaces.md`,
+  `technical/backend/packages/history-and-observation.md`,
+  `technical/frontend/packages/git-and-history.md`, `development/PERFORMANCE_RUNBOOK.md`.
+  The rule it exists to enforce: the index runs the projections in `transcript_view.py` over
+  compact records rather than reimplementing them, so a full read and the index cannot disagree;
+  `tests/test_conversation_index.py` compares the two, and a projection change must keep it green.
 - Changing how a transcript is linearized - which records count as the conversation, what a
   retry or `/rewind` leaves behind, or anything reading `parentUuid`:
   `design/features/transcript-branches.md`, `design/features/history.md`,

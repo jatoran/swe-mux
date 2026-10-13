@@ -230,8 +230,9 @@ Assistant dialogs, turns, interrupts, and action confirm, cancel, announce, and 
 
 The scan timeline and its backfill, the change map, catch-me-up, fleet blockers, scan search, the transcript, skills, the agent environment, the MCP tool fetch, and runtime-inventory ingress.
 Also holds change-map seed admission and worktree-membership validation.
+The transcript routes (`session_transcript`, `session_transcript_tool_calls`, `session_last_reply`) read through `conversation_index.snapshot_async`, which waits up to `CONVERSATION_PARSE_TIMEOUT_SECONDS` and otherwise answers `indexing` while the read goes on.
 
-**Not:** scanning (`scan_timeline.py`) or the code graph (`code_graph.py`).
+**Not:** scanning (`scan_timeline.py`), the code graph (`code_graph.py`), or reading a conversation (`conversation_index.py`).
 
 ### `routes/history.py`
 

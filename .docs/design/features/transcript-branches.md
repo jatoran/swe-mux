@@ -65,6 +65,7 @@ Older rollouts without native turn markers retain message-boundary compatibility
 The branch test runs against whatever window a reader was handed, and degrades in the safe direction.
 
 - A **whole file** or a **trailing slice** contains the real leaf, so the classification is exact.
+  The reader projection, branch points, read-aloud, Copy reply and History all read the whole file, through the conversation index (`conversation-index.md`), which re-marks every branch after each append because one new record can abandon a whole earlier run.
 - A **head slice** (the paging reader, `transcript_message_page`) resolves every branch that closes inside the window and does not notice one that does not.
   Failing to mark is a record shown that could have been folded; the opposite would be conversation hidden from its reader.
 - The one case that misclassifies is a conversation resumed back **into** a previously abandoned branch, which appends past that branch and makes an earlier sibling live again.
@@ -98,6 +99,7 @@ Nothing rewrites a native transcript at any point.
 ## Key files
 
 - `src/swe_mux/transcript_view.py` - `_claude_live_uuids`, `_mark_abandoned_records`, the two projections, and `resolve_cut_offset` (which cut a chosen message and side names, shared by the interactive picker and a scheduled fork so the two cannot disagree)
+- `src/swe_mux/conversation_index.py` - the incremental reading the reader projection and the indexing projection are served from
 - `src/swe_mux/server.py` - the session, history, and diagnostic-bundle payloads
 - `src/swe_mux/mcp.py` - `read_transcript`
 - `frontend/src/transcriptView.ts` - `groupTranscriptMessages`, `transcriptLiveMessages`
