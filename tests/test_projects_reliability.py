@@ -15,10 +15,15 @@ from swe_mux.automation_registry import install_defaults, requested_from_config
 from swe_mux.config import Config, update_config
 from swe_mux.event_bus import EventBus
 from swe_mux.history import HistoryIndex
-from swe_mux.layouts import MAX_LAYOUT_LEAVES, layout_terminal_ids, normalize_layout
+from swe_mux.layouts import (
+    MAX_LAYOUT_LEAVES,
+    layout_terminal_ids,
+    normalize_layout,
+    replace_terminal,
+)
 from swe_mux.models import SessionRecord
 from swe_mux.project_files import read_note, read_project_config
-from swe_mux.projects import ProjectManager
+from swe_mux.projects import LayoutRevisionConflict, ProjectManager
 from swe_mux.routes.projects import _project_snapshot, delete_project, record_project_use
 from swe_mux.server import error_middleware
 
@@ -115,12 +120,15 @@ async def test_project_creation_initializes_resources_and_persists_layout(
     assert updated.sidebar_visible is True
     hidden = await projects.update(project.id, sidebar_visible=False)
     assert hidden.sidebar_visible is False
-    with pytest.raises(ValueError, match="stale layout revision"):
+    # Typed, so a daemon-side writer can re-read and retry; still a ValueError, so every
+    # route that answered it as a refusal keeps doing so.
+    with pytest.raises(LayoutRevisionConflict, match="stale layout revision"):
         await projects.update(
             project.id,
             layout={"version": 1, "panes": ["two"]},
             layout_revision=0,
         )
+    assert issubclass(LayoutRevisionConflict, ValueError)
     history.close()
 
     reopened_history = HistoryIndex(tmp_path / "mux.db")
@@ -660,6 +668,110 @@ def test_recursive_layout_validates_splits_ratios_and_unique_resources() -> None
                 },
             }
         )
+
+
+def _terminal_stack(pane_id: str, active: str, *identities: str) -> dict[str, object]:
+    return {
+        "type": "stack",
+        "id": pane_id,
+        "active_child_id": active,
+        "children": [
+            {"type": "leaf", "kind": "terminal", "id": identity} for identity in identities
+        ],
+    }
+
+
+def _split(first: dict[str, object], second: dict[str, object]) -> dict[str, object]:
+    return {
+        "type": "split",
+        "id": "split-1",
+        "direction": "horizontal",
+        "ratio": 0.5,
+        "first": first,
+        "second": second,
+    }
+
+
+def _stack_view(node: dict[str, object]) -> tuple[list[str], object]:
+    children = node["children"]
+    assert isinstance(children, list)
+    return [child["id"] for child in children], node["active_child_id"]
+
+
+def test_replace_terminal_keeps_the_target_slot_and_its_focus() -> None:
+    layout = normalize_layout(
+        {"version": 7, "root": _terminal_stack("pane-1", "old", "first", "old", "last")}
+    )
+
+    swapped = replace_terminal(layout, "old", "new")
+
+    assert _stack_view(swapped["root"]) == (["first", "new", "last"], "new")
+
+
+def test_replace_terminal_withdraws_a_placement_a_client_made_in_another_pane() -> None:
+    # Measured 2026-10-12: a phone placed the restarted session in a tab of its own while
+    # the restart was still resuming, and the swap then refused a duplicate resource.
+    layout = normalize_layout(
+        {
+            "version": 7,
+            "root": _split(
+                _terminal_stack("pane-a", "old", "old", "other"),
+                _terminal_stack("pane-b", "new", "peer", "new"),
+            ),
+        }
+    )
+
+    swapped = replace_terminal(layout, "old", "new")
+
+    assert layout_terminal_ids(swapped) == ["new", "other", "peer"]
+    assert _stack_view(swapped["root"]["first"]) == (["new", "other"], "new")
+    # The pane the client had focused on the replacement falls back to what is left.
+    assert _stack_view(swapped["root"]["second"]) == (["peer"], "peer")
+
+
+def test_replace_terminal_collapses_a_pane_that_held_only_the_early_placement() -> None:
+    layout = normalize_layout(
+        {
+            "version": 7,
+            "root": _split(
+                _terminal_stack("pane-a", "other", "other", "old"),
+                _terminal_stack("pane-b", "new", "new"),
+            ),
+        }
+    )
+
+    swapped = replace_terminal(layout, "old", "new")
+
+    # The operator was not looking at the old tab, so the swap does not steal focus.
+    assert swapped["root"]["type"] == "stack"
+    assert _stack_view(swapped["root"]) == (["other", "new"], "other")
+
+
+@pytest.mark.parametrize(
+    ("active_before", "active_after"),
+    [("new", "new"), ("other", "other"), ("old", "new")],
+)
+def test_replace_terminal_in_the_same_pane_keeps_whatever_the_client_was_showing(
+    active_before: str, active_after: str
+) -> None:
+    layout = normalize_layout(
+        {
+            "version": 7,
+            "root": _terminal_stack("pane-1", active_before, "old", "other", "new"),
+        }
+    )
+
+    swapped = replace_terminal(layout, "old", "new")
+
+    assert _stack_view(swapped["root"]) == (["new", "other"], active_after)
+
+
+def test_replace_terminal_onto_itself_is_a_no_op() -> None:
+    layout = normalize_layout(
+        {"version": 7, "root": _terminal_stack("pane-1", "old", "old", "other")}
+    )
+
+    assert replace_terminal(layout, "old", "old") == layout
 
 
 def test_legacy_layout_migration_has_a_documented_safety_limit() -> None:

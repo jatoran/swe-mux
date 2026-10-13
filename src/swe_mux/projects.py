@@ -23,6 +23,15 @@ log = logging.getLogger(__name__)
 RESERVED_PROJECT_FOLDER_NAMES = frozenset({".git", ".swe-mux"})
 
 
+class LayoutRevisionConflict(ValueError):
+    """A layout write named a revision another writer has already moved past.
+
+    A `ValueError` so every existing route keeps answering it as a refusal; typed so a
+    daemon-side writer that read the layout moments ago can tell "somebody else wrote
+    first, read again" from a layout that is genuinely invalid.
+    """
+
+
 class ProjectRegistrationResult:
     def __init__(self, project: ProjectRecord, *, restored: bool) -> None:
         self.project = project
@@ -281,7 +290,7 @@ class ProjectManager:
             and isinstance(expected, (str, int))
             and int(expected) != project.layout_revision
         ):
-            raise ValueError(
+            raise LayoutRevisionConflict(
                 f"stale layout revision: expected {project.layout_revision}, received {expected}"
             )
         if "root" in changes:

@@ -1316,7 +1316,9 @@ Success is `201 {session, replaced, graceful, overridden, exit_ms, settle_ms, re
 The old session ends with reason `restarted`, the daemon waits for its teardown to settle, and the shared resume authority opens the same conversation into the same pane under the layout revision.
 It emits `session_restarted {session_id, source, replaced, backend, agent_run_id, graceful, forced, overridden, attempts, exit_ms, settle_ms, resume_ms, layout_ms, duration_ms}`.
 A failure after the old process ended returns `{error, code, stopped: true, session_id}` and leaves the ended pane in place for an ordinary Resume.
-Its code is `restart_settle_timeout` (503), the resume authority's own code and status, or `restart_replace_failed` (409 when the Project vanished, 500 when the layout write failed, which also stops the replacement).
+Its code is `restart_settle_timeout` (503), the resume authority's own code and status, or `restart_replace_failed` (409 when the Project vanished or three layout writes in a row lost a revision race, 500 when the layout write failed otherwise; both stop the replacement).
+A client layout write during the resume, including one that already placed the replacement, is built upon rather than refused: the swap re-reads the layout per attempt and moves an early placement into the old pane's slot.
+`ProjectManager.update` raises the stale-revision refusal as `projects.LayoutRevisionConflict`, a `ValueError` subclass, so routes still answer it as before and a daemon-side writer can tell a lost race from an invalid layout.
 Each failure emits `session_restart_failed {session_id, source, backend, code}`.
 Bookkeeping after the layout write (the lineage edge, the recovery row) is logged on failure and never turns a completed swap into a reported failure.
 

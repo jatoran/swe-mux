@@ -241,9 +241,42 @@ def layout_terminal_ids(layout: object) -> list[str]:
     return [str(leaf["id"]) for leaf in _layout_leaves(layout) if leaf["kind"] == "terminal"]
 
 
+def _stacks_showing(root: dict[str, Any] | None, resource_id: str) -> set[str]:
+    """Ids of the panes whose active tab is ``resource_id``."""
+    found: set[str] = set()
+
+    def visit(node: dict[str, Any] | None) -> None:
+        if node is None:
+            return
+        if node["type"] == "stack":
+            if node["active_child_id"] == resource_id:
+                found.add(node["id"])
+            return
+        visit(node["first"])
+        visit(node["second"])
+
+    visit(root)
+    return found
+
+
 def replace_terminal(layout: object, target_id: str, replacement_id: str) -> dict[str, Any]:
-    """Replace one terminal identity without changing its pane or tab position."""
+    """Replace one terminal identity without changing its pane or tab position.
+
+    The replacement may already be in the layout. A restart or a resume takes seconds
+    to spawn its replacement, and a client that sees the new session in that window
+    can place it itself - measured 2026-10-12, a phone wrote the restarted session into
+    a new tab twice while the restart was still resuming, and the swap then raised
+    "the same resource more than once" and abandoned two restarts. So a placement
+    found elsewhere is withdrawn first and the replacement takes the target's slot,
+    which is the one position the operator was looking at; if a client had it showing
+    in the target's own pane, it stays the active tab there.
+    """
     normalized = normalize_layout(layout)
+    keep_active: set[str] = set()
+    terminals = layout_terminal_ids(normalized)
+    if replacement_id != target_id and replacement_id in terminals and target_id in terminals:
+        keep_active = _stacks_showing(normalized["root"], replacement_id)
+        normalized = remove_layout_leaf(normalized, "terminal", replacement_id)
 
     def visit(node: dict[str, Any] | None) -> dict[str, Any] | None:
         if node is None:
@@ -257,14 +290,14 @@ def replace_terminal(layout: object, target_id: str, replacement_id: str) -> dic
                 )
                 for child in node["children"]
             ]
+            holds_replacement = any(child["id"] == replacement_id for child in children)
+            showing = node["active_child_id"] == target_id or (
+                holds_replacement and node["id"] in keep_active
+            )
             return {
                 **node,
                 "children": children,
-                "active_child_id": (
-                    replacement_id
-                    if node["active_child_id"] == target_id
-                    else node["active_child_id"]
-                ),
+                "active_child_id": replacement_id if showing else node["active_child_id"],
             }
         return {**node, "first": visit(node["first"]), "second": visit(node["second"])}
 

@@ -43,7 +43,7 @@ from ..project_files import (
     project_approval_rules,
     read_project_config,
 )
-from ..projects import ProjectManager
+from ..projects import LayoutRevisionConflict, ProjectManager
 from ..prompt_queue import (
     delivery_summary,
     stage_seed_argv,
@@ -1010,23 +1010,8 @@ async def _install_replacement(
     still read back.
     """
     manager: SessionManager = app[keys.SESSIONS]
-    project = app[keys.PROJECTS].projects.get(old.record.project_id)
-    if project is None:
-        await manager.stop(session.record.id)
-        manager.sessions.pop(session.record.id, None)
-        raise ValueError("the session's owning Project is unavailable")
-    current_layout = project.layout
-    next_layout = (
-        replace_terminal(current_layout, old.record.id, session.record.id)
-        if old.record.id in layout_terminal_ids(current_layout)
-        else attach_terminal(current_layout, session.record.id)
-    )
     try:
-        await app[keys.PROJECTS].update(
-            old.record.project_id,
-            layout=next_layout,
-            layout_revision=project.layout_revision,
-        )
+        await _write_replacement_layout(app, old=old, session=session)
     except Exception:
         await manager.stop(session.record.id)
         manager.sessions.pop(session.record.id, None)
@@ -1055,6 +1040,52 @@ async def _install_replacement(
             session.record.id,
             relation,
         )
+
+
+#: Layout writes a replacement retries when another writer moved the revision between
+#: its read and its write. Clients write layouts constantly (focus, tab switches) and a
+#: restart's layout step lands seconds after its first read, so one lost race is
+#: ordinary; three in a row means something is rewriting the layout continuously.
+REPLACEMENT_LAYOUT_ATTEMPTS = 3
+
+
+async def _write_replacement_layout(
+    app: web.Application, *, old: Session, session: Session
+) -> None:
+    """Put ``session`` where ``old`` sits in its Project's layout, re-reading on a race.
+
+    Each attempt reads the layout and its revision afresh, so a client write that
+    landed during the seconds a replacement takes to spawn - including one that placed
+    the replacement itself (`replace_terminal` withdraws that placement) - is built
+    upon rather than refused.
+    """
+    projects = app[keys.PROJECTS]
+    for attempt in range(1, REPLACEMENT_LAYOUT_ATTEMPTS + 1):
+        project = projects.projects.get(old.record.project_id)
+        if project is None:
+            raise ValueError("the session's owning Project is unavailable")
+        current_layout = project.layout
+        next_layout = (
+            replace_terminal(current_layout, old.record.id, session.record.id)
+            if old.record.id in layout_terminal_ids(current_layout)
+            else attach_terminal(current_layout, session.record.id)
+        )
+        try:
+            await projects.update(
+                old.record.project_id,
+                layout=next_layout,
+                layout_revision=project.layout_revision,
+            )
+            return
+        except LayoutRevisionConflict:
+            if attempt == REPLACEMENT_LAYOUT_ATTEMPTS:
+                raise
+            log.info(
+                "session_replacement_layout_raced replaced=%s session_id=%s attempt=%d",
+                old.record.id,
+                session.record.id,
+                attempt,
+            )
 
 
 async def _retire_replaced_session(

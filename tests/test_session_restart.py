@@ -17,8 +17,9 @@ import pytest
 from aiohttp import web
 
 from swe_mux import app_keys as keys
-from swe_mux.layouts import layout_terminal_ids
+from swe_mux.layouts import attach_terminal, layout_terminal_ids
 from swe_mux.models import StandingActivity
+from swe_mux.projects import LayoutRevisionConflict
 from swe_mux.routes import sessions as session_routes
 from swe_mux.routes.sessions import get_restart_eligibility, restart_session
 from swe_mux.session import SessionManager
@@ -524,6 +525,101 @@ async def test_a_failed_layout_write_stops_the_replacement_and_keeps_the_ended_p
     project = app[keys.PROJECTS].projects["default"]
     assert layout_terminal_ids(project.layout) == [old.record.id, "unrelated-live"]
     assert app[keys.EVENTS].payload("session_restart_failed")["code"] == "restart_replace_failed"
+
+
+async def test_a_client_that_placed_the_replacement_mid_resume_does_not_fail_the_restart(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Measured 2026-10-12: a phone saw the resumed session appear and wrote it into a
+    # tab of its own before the restart's layout step ran, which made the swap a
+    # duplicate resource and abandoned the restart with the new agent stopped.
+    old = _session()
+    app = _app(tmp_path, old)
+    _install_fakes(monkeypatch, app, old)
+    original_resume = session_routes.resume_run
+    projects = app[keys.PROJECTS]
+
+    async def resume_then_client_places_it(row: dict[str, Any], **kwargs: Any) -> Any:
+        outcome = await original_resume(row, **kwargs)
+        project = projects.projects["default"]
+        project.layout = attach_terminal(project.layout, outcome.session.record.id)
+        project.layout_revision += 1
+        return outcome
+
+    monkeypatch.setattr(session_routes, "resume_run", resume_then_client_places_it)
+
+    response = await restart_session(_request(app, old.record.id))
+
+    assert response.status == 201
+    assert app[keys.SESSIONS].stopped == []
+    project = projects.projects["default"]
+    assert layout_terminal_ids(project.layout) == ["restarted-agent", "unrelated-live"]
+    assert project.layout["root"]["active_child_id"] == "restarted-agent"
+    assert projects.revisions == [5]
+
+
+async def test_a_layout_write_that_loses_a_race_reads_again_instead_of_failing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    old = _session()
+    app = _app(tmp_path, old)
+    _install_fakes(monkeypatch, app, old)
+    projects = app[keys.PROJECTS]
+    original_update = projects.update
+    attempted: list[int] = []
+
+    async def update_after_a_client_focus_change(identity: str, **changes: Any) -> Any:
+        attempted.append(changes["layout_revision"])
+        if len(attempted) == 1:
+            # A client focused the other tab between the restart's read and its write.
+            project = projects.projects[identity]
+            project.layout = {
+                **project.layout,
+                "root": {**project.layout["root"], "active_child_id": "unrelated-live"},
+            }
+            project.layout_revision += 1
+            raise LayoutRevisionConflict("stale layout revision: expected 5, received 4")
+        return await original_update(identity, **changes)
+
+    monkeypatch.setattr(projects, "update", update_after_a_client_focus_change)
+
+    response = await restart_session(_request(app, old.record.id))
+
+    assert response.status == 201
+    assert attempted == [4, 5]
+    project = projects.projects["default"]
+    assert layout_terminal_ids(project.layout) == ["restarted-agent", "unrelated-live"]
+    # Built on the client's write rather than over it: its focus change survives.
+    assert project.layout["root"]["active_child_id"] == "unrelated-live"
+
+
+async def test_a_layout_rewritten_on_every_attempt_gives_up_and_keeps_the_ended_pane(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    old = _session()
+    app = _app(tmp_path, old)
+    _install_fakes(monkeypatch, app, old)
+    projects = app[keys.PROJECTS]
+    attempts = 0
+
+    async def always_raced(identity: str, **_changes: Any) -> Any:
+        nonlocal attempts
+        attempts += 1
+        projects.projects[identity].layout_revision += 1
+        raise LayoutRevisionConflict("stale layout revision")
+
+    monkeypatch.setattr(projects, "update", always_raced)
+
+    response = await restart_session(_request(app, old.record.id))
+
+    assert response.status == 409
+    assert json.loads(cast(Any, response).body)["code"] == "restart_replace_failed"
+    assert attempts == session_routes.REPLACEMENT_LAYOUT_ATTEMPTS
+    sessions = app[keys.SESSIONS]
+    assert sessions.stopped == ["restarted-agent"]
+    assert old.record.id in sessions.sessions
+    project = projects.projects["default"]
+    assert layout_terminal_ids(project.layout) == [old.record.id, "unrelated-live"]
 
 
 async def test_a_project_removed_mid_restart_is_a_refusal_not_a_crash(
