@@ -49,6 +49,15 @@
   The diff therefore runs when the change set actually moves, not once per session and not once
   per read, and every session sharing a checkout reads one measurement.
   A clean tree answers 0/0 with no subprocess at all.
+- A diff that **failed** is memoized on the same fingerprint, and re-tested only after
+  `DIFFSTAT_FAILURE_RETRY_SECONDS` (600s) in case load rather than size caused it.
+  Measured 2026-10-12, a checkout with 1,485 modified files, several of them JSON of 100k+ lines,
+  needed 13s for this diff and as long again for its branch comparison; both hit the 4s timeout on
+  every read and nothing remembered it, so every read spawned two diffs that each burned 4s of CPU
+  before being killed (reads every 30s detached, every 5s with a pane open). The same checkout now
+  reads in 0.55s after the first attempt, and its counts stay `None`.
+  Unlike the Map's rule below (a refused reading is never memoized), a time bound is safe here:
+  the monitor's reads take no lock, and the bound caps how long a transient failure is believed.
 - The counts cover **tracked** changes only: an untracked file raises the dirty count but has no
   content to compare, so it contributes no lines.
 - `added`/`removed` are `None` when the measurement could not be made — no HEAD yet, or a failed
@@ -253,6 +262,8 @@ uncommitted work together.
   existing parallel gather.
 - All four are `None` when no base resolves or the diff failed. A zero would claim a branch
   identical to its base, which is the one thing a reader would act on.
+  A failed merge base or diff is memoized on the same three-part fingerprint, with the same retry
+  bound as the working-tree diff above.
 - The poll's deduplication key is the checkout **and** its comparison override, because two
   Projects may point at one directory with different bases; collapsing them onto the cwd would
   serve one Project the other's number. The override is injected into `GitMonitor` as a

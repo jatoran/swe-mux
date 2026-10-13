@@ -614,6 +614,26 @@ _compare_ref_cache: OrderedDict[tuple[str, str | None], tuple[float, str | None]
 #: Seconds a resolved comparison ref is trusted before being inferred again.
 COMPARE_REF_TTL_SECONDS = 60.0
 
+#: Seconds a line count Git could not produce for one fingerprint is left alone
+#: before it is attempted again. Measured 2026-10-12: a checkout with 1,485 modified
+#: files, several of them JSON documents of 100k+ lines, needs 13s for
+#: `git diff --numstat HEAD` and as long again for its branch comparison. Both hit
+#: `GIT_TIMEOUT_SECONDS` on every read, and nothing remembered that, so every read
+#: of that checkout - every 30s detached, every 5s with a pane open - spawned two
+#: diffs that each burned 4s of CPU and were then killed, for an answer that never
+#: arrived. The fingerprint is what decides that the work is worth trying again;
+#: this bound only re-tests a failure that load, rather than size, may have caused.
+DIFFSTAT_FAILURE_RETRY_SECONDS = 600.0
+
+#: root -> (dirty_hash, retry at). A diffstat that failed for this change set.
+_diffstat_failures: OrderedDict[str, tuple[str | None, float]] = OrderedDict()
+
+#: (root, ref) -> ((compare oid, head, dirty_hash), retry at). The same, for the
+#: branch-scoped comparison.
+_compare_failures: OrderedDict[
+    tuple[str, str], tuple[tuple[str, str, str | None], float]
+] = OrderedDict()
+
 
 def reset_diffstat_cache() -> None:
     """Drop every memoized diffstat, comparison ref, and layout. For tests and restart."""
@@ -621,11 +641,35 @@ def reset_diffstat_cache() -> None:
     _compare_memo.clear()
     _compare_ref_cache.clear()
     _layout_memo.clear()
+    _diffstat_failures.clear()
+    _compare_failures.clear()
 
 
 def _trim(cache: OrderedDict[Any, Any]) -> None:
     while len(cache) > DIFFSTAT_CACHE_LIMIT:
         cache.popitem(last=False)
+
+
+def _failure_standing[K, F](
+    failures: OrderedDict[K, tuple[F, float]], key: K, fingerprint: F
+) -> bool:
+    """Whether `key` already failed for exactly `fingerprint`, recently enough to skip."""
+    entry = failures.get(key)
+    if entry is None:
+        return False
+    if entry[0] != fingerprint or entry[1] <= monotonic():
+        del failures[key]
+        return False
+    failures.move_to_end(key)
+    return True
+
+
+def _record_failure[K, F](
+    failures: OrderedDict[K, tuple[F, float]], key: K, fingerprint: F
+) -> None:
+    failures[key] = (fingerprint, monotonic() + DIFFSTAT_FAILURE_RETRY_SECONDS)
+    failures.move_to_end(key)
+    _trim(failures)
 
 
 def _memoized_diffstat(root: str, dirty_hash: str | None) -> tuple[int, int] | None:
@@ -673,7 +717,9 @@ async def _read_diffstat(
     """Lines added/removed vs HEAD, memoized on the working-tree fingerprint.
 
     A clean tree is answered without touching git at all: no change set means no
-    changed lines, and that is the common case across an idle fleet.
+    changed lines, and that is the common case across an idle fleet. A failure is
+    memoized too (`DIFFSTAT_FAILURE_RETRY_SECONDS`), because a change set too large
+    to count inside the timeout stays too large on the next read.
     """
     if not has_head:
         return None, None
@@ -683,11 +729,17 @@ async def _read_diffstat(
     cached = _memoized_diffstat(root, dirty_hash)
     if cached is not None:
         return cached
+    if _failure_standing(_diffstat_failures, root, dirty_hash):
+        return None, None
     code, output = await _git(cwd, "diff", "--numstat", "HEAD")
     if code:
-        log.debug(
-            "git diffstat unavailable",
-            extra={"root": root, "code": code, "diagnostic": output[:200]},
+        _record_failure(_diffstat_failures, root, dirty_hash)
+        log.info(
+            "git_diffstat_unavailable root=%s code=%d retry_s=%.0f diagnostic=%s",
+            root,
+            code,
+            DIFFSTAT_FAILURE_RETRY_SECONDS,
+            output[:200],
         )
         return None, None
     added, removed = parse_numstat(output)
@@ -744,7 +796,10 @@ async def _read_comparison(
     which reads as work destroyed rather than work not yet merged.
 
     Every failure answers `None` rather than 0. A zero here would claim a branch
-    identical to its base, which is the one thing a reader would act on.
+    identical to its base, which is the one thing a reader would act on. And every
+    failure is memoized on the same fingerprint a success is, for the reason
+    `_read_diffstat` gives: a branch that diverged too far to count in time has not
+    converged by the next read.
     """
     if ref is None or ref_oid is None or head is None:
         return None, None, None
@@ -754,19 +809,32 @@ async def _read_comparison(
     if cached is not None and cached[0] == fingerprint:
         _compare_memo.move_to_end(key)
         return cached[1], cached[2], cached[3]
+    if _failure_standing(_compare_failures, key, fingerprint):
+        return None, None, None
     base_code, base = await _git(cwd, "merge-base", ref_oid, head)
     base = base.strip()
     if base_code or not base:
-        log.debug(
-            "git merge base unavailable",
-            extra={"root": root, "ref": ref, "code": base_code, "diagnostic": base[:200]},
+        _record_failure(_compare_failures, key, fingerprint)
+        log.info(
+            "git_merge_base_unavailable root=%s ref=%s code=%d retry_s=%.0f diagnostic=%s",
+            root,
+            ref,
+            base_code,
+            DIFFSTAT_FAILURE_RETRY_SECONDS,
+            base[:200],
         )
         return None, None, None
     code, output = await _git(cwd, "diff", "--numstat", base)
     if code:
-        log.debug(
-            "git comparison diffstat unavailable",
-            extra={"root": root, "ref": ref, "code": code, "diagnostic": output[:200]},
+        _record_failure(_compare_failures, key, fingerprint)
+        log.info(
+            "git_comparison_diffstat_unavailable root=%s ref=%s code=%d retry_s=%.0f "
+            "diagnostic=%s",
+            root,
+            ref,
+            code,
+            DIFFSTAT_FAILURE_RETRY_SECONDS,
+            output[:200],
         )
         return None, None, None
     added, removed, files = parse_numstat_summary(output)

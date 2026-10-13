@@ -165,6 +165,57 @@ async def test_unmeasurable_diffstat_is_none_not_zero(monkeypatch: pytest.Monkey
     assert state.added is None and state.removed is None
 
 
+def _controllable_clock(monkeypatch: pytest.MonkeyPatch) -> dict[str, float]:
+    now = {"value": 1000.0}
+    monkeypatch.setattr(git_monitor, "monotonic", lambda: now["value"])
+    return now
+
+
+@pytest.mark.asyncio
+async def test_a_diffstat_git_cannot_produce_is_not_retried_until_the_tree_moves(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Measured 2026-10-12: a change set whose count needs 13s timed out on every read.
+
+    Nothing remembered the failure, so every read of that checkout spawned a diff
+    that burned the whole timeout and was killed. It is memoized on the same
+    fingerprint a success is, and re-tested only after a bound, in case load
+    rather than size was the cause.
+    """
+    porcelain = {"value": " M huge.json"}
+    outcome = {"value": (124, "git timed out after 4s")}
+    numstat_calls: list[str] = []
+    now = _controllable_clock(monkeypatch)
+
+    async def fake_git(cwd: str, *args: str, timeout_seconds: float = 4.0) -> tuple[int, str]:
+        del cwd, timeout_seconds
+        responses = _fake_git_responses(porcelain["value"])
+        if args == ("diff", "--numstat", "HEAD"):
+            numstat_calls.append(porcelain["value"])
+            return outcome["value"]
+        return responses[args]
+
+    monkeypatch.setattr(git_monitor, "_git", fake_git)
+    first = await read_git_state("C:/repo")
+    assert (first.added, first.removed) == (None, None)
+    assert len(numstat_calls) == 1
+
+    now["value"] += 60
+    second = await read_git_state("C:/repo")
+    assert (second.added, second.removed) == (None, None)
+    assert len(numstat_calls) == 1, "the same change set is not asked again"
+
+    porcelain["value"] = " M huge.json\n M other.json"
+    await read_git_state("C:/repo")
+    assert len(numstat_calls) == 2, "a different change set is a different question"
+
+    now["value"] += git_monitor.DIFFSTAT_FAILURE_RETRY_SECONDS
+    outcome["value"] = (0, "7\t2\thuge.json\n1\t0\tother.json")
+    recovered = await read_git_state("C:/repo")
+    assert len(numstat_calls) == 3, "a failure is re-tested once its bound passes"
+    assert (recovered.added, recovered.removed) == (8, 2)
+
+
 @pytest.mark.asyncio
 async def test_unborn_branch_has_no_diffstat(monkeypatch: pytest.MonkeyPatch) -> None:
     """With no HEAD there is nothing to diff against, so nothing is claimed."""
@@ -366,6 +417,70 @@ async def test_unmeasurable_comparison_is_none_not_zero(
     assert state.compare_added is None
     assert state.compare_removed is None
     assert state.compare_files is None
+
+
+@pytest.mark.asyncio
+async def test_a_comparison_git_cannot_produce_is_not_retried_until_something_moves(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A branch diverged too far to count in time stays that way on the next read."""
+    head = {"value": _FULL_SHA}
+    merge_bases: list[str] = []
+    diffs: list[str] = []
+    now = _controllable_clock(monkeypatch)
+
+    async def fake_git(cwd: str, *args: str, timeout_seconds: float = 4.0) -> tuple[int, str]:
+        del cwd, timeout_seconds
+        responses = _comparison_git_responses(" M file.txt")
+        responses[("rev-parse", "HEAD")] = (0, head["value"])
+        responses[("merge-base", _BASE_REF_SHA, head["value"])] = (0, _MERGE_BASE_SHA)
+        if args[0] == "merge-base":
+            merge_bases.append(head["value"])
+        if args == ("diff", "--numstat", _MERGE_BASE_SHA):
+            diffs.append(head["value"])
+            return 124, "git timed out after 4s"
+        return responses[args]
+
+    monkeypatch.setattr(git_monitor, "_git", fake_git)
+    _use_comparison(monkeypatch)
+
+    first = await read_git_state("C:/repo")
+    assert (first.compare_added, first.compare_removed, first.compare_files) == (
+        None,
+        None,
+        None,
+    )
+    assert (first.added, first.removed) == (3, 1), "the HEAD diff is a separate answer"
+    now["value"] += 60
+    await read_git_state("C:/repo")
+    assert (len(merge_bases), len(diffs)) == (1, 1), "nothing moved, so nothing is re-run"
+
+    head["value"] = "d" * 40
+    await read_git_state("C:/repo")
+    assert (len(merge_bases), len(diffs)) == (2, 2), "a commit is a different question"
+
+
+@pytest.mark.asyncio
+async def test_an_unrelated_base_is_not_asked_for_a_merge_base_on_every_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    merge_bases = 0
+
+    async def fake_git(cwd: str, *args: str, timeout_seconds: float = 4.0) -> tuple[int, str]:
+        nonlocal merge_bases
+        del cwd, timeout_seconds
+        responses = _comparison_git_responses(" M file.txt")
+        if args[0] == "merge-base":
+            merge_bases += 1
+            return 1, ""
+        return responses[args]
+
+    monkeypatch.setattr(git_monitor, "_git", fake_git)
+    _use_comparison(monkeypatch)
+    for _ in range(3):
+        state = await read_git_state("C:/repo")
+        assert state.compare_added is None
+    assert merge_bases == 1
 
 
 @pytest.mark.asyncio
