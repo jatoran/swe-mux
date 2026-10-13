@@ -213,11 +213,16 @@ def match_plans(plans: dict[str, str]) -> dict[str, str]:
     return {sql: plan for sql, plan in plans.items() if "history_messages_fts MATCH" in sql}
 
 
-async def test_page_excerpts_walk_only_each_conversations_own_matches(tmp_path: Path) -> None:
-    """Measured 2026-10-12 on the live archive: the page's excerpt statement took
-    145-550 ms for a common prefix, because `hm.history_id IN (...)` was applied after
-    FTS5 had produced, and `bm25` had ranked, every match in the archive. Each
-    conversation's part is now bounded by its own row-id range."""
+async def test_page_excerpts_are_one_walk_of_the_index_not_one_per_conversation(
+    tmp_path: Path,
+) -> None:
+    """The range bound that wins for one conversation loses for a page.
+
+    Each range-bounded `MATCH` re-pays the query's term setup, which for a prefix is a
+    walk of every term carrying it. Measured 2026-10-12 on a full prefix-indexed copy of
+    the live archive, fifty conversations: 14-111 ms as one `MATCH ... IN (...)`, against
+    71-756 ms as a union of fifty range-bounded parts.
+    """
     history = await seeded(tmp_path)
     try:
         page, statements = await statements_of(
@@ -228,13 +233,14 @@ async def test_page_excerpts_walk_only_each_conversations_own_matches(tmp_path: 
         excerpts = [plan for sql, plan in plans.items() if "snippet(" in sql]
         assert len(excerpts) == 1
         scans = [line for line in excerpts[0].splitlines() if "history_messages_fts" in line]
-        assert len(scans) == 3, "one bounded walk per conversation on the page"
-        assert all(_RANGE_BOUNDED_SCAN.search(line) for line in scans), excerpts[0]
+        assert len(scans) == 1, f"the page walks the index more than once: {excerpts[0]}"
     finally:
         history.close()
 
 
 async def test_one_conversations_matches_are_range_bounded(tmp_path: Path) -> None:
+    """Measured 2026-10-12 on a full prefix-indexed copy of the live archive: `"the"*`
+    74 -> 3 ms and `"cont"*` 59 -> 9 ms for one conversation's matches."""
     history = await seeded(tmp_path)
     try:
         matches, statements = await statements_of(

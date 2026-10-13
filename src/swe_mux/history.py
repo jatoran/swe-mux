@@ -3906,36 +3906,21 @@ class HistoryIndex:
         placeholders = ",".join("?" for _ in history_ids)
         args: list[Any]
         if search_index_ready:
-            # Still ONE statement, now one ranked sub-select per conversation, each
-            # bounded by that conversation's row-id range so FTS5 walks only its own
-            # matches. The previous shape filtered `hm.history_id IN (...)` *after* the
-            # index produced every match in the archive, and `ORDER BY bm25` had to rank
-            # all of them before the first row came back: 145-550 ms for a common prefix
-            # on the live archive (2026-10-12), the cost of "contact s" taking 4.3 s.
-            ranges = self._message_id_ranges(history_ids)
-            parts: list[str] = []
-            args = []
-            for history_id in dict.fromkeys(history_ids):
-                bounds = ranges.get(history_id)
-                if bounds is None:
-                    continue
-                parts.append(
-                    "SELECT * FROM (SELECT hm.history_id,hm.ordinal,hm.role,hm.ts,"
-                    "snippet(history_messages_fts,0,'','',' … ',24) AS excerpt "
-                    "FROM history_messages_fts JOIN history_messages hm "
-                    "ON hm.id=history_messages_fts.rowid "
-                    "WHERE history_messages_fts MATCH ? "
-                    "AND history_messages_fts.rowid BETWEEN ? AND ? "
-                    f"AND hm.history_id=?{role_sql} "
-                    f"ORDER BY bm25(history_messages_fts),hm.ordinal LIMIT {_PAGE_MATCH_CAP})"
-                )
-                args.extend([match_query, bounds[0], bounds[1], history_id])
-                if role:
-                    args.append(role)
-            if not parts:
-                return {}
-            sql = " UNION ALL ".join(parts)
-            role = None  # bound inside each part above
+            # One MATCH for the whole page, not one range-bounded MATCH per conversation.
+            # The per-conversation shape is what wins for a single conversation
+            # (`history_message_matches`), and it loses here: every part re-pays the
+            # query's term setup, which for a prefix is a walk of every term carrying it.
+            # Measured 2026-10-12 on a full prefix-indexed copy of the live archive, fifty
+            # conversations: 14-111 ms here against 71-756 ms as a fifty-part union.
+            sql = (
+                "SELECT hm.history_id,hm.ordinal,hm.role,hm.ts,"
+                "snippet(history_messages_fts,0,'','',' … ',24) AS excerpt "
+                "FROM history_messages_fts JOIN history_messages hm "
+                "ON hm.id=history_messages_fts.rowid "
+                f"WHERE history_messages_fts MATCH ? AND hm.history_id IN ({placeholders})"
+                f"{role_sql} ORDER BY bm25(history_messages_fts),hm.ordinal"
+            )
+            args = [match_query, *history_ids]
         else:
             predicate, query_args = _like_query_predicate(query, "all_terms")
             sql = (
@@ -4179,8 +4164,9 @@ class HistoryIndex:
             if search_index_ready:
                 # Bounded by this conversation's row-id range so FTS5 visits only its
                 # own matches; the `history_id` filter alone was applied after the index
-                # had produced every match in the archive (200-320 ms per open for a
-                # common prefix, 2026-10-12).
+                # had produced every match in the archive. Measured 2026-10-12 on a full
+                # prefix-indexed copy of the live archive: `"the"*` 74 -> 3 ms and
+                # `"cont"*` 59 -> 9 ms per conversation (200-320 ms on the live index).
                 bounds = self._message_id_ranges([history_id]).get(history_id)
                 if bounds is None:
                     return []

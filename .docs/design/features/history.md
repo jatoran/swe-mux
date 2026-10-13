@@ -119,12 +119,12 @@
   An FTS5 table's options are fixed when the table is created, so an archive indexed by an earlier build is recognised from the definition stored in `sqlite_master` and rebuilt through the same post-startup reset as any other index repair.
   The reset drops and recreates the token table, both indexes are repopulated in 250-row batches, and search answers through the bounded `LIKE` fallback until they are ready.
   The browser also waits 450 ms rather than 220 ms before sending a search whose last word is one letter (`historySearchDelay`), because that search is the broadest a typist sends and the one most certain to be replaced.
-- **A per-conversation match lookup walks only that conversation's matches.**
-  A run's messages are written by one `executemany` in one transaction, so their row ids form one contiguous range, and FTS5 takes a `rowid BETWEEN` constraint into its own index walk.
-  The page's excerpts are one statement made of one ranked sub-select per conversation, each bounded by that conversation's range, and the ranges come from one `GROUP BY` statement for the whole page (`_message_id_ranges`).
-  A reader's in-conversation matches are one range-bounded statement too.
-  Filtering on `history_id` alone was applied after FTS5 had produced, and `bm25` had ranked, every match in the archive: 145-550 ms per page and 200-320 ms per open for a common prefix, measured 2026-10-12.
-  The statements still filter on `history_id`, so a range that ever included another run's row would cost speed, never correctness.
+- **One conversation's match lookup walks only that conversation's matches.**
+  A run's messages are written by one `executemany` in one transaction, so their row ids form one contiguous range (`_message_id_ranges`), and FTS5 takes a `rowid BETWEEN` constraint into its own index walk.
+  Filtering on `history_id` alone was applied after FTS5 had produced every match in the archive: measured 2026-10-12 on a full prefix-indexed copy of the live archive, `"the"*` went from 74 ms to 3 ms and `"cont"*` from 59 ms to 9 ms per open.
+  The statement still filters on `history_id`, so a range that ever included another run's row would cost speed, never correctness.
+  A results page's excerpts deliberately stay one `MATCH ... history_id IN (...)` over the page.
+  Each range-bounded `MATCH` re-pays the query's term setup, which for a prefix is a walk of every term carrying it, so a union of fifty range-bounded parts measured 71-756 ms where the single statement measured 14-111 ms on the same copy.
 - Session rows show the chronological minimum and maximum provider-native conversational
   timestamps plus the final speaker, so out-of-order native JSONL records cannot produce a start
   after the last message. Transcript cards show each provider-native message timestamp.
