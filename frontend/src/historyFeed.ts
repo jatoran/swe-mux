@@ -1,8 +1,27 @@
 // The History results list's shape: which Project heading each conversation sits under,
-// and what order the headings come in.
+// what order the headings come in, and how long the search box waits before asking.
 //
 // Pure so the ordering rule is pinned by a unit test rather than by looking at the list,
 // because the rule is exactly the thing that made a working sort control look broken.
+
+/** How long the search box waits after a keystroke before searching. */
+export const HISTORY_SEARCH_DEBOUNCE_MS = 220
+
+/** The wait when the word being typed is one character long.
+ *
+ *  That is the state between the space and the second letter of the next word, and it is
+ *  the broadest search a typist ever sends: `contact s` asks for every message with any
+ *  word starting with `s`, measured at 4.3 s against the live archive before the prefix
+ *  index existed (2026-10-12). The index makes it cheap, but it is still a search whose
+ *  answer is about to be replaced, so it is given time to be. */
+export const HISTORY_SEARCH_SHORT_WORD_DEBOUNCE_MS = 450
+
+export function historySearchDelay(query: string): number {
+  const words = query.trim().split(/\s+/u).filter(Boolean)
+  if (!words.length) return 0
+  const last = words[words.length - 1].replace(/[^\p{L}\p{N}_]/gu, '')
+  return last.length === 1 ? HISTORY_SEARCH_SHORT_WORD_DEBOUNCE_MS : HISTORY_SEARCH_DEBOUNCE_MS
+}
 
 export type HistoryFeedEntry = { project_id?: string; project_label?: string }
 export type HistoryFeedProject = { project_id: string | null; label: string; removed_at?: number }

@@ -2769,7 +2769,9 @@ export function App() {
   const focusedQueueDepth=active?(rowQueueDepth[active.id]||0):0
   const attention = sessions.filter(session => session.state === 'awaiting').length
   const activeProject = projects.find(project => project.id === projectId)
-  const orderedProjects = [...projects].sort((a,b)=>a.position-b.position||a.name.localeCompare(b.name)||a.id.localeCompare(b.id))
+  // Memoized because it is a prop of the memoized History browser, which a fresh array on
+  // every render would re-render on every session status event.
+  const orderedProjects = useMemo(()=>[...projects].sort((a,b)=>a.position-b.position||a.name.localeCompare(b.name)||a.id.localeCompare(b.id)),[projects])
   const visibleProjects = orderedProjects.filter(project => project.sidebar_visible !== false)
   // One decision, in one place, so "not loaded yet" can never be drawn as
   // "you have no Projects" again (`sidebarProjects.sidebarProjectsView`).
@@ -5300,6 +5302,20 @@ export function App() {
     { run_id: entry.id, label: historyName(entry), backend: entry.backend, kind: 'run' },
     entry.project_id || projectId,
   )
+
+  // The History browser is memoized, so it re-renders only when its props change. These
+  // handlers close over this render's state and are new on every render, so the browser is
+  // handed stable wrappers that reach the current ones through a ref. Passed directly, they
+  // re-rendered the whole open browser - results, reader and every message in it - on every
+  // session status event in the fleet.
+  const historyHandlers = useRef({ resume: resumeHistoryEntry, schedule: scheduleResumeFromHistory, handoff: openHandoff })
+  historyHandlers.current = { resume: resumeHistoryEntry, schedule: scheduleResumeFromHistory, handoff: openHandoff }
+  const historyCallbacks = useMemo(() => ({
+    close: () => { setHistoryOpen(false); setHistoryEntry('') },
+    resume: (entry: HistoryEntry) => historyHandlers.current.resume(entry),
+    schedule: (entry: HistoryEntry) => historyHandlers.current.schedule(entry),
+    handoff: (entry: HistoryEntry) => historyHandlers.current.handoff(entry),
+  }), [])
 
   // A pane's own run, not its session id: a pane that rolled its conversation or
   // inherited one owns a History row keyed by the run, and a session id finds nothing.
@@ -9096,7 +9112,7 @@ export function App() {
     {/* The deep-linked entry is cleared with the overlay, not left behind: it is the
         reason this open happened, and a stale one would make the *next* open - a plain
         "Session history" from the menu - land on a conversation nobody asked for. */}
-    {historyOpen&&<HistoryBrowser projects={orderedProjects} initialProjectId={historyScope} initialEntryId={historyEntry} onClose={()=>{setHistoryOpen(false);setHistoryEntry('')}} onResume={resumeHistoryEntry} onScheduleResume={scheduleResumeFromHistory} onHandoff={openHandoff}/>}
+    {historyOpen&&<HistoryBrowser projects={orderedProjects} initialProjectId={historyScope} initialEntryId={historyEntry} onClose={historyCallbacks.close} onResume={historyCallbacks.resume} onScheduleResume={historyCallbacks.schedule} onHandoff={historyCallbacks.handoff}/>}
 
     {/* Opened with no target, the registry lands on the Project in focus rather than on
         whichever one sorts first: "manage Projects" almost always means the one being

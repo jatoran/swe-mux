@@ -1279,6 +1279,18 @@ body {
 .history-inline-state { padding:18px 10px;color:var(--muted) }
 .history-inline-state.error { color:var(--red) }
 .history-load-more { width:100%;min-height:34px;border:0;border-top:1px solid var(--line);background:var(--panel2);color:var(--text);cursor:pointer }
+/* A results list runs to hundreds of rows over a few "Load more" pages. A row off screen
+   skips layout and paint, and `auto` remembers its real height once it has been drawn, so
+   scrolling back over it does not move the list. */
+.history-row { content-visibility:auto;contain-intrinsic-size:auto 86px }
+/* The History reader keeps its own place when a page lands above it (`HistoryDetail`'s
+   anchor), so the browser's scroll anchoring is off here rather
+   than left to correct the same insertion a second time. Its messages deliberately do not
+   use `content-visibility`: a message first drawn above the view changes height there, and
+   with anchoring off nothing would hold the view still while it did. The window is bounded
+   instead (`historyMessages.ts`). */
+.history-modal .messages { overflow-anchor:none }
+.history-page-edge { min-height:28px;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:9px }
 .transcript-heading>div { min-width:0;flex:1 }
 .transcript-heading h3,.transcript-heading span { display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap }
 .transcript-actions { flex:none;display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:7px 16px;border-bottom:1px solid var(--line);background:var(--panel2) }
