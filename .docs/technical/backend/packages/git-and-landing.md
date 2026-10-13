@@ -42,13 +42,32 @@ Project-scoped comparison-ref inference and bounded review reads.
 
 ## `git_monitor.py`
 
-Bounded read-only (`--no-optional-locks`) polling of every session's checkout for full HEAD, branch, dirty count, upstream divergence, worktree identity, root, HEAD-scoped diffstat, and merge-base comparison counts.
-Also same-checkout previous-HEAD event evidence; bounded commit-range, changed-file, combined-merge-diff, excluded-range, and blob-digest readers for attribution; deduplication by `(cwd, comparison override)`; and memoization of both diffstats and of ref inference.
+Bounded read-only (`--no-optional-locks`) reads of every session's checkout for full HEAD, branch, dirty count, upstream divergence, worktree identity, root, HEAD-scoped diffstat, and merge-base comparison counts.
+A checkout is read when its watch reports a change, on a slow safety sweep, or on the old timed cadence while it has no live watch; `GitMonitor._due_cause` is the one place those rules live, and `status()` serves why each read happened (`design/features/git.md`).
+Also the memoized checkout layout the watches need, resolved off the loop; the row patch `git_changed` carries (`session_patch.py`);
+same-checkout previous-HEAD event evidence; bounded commit-range, changed-file, combined-merge-diff, excluded-range, and blob-digest readers for attribution; deduplication by `(cwd, comparison override)`; and memoization of both diffstats and of ref inference.
 
 Every query runs through `bounded_subprocess.run_bounded`, so a repository large enough to answer with hundreds of megabytes cannot be held in the daemon's memory and a poll cancelled at shutdown cannot leave `git` running.
 Three codes, and they are not interchangeable to a caller: `124` is a timeout, `125` a capture that hit the output cap (every caller here parses what it gets, so a truncated answer must read as a failure rather than as a smaller repository), and anything else is Git's own.
 
-**Not:** comparison-ref inference itself (`git_review`), Project registry lookups (injected as a callable), the execution mechanics (`bounded_subprocess.py`), or Git mutations.
+**Not:** comparison-ref inference itself (`git_review`), Project registry lookups (injected as a callable), the execution mechanics (`bounded_subprocess.py`), filesystem watching (`git_watch.py`), or Git mutations.
+
+## `git_watch.py`
+
+OS watches over the followed checkouts' working trees and Git directories, deciding which filesystem changes are a change of Git state.
+A minimal cover of roots (nested worktrees share their primary's watch, a shared Git directory is watched once), each on its own daemon thread running watchfiles' synchronous `watch`, so a batch is classified by pure string work off the loop and only "this checkout changed" is posted to it.
+Classification ignores Git internals that are not state (objects, logs, lock files, the monitor's own reads), paths the repository's ignore listing covers, and a fixed set of dependency and build directories.
+A watch that fails to start cools down for 60 seconds and its checkout falls back to timed polling; the cover is capped at 32 watches for the same reason.
+
+**Not:** running Git for state (`git_monitor`), deciding when a read is due, or Project file watches (`project_watcher.py`).
+
+## `session_patch.py`
+
+The `{patch, session_revision}` pair an event carries when it changes a few fields of one session's row: each field serialized exactly as the record snapshot serializes it, at the revision `publish_update` stamped.
+Called after `publish_update`, never before, so the revision names a snapshot that already contains the values.
+Used by `git_monitor` (`git`) and `observation` (`harness_status.CLAUDE_STATUS_ROW_FIELDS`); the browser half is `frontend/src/sessionSnapshots.ts`.
+
+**Not:** deciding which events carry one, or emitting them.
 
 ## `git_operations.py`
 

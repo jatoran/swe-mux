@@ -76,7 +76,7 @@ Index: `../packages.md`.
 
 ## Fleet refresh
 
-`fleetRefresh.ts`, `fleetLayouts.ts`
+`fleetRefresh.ts`, `fleetLayouts.ts`, `eventRefresh.ts`, `sessionSnapshots.ts`
 
 One cycle reads five independent daemon registries - sessions, Projects, previews, Groups, harnesses - and applies whatever arrived.
 
@@ -93,8 +93,25 @@ One cycle reads five independent daemon registries - sessions, Projects, preview
 - **An event requests a refresh; it never runs one.**
   `createEventRefreshScheduler` sits between the events socket and the controller: a burst settles for `EVENT_REFRESH_SETTLE_MS`, cycles never overlap, and each starts at least a gap after the previous event-driven one started - twice what that cycle took, clamped to [`EVENT_REFRESH_MIN_GAP_MS`, `EVENT_REFRESH_MAX_GAP_MS`] (1-5s) - so a slow daemon is asked less often, not more.
   Before it, every refreshing event queued a follow-up that started the moment the previous cycle ended, and on 2026-09-24 a subagent fleet's ~17 `subagent_activity` events a second held one desktop window at 2.5 full cycles a second, back to back: 12 requests a second on the daemon's one event loop.
-  `subagent_activity` still refreshes, because it moves the session row's subagent annotation, which no dedicated event carries.
   A refresh after the operator's own mutation calls the controller directly and is never delayed.
+- **Most events re-read one row or none, not the fleet** (since 2026-10-12).
+  Measured over 24 hours of the operator's fleet before the change: 645 events an hour asked for a whole-fleet read, a desktop window re-read all five endpoints about 9 times a minute, and two thirds of those events changed exactly one session's row - the status line alone (`harness_status`) 205 an hour, a checkout's Git state (`git_changed`) 53.
+  `fleetEventAction` (`eventRefresh.ts`) sorts every `/events` frame into one of four answers.
+  `none`: the payload or a dedicated consumer already carries the update (tool traffic, terminal input, `delivery_readiness_changed`, `provider_quota_refreshed`).
+  `patch`: the event carries the complete new values of the fields it wrote (`payload.patch`) and the `session_revision` that made them, and they are written onto that row in place; `git_changed` and `harness_status` do.
+  `session`: the event changed its own session's row without saying how (`state_changed`, the turn and subagent events, `composer_input_changed`, and the rest of `EVENT_CHANGES_ONE_ROW`), and that row alone is re-read through `GET /api/sessions/{id}`, which serves exactly the row the list serves.
+  `fleet`: membership (`session_spawned`, `session_exited`, `session_removed`), Previews (`listener_detected`, `listener_closed`), anything naming no session, and any type not listed.
+  The unknown-type default is the compatibility-safe direction and stays: a new state-changing daemon event cannot silently leave a slice stale.
+- **A patch is ordered per field, not per row** (`applySessionRowPatch`).
+  It can only be ordered against a row read from the same daemon generation the events socket announced in `events_hello`; otherwise the row is re-read instead.
+  A patch at or below the row's `_snapshot_revision` is already in it and changes nothing.
+  A newer one writes its fields and records their revision in `_field_revisions` *without* advancing `_snapshot_revision`, because every other field of the row is still as old as its snapshot: a snapshot taken between the two still merges, and `mergeSessionSnapshot` keeps the patched fields over it until a snapshot at or past their revision arrives.
+  A new daemon generation drops every patch with the old revision domain, an unversioned mutation response leaves them standing, and a patch may never write `id`, `project_id`, or an underscore field.
+- **Row re-reads have their own scheduler** (`createSessionRefreshScheduler`): a burst for one id settles for `SESSION_REFRESH_SETTLE_MS` into one read, each id is read at most once per `SESSION_REFRESH_MIN_GAP_MS`, at most `SESSION_REFRESH_MAX_CONCURRENT` run at once, and a change during a read reads the row again afterwards.
+  More than `SESSION_REFRESH_FLEET_THRESHOLD` rows waiting together become one fleet read, which is cheaper than that many row reads.
+  Anything a row read cannot answer falls back to the fleet read that event cost before: a session this tab does not hold, a 404, a failed read, or a response that is not that row.
+- **Replayed events are not re-applied one by one.** A resumed events socket queues one fleet read on open, which supersedes every replayed row event at once and also covers the transient ones (`delivery_readiness_changed`) that are never replayed at all.
+  Before this, resuming relied on the replayed events themselves to trigger the refresh.
 - `fleetLayouts.ts` is the pure half: given one snapshot it returns the layouts to store, the joins to persist quietly, and the pruned join-refusal record.
   The join rules live there - a Project mid-launch is withheld, a session this device already has a pending leaf for is not joined twice, ended sessions keep a leaf but are never given one.
 
