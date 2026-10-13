@@ -20,6 +20,7 @@ hook posts took 50 s behind five searches typed in nineteen seconds.
 from __future__ import annotations
 
 import asyncio
+import re
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -198,6 +199,102 @@ async def test_a_role_scoped_search_excerpts_only_that_role(tmp_path: Path) -> N
         assert page["items"]
         for item in page["items"]:
             assert {match["role"] for match in item["matches"]} == {"assistant"}
+    finally:
+        history.close()
+
+
+#: FTS5 reports a `rowid BETWEEN ? AND ?` it accepted as `>` and `<` in its index string
+#: (`INDEX 0:M1><` on SQLite 3.47). A plan without them is walking every match in the
+#: archive and filtering by conversation afterwards.
+_RANGE_BOUNDED_SCAN = re.compile(r"SCAN history_messages_fts VIRTUAL TABLE INDEX \d+:\S*>\S*<")
+
+
+def match_plans(plans: dict[str, str]) -> dict[str, str]:
+    return {sql: plan for sql, plan in plans.items() if "history_messages_fts MATCH" in sql}
+
+
+async def test_page_excerpts_walk_only_each_conversations_own_matches(tmp_path: Path) -> None:
+    """Measured 2026-10-12 on the live archive: the page's excerpt statement took
+    145-550 ms for a common prefix, because `hm.history_id IN (...)` was applied after
+    FTS5 had produced, and `bm25` had ranked, every match in the archive. Each
+    conversation's part is now bounded by its own row-id range."""
+    history = await seeded(tmp_path)
+    try:
+        page, statements = await statements_of(
+            history, lambda: history.history_page(query="beacon", project_id=PROJECT)
+        )
+        assert len(page["items"]) == 3
+        plans = match_plans(await plans_of(history, statements))
+        excerpts = [plan for sql, plan in plans.items() if "snippet(" in sql]
+        assert len(excerpts) == 1
+        scans = [line for line in excerpts[0].splitlines() if "history_messages_fts" in line]
+        assert len(scans) == 3, "one bounded walk per conversation on the page"
+        assert all(_RANGE_BOUNDED_SCAN.search(line) for line in scans), excerpts[0]
+    finally:
+        history.close()
+
+
+async def test_one_conversations_matches_are_range_bounded(tmp_path: Path) -> None:
+    history = await seeded(tmp_path)
+    try:
+        matches, statements = await statements_of(
+            history, lambda: history.history_message_matches("run-1", "beacon")
+        )
+        assert [match["ordinal"] for match in matches] == list(range(6))
+        assert all("run-1" in match["excerpt"] for match in matches)
+        plans = match_plans(await plans_of(history, statements))
+        assert len(plans) == 1
+        assert _RANGE_BOUNDED_SCAN.search(next(iter(plans.values()))), plans
+        assert "CORRELATED" not in next(iter(plans.values()))
+    finally:
+        history.close()
+
+
+async def test_range_bounds_survive_a_conversation_reindexed_between_others(
+    tmp_path: Path,
+) -> None:
+    """A reindex gives a run fresh ids above everyone else's, so its range moves; the
+    excerpts must follow it rather than read a neighbour's span."""
+    history = await seeded(tmp_path)
+    try:
+        await history.replace_history_messages(
+            "run-0",
+            [message("user", f"beacon sighting run-0 again {n}", n) for n in range(2)],
+            mtime_ns=2,
+            size=2,
+        )
+        page = await history.history_page(query="beacon", project_id=PROJECT)
+        by_id = {item["id"]: item for item in page["items"]}
+        assert by_id["run-0"]["match_count"] == 2
+        assert all("again" in match["excerpt"] for match in by_id["run-0"]["matches"])
+        for identity in ("run-1", "run-2"):
+            assert by_id[identity]["match_count"] == 4
+            assert all(identity in match["excerpt"] for match in by_id[identity]["matches"])
+        assert [m["ordinal"] for m in await history.history_message_matches("run-0", "beacon")] == [
+            0,
+            1,
+        ]
+    finally:
+        history.close()
+
+
+async def test_a_one_character_last_word_is_a_prefix_search(tmp_path: Path) -> None:
+    """What a typist sends between keystrokes. It is answered by the prefix index
+    (`_FTS_PREFIX_OPTION`), not by walking every term that starts with the letter."""
+    history = await seeded(tmp_path)
+    try:
+        page = await history.history_page(query="beacon s", project_id=PROJECT)
+        assert len(page["items"]) == 3
+        assert all(item["match_count"] == 4 for item in page["items"])
+        assert await history.history_message_matches("run-2", "beacon sig")
+
+        def definition() -> str:
+            row = history._db.execute(  # noqa: SLF001
+                "SELECT sql FROM sqlite_master WHERE name='history_messages_fts'"
+            ).fetchone()
+            return str(row["sql"])
+
+        assert "prefix='1 2 3'" in await history._run(definition)  # noqa: SLF001
     finally:
         history.close()
 
