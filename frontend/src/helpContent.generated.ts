@@ -63,7 +63,7 @@ export const HELP_DOC_CONTENT: HelpDocContent[] = [
           {
             "kind": "ul",
             "items": [
-              "Attached sessions poll the latest accepted live cwd (or spawn cwd until live telemetry is available) for HEAD, branch, dirty count, upstream divergence, linked-worktree identity, working-tree root, lines changed against HEAD, and lines and files changed against the comparison ref.",
+              "Live sessions follow the latest accepted live cwd (or spawn cwd until live telemetry is available) for HEAD, branch, dirty count, upstream divergence, linked-worktree identity, working-tree root, lines changed against HEAD, and lines and files changed against the comparison ref.",
               "User-initiated worktree API wraps git worktree without performing other mutating git operations.",
               "Durable provenance connects a commit to the session and agent run whose evidence observed or created it without changing the repository."
             ]
