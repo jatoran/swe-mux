@@ -40,6 +40,7 @@ from .telemetry_imports import LegacyImportMixin
 from .telemetry_queries import WORKLOAD_FIELDS, LedgerQueryMixin
 from .telemetry_reconcile import NativeReconcileMixin
 from .telemetry_schema import (
+    CALL_REPEATS_GROUP_FILTER,
     CALL_REPEATS_INSERT,
     CALL_REPEATS_SELECT,
     LEDGER_SCHEMA_VERSION,
@@ -257,6 +258,15 @@ class CanonicalTelemetryLedger(LegacyImportMixin, NativeReconcileMixin, LedgerQu
                 "INSERT OR IGNORE INTO ledger_segments(period,relative_path) VALUES(?,?)",
                 (period, str(path.relative_to(self.root))),
             )
+            if outcome["applied"]:
+                # A migration rewrote the file, so a seal recorded over its old bytes
+                # describes a file that no longer exists. It is resealed by the same
+                # rule as any write, once the grace period has passed.
+                self._mark_segment_written(
+                    period,
+                    f"schema migration {outcome['found']} to {outcome['version']}",
+                    self._shared.tick(self._clock),
+                )
             self._catalog.commit()
         self._segments[period] = connection
         return connection
@@ -354,31 +364,36 @@ class CanonicalTelemetryLedger(LegacyImportMixin, NativeReconcileMixin, LedgerQu
         """
 
         for period, reason in self._written_segments.items():
-            sealed = self._catalog.execute(
-                "SELECT sealed_at FROM ledger_segments WHERE period=? AND sealed_at IS NOT NULL",
-                (period,),
-            ).fetchone()
-            if sealed is not None:
-                self._catalog.execute(
-                    "UPDATE segment_seals SET invalidated_at=?,invalidation_reason=? "
-                    "WHERE period=? AND sealed_at=?",
-                    (now, reason, period, sealed["sealed_at"]),
-                )
-                self._catalog.execute(
-                    "UPDATE ledger_segments SET sealed_at=NULL,sha256=NULL WHERE period=?",
-                    (period,),
-                )
-                self.seal_invalidations += 1
-                log.info(
-                    "canonical telemetry segment %s unsealed: %s",
-                    period,
-                    reason,
-                    extra={"period": period, "reason": reason},
-                )
-            self._catalog.execute(
-                "UPDATE ledger_segments SET last_written_at=? WHERE period=?", (now, period)
-            )
+            self._mark_segment_written(period, reason, now)
         self._written_segments.clear()
+
+    def _mark_segment_written(self, period: str, reason: str, now: float) -> None:
+        """Drop `period`'s seal, if it has one, and move its last-write stamp to `now`."""
+
+        sealed = self._catalog.execute(
+            "SELECT sealed_at FROM ledger_segments WHERE period=? AND sealed_at IS NOT NULL",
+            (period,),
+        ).fetchone()
+        if sealed is not None:
+            self._catalog.execute(
+                "UPDATE segment_seals SET invalidated_at=?,invalidation_reason=? "
+                "WHERE period=? AND sealed_at=?",
+                (now, reason, period, sealed["sealed_at"]),
+            )
+            self._catalog.execute(
+                "UPDATE ledger_segments SET sealed_at=NULL,sha256=NULL WHERE period=?",
+                (period,),
+            )
+            self.seal_invalidations += 1
+            log.info(
+                "canonical telemetry segment %s unsealed: %s",
+                period,
+                reason,
+                extra={"period": period, "reason": reason},
+            )
+        self._catalog.execute(
+            "UPDATE ledger_segments SET last_written_at=? WHERE period=?", (now, period)
+        )
 
     def _plausible(self, observed_at: float) -> str | None:
         """Why an observation's time cannot place it, or None when it can."""
@@ -1401,10 +1416,7 @@ class CanonicalTelemetryLedger(LegacyImportMixin, NativeReconcileMixin, LedgerQu
                 (run_id, agent_id, raw_name, input_hash),
             )
             connection.execute(
-                CALL_REPEATS_INSERT
-                + CALL_REPEATS_SELECT
-                + " AND run_id=? AND agent_id=? AND raw_name=? "
-                "AND COALESCE(executed_input_sha256,input_sha256)=? GROUP BY 1,2,3,4",
+                CALL_REPEATS_INSERT + CALL_REPEATS_SELECT + CALL_REPEATS_GROUP_FILTER,
                 (run_id, agent_id, raw_name, input_hash),
             )
 

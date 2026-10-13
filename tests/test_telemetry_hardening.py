@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import hashlib
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 
 import pytest
 
 from swe_mux.telemetry_ledger import CanonicalTelemetryLedger
 from swe_mux.telemetry_schema import (
+    CALL_REPEATS_GROUP_FILTER,
+    CALL_REPEATS_SELECT,
     LEDGER_SCHEMA_VERSION,
     SEGMENT_MIGRATIONS,
     LedgerSchemaError,
@@ -53,8 +56,9 @@ def _drop_to_v1_shape(root: Path) -> None:
             connection.execute("DROP TABLE segment_meta")
             connection.execute("DROP TABLE telemetry_provider_metrics")
             connection.execute("DROP TABLE telemetry_call_repeats")
+            connection.execute("DROP INDEX idx_ledger_tools_repeat_group")
             for step in _SEGMENT_STEPS:
-                if isinstance(step, str):
+                if isinstance(step, str) and " ADD COLUMN " in step:
                     tokens = step.split()
                     connection.execute(f"ALTER TABLE {tokens[2]} DROP COLUMN {tokens[5]}")
 
@@ -73,7 +77,7 @@ def test_a_version_one_ledger_is_migrated_additively_on_open(tmp_path: Path) -> 
 
     reopened = CanonicalTelemetryLedger(root)
     status = reopened.schema_status()
-    assert status["version"] == LEDGER_SCHEMA_VERSION == 5
+    assert status["version"] == LEDGER_SCHEMA_VERSION == 6
     assert status["drift"] == []
     assert status["migrations"][segment.stem] == {
         "found": 0,
@@ -538,3 +542,68 @@ def test_repeated_calls_are_counted_as_they_are_written(tmp_path: Path) -> None:
     early = ledger.inefficiency_findings(from_ts=1_787_999_000, to_ts=1_788_000_015)["findings"]
     assert not [item for item in early if item["kind"] == "repeated_identical_calls"]
     ledger.close()
+
+
+def test_the_repeat_recount_reads_only_the_group_it_touched(tmp_path: Path) -> None:
+    """Measured 2026-10-12: without its own index the recount walked every call the
+    run's agent had made - 66ms per tool call on a 29k-call run, quadratic in the
+    run's length. The plan must name that index, on all four of its columns."""
+
+    root = tmp_path / "telemetry"
+    ledger = CanonicalTelemetryLedger(root)
+    ledger.record_event(event("tool_use", tool="Grep", call_id="g-0", target="x"), dimensions())
+    ledger.close()
+    [segment] = (root / "segments").glob("*.sqlite3")
+    with closing(sqlite3.connect(segment)) as connection:
+        plan = " ".join(
+            str(row[-1])
+            for row in connection.execute(
+                "EXPLAIN QUERY PLAN " + CALL_REPEATS_SELECT + CALL_REPEATS_GROUP_FILTER,
+                ("run", "root", "Grep", "hash"),
+            )
+        )
+    assert "idx_ledger_tools_repeat_group" in plan
+    assert "raw_name=? AND <expr>=?" in plan
+
+
+def test_a_migration_that_rewrites_a_sealed_segment_unseals_it(tmp_path: Path) -> None:
+    """A seal describes bytes. A migration that changes them must not leave it standing."""
+
+    root = tmp_path / "telemetry"
+    now = {"value": DAY + 60}
+    ledger = CanonicalTelemetryLedger(root, clock=lambda: now["value"])
+    ledger.record_event(event("tool_use", ts=DAY + 10, tool="Read", call_id="c-1"), dimensions())
+    while ledger.rebuild_next_closed_day(now=DAY + 86400) is not None:
+        pass
+    now["value"] = DAY + 10 * 86400
+    assert ledger.seal_next_segment() is not None
+    ledger.close()
+    [segment] = (root / "segments").glob("*.sqlite3")
+    with closing(sqlite3.connect(segment)) as connection, connection:
+        # The file as version 5 left it: no repeat-group index.
+        connection.execute("DROP INDEX idx_ledger_tools_repeat_group")
+        connection.execute("UPDATE segment_meta SET value='5' WHERE key='schema_version'")
+
+    now["value"] = DAY + 11 * 86400
+    reopened = CanonicalTelemetryLedger(root, clock=lambda: now["value"])
+    assert reopened.schema_status()["drift"] == []
+    with closing(sqlite3.connect(root / "catalog.sqlite3")) as catalog:
+        catalog.row_factory = sqlite3.Row
+        row = catalog.execute(
+            "SELECT sealed_at, sha256, last_written_at FROM ledger_segments WHERE period=?",
+            (segment.stem,),
+        ).fetchone()
+        reasons = [
+            item["invalidation_reason"]
+            for item in catalog.execute("SELECT invalidation_reason FROM segment_seals")
+        ]
+    assert (row["sealed_at"], row["sha256"]) == (None, None)
+    assert row["last_written_at"] == DAY + 11 * 86400
+    assert reasons == ["schema migration 5 to 6"]
+    reopened.close()
+
+    # A file already at the current version opens without touching its seal state.
+    again = CanonicalTelemetryLedger(root, clock=lambda: now["value"])
+    again.schema_status()
+    assert again.seal_invalidations == 0
+    again.close()

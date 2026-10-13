@@ -73,8 +73,8 @@ new ledger.
 - `segments/YYYY-MM.sqlite3` owns content-free evidence and canonical run, turn, tool-call,
   model-request, compaction, skill-invocation, verification, and provider-metric entities
   whose activity began in that UTC month.
-- Every file is versioned (`telemetry_schema.py`, `LEDGER_SCHEMA_VERSION`, 5 since
-  2026-10-12).
+- Every file is versioned (`telemetry_schema.py`, `LEDGER_SCHEMA_VERSION`, 6 since
+  2026-10-13).
   A migration step is a SQL statement or a callable, for the shapes SQL cannot express
   additively: recreating a derived rollup table whose key changed (version 3 put evidence
   quality into the tool rollup key), backfilling a new column from existing ones, and
@@ -83,6 +83,10 @@ new ledger.
   Version 5 changes only the catalog.
   It adds each segment's `last_written_at`, stamped with the seal time for a sealed segment and with the upgrade time for any other, so nothing is sealed for one grace period after the upgrade.
   It adds the reconciliation read cursor to `native_reconciliations` and the `rejected_observations` table.
+  Version 6 changes only segments: it adds `idx_ledger_tools_repeat_group`, over the four columns the per-write repeat recount filters on (the input-hash one as the same `COALESCE` expression).
+  Without it the recount walked every call the run's agent had made, measured on 2026-10-12 at 66ms per tool call on a 29k-call run, so the cost grew with the square of a run's length; with it, a recount reads its own group.
+  The index takes about a second to build on a quarter-million-call segment.
+  Any migration that applies a step to a segment now drops that segment's seal (reason `schema migration N to M`) and stamps its last write, because a seal describes bytes the migration just changed; it is resealed after the usual grace period.
   Opening a file creates missing tables from the current schema and then applies each
   additive migration the file has not seen, checking every `ADD COLUMN` against the table
   first, so a data directory written by an older daemon gains exactly the columns the current

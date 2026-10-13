@@ -26,7 +26,7 @@ from typing import Any
 
 from .harness import HARNESSES
 
-LEDGER_SCHEMA_VERSION = 5
+LEDGER_SCHEMA_VERSION = 6
 
 #: The earliest instant an observation may claim (2020-01-01T00:00:00Z). Nothing this
 #: ledger records predates it, so an earlier time is a producer that sent no time at
@@ -584,6 +584,8 @@ CREATE INDEX IF NOT EXISTS idx_ledger_tools_run
   ON telemetry_tool_calls(run_id,turn_id,started_at);
 CREATE INDEX IF NOT EXISTS idx_ledger_tools_dimensions
   ON telemetry_tool_calls(backend,project_id,family,operation,transport,status,started_at);
+CREATE INDEX IF NOT EXISTS idx_ledger_tools_repeat_group
+  ON telemetry_tool_calls(run_id,agent_id,raw_name,COALESCE(executed_input_sha256,input_sha256));
 
 CREATE TABLE IF NOT EXISTS telemetry_skill_invocations (
   skill_invocation_id TEXT PRIMARY KEY,
@@ -702,6 +704,10 @@ CREATE INDEX IF NOT EXISTS idx_ledger_call_repeats_time
 #: One row per (run, agent, tool, input hash): how many times that exact input ran.
 #: Maintained on every tool-call write and read by the repeated-call finding, so the
 #: finding costs the rows that repeated rather than a scan of every call in the window.
+#: The recount filters on exactly the columns of `idx_ledger_tools_repeat_group`,
+#: expression included; without that index it walked every call the run's agent had
+#: made (measured 2026-10-12: 66ms per tool call on a 29k-call run, so quadratic in a
+#: run's length), and an edit here that stops matching the index brings that back.
 CALL_REPEATS_SELECT = (
     "SELECT run_id,agent_id,raw_name,COALESCE(executed_input_sha256,input_sha256) input_sha256,"
     "MIN(backend),MIN(model),MIN(project_id),MIN(origin),MIN(invocation_layer),MIN(family),"
@@ -711,6 +717,11 @@ CALL_REPEATS_SELECT = (
 CALL_REPEATS_INSERT = (
     "INSERT INTO telemetry_call_repeats(run_id,agent_id,raw_name,input_sha256,backend,model,"
     "project_id,origin,invocation_layer,family,repeats,first_at,last_at) "
+)
+#: Narrows `CALL_REPEATS_SELECT` to the one group a write touched.
+CALL_REPEATS_GROUP_FILTER = (
+    " AND run_id=? AND agent_id=? AND raw_name=? "
+    "AND COALESCE(executed_input_sha256,input_sha256)=? GROUP BY 1,2,3,4"
 )
 
 MigrationStep = str | Callable[[sqlite3.Connection], None]
@@ -826,6 +837,7 @@ CATALOG_MIGRATIONS: dict[int, tuple[MigrationStep, ...]] = {
         "cursor_truncated INTEGER NOT NULL DEFAULT 0",
         _stamp_segment_writes,
     ),
+    6: (),
 }
 SEGMENT_MIGRATIONS: dict[int, tuple[MigrationStep, ...]] = {
     2: (
@@ -847,6 +859,12 @@ SEGMENT_MIGRATIONS: dict[int, tuple[MigrationStep, ...]] = {
         _backfill_evidence_quality,
     ),
     4: (_backfill_call_repeats,),
+    # The schema text already created it by the time this runs; the step is what
+    # makes the change visible as a migration, which is what unseals the segment.
+    6: (
+        "CREATE INDEX IF NOT EXISTS idx_ledger_tools_repeat_group ON telemetry_tool_calls"
+        "(run_id,agent_id,raw_name,COALESCE(executed_input_sha256,input_sha256))",
+    ),
 }
 
 

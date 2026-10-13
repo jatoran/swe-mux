@@ -267,6 +267,9 @@ Fields and invariants: `features/daemon-resilience.md`.
   how many calls ran that exact input and when the first and last did, maintained by every
   tool-call write and backfilled once by the migration; the repeated-call finding reads it
   instead of grouping every call in the window by hash.
+  Schema 6 adds `idx_ledger_tools_repeat_group` on `telemetry_tool_calls(run_id, agent_id,
+  raw_name, COALESCE(executed_input_sha256, input_sha256))`, which is what keeps that
+  per-write maintenance to the one group a write touched rather than the whole run.
   `telemetry_entity_evidence` records which observation contributed which entity side and its
   precedence.
   A catalog location makes entity identity global across segments, so a call beginning before a
