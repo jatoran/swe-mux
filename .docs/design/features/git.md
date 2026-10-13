@@ -2,7 +2,7 @@
 
 ## What it is
 
-- Attached sessions poll the latest accepted live cwd (or spawn cwd until live telemetry is available) for HEAD, branch, dirty count, upstream divergence, linked-worktree identity, working-tree root, lines changed against HEAD, and lines and files changed against the comparison ref.
+- Live sessions follow the latest accepted live cwd (or spawn cwd until live telemetry is available) for HEAD, branch, dirty count, upstream divergence, linked-worktree identity, working-tree root, lines changed against HEAD, and lines and files changed against the comparison ref.
 - User-initiated worktree API wraps `git worktree` without performing other mutating git operations.
 - Durable provenance connects a commit to the session and agent run whose evidence observed or created it without changing the repository.
 
@@ -11,14 +11,29 @@
 - Canonical Project identity probes for worktree root, common Git directory, and origin run
   concurrently behind one timeout window. Results are cached briefly per canonical cwd so a burst
   of terminal launches does not repeatedly cross the Git process boundary.
-- Poll cwd values with at least one attached terminal pane every cadence tick; sweep **every**
-  session once a minute, and always on the first tick after daemon start. Deduplicate by cwd and
-  cap concurrency. Branch/status/upstream/git-dir calls run in parallel with bounded timeouts.
-- The sweep exists because `GitState` is a cache of a derived observation on a record that
-  outlives the daemon that wrote it. Polling only attached sessions froze that cache for as long
-  as a pane stayed closed, so a value produced by code that was later corrected survived the
-  correction. It is affordable because deduplication is by cwd: a fleet of thirty sessions in one
-  checkout costs one read, so cost scales with distinct working directories rather than sessions.
+- **A checkout is read when it changes, not on a timer** (since 2026-10-12).
+  Each followed checkout has an OS watch over its working tree and its Git directory
+  (`src/swe_mux/git_watch.py`), and a change marks the checkout due.
+  An attached checkout (a session with a pane open) is re-read at most once per five-second cadence, so a burst of edits costs one read; a detached one at most every 30 seconds.
+  Before this the monitor ran about seven `git` processes per attached checkout every five seconds whether or not anything had moved, which on the operator's fleet kept the daemon's event loop busy a third of its life with a 9.9-second median iteration.
+- **A safety sweep still comes around**: every 60 seconds for an attached checkout and every 300 for a detached one, and always on the first tick after daemon start.
+  It bounds anything a watch misses (a network drive, an edit made through a path the watch does not cover, an OS event queue overflow) to a minute.
+  The sweep exists because `GitState` is a cache of a derived observation on a record that outlives the daemon that wrote it; reading only what a pane is open on froze that cache for as long as the pane stayed closed, so a value produced by code that was later corrected survived the correction.
+- **A checkout without a live watch keeps timed polling**: the five-second cadence while attached and once a minute while detached.
+  That covers a watch that failed to start (missing directory, permissions, the OS's watch limit), one in its 60-second failure cooldown, and more distinct roots than the 32-watch cap; losing a watch costs cost, never correctness.
+  A directory Git does not know is asked again every 30 seconds while attached and every 60 while detached, and is not watched until Git says it is a repository.
+- **What counts as a change.** Inside the Git directory only state that `git status` or `rev-parse` read: `HEAD`, `index`, `packed-refs`, `refs/`, the merge/cherry-pick/revert/bisect/rebase markers, and their per-worktree copies under `worktrees/<name>/`.
+  Lock files, objects, logs, and the monitor's own `--no-optional-locks` reads change nothing that matters and are ignored, so a read never triggers the next one.
+  In the working tree, a path Git ignores is not a change: the monitor reads the repository's own ignore listing (`git ls-files --others --ignored --exclude-standard --directory`), refreshed when a `.gitignore` changes and otherwise every 15 minutes, plus a fixed set of dependency and build directories that are noise in any repository (`node_modules`, `.venv`, `__pycache__`, and the like).
+- **Watches are shared and live off the loop.** Checkouts are covered by a minimal set of roots: a primary checkout with linked worktrees nested inside it is one watch, and a Git directory shared by several worktrees is watched once.
+  Each watch runs on its own daemon thread (watchfiles' synchronous `watch`), classifies a batch with pure string work, and posts only "this checkout changed" to the event loop, so no per-path work and no filesystem resolve ever reaches it.
+  The checkout layout a watch needs (toplevel, Git directory, common directory) is resolved once per `(cwd, git dir, common dir)` in a worker thread and memoized, where the linked-worktree name used to call `realpath` on the loop on every read.
+- **Changes are never lost to a read in flight.** A checkout's dirty mark is cleared before its read starts, so a change that lands mid-read marks it due again, and a watch that starts after the read that resolved its checkout (after a failure's cooldown, say) buys one catch-up read covering the gap.
+- Deduplicate by cwd and cap concurrency; branch/status/upstream/git-dir calls run in parallel with bounded timeouts.
+  Deduplication is by cwd, so a fleet of thirty sessions in one checkout costs one read and cost scales with distinct working directories rather than sessions.
+- `GET /api/diagnostics/background` serves the monitor's own account under `git_monitor`: how many targets it follows and how many are due, reads by cause (`initial`, `change`, `sweep`, `poll`), changes received, the last and slowest read, and under `watch` the roots followed, live watches, roots cooling down or unwatched, batches and paths received and how many mattered, and starts and failures with the last one.
+  A healthy idle fleet reads almost only `sweep`; a steady stream of `poll` means watches are not running.
+  A read taking five seconds or more logs `git_read_slow` with its targets and causes; a watch that fails logs `git_watch_failed` at WARNING with its cooldown.
 - A checkout is a **linked worktree** when its `--absolute-git-dir` differs from its
   `--git-common-dir`; `GitState.worktree` is then the checkout's leaf directory name.
   Comparing the two paths is the only check that stays correct for bare repositories and
@@ -32,7 +47,7 @@
 - Lines added and removed come from `git diff --numstat HEAD`, memoized per repository root on
   the working-tree fingerprint (`GitEvidence.dirty_hash`) the cheap poll already computes.
   The diff therefore runs when the change set actually moves, not once per session and not once
-  per five-second poll, and every session sharing a checkout reads one measurement.
+  per read, and every session sharing a checkout reads one measurement.
   A clean tree answers 0/0 with no subprocess at all.
 - The counts cover **tracked** changes only: an untracked file raises the dirty count but has no
   content to compare, so it contributes no lines.
@@ -58,6 +73,8 @@
   reporting only.
 - Detached HEAD is shown as its short commit SHA.
 - Emit `git_changed`; mirror state into the session snapshot and attached pane-header chip.
+  A session's `git_changed` carries a row patch (`patch.git`, the same value as `git`) and the `session_revision` its `publish_update` stamped, so the browser writes the field onto that one row in place rather than re-reading the whole fleet (`technical/frontend/packages/composition.md`, "Fleet refresh").
+  The Project-level `git_changed` a Git drawer action raises names no session and carries no patch, and still re-reads the fleet.
 - Add/list/remove worktrees through argument-vector subprocesses; no shell interpolation.
 - Removal validates the exact requested path against Git's current porcelain worktree
   list before mutation.
@@ -525,7 +542,7 @@ The whole-Project reading is still several hundred milliseconds of Git, and that
   The overview earned it first; the ledger has more to gain, because the unsearched ledger is the largest payload this daemon serves (measured 2026-08-27: 994KB, 140KB compressed, at 500 rows in this repository) and is append-mostly, so a revisit very often asks for bytes it already holds.
   Its size is **not** a field to trim: the contributor paths that dominate it are drawn on the row and carried in the review packet.
 - Map refreshes on Git and worktree events, **filtered by Project and debounced**.
-  `git_changed` is raised by a session's five-second dirty tick whenever that session's Git state actually moved, so an unfiltered listener re-read one Project's whole worktree map on another Project's poll, and ten sessions in one repository raised it ten times inside a few hundred milliseconds for one answer.
+  `git_changed` is raised for a session whenever its checkout's Git state actually moved, so an unfiltered listener re-read one Project's whole worktree map on another Project's poll, and ten sessions in one repository raised it ten times inside a few hundred milliseconds for one answer.
   The event carries its Project; an event naming none (a reconnect, a worktree act) is never filtered out, because treating "unknown" as "not mine" would stop the tab refreshing after a reconnect.
   `git_overview_changed` joins that listener and is the *daemon's* half: not an observation of a repository moving, but the reading layer reporting that an answer it already handed out has been superseded, which is what stops a client that arrived during a quiet moment from painting the cached reading and never learning the revalidation disagreed.
 - **Git is one mount across its three segments.** The drawer's default is one body per segment, which is right for unrelated panes and wrong here: Map, Log, and Provenance are one component reading one repository, sharing a refresh listener, a comparison ref, a land queue, and a commit cache, and mounting them separately meant switching to Log and back threw all of it away along with the reader's expanded worktree and filter.
@@ -634,6 +651,8 @@ and provider-managed worktrees may live outside that root.
 ## Key files
 
 - Monitor and git runner: `src/swe_mux/git_monitor.py`
+- Checkout watches, change classification, and ignore rules: `src/swe_mux/git_watch.py`
+- Row patches carried on `git_changed` and `harness_status`: `src/swe_mux/session_patch.py`
 - Durable session-to-commit capture and explicit historical import: `src/swe_mux/git_provenance.py`, `src/swe_mux/tools/git_provenance_backfill.py`, `src/swe_mux/history.py`
 - Project-scoped review domain and bounded patch runner: `src/swe_mux/git_review.py`
 - First-time repository creation, setup-status probes, and ignore-file writes: `src/swe_mux/git_init.py`

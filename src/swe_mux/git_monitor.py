@@ -16,15 +16,21 @@ from .background_tasks import background
 from .bounded_subprocess import run_bounded
 from .event_bus import EventBus
 from .git_review import resolve_comparison_ref
+from .git_watch import CheckoutLayout, CheckoutWatches
 from .logsetup import bound_request_id, current_request_id, new_request_id
 from .models import GitState
 from .session import Session, SessionManager
+from .session_patch import session_patch
 
 log = logging.getLogger(__name__)
 
 GIT_MONITOR_LOOP = "git-monitor"
 GIT_TIMEOUT_SECONDS = 4.0
 GIT_CONCURRENCY = 4
+#: Git's ignored-path listing walks the working tree like `git status` does, once
+#: per watched checkout and again only when a `.gitignore` moves. It gets longer
+#: than an ordinary query because a slow answer here delays nothing.
+IGNORED_LISTING_TIMEOUT_SECONDS = 15.0
 #: What one Git query may hold in memory. Every caller here parses what it gets
 #: back, so a capture that lost its middle is not a smaller answer - it is a wrong
 #: one, and is reported as `GIT_OUTPUT_CAPPED` rather than returned.
@@ -124,6 +130,10 @@ class GitEvidence:
 class GitReading:
     state: GitState
     evidence: GitEvidence
+    #: Where the checkout keeps its tree and its Git directory, resolved. What the
+    #: monitor watches for changes; None when Git could not say (not a repository,
+    #: or the identity query failed), which leaves the checkout on timed polling.
+    layout: CheckoutLayout | None = None
 
 
 @dataclass(slots=True, frozen=True)
@@ -514,10 +524,13 @@ def _dirty_hash(porcelain: str) -> str | None:
     return hashlib.sha256("\n".join(lines).encode("utf-8", "replace")).hexdigest()[:16]
 
 
-def _worktree_name(cwd: str, root: str, git_dir: str, common_dir: str) -> str | None:
-    """Leaf name of `root` when it is a linked worktree, else None.
+def _resolve_layout(
+    cwd: str, root: str, git_dir: str, common_dir: str
+) -> tuple[str | None, CheckoutLayout | None]:
+    """(linked worktree name, layout) for a checkout. Filesystem-bound: off the loop.
 
-    A linked worktree's `--git-dir` lives under the primary checkout's
+    The name is the leaf of `root` when it is a linked worktree, else None. A
+    linked worktree's `--git-dir` lives under the primary checkout's
     `.git/worktrees/<name>`, so it differs from `--git-common-dir`; the primary
     checkout reports the same path for both. Comparing the two paths is the only
     check that stays correct for bare repositories and `.git`-file submodules,
@@ -531,16 +544,53 @@ def _worktree_name(cwd: str, root: str, git_dir: str, common_dir: str) -> str | 
     toplevel. Resolved against this process's cwd instead, those never matched
     the git dir, so every primary checkout compared unequal to itself and was
     reported as a linked worktree named after the repository folder.
+
+    The same two resolved paths are what the monitor watches, so they are
+    computed once here for both purposes.
     """
     if not git_dir or not common_dir:
-        return None
+        return None, None
     try:
         base = Path(cwd)
-        if (base / git_dir).resolve() == (base / common_dir).resolve():
-            return None
+        resolved_git = (base / git_dir).resolve()
+        resolved_common = (base / common_dir).resolve()
     except OSError:
-        return None
-    return Path(root).name or None
+        return None, None
+    worktree = None if resolved_git == resolved_common else (Path(root).name or None)
+    layout = CheckoutLayout(
+        toplevel=str(Path(root)), git_dir=str(resolved_git), common_dir=str(resolved_common)
+    )
+    return worktree, layout
+
+
+def _worktree_name(cwd: str, root: str, git_dir: str, common_dir: str) -> str | None:
+    """Leaf name of `root` when it is a linked worktree, else None (see `_resolve_layout`)."""
+    return _resolve_layout(cwd, root, git_dir, common_dir)[0]
+
+
+#: (cwd, root, git dir, common dir) as Git reported them -> `_resolve_layout`'s
+#: answer. What `rev-parse` said about a directory does not move while the
+#: directory exists, and resolving those paths is filesystem work: two `realpath`
+#: calls per poll on the event loop were a recurring loop-stall frame (2026-10-12).
+#: A different answer from Git is a different key, so a checkout that is recreated
+#: as something else is never served a stale layout.
+_layout_memo: OrderedDict[
+    tuple[str, str, str, str], tuple[str | None, CheckoutLayout | None]
+] = OrderedDict()
+
+
+async def _checkout_layout(
+    cwd: str, root: str, git_dir: str, common_dir: str
+) -> tuple[str | None, CheckoutLayout | None]:
+    key = (cwd, root, git_dir, common_dir)
+    cached = _layout_memo.get(key)
+    if cached is not None:
+        _layout_memo.move_to_end(key)
+        return cached
+    value = await asyncio.to_thread(_resolve_layout, *key)
+    _layout_memo[key] = value
+    _trim(_layout_memo)
+    return value
 
 
 #: root -> (dirty_hash, added, removed). Keyed by the working-tree fingerprint the
@@ -566,10 +616,11 @@ COMPARE_REF_TTL_SECONDS = 60.0
 
 
 def reset_diffstat_cache() -> None:
-    """Drop every memoized diffstat and comparison ref. For tests and daemon restart."""
+    """Drop every memoized diffstat, comparison ref, and layout. For tests and restart."""
     _diffstat_memo.clear()
     _compare_memo.clear()
     _compare_ref_cache.clear()
+    _layout_memo.clear()
 
 
 def _trim(cache: OrderedDict[Any, Any]) -> None:
@@ -764,7 +815,11 @@ async def read_git_reading(cwd: str, compare_override: str | None = None) -> Git
     # An unborn branch (no commits yet) reports a non-zero code and no oid.
     commit = head.strip() if not head_code and head.strip() else None
     dir_lines = dirs.splitlines() if not dir_code else []
-    worktree = _worktree_name(cwd, root, *dir_lines[:2]) if len(dir_lines) >= 2 else None
+    worktree, layout = (
+        await _checkout_layout(cwd, root, dir_lines[0], dir_lines[1])
+        if len(dir_lines) >= 2
+        else (None, None)
+    )
     dirty_hash = _dirty_hash(porcelain)
     added, removed = await _read_diffstat(cwd, root, dirty_hash, commit is not None)
     resolved_oid = compare_oid.strip() if compare_ref and not compare_code else ""
@@ -792,6 +847,7 @@ async def read_git_reading(cwd: str, compare_override: str | None = None) -> Git
             head=commit,
         ),
         GitEvidence(head=commit, dirty_hash=dirty_hash),
+        layout,
     )
 
 
@@ -830,27 +886,53 @@ async def read_unique_git_readings(targets: Iterable[GitTarget]) -> dict[GitTarg
 class GitMonitor:
     """Keeps every session's `GitState` converging on what git actually says.
 
-    Attached sessions are polled at `cadence`; every session is swept far more
-    slowly. The sweep is not a nicety: `GitState` is a *cache of a derived
-    observation* living on a record that outlives the daemon that wrote it, so a
-    session whose pane is closed used to freeze whatever the last poll computed,
-    for as long as the session lived. A value derived by code that has since been
-    fixed then survives the fix — which is exactly how a wrong `worktree` name
-    kept rendering after the bug that produced it was gone.
+    **A checkout is read when it changes, not on a timer.** Every followed checkout
+    has an OS watch over its working tree and its Git directory (`git_watch.py`), and
+    a change marks it due. Attached sessions are re-read at most once per `cadence`
+    however fast the changes come; detached ones at most every
+    `DETACHED_CHANGE_SECONDS`. Until 2026-10 every attached checkout was re-read every
+    five seconds whether or not anything had moved - ~7 `git` processes per checkout
+    per tick, measured 2026-10-12 at a third of the loop's life and a 9.9s median
+    iteration, almost all of it answering "nothing changed".
 
-    The sweep is affordable because `read_unique_git_readings` deduplicates by
-    checkout target: a fleet of thirty sessions in one checkout is one git read,
-    not thirty. Cost scales with distinct working directories, which is why
-    polling more sessions is close to free while polling more often would not be.
+    Every session is still swept, far more slowly, and the sweep is not a nicety:
+    `GitState` is a *cache of a derived observation* living on a record that outlives
+    the daemon that wrote it, so a session whose pane is closed used to freeze
+    whatever the last poll computed, for as long as the session lived. A value derived
+    by code that has since been fixed then survives the fix - which is exactly how a
+    wrong `worktree` name kept rendering after the bug that produced it was gone. The
+    sweep is also what bounds a missed OS notification to staleness rather than to a
+    wrong answer. The first tick after a daemon start reads everything, so state
+    adopted from a previous daemon is re-derived by *this* daemon's code.
 
-    That deduplication is also why every session sharing a checkout reports the
-    same numbers, and it is not an artefact worth removing: `git status` answers
-    for the whole repository however it is invoked, so there is no per-session
-    measurement to take. Clients disambiguate with `GitState.root`.
+    A checkout with no live watch - not a repository, a watch the OS refused, a
+    directory on a filesystem that cannot be watched - falls back to the timed
+    polling it always had, so losing a watch costs cost, never correctness.
+
+    Reads are deduplicated by checkout target (`read_unique_git_readings`): a fleet of
+    thirty sessions in one checkout is one git read, not thirty. That deduplication is
+    also why every session sharing a checkout reports the same numbers, and it is not
+    an artefact worth removing: `git status` answers for the whole repository however
+    it is invoked, so there is no per-session measurement to take. Clients
+    disambiguate with `GitState.root`.
     """
 
-    #: Sweeps including detached sessions, in cadence ticks. 12 * 5 s = one minute.
-    DETACHED_SWEEP_EVERY = 12
+    #: How often the loop decides what is due. Deciding reads no files and spawns
+    #: nothing, so this is cheap; it bounds how long a noticed change waits.
+    TICK_SECONDS = 1.0
+    #: Safety sweep for a watched checkout with an attached pane.
+    ATTACHED_SWEEP_SECONDS = 60.0
+    #: Safety sweep for a watched checkout nobody has open.
+    DETACHED_SWEEP_SECONDS = 300.0
+    #: Fastest a detached checkout that keeps changing is re-read.
+    DETACHED_CHANGE_SECONDS = 30.0
+    #: Without a live watch, a detached checkout keeps the pre-watch sweep.
+    UNWATCHED_DETACHED_SECONDS = 60.0
+    #: A directory Git does not recognise is asked again this often while attached,
+    #: so a `git init` in a shell pane appears without waiting for the sweep.
+    NON_REPOSITORY_SECONDS = 30.0
+    #: A read batch slower than this is logged at WARNING with what it covered.
+    SLOW_READ_SECONDS = 5.0
 
     def __init__(
         self,
@@ -858,6 +940,9 @@ class GitMonitor:
         events: EventBus,
         cadence: float = 5.0,
         compare_override: Callable[[str], str | None] | None = None,
+        *,
+        clock: Callable[[], float] = monotonic,
+        watch: bool = True,
     ) -> None:
         self.sessions = sessions
         self.events = events
@@ -866,19 +951,38 @@ class GitMonitor:
         #: inference. Injected rather than imported so the monitor keeps knowing
         #: nothing about the Project registry; absent, every checkout infers.
         self.compare_override = compare_override
+        self._clock = clock
         self._task: asyncio.Task[None] | None = None
-        self._sweep = 0
+        self._targets: dict[GitTarget, _TargetState] = {}
+        self._wake = asyncio.Event()
+        self._watches = (
+            CheckoutWatches(self._on_checkout_changed, _read_ignored_listing) if watch else None
+        )
+        self._reads: dict[str, int] = {}
+        self._changes = 0
+        self._slowest_read_seconds = 0.0
+        self._last_read_seconds: float | None = None
 
     def start(self) -> None:
+        log.info(
+            "git monitor started: change-driven, attached reads at most every %.1fs, "
+            "sweeps every %.0fs attached / %.0fs detached",
+            self.cadence,
+            self.ATTACHED_SWEEP_SECONDS,
+            self.DETACHED_SWEEP_SECONDS,
+        )
         self._task = background.start(GIT_MONITOR_LOOP, self._run)
 
     async def stop(self) -> None:
         await background.stop(GIT_MONITOR_LOOP)
         self._task = None
+        if self._watches is not None:
+            await self._watches.stop()
 
     async def _run(self) -> None:
         while True:
-            # One correlation id per poll, minted here because no request causes
+            self._wake.clear()
+            # One correlation id per tick, minted here because no request causes
             # this work. Without it a `bounded_command_timed_out` from a Git query
             # this loop started carried no identifier at all — not a request id,
             # because there is no request, and not an operation id, because none
@@ -888,29 +992,80 @@ class GitMonitor:
             # tasks, and stamps the loop's own log lines with the same id.
             with background.iteration(GIT_MONITOR_LOOP), bound_request_id(new_request_id()):
                 await self._poll()
-            await asyncio.sleep(self.cadence)
+            try:
+                await asyncio.wait_for(self._wake.wait(), timeout=self.TICK_SECONDS)
+            except TimeoutError:
+                pass
 
-    def _due(self) -> list[Session]:
-        """Attached sessions every tick; the whole fleet on a sweep tick.
+    def status(self) -> dict[str, Any]:
+        """Counters for `/api/diagnostics/background`.
 
-        The first tick after a daemon start is always a sweep, so state adopted
-        from a previous daemon is re-derived by *this* daemon's code rather than
-        trusted indefinitely.
+        `reads` is keyed by why each read happened. A healthy idle fleet reads
+        almost nothing but `sweep`; `poll` climbing means checkouts have fallen back
+        to timed polling, which `watch.unwatched_roots` and `watch.last_failure`
+        explain.
         """
-        self._sweep += 1
-        everything = self._sweep % self.DETACHED_SWEEP_EVERY == 1
-        return [
-            session
-            for session in self.sessions.sessions.values()
+        return {
+            "cadence_seconds": self.cadence,
+            "targets": len(self._targets),
+            "dirty_targets": sum(1 for state in self._targets.values() if state.dirty),
+            "reads": dict(self._reads),
+            "changes_received": self._changes,
+            "last_read_seconds": self._last_read_seconds,
+            "slowest_read_seconds": round(self._slowest_read_seconds, 3),
+            "watch": self._watches.status() if self._watches is not None else None,
+        }
+
+    def _on_checkout_changed(self, root_key: str, rules_changed: bool) -> None:
+        del rules_changed  # The watch refreshes its own ignore rules.
+        self._changes += 1
+        touched = False
+        for state in self._targets.values():
+            if state.root_key == root_key:
+                state.dirty = True
+                touched = True
+        if touched:
+            self._wake.set()
+
+    def _live_targets(self) -> dict[GitTarget, tuple[list[Session], bool]]:
+        """Every target a live local session reads, with whether any pane shows it."""
+        groups: dict[GitTarget, tuple[list[Session], bool]] = {}
+        for session in self.sessions.sessions.values():
             # An ended session's reading is frozen at its death, deliberately.
             # Every field here describes the *checkout*, so following it onward
             # would attribute whatever somebody changed afterwards to a session
             # that could not have made it — and a retained ended pane keeps its
             # subscribers, so without this a dead row would poll Git forever.
-            if getattr(session.record, "state", None) not in {"exited", "crashed"}
-            and (session.subscribers or everything)
-            and getattr(session.record, "runtime_boundary", "local") == "local"
-        ]
+            if getattr(session.record, "state", None) in {"exited", "crashed"}:
+                continue
+            if getattr(session.record, "runtime_boundary", "local") != "local":
+                continue
+            target = (session.record.git_cwd, self._override_for(session))
+            members, attached = groups.get(target, ([], False))
+            members.append(session)
+            groups[target] = (members, attached or bool(session.subscribers))
+        return groups
+
+    def _due_cause(self, state: _TargetState, attached: bool, now: float) -> str | None:
+        """Why `state` should be read now, or None. The rate limits live here."""
+        if state.last_read is None:
+            return "initial"
+        age = now - state.last_read
+        if state.dirty:
+            limit = self.cadence if attached else self.DETACHED_CHANGE_SECONDS
+            return "change" if age >= limit else None
+        if not state.repository:
+            limit = self.NON_REPOSITORY_SECONDS if attached else self.UNWATCHED_DETACHED_SECONDS
+            return "sweep" if age >= limit else None
+        if (
+            self._watches is not None
+            and state.root_key is not None
+            and self._watches.watched(state.root_key)
+        ):
+            limit = self.ATTACHED_SWEEP_SECONDS if attached else self.DETACHED_SWEEP_SECONDS
+            return "sweep" if age >= limit else None
+        limit = self.cadence if attached else self.UNWATCHED_DETACHED_SECONDS
+        return "poll" if age >= limit else None
 
     def _override_for(self, session: Session) -> str | None:
         if self.compare_override is None:
@@ -921,43 +1076,154 @@ class GitMonitor:
             log.exception("comparison ref override lookup failed")
             return None
 
-    async def _poll(self) -> None:
-        by_target: dict[GitTarget, list[Session]] = {}
-        for session in self._due():
-            target = (session.record.git_cwd, self._override_for(session))
-            by_target.setdefault(target, []).append(session)
-        readings = await read_unique_git_readings(by_target)
-        for target, sessions in by_target.items():
-            cwd = target[0]
+    async def _poll(self, now: float | None = None) -> None:
+        now = self._clock() if now is None else now
+        live = self._live_targets()
+        for target in tuple(self._targets):
+            if target not in live:
+                del self._targets[target]
+        due: dict[GitTarget, str] = {}
+        for target, (_members, attached) in live.items():
+            state = self._targets.setdefault(target, _TargetState())
+            cause = self._due_cause(state, attached, now)
+            if cause is None:
+                continue
+            due[target] = cause
+            # Cleared before the read rather than after: a change that lands while
+            # git is running must survive to cause the next read.
+            state.dirty = False
+            state.last_read = now
+        if due:
+            await self._read(due, live)
+        self._sync_watches(set(due))
+
+    async def _read(
+        self,
+        due: dict[GitTarget, str],
+        live: dict[GitTarget, tuple[list[Session], bool]],
+    ) -> None:
+        started = monotonic()
+        readings = await read_unique_git_readings(due)
+        elapsed = monotonic() - started
+        self._last_read_seconds = round(elapsed, 3)
+        self._slowest_read_seconds = max(self._slowest_read_seconds, elapsed)
+        for cause in due.values():
+            self._reads[cause] = self._reads.get(cause, 0) + 1
+        if elapsed >= self.SLOW_READ_SECONDS:
+            log.warning(
+                "git_read_slow targets=%d elapsed_s=%.2f causes=%s",
+                len(due),
+                elapsed,
+                ",".join(sorted(set(due.values()))),
+            )
+        for target in due:
             reading = readings[target]
-            state = reading.state
-            for session in sessions:
-                if session.record.git != state:
-                    previous = session.record.git
-                    previous_head = (
-                        previous.head
-                        if previous.root
-                        and state.root
-                        and _normalized_path(previous.root) == _normalized_path(state.root)
-                        else None
-                    )
-                    session.record.git = state
-                    session.publish_update()
-                    await self.events.emit(
-                        "git_changed",
-                        session_id=session.record.id,
-                        source="daemon",
-                        # Which Project's repository moved. Every session's five-second
-                        # dirty tick raises this, and the Git tab refetched a whole
-                        # worktree overview on each one regardless of whose repository
-                        # it was about - at fifty checkouts, several hundred `git`
-                        # subprocesses for a Project nobody was looking at.
-                        project_id=session.record.project_id,
-                        git=asdict(state),
-                        # Tier 0 provenance reads these: which commit, which
-                        # working-tree change set. The UI ignores them.
-                        content_hash=reading.evidence.head,
-                        target=cwd,
-                        previous_head=previous_head,
-                        **reading.evidence.as_payload(),
-                    )
+            target_state = self._targets.get(target)
+            if target_state is not None:
+                target_state.repository = bool(reading.state.root)
+                target_state.layout = reading.layout
+                target_state.root_key = reading.layout.key if reading.layout else None
+            await self._apply(target[0], reading, live[target][0])
+
+    async def _apply(self, cwd: str, reading: GitReading, sessions: list[Session]) -> None:
+        state = reading.state
+        for session in sessions:
+            if session.record.git == state:
+                continue
+            previous = session.record.git
+            previous_head = (
+                previous.head
+                if previous.root
+                and state.root
+                and _normalized_path(previous.root) == _normalized_path(state.root)
+                else None
+            )
+            session.record.git = state
+            session.publish_update()
+            await self.events.emit(
+                "git_changed",
+                session_id=session.record.id,
+                source="daemon",
+                # Which Project's repository moved. The Git tab refetched a whole
+                # worktree overview on every one of these regardless of whose
+                # repository it was about - at fifty checkouts, several hundred
+                # `git` subprocesses for a Project nobody was looking at.
+                project_id=session.record.project_id,
+                git=asdict(state),
+                # The complete new value of every row field this changed, ordered
+                # by the revision `publish_update` just stamped. The browser patches
+                # the session row from it instead of re-reading the whole fleet.
+                **session_patch(session, ("git",)),
+                # Tier 0 provenance reads these: which commit, which
+                # working-tree change set. The UI ignores them.
+                content_hash=reading.evidence.head,
+                target=cwd,
+                previous_head=previous_head,
+                **reading.evidence.as_payload(),
+            )
+
+    def _sync_watches(self, just_read: set[GitTarget]) -> None:
+        """Point the OS watches at exactly the checkouts live targets resolved to.
+
+        A watch that starts for a checkout this tick did not just read may have
+        missed a change in the gap before it, so that checkout is read once more.
+        """
+        if self._watches is None:
+            return
+        layouts = {
+            state.root_key: state.layout
+            for state in self._targets.values()
+            if state.root_key is not None and state.layout is not None
+        }
+        fresh = self._watches.sync(layouts)
+        if not fresh:
+            return
+        fresh_read = {
+            self._targets[target].root_key for target in just_read if target in self._targets
+        }
+        for state in self._targets.values():
+            if state.root_key in fresh and state.root_key not in fresh_read:
+                state.dirty = True
+
+
+@dataclass(slots=True)
+class _TargetState:
+    """What the monitor knows about one target between reads."""
+
+    #: Monotonic time of the last read, None before the first.
+    last_read: float | None = None
+    #: A watched change arrived since the last read began.
+    dirty: bool = False
+    #: Whether Git recognised the directory at the last read.
+    repository: bool = True
+    layout: CheckoutLayout | None = None
+    #: `layout.key`: which watched checkout a change notification names.
+    root_key: str | None = None
+
+
+async def _read_ignored_listing(toplevel: str) -> str | None:
+    """Git's own list of what is ignored in a checkout, or None when it cannot say.
+
+    `--directory` collapses an ignored directory to one entry, which is what makes
+    this cheap enough to ask again whenever a `.gitignore` moves: Git does not walk
+    into what it ignores.
+    """
+    code, output = await _git(
+        toplevel,
+        "ls-files",
+        "--others",
+        "--ignored",
+        "--exclude-standard",
+        "--directory",
+        "--no-empty-directory",
+        timeout_seconds=IGNORED_LISTING_TIMEOUT_SECONDS,
+    )
+    if code:
+        log.info(
+            "git_ignore_rules_unavailable root=%s code=%d diagnostic=%s",
+            toplevel,
+            code,
+            output[:200],
+        )
+        return None
+    return output

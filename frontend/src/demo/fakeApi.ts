@@ -515,6 +515,12 @@ const ROUTES: Route[] = [
     },
   },
   { method: 'POST', pattern: /^\/api\/sessions$/, handler: (_match, body) => spawnSession(body as Record<string, unknown>) },
+  // The one-row read the browser makes when an event says only that row moved. The
+  // unmatched-GET fallback would answer `{}`, which is not a row.
+  {
+    method: 'GET', pattern: /^\/api\/sessions\/([^/]+)$/,
+    handler: match => session(decodeURIComponent(match[1])) ?? error(404, 'Unknown demo session.'),
+  },
   {
     method: 'DELETE', pattern: /^\/api\/sessions\/([^/]+)$/,
     handler: match => {
