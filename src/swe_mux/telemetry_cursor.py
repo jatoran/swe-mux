@@ -54,7 +54,9 @@ class ScanCursor:
     """Where the last read of one transcript stopped."""
 
     offset: int
-    line: int
+    #: The absolute number of the line at `offset`; None until something is
+    #: appended past a resumed cursor, which is the first time it is needed.
+    line: int | None
     head_sha256: str | None
     tail_sha256: str | None
     #: The read this cursor continues began at a tail window rather than at byte 0,
@@ -189,7 +191,10 @@ def read_appended(
             else:
                 reason = mismatch
         if reason == "append" and cursor is not None:
-            start, first_line, truncated = cursor.offset, cursor.line, cursor.truncated
+            start, truncated = cursor.offset, cursor.truncated
+            first_line = (
+                cursor.line if cursor.line is not None else count_lines(handle, cursor.offset)
+            )
         else:
             start, first_line, truncated = _first_read_start(handle, size, tail_bytes)
         records, end, next_line = _complete_lines(handle, start, size, first_line)
@@ -213,6 +218,11 @@ def resumed_cursor(path: Path, offset: int) -> ScanCursor | None:
     saw. Everything up to that size was read then, so the next read continues there
     instead of parsing the file again. Its samples are taken now, so it is trusted
     once rather than verified; None when the file is now shorter than that.
+
+    The line number is left unknown: counting it reads the whole prefix, and most
+    of an inventory is finished conversations that will never be appended to, so the
+    first pass after an upgrade would otherwise read every transcript once. A read
+    that continues the cursor counts it then (`read_appended`).
     """
 
     try:
@@ -228,7 +238,7 @@ def resumed_cursor(path: Path, offset: int) -> ScanCursor | None:
                     return None
             return ScanCursor(
                 offset=offset,
-                line=count_lines(handle, offset),
+                line=None,
                 head_sha256=_head(handle, offset),
                 tail_sha256=_tail(handle, offset),
                 truncated=offset > FIRST_READ_TAIL_BYTES,

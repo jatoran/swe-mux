@@ -877,7 +877,7 @@ class OperationalTelemetryStore(QuotaUsageMixin):
             cursor = (
                 ScanCursor(
                     offset=int(row["cursor_offset"]),
-                    line=int(row["cursor_line"] or 0),
+                    line=None if row["cursor_line"] is None else int(row["cursor_line"]),
                     head_sha256=row["cursor_head_sha256"],
                     tail_sha256=row["cursor_tail_sha256"],
                     truncated=bool(row["cursor_truncated"]),

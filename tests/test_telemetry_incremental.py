@@ -196,10 +196,17 @@ def test_resumed_cursor_continues_a_whole_file_read_at_its_recorded_size(
     _append(path, _use("b", "Grep", 3))
     cursor = resumed_cursor(path, size)
     assert cursor is not None
-    assert (cursor.offset, cursor.line, cursor.truncated) == (size, 2, False)
+    # The line is counted only when something is appended, not for every file an
+    # upgrade resumes.
+    assert (cursor.offset, cursor.line, cursor.truncated) == (size, None, False)
+    at_end = resumed_cursor(path, path.stat().st_size)
+    assert at_end is not None
+    unchanged = read_appended(path, at_end)
+    assert (unchanged.reason, unchanged.cursor.line) == ("unchanged", None)
     continued = read_appended(path, cursor)
     assert continued.reason == "append"
     assert [line for line, _record in continued.records] == [2]
+    assert continued.cursor.line == 3
     assert resumed_cursor(path, size - 3) is None  # mid-line
     assert resumed_cursor(path, path.stat().st_size + 1) is None  # longer than the file
 

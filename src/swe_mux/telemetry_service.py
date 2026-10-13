@@ -432,7 +432,9 @@ class CanonicalTelemetryService:
         )
 
     async def schema_status(self) -> dict[str, Any]:
-        result: dict[str, Any] = await self._maintain(self._maintenance.schema_status)
+        # A route asks for this; it reads schema signatures and must not wait out a
+        # seal on the maintenance thread.
+        result: dict[str, Any] = await self._call(self._queries.schema_status)
         self._schema = result
         return result
 

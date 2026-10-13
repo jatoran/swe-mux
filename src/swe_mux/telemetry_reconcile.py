@@ -417,7 +417,7 @@ class NativeReconcileMixin:
             return (
                 ScanCursor(
                     offset=int(state["cursor_offset"]),
-                    line=int(state["cursor_line"] or 0),
+                    line=None if state["cursor_line"] is None else int(state["cursor_line"]),
                     head_sha256=state["cursor_head_sha256"],
                     tail_sha256=state["cursor_tail_sha256"],
                     truncated=bool(state["cursor_truncated"]),
