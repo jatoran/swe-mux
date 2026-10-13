@@ -490,6 +490,9 @@ Three orderings make that safe without holding the lock across a read.
 - A seal reads the segment's last-write stamp, runs its checks unlocked, and records the seal under the lock only `WHERE sealed_at IS NULL AND last_written_at=?` the stamp it read; a write in between wins.
   Its WAL checkpoint also runs unlocked, because a `TRUNCATE` checkpoint waits out any reader still on an older snapshot, and only a write to that segment, which has had none for a week, can wait behind it.
 - A rollup reads its day, then writes it and deletes the day's dirty mark under the lock only `WHERE dirtied_at<=?` the time its read began, so a day dirtied during the read stays dirty.
+  Both times come from `LedgerShared.tick`, which never returns the same reading twice, because on a coarse clock a write committed just after the read's snapshot could otherwise stamp the very time the read began.
+
+A batch that raises is rolled back on every connection it touched before the lock is released, for the reason the operation contract above rolls back: an open transaction would be committed by the next batch, without the stamp that unseals what it changed.
 
 Every rule above about one worker per connection and bounded transactions still applies; the lock replaces the per-path operation lock, not the transaction discipline.
 

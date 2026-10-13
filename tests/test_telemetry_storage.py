@@ -353,9 +353,17 @@ def test_storage_status_reads_the_catalog_and_two_directory_listings(tmp_path: P
     ledger.close()
 
 
+@pytest.mark.parametrize("later", [60.0, 0.0], ids=["clock moved", "same clock reading"])
 def test_ingestion_proceeds_during_a_rollup_read_and_the_day_it_dirtied_stays_dirty(
-    tmp_path: Path,
+    tmp_path: Path, later: float
 ) -> None:
+    """A write that lands while a rollup reads keeps its day dirty.
+
+    Even on the same clock reading the read began at: a coarse clock gives a write
+    committed just after the read's snapshot the very time the read started, and the
+    mark must still not be taken as covered.
+    """
+
     root = tmp_path / "telemetry"
     shared = LedgerShared()
     clock = Clock(DAY + 60)
@@ -382,7 +390,7 @@ def test_ingestion_proceeds_during_a_rollup_read_and_the_day_it_dirtied_stays_di
     rollup.start()
     try:
         assert reading.wait(30)
-        clock.now = DAY + 120
+        clock.now += later
         written = threading.Event()
 
         def ingest() -> None:
@@ -401,13 +409,30 @@ def test_ingestion_proceeds_during_a_rollup_read_and_the_day_it_dirtied_stays_di
         rollup.join(30)
     assert rebuilt == ["2026-01-01"]
     # The rollup read the day before call-2 arrived, so the day keeps its mark ...
-    dirty = _catalog_rows(root, "SELECT day,dirtied_at FROM rollup_dirty_days")
-    assert [tuple(row) for row in dirty] == [("2026-01-01", DAY + 120)]
+    dirty = _catalog_rows(root, "SELECT day FROM rollup_dirty_days")
+    assert [row["day"] for row in dirty] == ["2026-01-01"]
     # ... and the next rebuild takes it.
     assert maintenance.rebuild_next_closed_day(now=DAY + 86400) == "2026-01-01"
     assert _catalog_rows(root, "SELECT day FROM rollup_dirty_days") == []
     maintenance.close()
     live.close()
+
+
+def test_a_batch_that_fails_leaves_nothing_for_the_next_one_to_commit(tmp_path: Path) -> None:
+    """A half-written batch would land with the next batch, without its stamp."""
+
+    ledger = CanonicalTelemetryLedger(tmp_path / "telemetry", clock=Clock(DAY + 60))
+    dims = dimensions()
+
+    def failing() -> Any:
+        yield event("tool_use", ts=DAY + 10, tool="Read", call_id="call-1"), dims
+        raise RuntimeError("the producer failed mid-batch")
+
+    with pytest.raises(RuntimeError):
+        ledger.record_events(failing())
+    ledger.record_event(event("tool_use", ts=DAY + 20, tool="Grep", call_id="call-2"), dims)
+    assert [row["native_call_id"] for row in ledger.tool_calls()] == ["call-2"]
+    ledger.close()
 
 
 def test_a_version_four_catalog_gains_write_stamps_and_reconciliation_cursors(

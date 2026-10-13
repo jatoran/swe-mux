@@ -129,6 +129,23 @@ class LedgerShared:
     write_lock: threading.RLock = field(default_factory=threading.RLock)
     migrations: dict[str, dict[str, Any]] = field(default_factory=dict)
     seal_failures: dict[str, float] = field(default_factory=dict)
+    _tick_lock: threading.Lock = field(default_factory=threading.Lock)
+    _last_tick: float = float("-inf")
+
+    def tick(self, clock: Callable[[], float]) -> float:
+        """A clock reading strictly later than every earlier one, across the ledgers.
+
+        A rollup keeps a dirty mark made after its read began (`dirtied_at` later
+        than the read's start). With a coarse clock a write committed just after
+        the read took its snapshot can stamp the same reading the read started at,
+        and the mark would be taken as already covered; strictly increasing
+        readings make "after" mean after.
+        """
+
+        with self._tick_lock:
+            reading = max(clock(), self._last_tick + 1e-6)
+            self._last_tick = reading
+            return reading
 
 
 class CanonicalTelemetryLedger(LegacyImportMixin, NativeReconcileMixin, LedgerQueryMixin):
@@ -285,9 +302,10 @@ class CanonicalTelemetryLedger(LegacyImportMixin, NativeReconcileMixin, LedgerQu
             "expected_segment_signature": expected_segment,
             "segment_signatures": segments,
             "drift": drift,
+            # A copy: another ledger's thread may open a new month's file meanwhile.
             "migrations": {
                 name: {"found": item["found"], "applied": len(item["applied"])}
-                for name, item in self._migrations.items()
+                for name, item in dict(self._migrations).items()
                 if item["applied"] or item["found"] != LEDGER_SCHEMA_VERSION
             },
         }
@@ -446,7 +464,23 @@ class CanonicalTelemetryLedger(LegacyImportMixin, NativeReconcileMixin, LedgerQu
         """
 
         with self._write_lock:
-            return self._record_events_locked(items)
+            try:
+                return self._record_events_locked(items)
+            except BaseException:
+                # Never leave a half-written batch open for the next one to commit:
+                # it would land without the stamp that unseals what it changed.
+                self._rollback_batch()
+                raise
+
+    def _rollback_batch(self) -> None:
+        for connection in self._segments.values():
+            if connection.in_transaction:
+                connection.rollback()
+        if self._catalog.in_transaction:
+            self._catalog.rollback()
+        self._written_segments.clear()
+        self._pending_rejections.clear()
+        self._extra_dirty_stamps.clear()
 
     def _record_events_locked(
         self, items: Iterable[tuple[MuxEvent, Mapping[str, Any]]]
@@ -465,7 +499,7 @@ class CanonicalTelemetryLedger(LegacyImportMixin, NativeReconcileMixin, LedgerQu
                 inserted += 1
         for period in self._dirty_segments:
             self._segment(period).commit()
-        now = self._clock()
+        now = self._shared.tick(self._clock)
         self._stamp_written_segments(now)
         self._flush_rejections(now)
         stamps = set(self._extra_dirty_stamps)
@@ -1925,7 +1959,7 @@ class CanonicalTelemetryLedger(LegacyImportMixin, NativeReconcileMixin, LedgerQu
         start = datetime.strptime(day, "%Y-%m-%d").replace(tzinfo=UTC).timestamp()
         end = start + 86400
         period = day[:7]
-        read_started = self._clock()
+        read_started = self._shared.tick(self._clock)
         bucket = self._bucket_rows(period, start, end)
         entities = self._daily_entity_rows(start, end, period)
         with self._write_lock, self._catalog:
@@ -1967,7 +2001,7 @@ class CanonicalTelemetryLedger(LegacyImportMixin, NativeReconcileMixin, LedgerQu
             return None
         hour = str(row["hour"])
         start = datetime.strptime(hour, "%Y-%m-%dT%H").replace(tzinfo=UTC).timestamp()
-        read_started = self._clock()
+        read_started = self._shared.tick(self._clock)
         bucket = self._bucket_rows(hour[:7], start, start + 3600)
         with self._write_lock, self._catalog:
             self._write_bucket(
