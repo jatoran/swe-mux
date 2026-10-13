@@ -149,6 +149,7 @@ def reset_rollout_identity_cache() -> None:
         _IDENTITY_CACHE.clear()
         _IDENTITY_STATS.update(hits=0, reads=0)
 
+
 CODEX_LIFECYCLE_HOOK_EVENTS = descriptor("codex").hook_events
 
 
@@ -459,9 +460,7 @@ class CodexAdapter(BackendAdapter):
         return "/exit\r"
 
     @staticmethod
-    def _native_id(
-        path: Path, hint: tuple[tuple[int, ...], int] | None = None
-    ) -> str | None:
+    def _native_id(path: Path, hint: tuple[tuple[int, ...], int] | None = None) -> str | None:
         """The root conversation id a rollout names, or None for a child or a stub.
 
         A child rollout (``parent_thread_id``) is never a root conversation, and a

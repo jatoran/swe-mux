@@ -5,6 +5,7 @@ import hashlib
 import json
 import logging
 import math
+import os
 import re
 import time
 from collections.abc import Callable
@@ -864,7 +865,12 @@ def _read_transcript_window(
 
 
 class JsonlTailer:
-    def __init__(self, path: Path, on_growth: Callable[[], None] | None = None) -> None:
+    def __init__(
+        self,
+        path: Path,
+        on_growth: Callable[[], None] | None = None,
+        on_stat: Callable[[os.stat_result | None], None] | None = None,
+    ) -> None:
         self.path = path
         self.offset = 0
         self.decoder = IncrementalJsonlDecoder()
@@ -876,6 +882,10 @@ class JsonlTailer:
         # (see `Session.transcript_growth_ts`). `st_size` remains accurate, and this
         # loop is already polling it.
         self.on_growth = on_growth
+        # Called with every stat this tailer already takes in its worker (None when
+        # the file is missing), so the switch watcher can read "when was it last
+        # written, does it still exist" without a stat of its own on the loop.
+        self.on_stat = on_stat
         # Content already present at attach is history (resume, promotion after
         # activity), not live agent behavior; events() labels it historical.
         try:
@@ -889,6 +899,10 @@ class JsonlTailer:
     def _note_growth(self) -> None:
         if self.on_growth is not None:
             self.on_growth()
+
+    def _note_stat(self, stat: os.stat_result | None) -> None:
+        if self.on_stat is not None:
+            self.on_stat(stat)
 
     def _prefix_differs(self, current: bytes) -> bool:
         """True when the file's leading bytes are no longer the ones we read."""
@@ -931,6 +945,7 @@ class JsonlTailer:
         bytes that existed at initial attach have been decoded.
         """
         while not stop.is_set() and not await asyncio.to_thread(self.path.exists):
+            self._note_stat(None)
             try:
                 await asyncio.wait_for(stop.wait(), timeout=0.2)
             except TimeoutError:
@@ -950,7 +965,12 @@ class JsonlTailer:
         session, and a stat on a busy disk is exactly the call that blocked the event
         loop for seconds at a time; one in flight per observer is the whole cost.
         """
-        stat = await asyncio.to_thread(self.path.stat)
+        try:
+            stat = await asyncio.to_thread(self.path.stat)
+        except FileNotFoundError:
+            self._note_stat(None)
+            raise
+        self._note_stat(stat)
         size = stat.st_size
         identity: _TailIdentity = (size, stat.st_ino, stat.st_dev, stat.st_mtime_ns)
         probe_due = identity != self._identity or (
@@ -1143,7 +1163,12 @@ async def observe_transcript(
         # the stamp whenever it re-aims the observer at a different file.
         session.transcript_growth_ts = time.time()
 
-    tailer = JsonlTailer(path, on_growth=note_growth)
+    def note_stat(stat: os.stat_result | None) -> None:
+        # The tailer's own 250 ms stat, kept for the switch watcher
+        # (`SessionManager._transcript_last_write_ts`) so it never stats on the loop.
+        session.transcript_stat = (path, None if stat is None else stat.st_mtime, time.monotonic())
+
+    tailer = JsonlTailer(path, on_growth=note_growth, on_stat=note_stat)
     attach_ts = time.time()
     replay_pending = tailer.initial_size > 0
     if replay_pending:

@@ -19,6 +19,7 @@ a live conversation.
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -28,6 +29,7 @@ from unittest.mock import AsyncMock
 from swe_mux import app_keys as keys
 from swe_mux.models import SessionRecord
 from swe_mux.session import Session, SessionManager, fleet_status_health
+from tests.support.settle import until
 
 OWN = "aaaaaaaa-1111-4a7b-8c9d-0e1f2a3b4c5d"
 STOLEN = "bbbbbbbb-2222-4a7b-8c9d-0e1f2a3b4c5d"
@@ -114,6 +116,8 @@ async def test_codex_watcher_still_uses_the_switch_heuristic(
     manager = fake_manager()
     record = agent_record("codex-root", backend="codex", cwd=str(tmp_path))
     session = real_session(record, tmp_path)
+    # A line the followed (here: missing) file never recorded, e.g. `/new`.
+    session.composer.last_submit_at = time.time()
     fresh = tmp_path / "fresh.jsonl"
     manager._transcript_switch_candidate = AsyncMock(return_value=fresh)
     manager._note_transcript_staleness = AsyncMock()
@@ -126,6 +130,93 @@ async def test_codex_watcher_still_uses_the_switch_heuristic(
         assert switch == fresh
     finally:
         observe_task.cancel()
+
+
+async def test_an_idle_codex_pane_never_runs_the_switch_search(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """No submitted line and no turn: there is no conversation change to look for.
+
+    Every idle Codex pane used to walk the rollout tree every two seconds for as
+    long as it was open. The watcher still ticks and still checks staleness; it
+    just never searches.
+    """
+    monkeypatch.setattr("swe_mux.session.TRANSCRIPT_SWITCH_POLL_SECONDS", 0.01)
+    manager = fake_manager()
+    record = agent_record("codex-idle", backend="codex", cwd=str(tmp_path))
+    session = real_session(record, tmp_path)
+    current = tmp_path / "old.jsonl"
+    current.write_text("{}\n", encoding="utf-8")
+    manager._transcript_switch_candidate = AsyncMock(return_value=tmp_path / "fresh.jsonl")
+    manager._note_transcript_staleness = AsyncMock()
+    stop_event = asyncio.Event()
+
+    async def ticks() -> None:
+        await until(lambda: manager._note_transcript_staleness.await_count >= 5)
+
+    observe_task = asyncio.create_task(ticks())
+    switch = await SessionManager._watch_transcript_switch(
+        manager, session, current, stop_event, observe_task
+    )
+
+    assert switch is None
+    manager._transcript_switch_candidate.assert_not_awaited()
+    assert manager.observation_costs["heuristic_searches"] == 0
+    assert manager.observation_costs["heuristic_searches_skipped"] >= 5
+
+
+async def test_a_line_the_followed_file_recorded_does_not_arm_the_search(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """A prompt answered in the same conversation lands in the followed file."""
+    monkeypatch.setattr("swe_mux.session.TRANSCRIPT_SWITCH_POLL_SECONDS", 0.01)
+    manager = fake_manager()
+    record = agent_record("codex-busy", backend="codex", cwd=str(tmp_path))
+    session = real_session(record, tmp_path)
+    current = tmp_path / "old.jsonl"
+    current.write_text("{}\n", encoding="utf-8")
+    now = time.time()
+    os.utime(current, (now - 11, now - 11))
+    session.composer.last_submit_at = now - 30
+    # The turn's Stop hook trails its last record by a moment; that is not news.
+    session.last_turn_hook_ts = now - 10
+    session.transcript_growth_ts = now - 11
+    manager._transcript_switch_candidate = AsyncMock(return_value=tmp_path / "fresh.jsonl")
+    manager._note_transcript_staleness = AsyncMock()
+    stop_event = asyncio.Event()
+
+    async def ticks() -> None:
+        await until(lambda: manager._note_transcript_staleness.await_count >= 3)
+
+    observe_task = asyncio.create_task(ticks())
+    switch = await SessionManager._watch_transcript_switch(
+        manager, session, current, stop_event, observe_task
+    )
+
+    assert switch is None
+    manager._transcript_switch_candidate.assert_not_awaited()
+
+
+def test_switch_search_arms_only_inside_the_evidence_window(tmp_path: Path) -> None:
+    record = agent_record("codex-window", backend="codex", cwd=str(tmp_path))
+    session = real_session(record, tmp_path)
+    now = time.time()
+    last_write = now - 600
+
+    assert not SessionManager._switch_search_armed(session, last_write)
+    session.composer.last_submit_at = now - 5
+    assert SessionManager._switch_search_armed(session, last_write)
+    session.composer.last_submit_at = now - 500
+    assert not SessionManager._switch_search_armed(session, last_write)
+    # A turn hook needs to clear the followed file's last write by the quiet window.
+    session.last_turn_hook_ts = last_write + 1
+    assert not SessionManager._switch_search_armed(session, last_write)
+    session.last_turn_hook_ts = now - 5
+    assert SessionManager._switch_search_armed(session, last_write)
+    # A provisional binding is a guess being refined, so it always searches.
+    session.last_turn_hook_ts = 0.0
+    session.transcript_provisional = True
+    assert SessionManager._switch_search_armed(session, last_write)
 
 
 async def test_a_rollover_onto_a_live_siblings_conversation_is_refused(

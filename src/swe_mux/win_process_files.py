@@ -195,6 +195,7 @@ def file_object_type_index() -> int:
 
 def _final_path(handle: int) -> str | None:
     length = 1024
+    # unsupervised-loop-ok: grows a buffer until the name fits; not a daemon loop.
     while True:
         buffer = ctypes.create_unicode_buffer(length)
         written = _GetFinalPathNameByHandleW(handle, buffer, length, _VOLUME_NAME_DOS)
@@ -232,11 +233,18 @@ class _NameWorker:
         self.thread.start()
 
     def _run(self) -> None:
+        # unsupervised-loop-ok: an OS thread serving one query at a time, which
+        # cannot raise out of the loop and exits once retired; not asyncio.
         while True:
             item = self.inbox.get()
             try:
                 item.path = _final_path(item.handle)
             except OSError:
+                item.path = None
+            except Exception:
+                # Unexpected (a ctypes failure). The query answers unnamed, which
+                # the caller treats as incomplete, and the worker stays alive.
+                log.warning("open_file_name_failed", exc_info=True)
                 item.path = None
             finally:
                 _CloseHandle(item.handle)
@@ -397,7 +405,9 @@ def query_stats() -> dict[str, float | int]:
     """Counters for the diagnostics endpoint."""
     with _workers_lock:
         return {
-            **{key: (round(value, 4) if key == "worst_seconds" else int(value))
-               for key, value in _stats.items()},
+            **{
+                key: (round(value, 4) if key == "worst_seconds" else int(value))
+                for key, value in _stats.items()
+            },
             "stuck_workers": sum(1 for w in _stuck_workers if w.thread.is_alive()),
         }
