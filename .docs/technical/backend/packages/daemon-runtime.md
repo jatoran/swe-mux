@@ -139,6 +139,9 @@ Rotating `daemon.log` and `access.log` handlers, the faulthandler `crash.log`, r
   A *bounded operation* with nothing above it is not that case, and `git-monitor`'s poll proved it: a Git query that timed out inside one logged with neither a request id (there is no request) nor an operation id (nothing passed one), leaving nothing to join it to the poll it came from.
   The git monitor's poll and the provider quota poll each `bound_request_id(new_request_id())` around one iteration, which stamps the loop's own lines *and* reaches every subprocess the iteration starts, including those inside its per-session tasks.
   It is bound rather than threaded through call signatures for that reason; a parameter would have had to be added to every intermediate.
+- **Library chatter is held per logger, not by the root level** (`QUIET_LIBRARY_LOGGERS`).
+  `watchfiles` writes one "N changes detected" INFO line per change batch from every watch, and the recursive checkout watches the git monitor added on 2026-10-12 wrote ~170 of them in a deploy's first three minutes.
+  Its logger is pinned at WARNING, so a root raised to DEBUG for a diagnosis does not bring the per-batch lines back; the owners' counters (`git_monitor.watch` on `/api/diagnostics/background`) carry what those lines did.
 - **`run_bounded`'s `operation_id` is read from the same contextvar at each call site** (`usage.py` passes the refresh's own id instead, since a refresh is the operation and already stamps its event with it).
   The parameter existed with no caller until W4.5.3, so every `bounded_command_timed_out` and output-cap line read `operation_id=None` beside a caller line carrying a real one.
 

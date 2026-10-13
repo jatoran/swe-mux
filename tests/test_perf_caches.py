@@ -268,6 +268,46 @@ async def test_reconcile_watermark_skips_unchanged_transcripts(tmp_path: Path, m
         history.close()
 
 
+async def test_reconcile_reads_the_history_map_once_for_changed_known_conversations(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A changed transcript of a conversation already on file reuses the map's id.
+
+    The store is asked again only when the scan has just created a conversation the
+    map could not know. Asking for every changed item was a full `history` scan per
+    transcript, which is what a long-running daemon's first reconcile after a restart
+    paid for every conversation that grew while it was down.
+    """
+    home = tmp_path / "home"
+    cwd = str(tmp_path / "repo")
+    paths = [_write_claude(home, f"claude-id-{index}", cwd) for index in range(3)]
+    history = HistoryIndex(tmp_path / "mux.db")
+    try:
+        assert await reconcile_external_history(history, home) == 3
+        first_ids = await history.native_history_ids()
+
+        reads = {"n": 0}
+        real = history.native_history_ids
+
+        async def counting() -> dict[tuple[str, str], str]:
+            reads["n"] += 1
+            return await real()
+
+        monkeypatch.setattr(history, "native_history_ids", counting)
+        for index, path in enumerate(paths):
+            _write_claude(home, f"claude-id-{index}", cwd, assistant_lines=2)
+            _bump_mtime(path)
+
+        assert await reconcile_external_history(history, home) == 3
+        assert reads["n"] == 1  # the map taken before the loop, and nothing per item
+        assert await real() == first_ids
+        # Every changed conversation was still re-indexed under its existing row.
+        watermarks = await history.message_index_watermarks()
+        assert {first_ids[("claude", f"claude-id-{i}")] for i in range(3)} <= set(watermarks)
+    finally:
+        history.close()
+
+
 async def test_external_watermarks_only_returns_indexed_rows(tmp_path: Path) -> None:
     history = HistoryIndex(tmp_path / "mux.db")
     try:

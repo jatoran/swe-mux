@@ -98,6 +98,27 @@ def test_ledger_rotates_instead_of_growing_forever(tmp_path: Path) -> None:
     assert "after rotation" in path.read_text(encoding="utf-8")
 
 
+def test_per_batch_watch_chatter_stays_out_of_the_daemon_log() -> None:
+    """`watchfiles` narrates every change batch at INFO; the daemon holds it at WARNING.
+
+    Pinned per logger so that raising the root to DEBUG for a diagnosis does not
+    bring back one line per batch from every checkout and Project watch.
+    """
+    from swe_mux.logsetup import quiet_library_loggers
+
+    chatty = logging.getLogger("watchfiles.main")
+    previous_root = logging.getLogger().level
+    previous = chatty.level
+    try:
+        quiet_library_loggers()
+        set_log_level("DEBUG")
+        assert not chatty.isEnabledFor(logging.INFO)
+        assert chatty.isEnabledFor(logging.WARNING)
+    finally:
+        chatty.setLevel(previous)
+        logging.getLogger().setLevel(previous_root)
+
+
 def test_log_level_normalization() -> None:
     assert normalize_level(" debug ") == "DEBUG"
     with pytest.raises(ValueError):

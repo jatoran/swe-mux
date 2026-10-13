@@ -642,7 +642,16 @@ async def reconcile_external_history(
                 size=item.size,
                 **summary,
             )
-            history_id = (await history.native_history_ids()).get((item.backend, item.native_id))
+            # Only a conversation this scan has just created is missing from the map
+            # taken before the loop; an existing one keeps the id it already had
+            # (earliest row wins, and an upsert never makes an earlier one). Asking the
+            # store again for every item was a full `history` scan per changed
+            # transcript - a quarter of the daemon's GIL time in the first minutes
+            # after the 2026-10-12 redeploy.
+            key = (item.backend, item.native_id)
+            if key not in history_ids:
+                history_ids = await history.native_history_ids()
+            history_id = history_ids.get(key)
             if history_id:
                 await history.index_transcript(
                     history_id, item.path, item.backend, native_id=item.native_id

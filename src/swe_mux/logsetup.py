@@ -249,11 +249,28 @@ def normalize_level(level: str) -> str:
     return candidate
 
 
+#: Third-party loggers that narrate routine work at INFO, and the level each is held at.
+#: `watchfiles` writes one "N changes detected" line per change batch from every
+#: watch: the Project file watches, and since 2026-10-12 one recursive watch per
+#: followed checkout. The first three minutes after that deploy wrote ~170 of them,
+#: which at a working fleet's rate rotates `daemon.log` for nothing - the owners'
+#: own counters (`git_monitor.watch` on `/api/diagnostics/background`, the Project
+#: watch diagnostics) carry every fact those lines did. Pinned per logger rather than
+#: via the root level, so a root at DEBUG for a diagnosis does not bring them back.
+QUIET_LIBRARY_LOGGERS: dict[str, int] = {"watchfiles.main": logging.WARNING}
+
+
+def quiet_library_loggers() -> None:
+    for name, level in QUIET_LIBRARY_LOGGERS.items():
+        logging.getLogger(name).setLevel(level)
+
+
 def setup_daemon_logging(data_dir: Path, level: str = "INFO") -> None:
     """Configure the daemon process's logging: console + rotating files."""
     data_dir.mkdir(parents=True, exist_ok=True)
     root = logging.getLogger()
     root.setLevel(normalize_level(level))
+    quiet_library_loggers()
     console = logging.StreamHandler()
     console.setFormatter(StructuredFormatter(LOG_FORMAT))
     console.addFilter(CorrelationFilter())
