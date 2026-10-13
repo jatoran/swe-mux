@@ -82,6 +82,7 @@ Fields and invariants: `features/daemon-resilience.md`.
   It lets an agent-initiated graceful end record `agent_ended` even when the CLI exits on its
   own and the ordinary process-exit path is what marks the record; `None` leaves the terminal
   path to classify the exit as it always has (`features/sessions.md`).
+  An in-place Restart sets `restarted`.
   Round-tripped through the record snapshot, so supervisor adoption preserves it across a daemon restart.
 - `SessionRecord.configurator`: true only for a session the daemon itself launched as the
   configurator agent (`features/configurator.md`). It is the whole of that tool family's

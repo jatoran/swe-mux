@@ -413,6 +413,10 @@ Its rules, and what each one is defending:
   `MenuGroup` takes an `icon` for the same reason and lines its header up with the rows it sits among.
   Where one control's label switches, its mark switches with it or it contradicts the word beside it: Stand down wears a power glyph, Kill and remove names its destructive scope, and an ended session's Remove from sidebar wears a bin.
   An inactive session replaces Stand down with Resume or Restart terminal, reports No process instead of a stale PID, and retains a dimmed row and tab until explicit removal.
+  A live agent's menu adds **Restart agent (fresh process)** above Stand down (`features/sessions.md`), resolved by `restartAgent.ts` from the daemon's eligibility probe, which the menu reads when it opens.
+  An unavailable restart stays a pressable row marked `aria-disabled`, with its reason as a second line (`.menu-row-detail`) as well as the tooltip, because a phone has no hover and a disabled button answers a tap with nothing.
+  A refusal only a human may override becomes "Restart agent anyway…" (`data-variant="danger"`), and its first press only arms a "Confirm restart" row that lists what will be lost; the second press sends `force`.
+  The palette command `session.restartAgent` never forces, so a refused palette restart says where the override lives instead.
   This is opt-in per row rather than applied to every `.context-menu button`: the remaining context menus are a handful of verbs about one object ("Rename", "Close", "Duplicate"), where a mark per verb is noise, while these four list a dozen unrelated acts and destinations.
   Inside them, a **radio set keeps its plain rows**: the three Read-aloud modes are already marked with a `✓`, and an icon column beside a check column draws two marks for one fact.
   Where two rows differ only in what they reload, the marks name the *thing* rather than the

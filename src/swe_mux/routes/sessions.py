@@ -66,6 +66,15 @@ from ..session_attachments import (
 )
 from ..session_media import session_media_directory
 from ..session_recovery import SessionRecoveryStore
+from ..session_restart import (
+    END_SETTLE_TIMEOUT_SECONDS,
+    RESTART_END_REASON,
+    RESTART_LINEAGE_RELATION,
+    RestartAssessment,
+    RestartBlocker,
+    RestartFacts,
+    assess_restart,
+)
 from ..session_resume import ResumeRefused, resume_run
 from ..spawn_contract import (
     SpawnRequest,
@@ -74,41 +83,51 @@ from ..spawn_contract import (
     resolve_listed_cwd,
     resolve_spawn_model,
 )
+from ..transcript_view import conversation_is_readable
 from . import terminal, voice
 from .support import _optional_json, refuse_agent_session_caller
 
 log = logging.getLogger(__name__)
 
 
+def _session_row(app: web.Application, session: Session, *, now: float) -> dict[str, Any]:
+    """One session as the fleet list serves it: the snapshot, ordered and enriched.
+
+    Shared by the list and the single-session read, so a browser that refreshes one
+    row (because an event told it only that row moved) gets exactly what a full
+    list would have given it for that row, revision and generation included.
+    """
+    item = session.record.snapshot()
+    item["_snapshot_generation"] = app[keys.DAEMON_GENERATION]
+    item["_snapshot_revision"] = session.revision
+    item["_snapshot_enriched"] = True
+    # This readiness is display-only and never authorizes a PTY write. Reuse a
+    # bounded classifier verdict so simultaneous browser refreshes cannot make
+    # GET /api/sessions repeatedly scan every live terminal on the event loop.
+    # On a fleet the readiness watcher is already following, that cache is
+    # warm from its last tick and this endpoint scans nothing at all.
+    delivery = app[keys.FLEET].readiness.evaluate(
+        session,
+        record_metrics=False,
+        snapshot_pty_cache_seconds=1.0,
+    )
+    item["delivery_readiness"] = delivery_summary(session.record, delivery, observed_at=now)
+    # Present only while something is actually sitting in the composer, so a
+    # client can treat presence as the whole signal. The character estimate
+    # stays server-side: it is inferred from keystrokes, and a number on
+    # screen would be read as a measurement (`composer_input.py`).
+    composer = getattr(session, "composer", None)
+    if composer is not None and composer.pending:
+        item["unsent_input"] = {"since": composer.since}
+    return item
+
+
 async def list_sessions(request: web.Request) -> web.Response:
     manager: SessionManager = request.app[keys.SESSIONS]
-    sessions = []
-    readiness = request.app[keys.FLEET].readiness
     now = time.time()
-    for session in manager.sessions.values():
-        item = session.record.snapshot()
-        item["_snapshot_generation"] = request.app[keys.DAEMON_GENERATION]
-        item["_snapshot_revision"] = session.revision
-        item["_snapshot_enriched"] = True
-        # This readiness is display-only and never authorizes a PTY write. Reuse a
-        # bounded classifier verdict so simultaneous browser refreshes cannot make
-        # GET /api/sessions repeatedly scan every live terminal on the event loop.
-        # On a fleet the readiness watcher is already following, that cache is
-        # warm from its last tick and this endpoint scans nothing at all.
-        delivery = readiness.evaluate(
-            session,
-            record_metrics=False,
-            snapshot_pty_cache_seconds=1.0,
-        )
-        item["delivery_readiness"] = delivery_summary(session.record, delivery, observed_at=now)
-        # Present only while something is actually sitting in the composer, so a
-        # client can treat presence as the whole signal. The character estimate
-        # stays server-side: it is inferred from keystrokes, and a number on
-        # screen would be read as a measurement (`composer_input.py`).
-        composer = getattr(session, "composer", None)
-        if composer is not None and composer.pending:
-            item["unsent_input"] = {"since": composer.since}
-        sessions.append(item)
+    sessions = [
+        _session_row(request.app, session, now=now) for session in manager.sessions.values()
+    ]
     await _decorate_generated_titles(request.app, sessions)
     for field in ("project_id", "state", "backend"):
         value = request.query.get(field.removesuffix("_id") if field == "project_id" else field)
@@ -546,9 +565,10 @@ async def spawn_session(request: web.Request) -> web.Response:
 
 
 async def get_session(request: web.Request) -> web.Response:
-    return json_response(
-        request.app[keys.SESSIONS].resolve(request.match_info["sid"]).record.snapshot()
-    )
+    session = request.app[keys.SESSIONS].resolve(request.match_info["sid"])
+    item = _session_row(request.app, session, now=time.time())
+    await _decorate_generated_titles(request.app, [item])
+    return json_response(item)
 
 
 async def patch_session(request: web.Request) -> web.Response:
@@ -964,6 +984,105 @@ async def stand_down_session(request: web.Request) -> web.Response:
     return json_response(session.record.snapshot())
 
 
+async def _install_replacement(
+    app: web.Application,
+    *,
+    old: Session,
+    session: Session,
+    resumed: bool,
+    relation: str,
+    discard_media: bool,
+) -> None:
+    """Swap a proven replacement into the old session's pane and retire the old one.
+
+    One implementation for every in-place replacement - Resume of a retained pane and
+    Restart of a live agent - because the order is the contract: the layout is
+    written first and only then is the old identity dropped, so a failed layout
+    write leaves the old pane (and its Resume button) exactly where it was and
+    discards the replacement instead.
+
+    The Project is read here rather than by the caller, because a restart takes
+    seconds between its first check and this point and the layout revision it must
+    honour is the one current *now*.
+
+    ``discard_media`` is False for a restart: the conversation continues, and the
+    pasted images and attachments it was handed are paths that conversation may
+    still read back.
+    """
+    manager: SessionManager = app[keys.SESSIONS]
+    project = app[keys.PROJECTS].projects.get(old.record.project_id)
+    if project is None:
+        await manager.stop(session.record.id)
+        manager.sessions.pop(session.record.id, None)
+        raise ValueError("the session's owning Project is unavailable")
+    current_layout = project.layout
+    next_layout = (
+        replace_terminal(current_layout, old.record.id, session.record.id)
+        if old.record.id in layout_terminal_ids(current_layout)
+        else attach_terminal(current_layout, session.record.id)
+    )
+    try:
+        await app[keys.PROJECTS].update(
+            old.record.project_id,
+            layout=next_layout,
+            layout_revision=project.layout_revision,
+        )
+    except Exception:
+        await manager.stop(session.record.id)
+        manager.sessions.pop(session.record.id, None)
+        raise
+
+    # The layout write is the commit point: the replacement is live and in the pane,
+    # so nothing below may raise into a caller that would report the swap as failed.
+    manager.sessions.pop(old.record.id, None)
+    attachment_locks = app.get(keys.ATTACHMENT_LOCKS, {})
+    for key in tuple(attachment_locks):
+        if key[1] == old.record.id:
+            attachment_locks.pop(key, None)
+    try:
+        await _retire_replaced_session(
+            app,
+            old=old,
+            session=session,
+            resumed=resumed,
+            relation=relation,
+            discard_media=discard_media,
+        )
+    except Exception:
+        log.exception(
+            "session_replacement_cleanup_failed replaced=%s session_id=%s relation=%s",
+            old.record.id,
+            session.record.id,
+            relation,
+        )
+
+
+async def _retire_replaced_session(
+    app: web.Application,
+    *,
+    old: Session,
+    session: Session,
+    resumed: bool,
+    relation: str,
+    discard_media: bool,
+) -> None:
+    """The durable bookkeeping after a committed swap: lineage, recovery, media."""
+    source_run_id = old.record.agent_run_id or old.record.id
+    child_run_id = session.record.agent_run_id or session.record.id
+    if resumed and child_run_id != source_run_id:
+        await app[keys.AUTOMATION_STORE].add_lineage(
+            source_run_id,
+            child_run_id,
+            relation,
+            {"backend": old.record.backend, "project_id": old.record.project_id},
+        )
+    recovery: SessionRecoveryStore | None = app.get(keys.SESSION_RECOVERY)
+    if recovery is not None:
+        await recovery.discard(old.record.id)
+    if discard_media:
+        await _discard_session_media(app, old.record.id)
+
+
 async def resume_retained_session(request: web.Request) -> web.Response:
     """Replace an inactive session or ended agent with a proven process in its pane."""
     started = time.monotonic()
@@ -973,8 +1092,7 @@ async def resume_retained_session(request: web.Request) -> web.Response:
         raise ValueError("only an ended session can be resumed")
     if old.record.backend == "shell" and not old.record.inactive:
         raise ValueError("only an inactive shell can be restarted through resume")
-    project = request.app[keys.PROJECTS].projects.get(old.record.project_id)
-    if project is None:
+    if old.record.project_id not in request.app[keys.PROJECTS].projects:
         raise ValueError("the session's owning Project is unavailable")
 
     source_run_id = old.record.agent_run_id or old.record.id
@@ -1012,36 +1130,14 @@ async def resume_retained_session(request: web.Request) -> web.Response:
             return json_response(refusal.payload(), refusal.status)
         session = outcome.session
 
-    current_layout = project.layout
-    next_layout = (
-        replace_terminal(current_layout, old.record.id, session.record.id)
-        if old.record.id in layout_terminal_ids(current_layout)
-        else attach_terminal(current_layout, session.record.id)
+    await _install_replacement(
+        request.app,
+        old=old,
+        session=session,
+        resumed=outcome is not None,
+        relation="resume",
+        discard_media=True,
     )
-    try:
-        await request.app[keys.PROJECTS].update(
-            old.record.project_id,
-            layout=next_layout,
-            layout_revision=project.layout_revision,
-        )
-    except Exception:
-        await manager.stop(session.record.id)
-        manager.sessions.pop(session.record.id, None)
-        raise
-
-    child_run_id = session.record.agent_run_id or session.record.id
-    if outcome is not None and child_run_id != source_run_id:
-        await request.app[keys.AUTOMATION_STORE].add_lineage(
-            source_run_id,
-            child_run_id,
-            "resume",
-            {"backend": old.record.backend, "project_id": old.record.project_id},
-        )
-    manager.sessions.pop(old.record.id, None)
-    recovery: SessionRecoveryStore | None = request.app.get(keys.SESSION_RECOVERY)
-    if recovery is not None:
-        await recovery.discard(old.record.id)
-    await _discard_session_media(request.app, old.record.id)
     event_type = (
         "session_resumed_from_inactive"
         if old.record.inactive
@@ -1131,6 +1227,345 @@ async def relaunch_session(request: web.Request) -> web.Response:
         # The replacement supersedes it, which is the operator being done with it.
         await recovery.discard(old_id)
     return json_response({"session": session.record.snapshot(), "replaced": old_id}, 201)
+
+
+# ------------------------------------------------------------ in-place restart
+
+
+async def _restart_facts(
+    app: web.Application, session: Session
+) -> tuple[RestartFacts, dict[str, Any] | None]:
+    """Everything the restart policy needs that the session record does not carry.
+
+    Each read is cheap and off the loop where it touches the disk or the process
+    table: the probe runs every time a session menu opens, so it must never be the
+    thing that stalls a terminal.
+    """
+    record = session.record
+    run_id = str(getattr(record, "agent_run_id", "") or "")
+    row = await app[keys.HISTORY].history_entry(run_id) if run_id else None
+    native_id = str(getattr(record, "native_session_id", "") or "")
+    candidates = [
+        Path(str(row["transcript_path"])) if row and row.get("transcript_path") else None,
+        getattr(session, "transcript_path", None),
+    ]
+
+    def readable() -> bool:
+        # A store-backed harness has no path and answers from its store either way.
+        paths = [path for path in candidates if path is not None] or [None]
+        return any(
+            conversation_is_readable(path, str(record.backend), native_id) for path in paths
+        )
+
+    transcript_readable, hosts_daemon = await asyncio.gather(
+        asyncio.to_thread(readable),
+        asyncio.to_thread(terminal._session_owns_daemon, session),
+    )
+    queued = 0
+    queue_store = app.get(keys.PROMPT_QUEUE_STORE)
+    if queue_store is not None:
+        queued = int((await queue_store.messages_for_target(str(record.id))).get("pending") or 0)
+    open_land = False
+    land_queue = app.get(keys.LAND_QUEUE)
+    if land_queue is not None:
+        open_land = bool(await land_queue.origin_windows([str(record.id)], 0.0))
+    last_input = float(getattr(session, "last_input_event_ts", 0.0) or 0.0)
+    facts = RestartFacts(
+        project_known=str(record.project_id) in app[keys.PROJECTS].projects,
+        transcript_readable=transcript_readable,
+        hosts_daemon=hosts_daemon,
+        queued_messages=queued,
+        open_land_request=open_land,
+        history_row_known=row is not None,
+        input_age_seconds=(time.monotonic() - last_input) if last_input > 0 else None,
+    )
+    return facts, row
+
+
+async def _assess(
+    app: web.Application, session: Session
+) -> tuple[RestartAssessment, dict[str, Any] | None]:
+    record = session.record
+    # The two refusals that need no reads at all answer without any, which is what
+    # keeps the menu of a shell or an ended pane free.
+    cheap = assess_restart(session, RestartFacts())
+    if cheap.blockers and cheap.blockers[0].code in {"not_agent", "session_ended"}:
+        return cheap, None
+    facts, row = await _restart_facts(app, session)
+    assessment = assess_restart(session, facts)
+    log.debug(
+        "session_restart_assessed session_id=%s eligible=%s codes=%s",
+        record.id,
+        assessment.eligible,
+        ",".join(item.code for item in assessment.blockers),
+    )
+    return assessment, row
+
+
+async def get_restart_eligibility(request: web.Request) -> web.Response:
+    """Whether this session can be restarted in place, and what a forced one loses.
+
+    A probe rather than a field on every snapshot: the answer needs the queue, the
+    land queue, the transcript, and the daemon's ancestry, and only the menu that
+    offers the action needs it - at the moment it opens.
+    """
+    session = request.app[keys.SESSIONS].resolve(request.match_info["sid"])
+    assessment, _row = await _assess(request.app, session)
+    return json_response({"session_id": session.record.id, **assessment.payload()})
+
+
+async def restart_session(request: web.Request) -> web.Response:
+    """Restart a live agent into a fresh process on the same conversation, in place.
+
+    Ends the CLI through the shared graceful end, waits for its teardown to finish,
+    and resumes the same conversation through the single resume authority into the
+    same pane (`session_restart.py`). Operator-only: refused for an agent session's
+    own caller identity, and absent from the agent MCP surface.
+
+    A failure after the old process has ended leaves the pane showing that ended
+    session, whose ordinary Resume is then the way back - the conversation is on
+    disk throughout, so nothing a failed restart does can lose it.
+    """
+    refuse_agent_session_caller(request, operation="restarting a session over HTTP")
+    force = (await _optional_json(request)).get("force") is True
+    old = request.app[keys.SESSIONS].resolve(request.match_info["sid"])
+    operation_id = secrets.token_hex(6)
+    started = time.monotonic()
+    assessment, row = await _assess(request.app, old)
+    if getattr(old, "restart_in_progress", False):
+        # Re-read after the awaits above: a second request can pass the assessment
+        # while the first is still gathering, and only this synchronous check-and-set
+        # (no await between it and the assignment below) is atomic on the loop.
+        assessment = RestartAssessment(
+            (
+                RestartBlocker(
+                    "restart_in_progress", "this session is already being restarted", False
+                ),
+            )
+        )
+    if not assessment.permits(force=force):
+        log.info(
+            "session_restart_refused operation_id=%s session_id=%s backend=%s code=%s "
+            "force=%s force_allowed=%s",
+            operation_id,
+            old.record.id,
+            old.record.backend,
+            assessment.payload()["code"],
+            force,
+            assessment.force_allowed,
+        )
+        payload = assessment.payload()
+        return json_response(
+            {"error": payload["reason"], "session_id": old.record.id, **payload}, 409
+        )
+    if row is None:  # `history_unavailable` is an identity refusal, so this cannot pass
+        raise RuntimeError("restart permitted without the conversation's history row")
+    old.restart_in_progress = True
+    try:
+        return await _restart_in_place(
+            request.app,
+            old,
+            row,
+            overridden=[item.code for item in assessment.blockers],
+            operation_id=operation_id,
+            started=started,
+        )
+    finally:
+        old.restart_in_progress = False
+
+
+async def _restart_in_place(
+    app: web.Application,
+    old: Session,
+    row: dict[str, Any],
+    *,
+    overridden: list[str],
+    operation_id: str,
+    started: float,
+) -> web.Response:
+    record = old.record
+    run_id = str(record.agent_run_id or record.id)
+    log.info(
+        "session_restart_started operation_id=%s session_id=%s backend=%s run_id=%s "
+        "native_id=%s forced=%s overridden=%s",
+        operation_id,
+        record.id,
+        record.backend,
+        run_id,
+        record.native_session_id,
+        bool(overridden),
+        ",".join(overridden) or "-",
+    )
+    ended = await terminal._end_session_gracefully(app, old, RESTART_END_REASON)
+    exited_at = time.monotonic()
+    log.info(
+        "session_restart_exited operation_id=%s session_id=%s graceful=%s state=%s exit_ms=%d",
+        operation_id,
+        record.id,
+        ended.get("graceful"),
+        ended.get("final_state"),
+        round((exited_at - started) * 1000),
+    )
+    try:
+        await asyncio.wait_for(old.end_settled.wait(), timeout=END_SETTLE_TIMEOUT_SECONDS)
+    except TimeoutError:
+        log.warning(
+            "session_restart_settle_timeout operation_id=%s session_id=%s waited_s=%.0f",
+            operation_id,
+            record.id,
+            END_SETTLE_TIMEOUT_SECONDS,
+        )
+        return await _restart_failed(
+            app,
+            old,
+            operation_id=operation_id,
+            code="restart_settle_timeout",
+            message=(
+                "the agent exited but its teardown did not finish in time; the pane shows "
+                "the ended session, and Resume reopens the conversation"
+            ),
+            status=503,
+        )
+    settled_at = time.monotonic()
+    # Re-read: the teardown may have repaired the transcript path on the row.
+    row = await app[keys.HISTORY].history_entry(run_id) or row
+    try:
+        outcome = await resume_run(
+            row,
+            sessions=app[keys.SESSIONS],
+            projects=app[keys.PROJECTS],
+            target_project_id=record.project_id,
+            # An auto-named pane keeps following its generated title; a pinned name
+            # stays pinned. Passing the name for both would pin every restarted pane.
+            name="" if getattr(record, "auto_named", True) else record.name,
+            flow=f"restart of session {record.id}",
+        )
+    except ResumeRefused as refusal:
+        return await _restart_failed(
+            app,
+            old,
+            operation_id=operation_id,
+            code=refusal.code,
+            message=str(refusal),
+            status=refusal.status,
+            detail=refusal.detail,
+        )
+    session = outcome.session
+    resumed_at = time.monotonic()
+    try:
+        await _install_replacement(
+            app,
+            old=old,
+            session=session,
+            resumed=True,
+            relation=RESTART_LINEAGE_RELATION,
+            discard_media=False,
+        )
+    except Exception as exc:
+        # Anything escaping the helper was raised before its commit point, so the
+        # replacement is already stopped and the old pane is still in the layout: the
+        # same outcome as a refused resume, reported the same way.
+        unexpected = not isinstance(exc, ValueError)
+        if unexpected:
+            log.exception(
+                "session_restart_replace_crashed operation_id=%s session_id=%s replacement=%s",
+                operation_id,
+                record.id,
+                session.record.id,
+            )
+        return await _restart_failed(
+            app,
+            old,
+            operation_id=operation_id,
+            code="restart_replace_failed",
+            message=f"the resumed agent could not take the pane's place: {exc}",
+            status=500 if unexpected else 409,
+        )
+    finished = time.monotonic()
+    timings = {
+        "exit_ms": round((exited_at - started) * 1000),
+        "settle_ms": round((settled_at - exited_at) * 1000),
+        "resume_ms": round((resumed_at - settled_at) * 1000),
+        "layout_ms": round((finished - resumed_at) * 1000),
+        "duration_ms": round((finished - started) * 1000),
+    }
+    await app[keys.EVENTS].emit(
+        "session_restarted",
+        session_id=session.record.id,
+        source="http",
+        replaced=record.id,
+        backend=session.record.backend,
+        agent_run_id=session.record.agent_run_id or session.record.id,
+        graceful=bool(ended.get("graceful")),
+        forced=bool(overridden),
+        overridden=overridden,
+        attempts=outcome.attempts,
+        **timings,
+    )
+    log.info(
+        "session_restart_completed operation_id=%s session_id=%s replaced=%s backend=%s "
+        "graceful=%s attempts=%d exit_ms=%d settle_ms=%d resume_ms=%d layout_ms=%d "
+        "duration_ms=%d",
+        operation_id,
+        session.record.id,
+        record.id,
+        session.record.backend,
+        bool(ended.get("graceful")),
+        outcome.attempts,
+        timings["exit_ms"],
+        timings["settle_ms"],
+        timings["resume_ms"],
+        timings["layout_ms"],
+        timings["duration_ms"],
+    )
+    return json_response(
+        {
+            "session": session.record.snapshot(),
+            "replaced": record.id,
+            "graceful": bool(ended.get("graceful")),
+            "overridden": overridden,
+            **timings,
+        },
+        201,
+    )
+
+
+async def _restart_failed(
+    app: web.Application,
+    old: Session,
+    *,
+    operation_id: str,
+    code: str,
+    message: str,
+    status: int,
+    detail: dict[str, Any] | None = None,
+) -> web.Response:
+    """Report a restart that ended the old process but could not replace it."""
+    log.error(
+        "session_restart_failed operation_id=%s session_id=%s backend=%s code=%s detail=%s",
+        operation_id,
+        old.record.id,
+        old.record.backend,
+        code,
+        message,
+    )
+    await app[keys.EVENTS].emit(
+        "session_restart_failed",
+        session_id=old.record.id,
+        source="http",
+        backend=old.record.backend,
+        code=code,
+    )
+    return json_response(
+        {
+            "error": message,
+            "code": code,
+            "stopped": True,
+            "session_id": old.record.id,
+            **(detail or {}),
+        },
+        status,
+    )
 
 
 async def _upload_session_attachment(
@@ -1292,6 +1727,8 @@ ROUTES: tuple[web.RouteDef, ...] = (
     web.post("/api/sessions/{sid}/stand-down", stand_down_session),
     web.post("/api/sessions/{sid}/resume", resume_retained_session),
     web.post("/api/sessions/{sid}/relaunch", relaunch_session),
+    web.get("/api/sessions/{sid}/restart", get_restart_eligibility),
+    web.post("/api/sessions/{sid}/restart", restart_session),
     web.post("/api/sessions/{sid}/attachments", upload_session_attachment),
     web.post("/api/sessions/{sid}/media", upload_session_media),
     web.post("/api/sessions/{sid}/promote", promote_session),

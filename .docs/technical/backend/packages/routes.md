@@ -180,10 +180,10 @@ Scheduled runs, previews, and run history.
 
 ### `routes/sessions.py`
 
-Session listing and spawn, patch, read, title regeneration, standing-activity clear, approvals, delete, relaunch, attachments and media, and promote/demote.
-Also holds `_spawn_from_body`, the spawn transport every other spawn caller goes through, and generated-title and conversation-holder decoration.
+Session listing and spawn, patch, read, title regeneration, standing-activity clear, approvals, delete, relaunch, stand-down, resume of a retained pane, in-place agent restart and its eligibility probe, attachments and media, and promote/demote.
+Also holds `_spawn_from_body`, the spawn transport every other spawn caller goes through, `_install_replacement`, the one layout swap Resume and Restart share, and generated-title and conversation-holder decoration.
 
-**Not:** the spawn itself (`session.py`), media validation (`session_media.py`), or terminal writes (`routes/terminal.py`).
+**Not:** the spawn itself (`session.py`), media validation (`session_media.py`), restart eligibility (`session_restart.py`), or terminal writes (`routes/terminal.py`).
 
 ### `routes/terminal.py`
 
