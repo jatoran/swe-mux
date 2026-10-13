@@ -504,29 +504,31 @@ async def test_detached_sessions_are_swept_so_stale_git_state_cannot_outlive_it(
     been fixed survives the fix for as long as the session lives — which is how a
     wrong worktree name kept rendering after its bug was gone.
     """
-    fresh = git_monitor.GitState(branch="master", worktree=None)
+    fresh = git_monitor.GitState(branch="master", worktree=None, root="C:/repo")
 
     async def fake_read(cwds):  # type: ignore[no-untyped-def]
         return {cwd: git_monitor.GitReading(fresh, git_monitor.GitEvidence()) for cwd in cwds}
 
     monkeypatch.setattr(git_monitor, "read_unique_git_readings", fake_read)
-    stale = git_monitor.GitState(branch="master", worktree="swe-mux")
+    stale = git_monitor.GitState(branch="master", worktree="swe-mux", root="C:/repo")
     attached = _FakeSession("C:/repo", True, stale)
+    attached.record.git_cwd = "C:/repo/attached"
     detached = _FakeSession("C:/repo", False, stale)
     monitor = _monitor([attached, detached])
 
-    # The first tick is always a sweep: state adopted from a previous daemon is
-    # re-derived by this one rather than trusted.
-    await monitor._poll()
+    # The first tick always reads everything: state adopted from a previous daemon
+    # is re-derived by this one rather than trusted.
+    await monitor._poll(now=0.0)
     assert attached.record.git.worktree is None
     assert detached.record.git.worktree is None
 
+    # These readings carry no layout, so nothing is watched and the checkouts keep
+    # timed polling: attached at the cadence, detached on the slower sweep.
     detached.record.git = stale
-    await monitor._poll()
-    assert detached.record.git.worktree == "swe-mux", "ordinary ticks stay attached-only"
+    await monitor._poll(now=monitor.cadence)
+    assert detached.record.git.worktree == "swe-mux", "a cadence tick stays attached-only"
 
-    for _ in range(git_monitor.GitMonitor.DETACHED_SWEEP_EVERY - 1):
-        await monitor._poll()
+    await monitor._poll(now=git_monitor.GitMonitor.UNWATCHED_DETACHED_SECONDS)
     assert detached.record.git.worktree is None, "the sweep must come back around"
 
 
@@ -559,7 +561,7 @@ async def test_an_ended_sessions_git_reading_is_frozen_at_its_death(
     # The first tick is a full sweep, so nothing else can be excluding them.
     await monitor._poll()
 
-    assert reads == [[]], "no checkout is read on behalf of a session with no process"
+    assert not any(reads), "no checkout is read on behalf of a session with no process"
     assert ended.record.git.worktree == "swe-mux"
     assert cold.record.git.worktree == "swe-mux"
 
