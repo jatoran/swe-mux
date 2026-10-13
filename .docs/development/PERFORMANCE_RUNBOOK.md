@@ -457,23 +457,42 @@ Frames expected in a healthy profile, so they are not mistaken for defects:
 | `_fanout (session.py)` | delivering output to attached clients; scales with panes |
 | `_refresh_tree (processes.py)` | the one permitted system-wide psutil snapshot per pass |
 | `_read (pty_host.py)`, supervisor only | the nonblocking reader poll; high sample share, near-zero CPU |
-| `_newest_rollouts (adapters/codex.py)` | Codex switch-watch tree walk; ~9% of a loaded profile with 3 Codex sessions |
+| `_newest_rollouts (adapters/codex.py)`, worker thread only | Codex switch-watch tree walk; only within two minutes of a submitted line or turn the followed rollout does not record |
 | `_normalize_tail_text (session.py)` | PTY screen classification for status detection |
 | `_read_and_decode (observation.py)`, worker thread only | one 512 KiB window of transcript replay; bursts at attach and rebind, silent at rest |
 
-`_newest_rollouts` is the largest remaining avoidable-looking cost and has been left alone
-deliberately.
+`_newest_rollouts` used to be the largest remaining avoidable-looking cost (~9% of a loaded
+profile with three Codex sessions) and the walk itself has been left alone deliberately.
 Its cache TTL is pinned below `TRANSCRIPT_SWITCH_FRESH_SECONDS`, its tree cannot be pruned by
 directory date because `codex resume` appends to old rollouts, and the watcher it feeds is the
-only path by which Codex `/new` is detected at all.
-At a daemon cost of 1.5% of a core the win is a fraction of a percent, against the subsystem
-with the longest history of subtle identity bugs in this repository.
+only path by which a hookless Codex `/new` is detected at all.
+What changed on 2026-10-12 is *when* it runs, not what it does: the watcher searches only after
+evidence a conversation could have moved (`design/features/status-detection.md`, Codex branch
+and rewind recovery), so an idle Codex pane no longer walks at all, and the headers it reads
+come from a per-file-instance cache (`rollout_identity`).
+Seeing this frame on an idle fleet is therefore a defect, and `transcript_observation` on
+`/api/diagnostics/background` says which pane is searching.
 
 ## Traps
 
 - **`asyncio.to_thread` does not make psutil work free.** Its Windows calls hold the GIL, so a
   long sampling pass in a worker thread starves the loop exactly as a blocking call would. It
   only stops *looking* like one.
+- **`psutil.Process.open_files()` on Windows is a system-wide call, whatever its name says.**
+  It answers for one process by enumerating every handle in the system
+  (`NtQuerySystemInformation`) and filtering, under the GIL. On the operator's host on
+  2026-10-12 that was ~450,000 handles and 234-340 ms per call; with four concurrent callers
+  the loop thread's own 0.2 ms `realpath`+`stat` took 500-700 ms, and the Codex ownership
+  proof was making the call every 10 s for every idle Codex pane. The stall dumps of that day
+  showed the loop in whatever innocent syscall it happened to be holding when the GIL came
+  back - `realpath`, `stat`, `resolve` - which is why the cause was not in any of them.
+  `win_process_files.py` asks the one process for its own handle table instead (0.6-2 ms),
+  and the proof now runs only on evidence. Measured on two live Codex panes, one full
+  ownership proof: **median 325 ms before, 1.8 ms after, same rollout found by both**. The
+  rule: on Windows, nothing on a cadence may call `open_files()`, `connections()` or any other
+  psutil call whose implementation walks the system table; a per-process answer, or no
+  answer, is the choice. And when stall frames name a cheap syscall, look for the thread
+  holding the GIL before optimising the syscall.
 - **`oneshot()` does not cache everything.** `Process.ppid()` on Windows carries no
   `@memoize_when_activated` and rebuilds the whole system parent table per call, sitting in the
   same `oneshot()` block as calls that are cached.
@@ -490,6 +509,14 @@ with the longest history of subtle identity bugs in this repository.
   remembers a resolved path for 30s. Both are counted on `/api/diagnostics/background`
   (`transcript_scans`), and a scan over a second is `transcript_scan_slow` at WARNING. The rule:
   a reading taken per session must be shared per *thing read*, and never taken on the loop.
+  A cache's *expiry* is a reading too: until 2026-10-12 an expired resolve re-ran `realpath` on
+  the loop, and the stall dumps had the loop inside one for 140 s in a day. An expired entry
+  now answers stale and refreshes in a worker, async callers resolve new paths off the loop
+  before asking (`resolve_paths_async`), and a first-ever resolution on the loop is counted
+  (`resolved_paths.loop_misses`) and warned when slow (`resolve_on_loop_slow`).
+  The same audit moved Project registration and re-rooting, the onboarding record, and the
+  Recent files existence filter into workers, each named in a stall dump of that day: a path on
+  an unreachable provider costs the request that asked about it, never every terminal.
 - **An unchanged arbitration is silence.** Several subsystems broadcast only on change, so
   "nothing was reported" is not evidence that nothing is wrong.
 - **`asyncio.to_thread` cannot be cancelled, and the loop joins what you abandon.** Cancelling

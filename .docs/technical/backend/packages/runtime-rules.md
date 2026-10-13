@@ -138,6 +138,9 @@ Codex rollout discovery (`adapters/codex.py`) walks a tree that mux never prunes
 
 That tree cannot be pruned by directory name to go faster, because `codex resume` appends to the original rollout and a file under an old date routinely holds the newest mtime.
 The walk is cached whole for that window rather than sliced to the newest few, because locating a *known* conversation (`transcript_path`) matches on the file name and would otherwise pay a second walk.
+The walk has run in a worker since `TranscriptScanCache`, and since 2026-10-12 it keeps each rollout's `(creation time, size)` (POSIX: device and inode) as a hint for `rollout_identity`, which reads a rollout's `session_meta` header once per file instance and answers later lookups from memory without a syscall.
+Measured on 2,497 rollouts: the 20 header reads a search used to repeat cost 2.1 ms, the cached lookups 0.009 ms.
+A rollout only ever grows, so a size that shrank or a different creation time is a different file and is read again.
 Expensive-but-honest metrics such as unique set size are opt-in per request, never on the cadence.
 
 ## Git

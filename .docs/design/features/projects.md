@@ -171,6 +171,11 @@ persisted ordering organize Project rows without acquiring behavioral ownership.
   The new folder's leaf is validated server-side under the shared Windows-safe leaf rules
   (`leaf_names.py`), because the dialog's folder field is free text and not every create path
   has a dialog; adopting an existing folder skips the leaf check.
+  Every filesystem step of registering or re-rooting a Project - resolving the path, the
+  duplicate-root comparison, the folder checks and the seed files - runs in one worker call
+  (`projects._prepare_project_root`), and registrations are serialized so two concurrent adds
+  of one folder still admit exactly one. A root on a stopped WSL distro or a dead share makes
+  that request slow; on the event loop it used to stall the whole daemon (196 s on 2026-10-12).
 - Create project contains only name, folder mode and path, and an optional Group when Groups exist.
   It states **Global defaults selected** and leaves customization to Project settings and Automation Policy after creation.
   Creation writes no automation, authority, backend, or launch-profile overrides and does not fetch provider readiness or the grants catalogue.

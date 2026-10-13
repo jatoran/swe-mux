@@ -98,6 +98,8 @@ Contracts: `../../../design/features/daemon-resilience.md` § Listener guard.
 
 The shared, off-loop transcript directory scan (`TranscriptScanCache`) and the cached path resolver (`resolve_path_cached`) the session manager's discovery, promotion and switch-watch loops read through.
 One listing per `(backend, cwd)` serves every session standing in that directory for `TRANSCRIPT_SCAN_CACHE_SECONDS`; concurrent askers join one in-flight scan; a scan over `SLOW_SCAN_WARN_SECONDS` is `transcript_scan_slow` at WARNING; counters are `transcript_scans` on `/api/diagnostics/background`.
+The resolver never re-resolves on the event loop: an expired entry asked for on the loop thread answers its previous value and refreshes in a worker, eviction is least recently used, and async callers resolve first-ever paths in one worker call with `resolve_paths_async` before reading keys synchronously (`SessionManager._prime_claim_keys`).
+A first-ever resolution on the loop is counted (`resolved_paths.loop_misses`) and one over `SLOW_LOOP_RESOLVE_WARN_SECONDS` is `resolve_on_loop_slow` at WARNING, naming the caller that should be priming.
 Why: `development/PERFORMANCE_RUNBOOK.md` § Traps.
 
 **Not:** any adapter's notion of what a transcript is - it calls `adapter.recent_transcripts` and narrows the answer by the same `created_at` rule every adapter applies first.
