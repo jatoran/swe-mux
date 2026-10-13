@@ -1487,6 +1487,14 @@ Every `GET /sessions` row and every PTY `state`/`update`/`exit` snapshot carries
 `_snapshot_generation`, `_snapshot_revision`, and `_snapshot_enriched`.
 The generation identifies one daemon process, the revision orders one session inside that generation, and the enriched flag identifies REST rows that authoritatively carry generated-title and delivery-readiness presentation fields.
 Clients reject lower revisions from the same generation, accept a new generation even when its revision resets, and preserve enriched fields when applying a raw PTY snapshot for the same agent run.
+`GET /sessions/{sid}` serves exactly the row `GET /sessions` serves for that session - the same ordering envelope, `delivery_readiness`, `unsent_input`, and generated title - so a client that re-reads one row because an event said only that row moved merges it like any list row.
+An unknown session is a 404.
+
+**Row patches on events.** An event that changes a few fields of one session's row may carry them whole, so a client writes them in place instead of re-reading anything:
+`patch` is `{field: value}` with each value exactly as the session snapshot serializes that field, and `session_revision` is the revision `publish_update` stamped when it made them, in the generation the `/events` socket announced in `events_hello.daemon_generation`.
+A snapshot at or past that revision already contains the values; one before it must not roll them back.
+`git_changed` carries `patch.git` for a session's checkout and `harness_status` carries `patch` over `harness_status`, `context_window`, `context_pct`, `context_peak_pct`, and `cost_usd` - every row field the status line can write (`harness_status.CLAUDE_STATUS_ROW_FIELDS`).
+The Project-level `git_changed {project_id}` names no session and carries no patch.
 Rows also carry `idle_reason`, the idle-axis sibling of `awaiting_reason`:
 `waiting_on_background` means the turn genuinely ended (the composer accepts input,
 `delivery_state` is unchanged) while the agent has background work that will wake it back
@@ -1860,6 +1868,7 @@ The body is whitelisted to `mcp__*` names and descriptions, bounded, and held on
 `POST /api/hooks/{sid}` additionally accepts `{"event": "Status", "payload": <Claude status-line snapshot + delegate>}` from the status-line tee (`features/harness-status.md`).
 It shares the hooks' route, secret, and foreign-conversation filter because it speaks for the same conversation, but it is a measurement rather than a lifecycle event: it never moves state and is kept off the generic EventBus fan-out.
 A real change surfaces as a compact `harness_status` event, and the session snapshot carries the result as `harness_status` (`data-model.md`).
+The event also carries a row patch of every row field the snapshot can write, with its `session_revision` ("Row patches on events" above).
 
 ## Voice and Conversation mode
 
@@ -2234,6 +2243,12 @@ depths plus `tier0_capture` (captured/dropped, last error) and `deterministic_co
 otherwise indistinguishable from a quiet fleet) plus `project_contexts` (fixed path, size bound,
 reads, writes, blank-file creates, and last read error). Both are in-memory per daemon
 boot and do not survive a restart.
+`git_monitor` reports the Git monitor's own account (`features/git.md`): `cadence_seconds`,
+`targets`, `dirty_targets`, `reads` keyed by cause (`initial`, `change`, `sweep`, `poll`),
+`changes_received`, `last_read_seconds`, `slowest_read_seconds`, and `watch` (roots, live
+watches, roots cooling down or unwatched, batches and paths received and how many mattered,
+starts, failures, the last failure, ignore-listing refreshes and failures); null when no monitor
+runs.
 
 It also reports **what each loop costs**, not only whether it lives. Every `loops[]` entry
 carries `busy_seconds` (wall time inside `iteration()` bodies, **awaits included**),
@@ -2600,7 +2615,7 @@ superseded, with no session and no working tree, which is why it is not a `git_c
 computation and an unchanged revalidation emit nothing, so a quiet repository raises no events and
 the refetch this provokes cannot sustain itself.
 
-The session snapshot's `git` object and the `git_changed.git` event field carry the same shape, which describes the **checkout** a session is in and never the session:
+The session snapshot's `git` object, the `git_changed.git` event field, and a session's `git_changed.patch.git` carry the same shape, which describes the **checkout** a session is in and never the session:
 
 ```text
 git {
@@ -2615,7 +2630,7 @@ git {
 ```
 
 On a same-checkout HEAD transition, `git_changed.previous_head` carries the prior full commit OID and the existing top-level `head` evidence field carries the new one.
-The first poll and a checkout switch set `previous_head` to `null`, so they establish a baseline without inventing provenance.
+The first read and a checkout switch set `previous_head` to `null`, so they establish a baseline without inventing provenance.
 
 Sessions sharing a working tree report identical values by construction.
 `compare_*` measure the working tree against its merge base with `compare_ref`, so they include

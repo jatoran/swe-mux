@@ -51,6 +51,18 @@ STATUS_EVENT = "Status"
 #: `codex-rs/protocol/src/protocol.rs`, read 2026-09-07 at rust-v0.153.4.
 CODEX_BASELINE_TOKENS = 12_000
 
+#: Every row field `apply_claude_status_snapshot` can write. The `harness_status`
+#: event carries each of them whole, so a browser patches the row from the event
+#: rather than re-reading the fleet. Adding a write there means adding it here;
+#: `test_harness_status_patch_covers_every_field_the_snapshot_writes` holds that.
+CLAUDE_STATUS_ROW_FIELDS = (
+    "harness_status",
+    "context_window",
+    "context_pct",
+    "context_peak_pct",
+    "cost_usd",
+)
+
 #: Window lengths Codex reports in `window_minutes`, mapped onto the shared keys.
 _CODEX_WINDOW_KEYS: dict[int, str] = {
     300: RATE_LIMIT_FIVE_HOUR,
