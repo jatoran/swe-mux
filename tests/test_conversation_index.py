@@ -769,6 +769,8 @@ async def test_concurrent_readers_share_one_refresh_and_a_slow_one_says_indexing
         assert counters(registry)["joined"] == 2
         release.set()
         first, second = await asyncio.gather(*waiting)
+        # A finished read is not kept as "in flight": it would pin its reading for ever.
+        assert registry.status()["in_flight"] == 0
     finally:
         release.set()
         registry.close()

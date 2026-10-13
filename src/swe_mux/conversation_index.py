@@ -1224,11 +1224,15 @@ class ConversationIndexRegistry:
         rather than a second timeout over the same work.
         """
         index = self.index_for(path, backend, native_id)
+        key = index.key
         with self._lock:
-            future = self._inflight.get(index.key)
+            future = self._inflight.get(key)
             if future is None or future.done():
                 future = self._executor_for().submit(self._refresh_and_evict, index)
-                self._inflight[index.key] = future
+                self._inflight[key] = future
+                # A finished future holds its reading; left in the map it would keep an
+                # evicted conversation's messages alive for the life of the daemon.
+                future.add_done_callback(lambda done: self._forget_inflight(key, done))
             else:
                 self.stats.count("joined")
         try:
@@ -1238,6 +1242,11 @@ class ConversationIndexRegistry:
             raise IndexBuilding(
                 {"read_bytes": read, "total_bytes": total, "building": index.building}
             ) from None
+
+    def _forget_inflight(self, key: str, done: Future[ConversationSnapshot]) -> None:
+        with self._lock:
+            if self._inflight.get(key) is done:
+                del self._inflight[key]
 
     def _refresh_and_evict(self, index: ConversationIndex) -> ConversationSnapshot:
         snapshot = index.refresh()
@@ -1269,9 +1278,11 @@ class ConversationIndexRegistry:
         """Counters for `/api/diagnostics/background` (`transcript_index`)."""
         with self._lock:
             indexes = list(self._indexes.values())
+            in_flight = len(self._inflight)
         return {
             **self.stats.snapshot(),
             "indexes": len(indexes),
+            "in_flight": in_flight,
             "estimated_bytes": sum(index.estimated_bytes for index in indexes),
             "budget_bytes": self.budget_bytes,
             "building": [

@@ -548,6 +548,7 @@ Seeing this frame on an idle fleet is therefore a defect, and `transcript_observ
   - `rebuilds` counts files that were replaced under the index (Claude cancel/revert); each is logged as `transcript_index_rebuilt` with its reason.
   - `lines_decoded`, `lines_sniffed` (Codex records skipped without decoding) and `bytes_read` say what the reads cost; `joined` counts readers that shared a read already in flight.
   - `building` lists first reads in progress, with bytes read and total; a read slower than 2 s is `transcript_index_slow` at WARNING, and `worst_seconds` keeps the slowest.
+    `in_flight` counts async reads still running; it returns to zero when they finish.
   - `tool_input_misses` counts tool inputs that could not be read back because their record moved; more than a handful means files are being rewritten under live readers.
 - **A window over a growing file is not a frame of reference.**
   Anything numbered from where a bounded read starts (a line index, a sequence within the read) renumbers itself when the file grows and the window moves, so an idempotent insert keyed on it inserts everything again.
