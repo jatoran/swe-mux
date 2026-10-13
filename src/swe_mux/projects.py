@@ -60,6 +60,37 @@ def canonical_project_root(value: str | Path, *, create: bool = False) -> Path:
     return root
 
 
+def _prepare_project_root(
+    root: str | Path,
+    label: str,
+    registered: list[tuple[str, str]],
+    *,
+    create: bool,
+) -> Path:
+    """Every filesystem step of registering or re-rooting a Project, in one call.
+
+    Runs in a worker thread (`ProjectManager.register`, `ProjectManager._update`):
+    `resolve`, `same_path`'s stats, the folder checks and the seed files are all
+    syscalls, and a root on a slow or unreachable provider - a stopped WSL distro,
+    a dead share - makes each of them take seconds to minutes. On the event loop
+    that stalled every terminal and request in the daemon (196 s in one
+    `register` resolve on 2026-10-12). ``registered`` is (project id, root) for
+    every existing Project, snapshotted on the loop.
+    """
+    resolved = Path(root).expanduser().resolve()
+    # `same_path` rather than a normalized-string compare. `normcase` is
+    # already platform-correct about case, but it is still a *string* test, so
+    # two genuinely different spellings of one directory - a symlink, a
+    # junction, a UNC path against a mapped drive, a bind mount - register as
+    # two Projects over the same tree. Both then own the same `.swe-mux/`, and
+    # nothing downstream can tell them apart.
+    if any(same_path(existing, resolved) for _project_id, existing in registered):
+        raise ValueError("that folder is already registered as a project")
+    canonical = canonical_project_root(resolved, create=create)
+    initialize_project_files(canonical, label)
+    return canonical
+
+
 def project_note_template(name: str) -> str:
     """Seed a Project's initial note with a heading and room to start typing.
 
@@ -97,6 +128,10 @@ class ProjectManager:
         self.groups: dict[str, ProjectGroupRecord] = {}
         self._order_lock = asyncio.Lock()
         self._project_write_lock = asyncio.Lock()
+        # Serializes registrations, whose duplicate-root check and insert are now
+        # separated by a worker call. Its own lock rather than the write lock, so
+        # a registration waiting on a slow provider never holds up `touch_used`.
+        self._register_lock = asyncio.Lock()
 
     def ordered_projects(self) -> list[ProjectRecord]:
         return sorted(self.projects.values(), key=lambda item: (item.position, item.name, item.id))
@@ -153,21 +188,20 @@ class ProjectManager:
         if not str(root).strip():
             # An empty root used to resolve to the daemon's own working directory.
             raise ValueError("project folder is required")
+        async with self._register_lock:
+            return await self._register(label, root, group_id, create_missing)
+
+    async def _register(
+        self, label: str, root: str, group_id: str | None, create_missing: bool
+    ) -> ProjectRegistrationResult:
         # Registration conflicts and an unknown group are checked before the folder is
         # created, so a rejected request never leaves a stray directory behind.
-        resolved = Path(root).expanduser().resolve()
-        # `same_path` rather than a normalized-string compare. `normcase` is
-        # already platform-correct about case, but it is still a *string* test, so
-        # two genuinely different spellings of one directory - a symlink, a
-        # junction, a UNC path against a mapped drive, a bind mount - register as
-        # two Projects over the same tree. Both then own the same `.swe-mux/`, and
-        # nothing downstream can tell them apart.
-        if any(same_path(item.root, resolved) for item in self.projects.values()):
-            raise ValueError("that folder is already registered as a project")
         if group_id is not None and group_id not in self.groups:
             raise ValueError("unknown project group")
-        canonical = canonical_project_root(resolved, create=create_missing)
-        initialize_project_files(canonical, label)
+        registered = [(item.id, item.root) for item in self.projects.values()]
+        canonical = await asyncio.to_thread(
+            _prepare_project_root, root, label, registered, create=create_missing
+        )
         removed = await self.history.removed_project_for_root(str(canonical))
         if removed is not None:
             removed.name = label
@@ -251,14 +285,17 @@ class ProjectManager:
                 f"stale layout revision: expected {project.layout_revision}, received {expected}"
             )
         if "root" in changes:
-            root = canonical_project_root(str(changes["root"]))
-            if any(
-                item.id != project_id and same_path(item.root, root)
-                for item in self.projects.values()
-            ):
-                raise ValueError("that folder is already registered as a project")
             renamed = changes.get("name")
-            initialize_project_files(root, str(renamed).strip() if renamed else project.name)
+            others = [
+                (item.id, item.root) for item in self.projects.values() if item.id != project_id
+            ]
+            root = await asyncio.to_thread(
+                _prepare_project_root,
+                str(changes["root"]),
+                str(renamed).strip() if renamed else project.name,
+                others,
+                create=False,
+            )
             changes["root"] = str(root)
         if "group_id" in changes:
             group_id = changes["group_id"]
