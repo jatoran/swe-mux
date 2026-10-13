@@ -78,6 +78,11 @@ The title is deliberately a `<strong>` so `sessionAttention.ts`'s attention-tier
 Inactive sessions keep their ordinary tree and pane placement with a dimmed row and tab.
 Their context action changes from Stand down to Resume or Restart terminal, and bulk ended-session cleanup deliberately excludes them.
 
+A live agent's context menu also offers Restart agent, drawn by `restartAgent.ts`.
+That module is pure and, like `branchPoints.ts`, recomputes no eligibility: it maps the daemon's probe (`GET /api/sessions/{id}/restart`, read when the menu opens) and the menu's armed and running state onto one row's label, reason, danger mark and press action.
+`canOfferRestart` is the only local decision, and it only says whether the row is worth probing for at all.
+`App.tsx` owns the probe, the two-press force, and moving the active, focused and zoomed pane ids onto the replacement session.
+
 ## Sidebar filter
 
 `sidebarSearch.ts`, `fuzzyText.ts`, `App.tsx` orchestration

@@ -2332,6 +2332,16 @@ class Session:
         self.watchdog_recovery_actions: dict[str, int] = {}
         self.terminal_latencies: deque[dict[str, Any]] = deque(maxlen=32)
         self.agent_stop_event = asyncio.Event()
+        # Set once `_mark_ended` has finished *all* of its teardown - the history
+        # row, the transcript index, the recovery row - not merely flipped the state.
+        # The state reads `exited` at the first line of that method and the run row
+        # is still being written for some time after, so anything that must act on
+        # a fully retired run (an in-place restart resuming the same conversation)
+        # waits for this rather than for the state.
+        self.end_settled = asyncio.Event()
+        # An in-place restart owns this session from its first refusal check to the
+        # replacement's layout swap; a second request in that window is refused.
+        self.restart_in_progress = False
         self.observer_task: asyncio.Task[Any] | None = None
         self.transcript_path: Path | None = None
         # A transcript adopted by elimination rather than by identity evidence
@@ -8178,6 +8188,17 @@ class SessionManager:
     async def _mark_ended(self, session: Session, reason: str) -> None:
         if session.record.state in {"exited", "crashed"}:
             return
+        try:
+            await self._retire_ended_session(session, reason)
+        finally:
+            # Set however the teardown ended, including by raising: a waiter that
+            # outlived a failed teardown would otherwise wait out its whole bound for
+            # an end that has already happened.
+            settled = getattr(session, "end_settled", None)
+            if settled is not None:
+                settled.set()
+
+    async def _retire_ended_session(self, session: Session, reason: str) -> None:
         exit_status = getattr(session.pty, "exit_status", None)
         exit_code = exit_status() if callable(exit_status) else None
         session.record.exit_code = exit_code

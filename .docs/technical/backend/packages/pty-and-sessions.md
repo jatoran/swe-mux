@@ -180,16 +180,26 @@ Proof that a pane survived its own spawn: a settle window with optional caller-s
 
 ## `session_resume.py`
 
-The single agent-conversation resume authority, shared by the History route, the retained-session replacement route, and the scheduled-resume path.
+The single agent-conversation resume authority, shared by the History route, the retained-session replacement route, the in-place restart route, and the scheduled-resume path.
 
 - The structural refusals: `not_agent`, `native_id_missing`, `cwd_missing`, `transcript_unavailable`, `target_project_missing`, `adapter_missing`.
 - The two claim checks: a mux pane on the conversation, and `conversation_holder` for processes mux does not own.
 - Whether the resumed pane inherits the run row, which is the adapter's answer and never this module's.
 - Proof that the pane survived its settle window.
 - `fork_run` for a fork-then-resume.
-- `resolve_latest_run`, which follows rollovers and `resume` edges and deliberately not `branch`, `review`, or `handoff` ones.
+- `resolve_latest_run`, which follows rollovers and the continuation edges (`resume`, `restart`) and deliberately not `branch`, `review`, or `handoff` ones.
 
 **Not:** layout attachment and lineage, which belong to the callers because only they differ on it; HTTP; trigger arithmetic; or the fork writer's byte work (`transcript_fork.py`).
+
+## `session_restart.py`
+
+Whether a live agent may be restarted in place, as a pure function of its record and a handful of daemon facts (`RestartFacts`) the route gathers.
+
+- Identity blockers, which no `force` reaches: the conversation must be known, proven, current and readable, and the process local, active and not the daemon's host.
+- Activity blockers, which a human `force` may override, each carrying the sentence a confirmation shows for what it loses.
+- The end reason `restarted`, the `restart` lineage relation, and the teardown settle bound.
+
+**Not:** the sequence itself, which `routes/sessions.py` runs through the shared graceful end, `Session.end_settled`, `session_resume.resume_run`, and the same layout swap Resume uses; or who may call it, which the route decides.
 
 ## `session_titles.py`
 

@@ -1158,6 +1158,8 @@ PUT    /sessions/{id}/approvals                 {mode: wait|allowlisted|allow_al
   POST   /sessions/{id}/approvals/approve-once    {fingerprint?}
   POST   /sessions/{id}/stand-down
   POST   /sessions/{id}/resume
+  GET    /sessions/{id}/restart                 -> restart eligibility (reads only)
+  POST   /sessions/{id}/restart                 {force?} human callers only
   DELETE /sessions/{id}
 POST   /sessions/{id}/input
 GET    /sessions/{id}/branch-points[?limit=]
@@ -1276,6 +1278,46 @@ The daemon proves the replacement live, replaces the old terminal identity in th
 Failure before layout replacement leaves the retained session intact.
 Inactive success emits `session_resumed_from_inactive {session_id, replaced, backend, agent_run_id, recovered, duration_ms}`.
 Other ended-agent success emits `session_resumed_from_ended` with the same payload.
+
+`GET /sessions/{id}/restart` reads the same assessment the restart enforces and changes nothing: `{session_id, eligible, code, reason, force_allowed, blockers: [{code, message, forceable}], would_lose: [message]}`.
+`code` and `reason` are the first blocker's, or `null` when eligible.
+`would_lose` lists the forceable blockers' sentences, which is what a confirmation shows.
+A shell or an ended session answers from the record alone without reading history, the transcript or the queue.
+
+`POST /sessions/{id}/restart` replaces a live agent's process without leaving its conversation (`features/sessions.md`).
+The body is optional; only `{"force": true}` overrides, and it overrides only the activity blockers.
+A caller carrying an agent session's identity is refused with 403, and the operation is not on the MCP surface.
+A refusal is `409 {error, session_id, eligible: false, code, reason, force_allowed, blockers, would_lose}`, written before anything is stopped.
+
+| Code | Forceable | Meaning |
+| --- | --- | --- |
+| `not_agent` | no | Not an agent harness with an observable transcript. |
+| `session_ended` | no | Already ended; use Resume. |
+| `session_inactive` | no | Stood down or cold; use Resume. |
+| `restart_in_progress` | no | Another restart of this session is running. |
+| `remote_boundary` | no | The terminal runs outside the local host boundary. |
+| `conversation_unknown` | no | No native conversation id, a placeholder id, or no history run. |
+| `conversation_unproven` | no | The transcript binding is still provisional. |
+| `transcript_stale` | no | Observation has lost the transcript. |
+| `history_unavailable` | no | The history run row is missing. |
+| `transcript_unavailable` | no | No readable transcript on disk. |
+| `hosts_daemon` | no | The session hosts the running daemon. |
+| `project_missing` | no | The owning Project no longer exists. |
+| `agent_working` | yes | A turn is in flight or starting. |
+| `awaiting_input` | yes | An approval or question is pending. |
+| `background_work` | yes | Background tasks, subagents, loops or crons are running. |
+| `unsent_input` | yes | Composer text or an unsubmitted delivery would be lost. |
+| `recent_input` | yes | The operator typed within the last three seconds. |
+| `queue_pending` | yes | Queued messages bind to this session id and would strand. |
+| `land_in_progress` | yes | An auto-merge request from this session is still open. |
+
+Success is `201 {session, replaced, graceful, overridden, exit_ms, settle_ms, resume_ms, layout_ms, duration_ms}`, where `overridden` lists the blocker codes `force` bypassed and `graceful` is false when the hard stop was needed.
+The old session ends with reason `restarted`, the daemon waits for its teardown to settle, and the shared resume authority opens the same conversation into the same pane under the layout revision.
+It emits `session_restarted {session_id, source, replaced, backend, agent_run_id, graceful, forced, overridden, attempts, exit_ms, settle_ms, resume_ms, layout_ms, duration_ms}`.
+A failure after the old process ended returns `{error, code, stopped: true, session_id}` and leaves the ended pane in place for an ordinary Resume.
+Its code is `restart_settle_timeout` (503), the resume authority's own code and status, or `restart_replace_failed` (409 when the Project vanished, 500 when the layout write failed, which also stops the replacement).
+Each failure emits `session_restart_failed {session_id, source, backend, code}`.
+Bookkeeping after the layout write (the lineage edge, the recovery row) is logged on failure and never turns a completed swap into a reported failure.
 
 `POST /sessions/{id}/standing-activity/clear` takes an optional
 `{kind?: 'loop'|'cron'|'background_tasks'|'subagents'}` (the whole set when omitted or when the

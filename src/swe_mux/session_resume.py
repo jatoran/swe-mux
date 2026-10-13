@@ -4,6 +4,8 @@ This module is the **single resume authority**. Both callers go through it:
 
 - `server.resume_history`, when a human presses Resume on a History row.
 - `scheduler.py`, when a schedule whose action is ``resume`` fires.
+- `routes/sessions.py`, when a retained pane is resumed in place, and
+  `session_restart.py`, when a live agent is restarted into a fresh process.
 
 That is deliberate and load-bearing, for the same reason `scheduler.py` spawns
 through `_spawn_from_body` rather than reimplementing a spawn: a resume has five
@@ -85,6 +87,13 @@ FORK_WRITE_TIMEOUT_SECONDS = 60.0
 # bound is a runaway guard rather than a policy: a conversation resumed fifty times has
 # other problems.
 LATEST_RUN_MAX_HOPS = 64
+
+# Lineage relations that carry the *same* conversation into a new pane, and so are
+# followed by `resolve_latest_run`. A `restart` is a resume the operator asked for
+# while the old pane was still alive (`session_restart.py`): the conversation moved
+# to a fresh process and nothing else changed. A `branch`, `review` or `handoff` is
+# a different conversation or a different agent and is never followed.
+CONTINUATION_RELATIONS = frozenset({"resume", "restart"})
 
 
 class ResumeRefused(Exception):
@@ -523,7 +532,7 @@ async def resolve_latest_run(
     - A **rollover** (``/clear``, an in-CLI ``/resume``) retires the run and mints a
       new one *in the same pane*, which is what ``note_id`` chains together.
     - A **resume** opens a new pane on the same conversation and records a ``resume``
-      lineage edge.
+      lineage edge; an in-place **restart** does the same with a ``restart`` edge.
 
     Both are followed; nothing else is. A ``branch`` edge is a different conversation
     by construction, and a ``review`` or ``handoff`` edge is a different agent reading
@@ -570,7 +579,8 @@ async def _next_run(
     children = [
         edge
         for edge in edges
-        if edge.get("relation") == "resume" and str(edge.get("parent_run_id")) == str(row["id"])
+        if edge.get("relation") in CONTINUATION_RELATIONS
+        and str(edge.get("parent_run_id")) == str(row["id"])
     ]
     for edge in sorted(children, key=lambda item: float(item.get("created_at") or 0.0)):
         child: dict[str, Any] | None = await history.history_entry(str(edge["child_run_id"]))
