@@ -14,7 +14,7 @@ export const KEYMAP_FIXTURE = {
    "prefix": "ctrl+x",
    "prefix_alternates": [],
    "warning": "C-x is a prefix inside Emacs and inside a readline shell too, so an Emacs running in a pane loses it while this preset is active. C-c, C-a, C-e and C-k are deliberately left alone here: those are the shell bindings people actually feel.",
-   "bindings": 250
+   "bindings": 251
   },
   {
    "id": "swemux",
@@ -24,7 +24,7 @@ export const KEYMAP_FIXTURE = {
    "prefix": "",
    "prefix_alternates": [],
    "warning": "",
-   "bindings": 281
+   "bindings": 282
   },
   {
    "id": "tmux",
@@ -36,7 +36,7 @@ export const KEYMAP_FIXTURE = {
     "ctrl+a"
    ],
    "warning": "Ctrl+B is tmux's own prefix. If you run tmux inside a swe-mux pane, swe-mux will now eat it before tmux sees it. Ctrl+A is the usual escape from that collision and is one edit away in Settings.",
-   "bindings": 266
+   "bindings": 267
   },
   {
    "id": "vim",
@@ -46,7 +46,7 @@ export const KEYMAP_FIXTURE = {
    "prefix": "ctrl+w",
    "prefix_alternates": [],
    "warning": "Ctrl+W is a shell's delete-word, and a browser tab closes on it before the page ever sees it - so every Ctrl+W binding here is desktop-app only, and the Alt+hjkl set beside it is the one that works in a browser.",
-   "bindings": 280
+   "bindings": 281
   },
   {
    "id": "vscode",
@@ -56,7 +56,7 @@ export const KEYMAP_FIXTURE = {
    "prefix": "ctrl+k",
    "prefix_alternates": [],
    "warning": "Ctrl+K is a shell's kill-to-end-of-line and Ctrl+B is tmux's prefix. Both are taken from whatever runs inside a pane while this preset is active.",
-   "bindings": 273
+   "bindings": 274
   }
  ],
  "rules": {
@@ -320,6 +320,10 @@ export const KEYMAP_FIXTURE = {
    {
     "keys": "ctrl+shift+space s r",
     "command": "session.rename"
+   },
+   {
+    "keys": "ctrl+shift+space s shift+r",
+    "command": "session.restartAgent"
    },
    {
     "keys": "ctrl+shift+space s x",
@@ -1323,6 +1327,10 @@ export const KEYMAP_FIXTURE = {
    {
     "keys": "ctrl+shift+space s r",
     "command": "session.rename"
+   },
+   {
+    "keys": "ctrl+shift+space s shift+r",
+    "command": "session.restartAgent"
    },
    {
     "keys": "ctrl+shift+space s x",
@@ -2477,6 +2485,10 @@ export const KEYMAP_FIXTURE = {
     "command": "session.rename"
    },
    {
+    "keys": "ctrl+shift+space s shift+r",
+    "command": "session.restartAgent"
+   },
+   {
     "keys": "ctrl+shift+space s x",
     "command": "session.kill"
    },
@@ -3541,6 +3553,10 @@ export const KEYMAP_FIXTURE = {
    {
     "keys": "ctrl+shift+space s r",
     "command": "session.rename"
+   },
+   {
+    "keys": "ctrl+shift+space s shift+r",
+    "command": "session.restartAgent"
    },
    {
     "keys": "ctrl+shift+space s x",
@@ -4689,6 +4705,10 @@ export const KEYMAP_FIXTURE = {
    {
     "keys": "ctrl+shift+space s r",
     "command": "session.rename"
+   },
+   {
+    "keys": "ctrl+shift+space s shift+r",
+    "command": "session.restartAgent"
    },
    {
     "keys": "ctrl+shift+space s x",
@@ -5924,6 +5944,12 @@ export const KEYMAP_FIXTURE = {
     "ctrl+shift+space s r": [
      {
       "command": "session.rename",
+      "when": ""
+     }
+    ],
+    "ctrl+shift+space s shift+r": [
+     {
+      "command": "session.restartAgent",
       "when": ""
      }
     ],
@@ -7447,6 +7473,12 @@ export const KEYMAP_FIXTURE = {
     "ctrl+shift+space s r": [
      {
       "command": "session.rename",
+      "when": ""
+     }
+    ],
+    "ctrl+shift+space s shift+r": [
+     {
+      "command": "session.restartAgent",
       "when": ""
      }
     ],
@@ -9024,6 +9056,12 @@ export const KEYMAP_FIXTURE = {
     "ctrl+shift+space s r": [
      {
       "command": "session.rename",
+      "when": ""
+     }
+    ],
+    "ctrl+shift+space s shift+r": [
+     {
+      "command": "session.restartAgent",
       "when": ""
      }
     ],
@@ -10652,6 +10690,12 @@ export const KEYMAP_FIXTURE = {
       "when": ""
      }
     ],
+    "ctrl+shift+space s shift+r": [
+     {
+      "command": "session.restartAgent",
+      "when": ""
+     }
+    ],
     "ctrl+shift+space s x": [
      {
       "command": "session.kill",
@@ -12202,6 +12246,12 @@ export const KEYMAP_FIXTURE = {
     "ctrl+shift+space s r": [
      {
       "command": "session.rename",
+      "when": ""
+     }
+    ],
+    "ctrl+shift+space s shift+r": [
+     {
+      "command": "session.restartAgent",
       "when": ""
      }
     ],
@@ -13968,7 +14018,7 @@ export const KEYMAP_FIXTURE = {
   },
   {
    "id": "usage.open",
-   "label": "Open usage analytics",
+   "label": "Open usage & activity",
    "category": "view"
   },
   {
@@ -13998,7 +14048,7 @@ export const KEYMAP_FIXTURE = {
   },
   {
    "id": "resources.open",
-   "label": "Open resources (processes, bandwidth, storage, fleet activity)",
+   "label": "Open system resources (processes, bandwidth, storage)",
    "category": "view"
   },
   {
@@ -14219,6 +14269,11 @@ export const KEYMAP_FIXTURE = {
   {
    "id": "session.resumeInactive",
    "label": "Resume an inactive agent session",
+   "category": "session"
+  },
+  {
+   "id": "session.restartAgent",
+   "label": "Restart the selected agent in a fresh process",
    "category": "session"
   },
   {
