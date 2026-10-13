@@ -20,6 +20,7 @@ hook posts took 50 s behind five searches typed in nineteen seconds.
 from __future__ import annotations
 
 import asyncio
+import re
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -198,6 +199,108 @@ async def test_a_role_scoped_search_excerpts_only_that_role(tmp_path: Path) -> N
         assert page["items"]
         for item in page["items"]:
             assert {match["role"] for match in item["matches"]} == {"assistant"}
+    finally:
+        history.close()
+
+
+#: FTS5 reports a `rowid BETWEEN ? AND ?` it accepted as `>` and `<` in its index string
+#: (`INDEX 0:M1><` on SQLite 3.47). A plan without them is walking every match in the
+#: archive and filtering by conversation afterwards.
+_RANGE_BOUNDED_SCAN = re.compile(r"SCAN history_messages_fts VIRTUAL TABLE INDEX \d+:\S*>\S*<")
+
+
+def match_plans(plans: dict[str, str]) -> dict[str, str]:
+    return {sql: plan for sql, plan in plans.items() if "history_messages_fts MATCH" in sql}
+
+
+async def test_page_excerpts_are_one_walk_of_the_index_not_one_per_conversation(
+    tmp_path: Path,
+) -> None:
+    """The range bound that wins for one conversation loses for a page.
+
+    Each range-bounded `MATCH` re-pays the query's term setup, which for a prefix is a
+    walk of every term carrying it. Measured 2026-10-12 on a full prefix-indexed copy of
+    the live archive, fifty conversations: 14-111 ms as one `MATCH ... IN (...)`, against
+    71-756 ms as a union of fifty range-bounded parts.
+    """
+    history = await seeded(tmp_path)
+    try:
+        page, statements = await statements_of(
+            history, lambda: history.history_page(query="beacon", project_id=PROJECT)
+        )
+        assert len(page["items"]) == 3
+        plans = match_plans(await plans_of(history, statements))
+        excerpts = [plan for sql, plan in plans.items() if "snippet(" in sql]
+        assert len(excerpts) == 1
+        scans = [line for line in excerpts[0].splitlines() if "history_messages_fts" in line]
+        assert len(scans) == 1, f"the page walks the index more than once: {excerpts[0]}"
+    finally:
+        history.close()
+
+
+async def test_one_conversations_matches_are_range_bounded(tmp_path: Path) -> None:
+    """Measured 2026-10-12 on a full prefix-indexed copy of the live archive: `"the"*`
+    74 -> 3 ms and `"cont"*` 59 -> 9 ms for one conversation's matches."""
+    history = await seeded(tmp_path)
+    try:
+        matches, statements = await statements_of(
+            history, lambda: history.history_message_matches("run-1", "beacon")
+        )
+        assert [match["ordinal"] for match in matches] == list(range(6))
+        assert all("run-1" in match["excerpt"] for match in matches)
+        plans = match_plans(await plans_of(history, statements))
+        assert len(plans) == 1
+        assert _RANGE_BOUNDED_SCAN.search(next(iter(plans.values()))), plans
+        assert "CORRELATED" not in next(iter(plans.values()))
+    finally:
+        history.close()
+
+
+async def test_range_bounds_survive_a_conversation_reindexed_between_others(
+    tmp_path: Path,
+) -> None:
+    """A reindex gives a run fresh ids above everyone else's, so its range moves; the
+    excerpts must follow it rather than read a neighbour's span."""
+    history = await seeded(tmp_path)
+    try:
+        await history.replace_history_messages(
+            "run-0",
+            [message("user", f"beacon sighting run-0 again {n}", n) for n in range(2)],
+            mtime_ns=2,
+            size=2,
+        )
+        page = await history.history_page(query="beacon", project_id=PROJECT)
+        by_id = {item["id"]: item for item in page["items"]}
+        assert by_id["run-0"]["match_count"] == 2
+        assert all("again" in match["excerpt"] for match in by_id["run-0"]["matches"])
+        for identity in ("run-1", "run-2"):
+            assert by_id[identity]["match_count"] == 4
+            assert all(identity in match["excerpt"] for match in by_id[identity]["matches"])
+        assert [m["ordinal"] for m in await history.history_message_matches("run-0", "beacon")] == [
+            0,
+            1,
+        ]
+    finally:
+        history.close()
+
+
+async def test_a_one_character_last_word_is_a_prefix_search(tmp_path: Path) -> None:
+    """What a typist sends between keystrokes. It is answered by the prefix index
+    (`_FTS_PREFIX_OPTION`), not by walking every term that starts with the letter."""
+    history = await seeded(tmp_path)
+    try:
+        page = await history.history_page(query="beacon s", project_id=PROJECT)
+        assert len(page["items"]) == 3
+        assert all(item["match_count"] == 4 for item in page["items"])
+        assert await history.history_message_matches("run-2", "beacon sig")
+
+        def definition() -> str:
+            row = history._db.execute(  # noqa: SLF001
+                "SELECT sql FROM sqlite_master WHERE name='history_messages_fts'"
+            ).fetchone()
+            return str(row["sql"])
+
+        assert "prefix='1 2 3'" in await history._run(definition)  # noqa: SLF001
     finally:
         history.close()
 

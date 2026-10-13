@@ -180,10 +180,10 @@ Scheduled runs, previews, and run history.
 
 ### `routes/sessions.py`
 
-Session listing and spawn, patch, read, title regeneration, standing-activity clear, approvals, delete, relaunch, attachments and media, and promote/demote.
-Also holds `_spawn_from_body`, the spawn transport every other spawn caller goes through, and generated-title and conversation-holder decoration.
+Session listing and spawn, patch, read, title regeneration, standing-activity clear, approvals, delete, relaunch, stand-down, resume of a retained pane, in-place agent restart and its eligibility probe, attachments and media, and promote/demote.
+Also holds `_spawn_from_body`, the spawn transport every other spawn caller goes through, `_install_replacement`, the one layout swap Resume and Restart share, and generated-title and conversation-holder decoration.
 
-**Not:** the spawn itself (`session.py`), media validation (`session_media.py`), or terminal writes (`routes/terminal.py`).
+**Not:** the spawn itself (`session.py`), media validation (`session_media.py`), restart eligibility (`session_restart.py`), or terminal writes (`routes/terminal.py`).
 
 ### `routes/terminal.py`
 
@@ -237,6 +237,7 @@ Also holds change-map seed admission and worktree-membership validation.
 
 Run history, backfills, scans, transcripts, resume, duplicates, and the event log.
 Also holds the live run-id sets and the conversation parsing the diagnostic bundle shares.
+The History reader's routes (`/detail`, `/messages`, `/matches`, `/notes`, `/tool-calls`) are registered two path segments deep under `/api/history/{sid}/`, because a one-segment `{sid}` GET would shadow the single-segment static paths other modules register under `/api/history/`.
 
 **Not:** indexing (`history.py`) or resume policy (`session_resume.py`).
 

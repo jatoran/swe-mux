@@ -963,6 +963,23 @@ An initial provisional guess upgraded by OS ownership keeps its run; replacing a
 Candidate freshness includes the newest bounded native record timestamp, cached by file identity and size, because Windows can retain the creation-time mtime while a rollout grows.
 Freshness never bypasses live-session ownership or ambiguous-sibling checks.
 
+Neither the process proof nor the filesystem search runs on an idle pane (since 2026-10-12).
+A conversation cannot move unless the pane hands its CLI a line or the CLI runs a turn, so `_switch_evidence_at` reports the newest submitted line (`ComposerState.last_submit_at`) or turn hook (`last_turn_hook_ts`) that the followed file does not explain, and both checks key off it.
+A line is explained when the followed file was written after it, because a line answered in the same conversation lands there.
+A turn hook gets `TRANSCRIPT_SWITCH_QUIET_SECONDS` of slack, the same slack the staleness rule gives it, because `Stop` fires just after the turn's last record is written and would otherwise arm both checks after every turn.
+The proof runs once per followed file as a baseline, then only when unexplained evidence has settled for `TRANSCRIPT_SWITCH_QUIET_SECONDS`, and never closer together than `PROCESS_PROOF_MIN_INTERVAL_SECONDS`.
+Confirming the file already followed doubles that spacing, up to `PROCESS_PROOF_MAX_INTERVAL_SECONDS`.
+An unbound or provisional pane keeps probing without evidence on that backoff, because finding the file or upgrading a guess is what the proof exists for, and fresh evidence cuts its wait back to the minimum.
+The filesystem search runs only while unexplained evidence is younger than `SWITCH_EVIDENCE_WINDOW_SECONDS`, or for a provisional binding.
+Staleness detection is unchanged and still runs every tick.
+The rule assumes a conversation cannot be replaced by anything other than a line or a turn; a replacement nothing in the pane caused would now wait for the next one, where the old cadence caught it within a tick.
+Before this, every idle Codex pane ran the proof every 10 s and the search every 2 s for as long as it was open, and the proof enumerated the host's whole handle table under the GIL (`development/PERFORMANCE_RUNBOOK.md` § Traps).
+
+Each watcher tick takes one reading of the followed file's last write and hands it to every rule.
+It comes from the tailer's own stat when that is current (`Session.transcript_stat`, refreshed every 250 ms while the tailer is not draining a backlog), so a followed file costs the watcher no syscall; otherwise one stat runs in a worker.
+Every other file read the watcher makes - the proof and the rollout header it needs, the staged-relocation checks, re-resolution, the candidates' creation times and the siblings' readings - runs in a worker, and the path keys the claim rules compare are resolved off the loop first (`_prime_claim_keys`).
+`/api/diagnostics/background` reports what the watcher spent and skipped as `transcript_observation`, so an idle fleet reads as the `*_skipped` counts climbing while `process_proofs` and `heuristic_searches` stay flat.
+
 A provisional setup-only file with zero parsed activity does not disable the existing unwitnessed PTY fallback.
 That fallback still requires an owner submit and a positive working marker.
 The state-log fields `provisional_without_activity` and `process_transcript_probe` distinguish this gap from an established observation channel.

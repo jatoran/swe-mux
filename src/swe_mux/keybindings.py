@@ -148,6 +148,7 @@ KEYBINDING_COMMANDS: tuple[tuple[str, str, str], ...] = (
     ("session.reveal", "Reveal selected session directory", "session"),
     ("session.resume", "Resume selected agent session", "session"),
     ("session.resumeInactive", "Resume an inactive agent session", "session"),
+    ("session.restartAgent", "Restart the selected agent in a fresh process", "session"),
     ("session.resumeLater", "Schedule a resume of the selected agent", "session"),
     ("session.relaunch", "Relaunch the selected session", "session"),
     ("session.restartCold", "Restart the selected cold session", "session"),

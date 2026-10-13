@@ -1,15 +1,17 @@
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import contextlib
 import json
 import logging
 import re
 import sqlite3
+import threading
 import time
 import uuid
 from collections.abc import Callable, Collection, Iterator, Sequence
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 from typing import Any, TypeVar
@@ -33,9 +35,11 @@ from .sqlite_store import (
 )
 from .transcript_view import (
     TRANSCRIPT_PARSER_VERSION,
+    ParsedConversation,
+    _parse_transcript_counted,
     conversation_is_readable,
     conversation_watermark,
-    parse_transcript,
+    parse_transcript_with_watermark,
     searchable_transcript_messages,
     transcript_time_summary,
 )
@@ -71,6 +75,64 @@ _STORE_BACKEND_SQL = ",".join("?" for _ in _STORE_BACKEND_ARGS)
 #: Ids per `history_naming_rows` statement. The id list is bound twice (id and
 #: note_id), so this stays well inside SQLite's default 999-variable ceiling.
 _NAMING_ROW_CHUNK = 400
+#: History columns a listing never ships. `argv_json` was 66% of a 199 KB page on the
+#: development host's archive (2026-10-12) and no listing reader uses it; the single-row
+#: read (`history_entry`) still carries it for Resume.
+_HISTORY_LIST_EXCLUDED_COLUMNS = frozenset({"argv_json"})
+#: Messages per page of the History reader, and the ceiling a caller may ask for.
+HISTORY_MESSAGES_PAGE = 60
+HISTORY_MESSAGES_PAGE_MAX = 400
+#: How long a listing waits for its rows' time summaries before answering with what it
+#: has. Whatever is still reading keeps going and lands in SQLite for the next listing:
+#: a live conversation re-reads an 8 MiB tail per change, and one of those used to sit
+#: in front of every page (measured 168 ms per live row, 2026-10-12).
+TIME_SUMMARY_WAIT_SECONDS = 0.25
+#: The least time between two background reindexes of one conversation. A reader
+#: polling a conversation that is still being written would otherwise reparse it on
+#: every poll; this bounds that to one parse per window, however often it is opened.
+REINDEX_COOLDOWN_SECONDS = 30.0
+#: The FTS5 prefix index on the token table. A one- or two-character trailing token is
+#: what a typist sends between keystrokes, and without the index each one is a walk of
+#: every term with that prefix: measured on a 120k-message sample of the live archive
+#: (2026-10-12), `"s"*` 88 ms -> 2 ms and `"contact"* AND "s"*` 85 ms -> 1 ms, for an
+#: index about 42% larger. `'2 3'` alone left the one-character case at 38 ms.
+_FTS_PREFIX_OPTION = "prefix='1 2 3'"
+
+
+def read_history_conversation(
+    path: Path | None, backend: str, native_id: str | None, *, cached: bool
+) -> ParsedConversation:
+    """The one seam through which History reads a native conversation.
+
+    Every History path that needs a parse comes through here: the indexer, the
+    background reindex an open schedules, and the lazily loaded tool calls. The shared
+    incremental transcript reader replaces the body of this function, not its callers.
+
+    ``cached`` picks the shared watermark-keyed LRU (`parse_transcript_with_watermark`),
+    which is right for a read a person is waiting on and may repeat (tool calls for one
+    open conversation, page after page). The indexer passes ``False``: a reconcile walks
+    thousands of conversations, and routing each through a 32-entry cache of whole
+    message lists would evict every live reader's entry and pin up to 32 large
+    conversations in memory at once. The watermark is stamped before the parse on both
+    paths, so it can only describe the same content or less than the messages returned.
+    """
+    if cached:
+        return parse_transcript_with_watermark(path, backend, native_id=native_id)
+    _identity, first, second = conversation_watermark(path, backend, native_id)
+    messages, abandoned = _parse_transcript_counted(path, backend, native_id=native_id)
+    return ParsedConversation(messages, abandoned, first, second)
+
+
+def _tool_call_count(messages: Sequence[dict[str, Any]]) -> int:
+    """How many tool calls a parsed conversation carries, for the reader's toggle."""
+    return sum(
+        1
+        for message in messages
+        for block in message.get("content") or []
+        if isinstance(block, dict)
+        and block.get("type") == "tool_use"
+        and str(block.get("name") or "").strip()
+    )
 
 
 #: Kept as module-local names because this file's call sites read better with
@@ -185,7 +247,8 @@ CREATE TABLE IF NOT EXISTS history_messages (
 CREATE TABLE IF NOT EXISTS history_transcript_index (
   history_id TEXT PRIMARY KEY, source_mtime_ns INTEGER NOT NULL,
   source_size INTEGER NOT NULL, parser_version INTEGER NOT NULL,
-  message_count INTEGER NOT NULL, indexed_at REAL NOT NULL
+  message_count INTEGER NOT NULL, indexed_at REAL NOT NULL,
+  abandoned_messages INTEGER, tool_calls INTEGER
 );
 CREATE TABLE IF NOT EXISTS events (
   seq INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL NOT NULL, session_id TEXT,
@@ -398,9 +461,10 @@ CREATE TABLE IF NOT EXISTS history_message_search_maintenance (
   last_error TEXT
 );
 """
-_MESSAGE_SEARCH_INDEX_SCHEMA = """
+_MESSAGE_SEARCH_INDEX_SCHEMA = f"""
 CREATE VIRTUAL TABLE IF NOT EXISTS history_messages_fts USING fts5(
-  text, content='history_messages', content_rowid='id', tokenize='unicode61 remove_diacritics 2'
+  text, content='history_messages', content_rowid='id', tokenize='unicode61 remove_diacritics 2',
+  {_FTS_PREFIX_OPTION}
 );
 CREATE VIRTUAL TABLE IF NOT EXISTS history_messages_trigram USING fts5(
   text, content='history_messages', content_rowid='id', tokenize='trigram case_sensitive 0'
@@ -589,6 +653,26 @@ class HistoryIndex:
         self._operation_lock = database_operation_lock(path)
         self._closed = False
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="mux-history-db")
+        # Work an open or a listing starts and does not wait for. Plain threads rather
+        # than asyncio tasks on purpose: the job outlives the request that started it,
+        # and a task parked on an executor future when its loop closes reports into a
+        # dead loop from the worker thread. `close()` drains both pools before the
+        # database executor, so a job that is mid-write always finishes its write.
+        #
+        # One reindex at a time: a parse holds the GIL for most of its length (measured
+        # 2 s for a 283 MB rollout), and two at once would only halve each other's speed
+        # while doubling the time the event loop competes for the interpreter.
+        self._reindex_pool = ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="mux-history-reindex"
+        )
+        self._summary_pool = ThreadPoolExecutor(
+            max_workers=4, thread_name_prefix="mux-history-summary"
+        )
+        self._background_lock = threading.Lock()
+        self._reindexing: dict[str, Future[str]] = {}
+        self._reindexed_at: dict[str, float] = {}
+        self._summarizing: dict[str, Future[dict[str, Any] | None]] = {}
+        self._list_columns = "h.*"
         # Create and initialise the connection on the worker thread so the
         # connection object keeps strict thread affinity for its whole lifetime.
         self._executor.submit(self._connect).result()
@@ -603,6 +687,13 @@ class HistoryIndex:
             self._db.executescript(SCHEMA)
             self._migrate_schema()
             self._db.commit()
+            # Read from the table after migrations rather than written out, so a column a
+            # later migration adds reaches the listing without anybody remembering to.
+            self._list_columns = ",".join(
+                f"h.{row['name']}"
+                for row in self._db.execute("PRAGMA table_info(history)").fetchall()
+                if row["name"] not in _HISTORY_LIST_EXCLUDED_COLUMNS
+            )
             try:
                 self._initialize_message_search_schema()
             except Exception:
@@ -827,6 +918,18 @@ class HistoryIndex:
             "DELETE FROM history WHERE backend='shell' AND agent_visible=0 AND "
             "exited_at IS NOT NULL AND (transcript_path IS NULL OR transcript_path='')"
         )
+        index_columns = {
+            row["name"]
+            for row in self._db.execute("PRAGMA table_info(history_transcript_index)").fetchall()
+        }
+        # What the reader needs to say about a conversation without parsing it: how many
+        # turns it branched away from, and whether it has tool calls to disclose. NULL on a
+        # row indexed before these existed means "unknown", which the next open repairs.
+        for column in ("abandoned_messages", "tool_calls"):
+            if column not in index_columns:
+                self._db.execute(
+                    f"ALTER TABLE history_transcript_index ADD COLUMN {column} INTEGER"
+                )
         artifact_columns = {
             row["name"] for row in self._db.execute("PRAGMA table_info(artifacts)").fetchall()
         }
@@ -933,6 +1036,24 @@ class HistoryIndex:
         self._drop_message_search_triggers()
         self._db.executescript(_MESSAGE_SEARCH_TRIGGER_SCHEMA)
 
+    def _outdated_message_search_tables(self) -> set[str]:
+        """Search tables whose stored definition predates the one this build creates.
+
+        An FTS5 table's options (its prefix index) are fixed at `CREATE`, so a
+        definition change cannot be applied in place and `delete-all` would rebuild the
+        old shape. Read off `sqlite_master` rather than remembered, so a database
+        downgraded and upgraded again is judged by what it actually holds.
+        """
+        rows = self._db.execute(
+            "SELECT name,sql FROM sqlite_master WHERE type='table' AND name=?",
+            ("history_messages_fts",),
+        ).fetchall()
+        return {
+            str(row["name"])
+            for row in rows
+            if _FTS_PREFIX_OPTION.replace(" ", "") not in str(row["sql"] or "").replace(" ", "")
+        }
+
     def _initialize_message_search_schema(self) -> None:
         """Install only bounded search schema work on the startup path.
 
@@ -956,6 +1077,12 @@ class HistoryIndex:
             self._db.execute("ALTER TABLE history_messages ADD COLUMN ts_epoch REAL")
         self._db.executescript(_MESSAGE_SEARCH_STATE_SCHEMA)
         self._db.executescript(_MESSAGE_SEARCH_INDEX_SCHEMA)
+        # A table created by an earlier build keeps its old options. Recreating it is a
+        # rebuild of every indexed message, which is maintenance work and never startup
+        # work, so here it is only *scheduled*: the reset below drops and recreates it
+        # behind the ready daemon, and search answers through the bounded LIKE path
+        # until the repopulated index is ready.
+        outdated = self._outdated_message_search_tables()
         state = self._db.execute(
             "SELECT target_max_id,cursor_id,reset_required,ready "
             "FROM history_message_search_maintenance WHERE id=1"
@@ -965,7 +1092,7 @@ class HistoryIndex:
                 self._db.execute("SELECT COALESCE(MAX(id),0) FROM history_messages").fetchone()[0]
             )
             indexes_are_new = len(existing_tables) == 0
-            ready = int(target == 0 and indexes_are_new)
+            ready = int(target == 0 and indexes_are_new and not outdated)
             self._db.execute(
                 "INSERT INTO history_message_search_maintenance"
                 "(id,target_max_id,cursor_id,reset_required,ready,updated_at,last_error) "
@@ -977,7 +1104,7 @@ class HistoryIndex:
                     "CREATE INDEX IF NOT EXISTS idx_history_messages_time "
                     "ON history_messages(history_id,ts_epoch)"
                 )
-        elif existing_tables != set(_MESSAGE_SEARCH_TABLES):
+        elif existing_tables != set(_MESSAGE_SEARCH_TABLES) or outdated:
             target = int(
                 self._db.execute("SELECT COALESCE(MAX(id),0) FROM history_messages").fetchone()[0]
             )
@@ -985,6 +1112,12 @@ class HistoryIndex:
                 "UPDATE history_message_search_maintenance SET target_max_id=?,cursor_id=0,"
                 "reset_required=1,ready=0,updated_at=?,last_error=NULL WHERE id=1",
                 (target, time.time()),
+            )
+        if outdated:
+            log.warning(
+                "history message search tables %s predate the current definition; "
+                "scheduled a rebuild behind the ready daemon",
+                ",".join(sorted(outdated)),
             )
         self._create_message_search_triggers()
         self._db.commit()
@@ -1026,9 +1159,22 @@ class HistoryIndex:
         # Reset both rebuildable indexes together instead of trying to infer which
         # one is inconsistent from SQLite's generic SQLITE_CORRUPT_VTAB message.
         self._drop_message_search_triggers()
+        # A table whose definition changed cannot be emptied into the new shape:
+        # `delete-all` keeps its options. It is dropped and created afresh instead, and
+        # repopulated by the same batches as every other reset.
+        outdated = self._outdated_message_search_tables()
         try:
             for table in _MESSAGE_SEARCH_TABLES:
-                self._db.execute(f"INSERT INTO {table}({table}) VALUES('delete-all')")
+                if table in outdated:
+                    self._db.execute(f"DROP TABLE IF EXISTS {table}")
+                else:
+                    self._db.execute(f"INSERT INTO {table}({table}) VALUES('delete-all')")
+            if outdated:
+                self._db.executescript(_MESSAGE_SEARCH_INDEX_SCHEMA)
+                log.info(
+                    "history message search tables recreated with the current definition: %s",
+                    ",".join(sorted(outdated)),
+                )
             self._db.commit()
         except sqlite3.Error:
             self._db.rollback()
@@ -2185,16 +2331,24 @@ class HistoryIndex:
 
         return await self._run(op)
 
-    async def replace_history_messages(
+    def _replace_messages_op(
         self,
         history_id: str,
         messages: list[dict[str, Any]],
         *,
         mtime_ns: int,
         size: int,
-        parser_version: int = TRANSCRIPT_PARSER_VERSION,
+        parser_version: int,
+        abandoned: int | None,
     ) -> int:
+        """Replace one run's indexed messages and its cursor, on the database thread.
+
+        The search records are reduced here rather than on the caller's thread: a long
+        conversation is thousands of messages, and the async entry point used to reduce
+        them on the event loop before handing the write over.
+        """
         records = searchable_transcript_messages(messages)
+        tool_calls = _tool_call_count(messages)
         timestamped = [
             (stamp, record)
             for record in records
@@ -2212,125 +2366,228 @@ class HistoryIndex:
         )
         native_started_at = first_message[0] if first_message is not None else None
         last_message_at = last_message[0] if last_message is not None else None
-        last_message_role = (
-            str(last_message[1]["role"]) if last_message is not None else None
-        )
-
-        def op() -> int:
-            with self._db:
-                self._db.execute("DELETE FROM history_messages WHERE history_id=?", (history_id,))
-                self._db.executemany(
-                    "INSERT INTO history_messages"
-                    "(history_id,ordinal,role,ts,ts_epoch,text,source_mtime_ns,source_size,"
-                    "parser_version) VALUES(?,?,?,?,?,?,?,?,?)",
-                    [
-                        (
-                            history_id,
-                            int(item["ordinal"]),
-                            str(item["role"]),
-                            None if item.get("ts") is None else str(item["ts"]),
-                            _message_timestamp(item.get("ts")),
-                            str(item["text"]),
-                            mtime_ns,
-                            size,
-                            parser_version,
-                        )
-                        for item in records
-                    ],
-                )
-                self._db.execute(
-                    "INSERT INTO history_transcript_index"
-                    "(history_id,source_mtime_ns,source_size,parser_version,"
-                    "message_count,indexed_at) "
-                    "VALUES(?,?,?,?,?,?) ON CONFLICT(history_id) DO UPDATE SET "
-                    "source_mtime_ns=excluded.source_mtime_ns,source_size=excluded.source_size,"
-                    "parser_version=excluded.parser_version,message_count=excluded.message_count,"
-                    "indexed_at=excluded.indexed_at",
-                    (history_id, mtime_ns, size, parser_version, len(records), time.time()),
-                )
-                self._db.execute(
-                    "UPDATE history SET native_started_at=?,last_message_at=?,last_message_role=?,"
-                    "time_summary_mtime_ns=?,time_summary_size=? WHERE id=?",
+        last_message_role = str(last_message[1]["role"]) if last_message is not None else None
+        with self._db:
+            self._db.execute("DELETE FROM history_messages WHERE history_id=?", (history_id,))
+            # One `executemany` in one transaction is also what keeps a conversation's row
+            # ids contiguous, which the per-conversation match lookups lean on as a range
+            # (`_message_id_ranges`). They still filter on `history_id`, so a gap would
+            # cost speed, never correctness.
+            self._db.executemany(
+                "INSERT INTO history_messages"
+                "(history_id,ordinal,role,ts,ts_epoch,text,source_mtime_ns,source_size,"
+                "parser_version) VALUES(?,?,?,?,?,?,?,?,?)",
+                [
                     (
-                        native_started_at,
-                        last_message_at,
-                        last_message_role,
+                        history_id,
+                        int(item["ordinal"]),
+                        str(item["role"]),
+                        None if item.get("ts") is None else str(item["ts"]),
+                        _message_timestamp(item.get("ts")),
+                        str(item["text"]),
                         mtime_ns,
                         size,
-                        history_id,
-                    ),
-                )
-            return len(records)
+                        parser_version,
+                    )
+                    for item in records
+                ],
+            )
+            self._db.execute(
+                "INSERT INTO history_transcript_index"
+                "(history_id,source_mtime_ns,source_size,parser_version,"
+                "message_count,indexed_at,abandoned_messages,tool_calls) "
+                "VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(history_id) DO UPDATE SET "
+                "source_mtime_ns=excluded.source_mtime_ns,source_size=excluded.source_size,"
+                "parser_version=excluded.parser_version,message_count=excluded.message_count,"
+                "indexed_at=excluded.indexed_at,abandoned_messages=excluded.abandoned_messages,"
+                "tool_calls=excluded.tool_calls",
+                (
+                    history_id,
+                    mtime_ns,
+                    size,
+                    parser_version,
+                    len(records),
+                    time.time(),
+                    abandoned,
+                    tool_calls,
+                ),
+            )
+            self._db.execute(
+                "UPDATE history SET native_started_at=?,last_message_at=?,last_message_role=?,"
+                "time_summary_mtime_ns=?,time_summary_size=? WHERE id=?",
+                (
+                    native_started_at,
+                    last_message_at,
+                    last_message_role,
+                    mtime_ns,
+                    size,
+                    history_id,
+                ),
+            )
+        return len(records)
 
-        return await self._run(op)
+    async def replace_history_messages(
+        self,
+        history_id: str,
+        messages: list[dict[str, Any]],
+        *,
+        mtime_ns: int,
+        size: int,
+        parser_version: int = TRANSCRIPT_PARSER_VERSION,
+        abandoned: int | None = None,
+    ) -> int:
+        """Replace one run's indexed messages from an already-parsed conversation.
 
-    async def refresh_time_summaries(self, items: list[dict[str, Any]]) -> int:
-        """Refresh bounded first/last-message metadata for changed visible transcripts."""
-        semaphore = asyncio.Semaphore(4)
+        ``abandoned`` is how many messages the parse dropped as branched away from;
+        ``None`` records that it is not known, which the reader reports as such and the
+        next open repairs (`transcript_index_state`).
+        """
+        return await self._run(
+            lambda: self._replace_messages_op(
+                history_id,
+                messages,
+                mtime_ns=mtime_ns,
+                size=size,
+                parser_version=parser_version,
+                abandoned=abandoned,
+            )
+        )
 
-        async def inspect(item: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]] | None:
-            backend = str(item.get("backend") or "")
-            if not has_observable_transcript(backend):
-                return None
-            transcript = item.get("transcript_path")
-            path = Path(str(transcript)) if transcript else None
-            native_id = str(item.get("native_id") or "") or None
+    def _call_db(self, fn: Callable[[], T]) -> T:
+        """Run one database operation from a background thread and wait for it."""
+        return self._executor.submit(
+            run_sqlite_operation, self._db, self._operation_lock, fn
+        ).result()
+
+    def _time_summary_job(
+        self,
+        history_id: str,
+        path: Path | None,
+        backend: str,
+        native_id: str | None,
+        stored: tuple[Any, Any],
+    ) -> dict[str, Any] | None:
+        """Re-read one row's conversational time span if its conversation changed.
+
+        Runs on the summary pool and writes its own result, so a listing that stopped
+        waiting still leaves the next listing a current row.
+
+        The stored pair is compared against, and replaced by, the conversation's
+        **watermark** (`conversation_watermark`) - the same pair the message index keys
+        on. It used to store the head/tail read's own `stat`, which for a Codex rollout
+        (watermark `(0, total)`) could never equal the watermark it was compared with:
+        every listing re-read every Codex row's 512 KiB head and 8 MiB tail for ever
+        (122 rows stuck that way on the development host, 2026-10-12).
+        """
+        try:
             if not conversation_is_readable(path, backend, native_id):
                 return None
-            try:
-                _identity, first, second = await asyncio.to_thread(
-                    conversation_watermark, path, backend, native_id
-                )
-            except OSError:
+            _identity, first, second = conversation_watermark(path, backend, native_id)
+            if stored == (first, second):
                 return None
-            if (
-                item.get("time_summary_mtime_ns") == first
-                and item.get("time_summary_size") == second
-            ):
-                return None
-            try:
-                async with semaphore:
-                    summary = await asyncio.to_thread(
-                        transcript_time_summary, path, backend, native_id=native_id
-                    )
-            except OSError:
-                return None
-            return item, summary
-
-        refreshed = [
-            result
-            for result in await asyncio.gather(*(inspect(item) for item in items))
-            if result is not None
-        ]
-        if not refreshed:
-            return 0
+            started = time.monotonic()
+            summary = transcript_time_summary(path, backend, native_id=native_id)
+        except OSError:
+            return None
+        values = {
+            "native_started_at": _message_timestamp(summary["native_started_ts"]),
+            "last_message_at": _message_timestamp(summary["last_message_ts"]),
+            "last_message_role": summary["last_message_role"],
+            "time_summary_mtime_ns": first,
+            "time_summary_size": second,
+        }
 
         def op() -> None:
             with self._db:
-                self._db.executemany(
+                self._db.execute(
                     "UPDATE history SET native_started_at=?,last_message_at=?,"
                     "last_message_role=?,time_summary_mtime_ns=?,time_summary_size=? WHERE id=?",
-                    [
-                        (
-                            _message_timestamp(summary["native_started_ts"]),
-                            _message_timestamp(summary["last_message_ts"]),
-                            summary["last_message_role"],
-                            summary["mtime_ns"],
-                            summary["size"],
-                            item["id"],
-                        )
-                        for item, summary in refreshed
-                    ],
+                    (
+                        values["native_started_at"],
+                        values["last_message_at"],
+                        values["last_message_role"],
+                        first,
+                        second,
+                        history_id,
+                    ),
                 )
 
-        await self._run(op)
-        for item, summary in refreshed:
-            item["native_started_at"] = _message_timestamp(summary["native_started_ts"])
-            item["last_message_at"] = _message_timestamp(summary["last_message_ts"])
-            item["last_message_role"] = summary["last_message_role"]
-            item["time_summary_mtime_ns"] = summary["mtime_ns"]
-            item["time_summary_size"] = summary["size"]
-        return len(refreshed)
+        try:
+            self._call_db(op)
+        except RuntimeError:
+            # The store closed while this was reading; the next listing reads again.
+            return None
+        elapsed_ms = (time.monotonic() - started) * 1000
+        log.log(
+            logging.WARNING if elapsed_ms > 1_000 else logging.DEBUG,
+            "history time summary refreshed history_id=%s backend=%s bytes=%s elapsed_ms=%.0f",
+            history_id,
+            backend,
+            second,
+            elapsed_ms,
+        )
+        return values
+
+    def _summary_future(self, item: dict[str, Any]) -> Future[dict[str, Any] | None] | None:
+        """The in-flight summary refresh for this row, starting one if there is none."""
+        backend = str(item.get("backend") or "")
+        if not has_observable_transcript(backend):
+            return None
+        history_id = str(item["id"])
+        transcript = item.get("transcript_path")
+        path = Path(str(transcript)) if transcript else None
+        native_id = str(item.get("native_id") or "") or None
+        stored = (item.get("time_summary_mtime_ns"), item.get("time_summary_size"))
+        with self._background_lock:
+            current = self._summarizing.get(history_id)
+            if current is not None and not current.done():
+                return current
+            if self._closed:
+                return None
+            future = self._summary_pool.submit(
+                self._time_summary_job, history_id, path, backend, native_id, stored
+            )
+            self._summarizing[history_id] = future
+
+        def forget(done: Future[dict[str, Any] | None]) -> None:
+            with self._background_lock:
+                if self._summarizing.get(history_id) is done:
+                    del self._summarizing[history_id]
+
+        future.add_done_callback(forget)
+        return future
+
+    async def refresh_time_summaries(
+        self, items: list[dict[str, Any]], *, wait_s: float = TIME_SUMMARY_WAIT_SECONDS
+    ) -> int:
+        """Refresh first/last-message metadata for this page's changed transcripts.
+
+        Waits at most ``wait_s`` and patches the rows it got answers for; the rest go on
+        reading in the background and land in SQLite, so the next listing has them. The
+        wait happens on a worker thread (`concurrent.futures.wait`) rather than by
+        chaining the jobs' futures to the event loop, because a job that outlives this
+        request must never call back into a loop that may have closed by then.
+        """
+        pending = [
+            (item, future)
+            for item in items
+            if (future := self._summary_future(item)) is not None
+        ]
+        if not pending:
+            return 0
+        await asyncio.to_thread(
+            concurrent.futures.wait, [future for _, future in pending], max(0.0, wait_s)
+        )
+        refreshed = 0
+        for item, future in pending:
+            if not future.done() or future.cancelled() or future.exception() is not None:
+                continue
+            values = future.result()
+            if values is None:
+                continue
+            item.update(values)
+            refreshed += 1
+        return refreshed
 
     async def index_transcript(
         self,
@@ -2354,29 +2611,294 @@ class HistoryIndex:
             conversation_watermark, path, backend, native_id
         )
         watermark = (first, second, TRANSCRIPT_PARSER_VERSION)
-
-        def current_watermark() -> tuple[int, int, int] | None:
-            row = self._db.execute(
-                "SELECT source_mtime_ns,source_size,parser_version "
-                "FROM history_transcript_index WHERE history_id=?",
-                (history_id,),
-            ).fetchone()
-            return (
-                (int(row["source_mtime_ns"]), int(row["source_size"]), int(row["parser_version"]))
-                if row
-                else None
-            )
-
-        if not force and await self._run(current_watermark) == watermark:
+        if not force and await self._run(lambda: self._index_watermark(history_id)) == watermark:
             return "unchanged", 0
-        messages = await asyncio.to_thread(parse_transcript, path, backend, native_id=native_id)
+        parsed = await asyncio.to_thread(
+            read_history_conversation, path, backend, native_id, cached=False
+        )
         count = await self.replace_history_messages(
             history_id,
-            messages,
-            mtime_ns=first,
-            size=second,
+            parsed.messages,
+            mtime_ns=parsed.mtime_ns,
+            size=parsed.size,
+            abandoned=parsed.abandoned,
         )
         return "indexed", count
+
+    def _index_watermark(self, history_id: str) -> tuple[int, int, int] | None:
+        row = self._db.execute(
+            "SELECT source_mtime_ns,source_size,parser_version "
+            "FROM history_transcript_index WHERE history_id=?",
+            (history_id,),
+        ).fetchone()
+        return (
+            (int(row["source_mtime_ns"]), int(row["source_size"]), int(row["parser_version"]))
+            if row
+            else None
+        )
+
+    def _transcript_index_row(self, history_id: str) -> dict[str, Any] | None:
+        row = self._db.execute(
+            "SELECT source_mtime_ns,source_size,parser_version,message_count,indexed_at,"
+            "abandoned_messages,tool_calls FROM history_transcript_index WHERE history_id=?",
+            (history_id,),
+        ).fetchone()
+        return dict(row) if row is not None else None
+
+    def _reindex_job(
+        self, history_id: str, path: Path | None, backend: str, native_id: str | None
+    ) -> str:
+        """Bring one run's message index up to its conversation. Runs on the reindex pool.
+
+        Watermark-gated twice: once by the caller that scheduled it, and again here,
+        because the conversation can have been indexed by someone else (session end, a
+        reconcile) while this sat in the queue. A row whose index predates the
+        abandoned-message count is reindexed once even when unchanged, which is how
+        that count arrives on conversations indexed before it existed.
+        """
+        started = time.monotonic()
+        try:
+            _identity, first, second = conversation_watermark(path, backend, native_id)
+            current = self._call_db(lambda: self._transcript_index_row(history_id))
+            if (
+                current is not None
+                and (
+                    int(current["source_mtime_ns"]),
+                    int(current["source_size"]),
+                    int(current["parser_version"]),
+                )
+                == (first, second, TRANSCRIPT_PARSER_VERSION)
+                and current["abandoned_messages"] is not None
+            ):
+                log.debug("history reindex skipped history_id=%s reason=current", history_id)
+                return "unchanged"
+            parsed = read_history_conversation(path, backend, native_id, cached=False)
+            count = self._call_db(
+                lambda: self._replace_messages_op(
+                    history_id,
+                    parsed.messages,
+                    mtime_ns=parsed.mtime_ns,
+                    size=parsed.size,
+                    parser_version=TRANSCRIPT_PARSER_VERSION,
+                    abandoned=parsed.abandoned,
+                )
+            )
+        except OSError as exc:
+            log.warning(
+                "history reindex failed history_id=%s backend=%s error=%s",
+                history_id,
+                backend,
+                exc,
+            )
+            return "unavailable"
+        except RuntimeError:
+            log.debug("history reindex abandoned at shutdown history_id=%s", history_id)
+            return "abandoned"
+        elapsed_ms = (time.monotonic() - started) * 1000
+        log.log(
+            logging.WARNING if elapsed_ms > 5_000 else logging.INFO,
+            "history reindex finished history_id=%s backend=%s messages=%d indexed=%d "
+            "abandoned=%d bytes=%d elapsed_ms=%.0f",
+            history_id,
+            backend,
+            len(parsed.messages),
+            count,
+            parsed.abandoned,
+            parsed.size,
+            elapsed_ms,
+        )
+        return "indexed"
+
+    def schedule_transcript_reindex(
+        self, history_id: str, path: Path | None, backend: str, native_id: str | None
+    ) -> bool:
+        """Reindex one run in the background, once at a time per run.
+
+        Returns True when a reindex is now in flight (just started or already running).
+        Never waits: the reader serves what is indexed and polls `transcript_reindexing`.
+        """
+        with self._background_lock:
+            current = self._reindexing.get(history_id)
+            if current is not None and not current.done():
+                return True
+            if self._closed:
+                return False
+            # A conversation that is still being written goes stale again the moment it
+            # is indexed; without a floor, a reader polling it would reparse it on every
+            # poll for as long as the agent kept typing.
+            finished = self._reindexed_at.get(history_id)
+            if finished is not None and time.monotonic() - finished < REINDEX_COOLDOWN_SECONDS:
+                return False
+            future = self._reindex_pool.submit(
+                self._reindex_job, history_id, path, backend, native_id
+            )
+            self._reindexing[history_id] = future
+        log.info("history reindex scheduled history_id=%s backend=%s", history_id, backend)
+
+        def forget(done: Future[str]) -> None:
+            with self._background_lock:
+                now = time.monotonic()
+                if len(self._reindexed_at) > 512:
+                    for key, stamp in list(self._reindexed_at.items()):
+                        if now - stamp >= REINDEX_COOLDOWN_SECONDS:
+                            del self._reindexed_at[key]
+                self._reindexed_at[history_id] = now
+                if self._reindexing.get(history_id) is done:
+                    del self._reindexing[history_id]
+
+        future.add_done_callback(forget)
+        return True
+
+    def transcript_reindexing(self, history_id: str) -> bool:
+        with self._background_lock:
+            current = self._reindexing.get(history_id)
+            return current is not None and not current.done()
+
+    def wait_for_background(self, timeout: float | None = None) -> None:
+        """Block until every background reindex and summary refresh has finished.
+
+        For tests and orderly shutdown; nothing on a request path calls this.
+        """
+        with self._background_lock:
+            futures: list[Future[Any]] = [*self._reindexing.values(), *self._summarizing.values()]
+        concurrent.futures.wait(futures, timeout=timeout)
+
+    async def transcript_index_state(
+        self,
+        history_id: str,
+        path: Path | None,
+        backend: str,
+        native_id: str | None,
+        *,
+        readable: bool,
+        schedule: bool = True,
+    ) -> dict[str, Any]:
+        """What the reader can say about this run's indexed conversation, right now.
+
+        ``current`` compares the index's watermark with the conversation's; a stale or
+        missing index (or one predating the abandoned count) schedules a background
+        reindex when the conversation is readable and ``schedule`` is set, and the
+        answer says so with ``indexing``. Nothing here parses on the caller's path.
+        """
+        index = await self._run(lambda: self._transcript_index_row(history_id))
+        watermark: tuple[int, int] | None = None
+        if readable:
+            try:
+                _identity, first, second = await asyncio.to_thread(
+                    conversation_watermark, path, backend, native_id
+                )
+                watermark = (first, second)
+            except OSError:
+                readable = False
+        current = bool(
+            index is not None
+            and watermark is not None
+            and (
+                int(index["source_mtime_ns"]),
+                int(index["source_size"]),
+                int(index["parser_version"]),
+            )
+            == (*watermark, TRANSCRIPT_PARSER_VERSION)
+        )
+        needs_reindex = readable and (
+            not current or index is None or index["abandoned_messages"] is None
+        )
+        indexing = (
+            self.schedule_transcript_reindex(history_id, path, backend, native_id)
+            if needs_reindex and schedule
+            else self.transcript_reindexing(history_id)
+        )
+        return {
+            "available": readable,
+            "indexed": index is not None,
+            "current": current,
+            "indexing": indexing,
+            "message_count": int(index["message_count"]) if index else 0,
+            "abandoned_messages": index["abandoned_messages"] if index else None,
+            "tool_calls": index["tool_calls"] if index else None,
+            "indexed_at": index["indexed_at"] if index else None,
+            # The index's own cursor, for a caller holding a parse to compare against.
+            # Not part of any HTTP answer.
+            "watermark": (
+                (
+                    int(index["source_mtime_ns"]),
+                    int(index["source_size"]),
+                    int(index["parser_version"]),
+                )
+                if index
+                else None
+            ),
+        }
+
+    async def history_messages_page(
+        self,
+        history_id: str,
+        *,
+        after: int | None = None,
+        before: int | None = None,
+        around: int | None = None,
+        limit: int = HISTORY_MESSAGES_PAGE,
+    ) -> dict[str, Any]:
+        """One page of a run's indexed messages, in conversation order.
+
+        Served from `history_messages` rather than by parsing the transcript, which is
+        the difference between 2-9 ms and seconds for a long conversation. Ordinals are
+        the parsed message list's indices, the same numbers search matches carry, so a
+        match can be scrolled to whichever page it is on.
+
+        Exactly one anchor applies: ``around`` centres the page on an ordinal, ``before``
+        pages backwards from one, ``after`` pages forwards from one, and none starts at
+        the beginning of the conversation.
+        """
+        bounded = max(1, min(int(limit), HISTORY_MESSAGES_PAGE_MAX))
+
+        def rows(sql: str, args: Sequence[Any]) -> list[dict[str, Any]]:
+            return [dict(row) for row in self._db.execute(sql, args).fetchall()]
+
+        def op() -> dict[str, Any]:
+            select = "SELECT ordinal,role,ts,text FROM history_messages WHERE history_id=?"
+            if around is not None:
+                earlier = rows(
+                    f"{select} AND ordinal<? ORDER BY ordinal DESC LIMIT ?",
+                    (history_id, around, bounded // 2),
+                )
+                later = rows(
+                    f"{select} AND ordinal>=? ORDER BY ordinal LIMIT ?",
+                    (history_id, around, bounded - len(earlier)),
+                )
+                page = [*reversed(earlier), *later]
+            elif before is not None:
+                page = list(
+                    reversed(
+                        rows(
+                            f"{select} AND ordinal<? ORDER BY ordinal DESC LIMIT ?",
+                            (history_id, before, bounded),
+                        )
+                    )
+                )
+            else:
+                page = rows(
+                    f"{select} AND ordinal>? ORDER BY ordinal LIMIT ?",
+                    (history_id, -1 if after is None else after, bounded),
+                )
+            if not page:
+                return {"messages": [], "has_more_before": False, "has_more_after": False}
+            low, high = page[0]["ordinal"], page[-1]["ordinal"]
+            more_before = self._db.execute(
+                "SELECT 1 FROM history_messages WHERE history_id=? AND ordinal<? LIMIT 1",
+                (history_id, low),
+            ).fetchone()
+            more_after = self._db.execute(
+                "SELECT 1 FROM history_messages WHERE history_id=? AND ordinal>? LIMIT 1",
+                (history_id, high),
+            ).fetchone()
+            return {
+                "messages": page,
+                "has_more_before": more_before is not None,
+                "has_more_after": more_after is not None,
+            }
+
+        return await self._run(op)
 
     async def external_watermarks(self) -> dict[str, tuple[int, int]]:
         """Return ``{transcript_path: (mtime_ns, size)}`` for indexed external rows.
@@ -3327,6 +3849,27 @@ class HistoryIndex:
 
         return await self._run(op)
 
+    def _message_id_ranges(self, history_ids: Sequence[str]) -> dict[str, tuple[int, int]]:
+        """Each conversation's indexed row-id span, in one statement.
+
+        A run's messages are written by one `executemany` in one transaction
+        (`_replace_messages_op`), so their ids are contiguous and the span is exactly
+        theirs. FTS5 takes a `rowid BETWEEN` constraint straight into its index walk,
+        which is what turns "every match in the archive, then filter" into "this
+        conversation's matches". Callers still filter on `history_id`, so a span that
+        ever did include a stranger's row would cost a little speed and nothing else.
+        """
+        unique = list(dict.fromkeys(history_ids))
+        if not unique:
+            return {}
+        placeholders = ",".join("?" for _ in unique)
+        rows = self._db.execute(
+            "SELECT history_id,MIN(id) AS low,MAX(id) AS high FROM history_messages "
+            f"WHERE history_id IN ({placeholders}) GROUP BY history_id",
+            unique,
+        ).fetchall()
+        return {str(row["history_id"]): (int(row["low"]), int(row["high"])) for row in rows}
+
     def _page_message_matches(
         self,
         history_ids: list[str],
@@ -3363,6 +3906,12 @@ class HistoryIndex:
         placeholders = ",".join("?" for _ in history_ids)
         args: list[Any]
         if search_index_ready:
+            # One MATCH for the whole page, not one range-bounded MATCH per conversation.
+            # The per-conversation shape is what wins for a single conversation
+            # (`history_message_matches`), and it loses here: every part re-pays the
+            # query's term setup, which for a prefix is a walk of every term carrying it.
+            # Measured 2026-10-12 on a full prefix-indexed copy of the live archive, fifty
+            # conversations: 14-111 ms here against 71-756 ms as a fifty-part union.
             sql = (
                 "SELECT hm.history_id,hm.ordinal,hm.role,hm.ts,"
                 "snippet(history_messages_fts,0,'','',' … ',24) AS excerpt "
@@ -3464,8 +4013,8 @@ class HistoryIndex:
         search_index_ready = bool((await self.message_search_status())["ready"])
         order_column = _HISTORY_ORDER_COLUMNS[time_basis]
         sql = (
-            f"SELECT h.*, {order_column} AS {_HISTORY_ORDER_KEY} FROM history h "
-            f"WHERE h.agent_visible=1 AND h.backend IN ({_AGENT_BACKEND_SQL})"
+            f"SELECT {self._list_columns}, {order_column} AS {_HISTORY_ORDER_KEY} "
+            f"FROM history h WHERE h.agent_visible=1 AND h.backend IN ({_AGENT_BACKEND_SQL})"
         )
         args: list[Any] = list(_AGENT_BACKEND_ARGS)
         match_query = _fts_query(query)
@@ -3613,7 +4162,15 @@ class HistoryIndex:
                 role_sql = " AND hm.role=?"
             bounded_limit = max(1, min(limit, 2000))
             if search_index_ready:
-                args: list[Any] = [match_query, history_id]
+                # Bounded by this conversation's row-id range so FTS5 visits only its
+                # own matches; the `history_id` filter alone was applied after the index
+                # had produced every match in the archive. Measured 2026-10-12 on a full
+                # prefix-indexed copy of the live archive: `"the"*` 74 -> 3 ms and
+                # `"cont"*` 59 -> 9 ms per conversation (200-320 ms on the live index).
+                bounds = self._message_id_ranges([history_id]).get(history_id)
+                if bounds is None:
+                    return []
+                args: list[Any] = [match_query, bounds[0], bounds[1], history_id]
                 if search_scope in {"user", "assistant"}:
                     args.append(search_scope)
                 args.append(bounded_limit)
@@ -3622,7 +4179,8 @@ class HistoryIndex:
                     "snippet(history_messages_fts,0,'','',' … ',24) AS excerpt "
                     "FROM history_messages hm JOIN history_messages_fts "
                     "ON history_messages_fts.rowid=hm.id "
-                    "WHERE history_messages_fts MATCH ? AND hm.history_id=?"
+                    "WHERE history_messages_fts MATCH ? "
+                    "AND history_messages_fts.rowid BETWEEN ? AND ? AND hm.history_id=?"
                     f"{role_sql} ORDER BY hm.ordinal LIMIT ?",
                     args,
                 ).fetchall()
@@ -4364,8 +4922,16 @@ class HistoryIndex:
         return await self._run(op)
 
     def close(self) -> None:
-        if self._closed:
-            return
-        self._closed = True
+        # Under the lock the schedulers test it under, so none of them can submit to a
+        # pool between this flag and the pool's shutdown.
+        with self._background_lock:
+            if self._closed:
+                return
+            self._closed = True
+        # Background jobs write through the database executor, so they drain first: a
+        # queued reindex is dropped (the next open schedules it again), a running one
+        # finishes its write rather than leaving a half-replaced message set.
+        for pool in (self._reindex_pool, self._summary_pool):
+            pool.shutdown(wait=True, cancel_futures=True)
         self._executor.submit(self._db.close).result()
         self._executor.shutdown(wait=True)

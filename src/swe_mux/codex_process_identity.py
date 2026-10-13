@@ -11,12 +11,19 @@ from __future__ import annotations
 import json
 import logging
 import os
+import sys
+import time
 from pathlib import Path
 from typing import Any, NamedTuple
 
 import psutil
 
 log = logging.getLogger(__name__)
+
+#: A proof slower than this is reported. The per-process query measures in
+#: single-digit milliseconds; the system-wide enumeration it replaced took
+#: 250 ms-1 s per call, so a recurrence of that shape is what this catches.
+SLOW_PROOF_WARN_SECONDS = 0.25
 
 PROCESS_FIELD = "mux_codex_process"
 MAX_ANCESTORS = 32
@@ -129,6 +136,27 @@ def verify_codex_root_process(
     return ProcessProof(True, "pty_root_codex")
 
 
+def held_file_paths(process: psutil.Process) -> list[str] | None:
+    """Every file ``process`` holds open for writing, or None when not knowable.
+
+    On Windows this is the per-process handle query (`win_process_files`), never
+    `psutil.Process.open_files()`: psutil answers by enumerating every handle in
+    the system, which on a busy host is ~450,000 entries per call and held the GIL
+    for 250 ms-1 s each time (measured 2026-10-12). An answer the query could not
+    complete is None, because a handle that went unnamed could be the rollout and
+    the caller decides on uniqueness. Elsewhere psutil reads the process's own
+    descriptor table, which is already per-process and cheap.
+    """
+    if sys.platform == "win32":
+        from .win_process_files import open_file_paths
+
+        result = open_file_paths(process.pid)
+        if result is None or not result.complete:
+            return None
+        return list(result.paths)
+    return [opened.path for opened in process.open_files()]
+
+
 def owned_rollout(root_pid: int, root_started_at: float | None, home: Path) -> Path | None:
     """The unique CLI-root rollout held open by this PTY's outer Codex process.
 
@@ -136,10 +164,26 @@ def owned_rollout(root_pid: int, root_started_at: float | None, home: Path) -> P
     handle is independent evidence, unlike a directory's newest filename. Native
     subagents share the process but identify themselves in their metadata; nested
     CLIs have an intervening Codex ancestor. Ambiguity and access errors fail closed.
-    Runs only in a worker thread, on the observer's throttled recovery cadence.
+    Runs only in a worker thread, and only when the session has given evidence a
+    conversation could have moved (`SessionManager._process_proof_due`).
     """
     if root_pid <= 0 or not _positive_number(root_started_at):
         return None
+    started = time.perf_counter()
+    try:
+        return _owned_rollout(root_pid, root_started_at, home)
+    finally:
+        elapsed = time.perf_counter() - started
+        if elapsed >= SLOW_PROOF_WARN_SECONDS:
+            log.warning(
+                "codex_process_proof_slow pid=%d elapsed_s=%.3f",
+                root_pid,
+                elapsed,
+                extra={"proof_pid": root_pid, "proof_elapsed_s": round(elapsed, 3)},
+            )
+
+
+def _owned_rollout(root_pid: int, root_started_at: float | None, home: Path) -> Path | None:
     from .codex_history import metadata
 
     try:
@@ -163,9 +207,12 @@ def owned_rollout(root_pid: int, root_started_at: float | None, home: Path) -> P
         if pending or len(codex) != 1:
             return None
         process = codex[0]
+        held = held_file_paths(process)
+        if held is None:
+            return None
         candidates: set[Path] = set()
-        for opened in process.open_files():
-            path = Path(opened.path)
+        for opened in held:
+            path = Path(opened)
             if not path.name.startswith("rollout-") or path.suffix != ".jsonl":
                 continue
             if not path.resolve().is_relative_to(home.resolve()):

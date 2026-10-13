@@ -2,7 +2,10 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
   EVENT_REFRESH_MAX_GAP_MS, EVENT_REFRESH_MIN_GAP_MS, EVENT_REFRESH_SETTLE_MS, FLEET_REFRESH_TIMEOUT_MS,
-  createEventRefreshScheduler, createFleetRefreshController, describeFleetFailures, fetchFleetSlices,
+  SESSION_REFRESH_FLEET_THRESHOLD, SESSION_REFRESH_MAX_CONCURRENT, SESSION_REFRESH_MIN_GAP_MS,
+  SESSION_REFRESH_SETTLE_MS,
+  createEventRefreshScheduler, createFleetRefreshController, createSessionRefreshScheduler,
+  describeFleetFailures, fetchFleetSlices,
 } from '../src/fleetRefresh.ts'
 
 type Call = { method: string; path: string; timeoutMs: number | undefined; signal: AbortSignal | undefined }
@@ -325,5 +328,112 @@ test('a quiet fleet refreshes nothing, and cancel drops what was scheduled', asy
   await time.advance(10_000)
   assert.equal(runs, 0)
   scheduler.request()
+  assert.deepEqual(time.pending(), [])
+})
+
+test('a burst of events for one row costs one row read, after a short settle', async () => {
+  const time = manualTime()
+  const reads: string[] = []
+  let fleet = 0
+  const scheduler = createSessionRefreshScheduler(async id => { reads.push(id) }, () => { fleet += 1 }, time)
+  for (let index = 0; index < 20; index += 1) scheduler.request('a')
+  assert.deepEqual(time.pending(), [SESSION_REFRESH_SETTLE_MS])
+  await time.advance(SESSION_REFRESH_SETTLE_MS)
+  assert.deepEqual(reads, ['a'])
+  assert.equal(fleet, 0, 'one changed row never costs the whole fleet')
+})
+
+test('a busy row is read at most once per gap, and different rows do not wait on each other', async () => {
+  const time = manualTime()
+  const starts: Array<[string, number]> = []
+  const scheduler = createSessionRefreshScheduler(async id => { starts.push([id, time.now()]) }, () => {}, time)
+  // The status line on one session, several times a second for five seconds.
+  for (let at = 0; at < 5_000; at += 200) {
+    scheduler.request('busy')
+    if (at === 1_000) scheduler.request('quiet')
+    await time.advance(200)
+  }
+  await time.advance(SESSION_REFRESH_MIN_GAP_MS)
+  const busy = starts.filter(([id]) => id === 'busy').map(([, at]) => at)
+  const gaps = busy.slice(1).map((start, index) => start - busy[index])
+  assert.ok(busy.length <= 6, `expected about one read a second, got ${busy.length}`)
+  for (const gap of gaps) assert.ok(gap >= SESSION_REFRESH_MIN_GAP_MS, `two reads of one row ${gap}ms apart`)
+  const quiet = starts.filter(([id]) => id === 'quiet').map(([, at]) => at)
+  assert.deepEqual(quiet, [1_000 + SESSION_REFRESH_SETTLE_MS])
+})
+
+test('a change during a row read reads the row again afterwards', async () => {
+  const time = manualTime()
+  const starts: number[] = []
+  let finish: () => void = () => {}
+  const scheduler = createSessionRefreshScheduler(() => {
+    starts.push(time.now())
+    return new Promise<void>(resolve => { finish = resolve })
+  }, () => {}, time)
+  scheduler.request('a')
+  await time.advance(SESSION_REFRESH_SETTLE_MS)
+  scheduler.request('a')
+  await time.advance(2_000)
+  assert.equal(starts.length, 1, 'never two reads of one row at once')
+  finish()
+  await flush()
+  await time.advance(SESSION_REFRESH_SETTLE_MS)
+  assert.equal(starts.length, 2, 'the read in flight may predate the change, so it is read again')
+})
+
+test('row reads run a few at a time, and the rest wait their turn', async () => {
+  const time = manualTime()
+  const finishers: Array<() => void> = []
+  const started: string[] = []
+  const scheduler = createSessionRefreshScheduler(id => {
+    started.push(id)
+    return new Promise<void>(resolve => { finishers.push(resolve) })
+  }, () => {}, time)
+  const ids = Array.from({ length: SESSION_REFRESH_MAX_CONCURRENT + 2 }, (_, index) => `s${index}`)
+  for (const id of ids) scheduler.request(id)
+  await time.advance(SESSION_REFRESH_SETTLE_MS)
+  assert.equal(started.length, SESSION_REFRESH_MAX_CONCURRENT)
+  finishers.shift()?.()
+  await flush()
+  await time.advance(0)
+  assert.equal(started.length, SESSION_REFRESH_MAX_CONCURRENT + 1)
+  for (const finish of finishers.splice(0)) finish()
+  await flush()
+  await time.advance(0)
+  assert.deepEqual(started.sort(), [...ids].sort())
+})
+
+test('many rows waiting at once become one fleet read', async () => {
+  const time = manualTime()
+  const reads: string[] = []
+  let fleet = 0
+  const scheduler = createSessionRefreshScheduler(async id => { reads.push(id) }, () => { fleet += 1 }, time)
+  for (let index = 0; index <= SESSION_REFRESH_FLEET_THRESHOLD; index += 1) scheduler.request(`s${index}`)
+  assert.equal(fleet, 1)
+  await time.advance(SESSION_REFRESH_MIN_GAP_MS)
+  assert.deepEqual(reads, [], 'the fleet read answers every row that was waiting')
+  scheduler.request('later')
+  await time.advance(SESSION_REFRESH_SETTLE_MS)
+  assert.deepEqual(reads, ['later'])
+})
+
+test('a failed row read does not wedge the scheduler, and cancel drops what was scheduled', async () => {
+  const time = manualTime()
+  let reads = 0
+  const scheduler = createSessionRefreshScheduler(async () => {
+    reads += 1
+    throw new Error('daemon away')
+  }, () => {}, time)
+  scheduler.request('a')
+  await time.advance(SESSION_REFRESH_SETTLE_MS)
+  await time.advance(SESSION_REFRESH_MIN_GAP_MS)
+  scheduler.request('a')
+  await time.advance(SESSION_REFRESH_SETTLE_MS)
+  assert.equal(reads, 2)
+  scheduler.request('a')
+  scheduler.cancel()
+  await time.advance(10_000)
+  assert.equal(reads, 2)
+  scheduler.request('a')
   assert.deepEqual(time.pending(), [])
 })

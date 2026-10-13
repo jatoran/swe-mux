@@ -9,6 +9,7 @@ import {
 
 const source=readFileSync(join(import.meta.dirname,'..','src','HistoryBrowser.tsx'),'utf8')
 const css=readFileSync(join(import.meta.dirname,'..','src','style.css'),'utf8')
+const app=readFileSync(join(import.meta.dirname,'..','src','App.tsx'),'utf8')
 
 test('history detail actions stay ahead of the collapsible run sections',()=>{
   const actions=source.indexOf('<div class="transcript-actions">')
@@ -40,9 +41,52 @@ test('the detail view drops cross-vendor review and renames the two resume actio
   // Back sits in the detail view's own top bar rather than in a full-width row above it.
   const heading=source.indexOf('<div class="transcript-heading">')
   assert.ok(heading>0&&source.indexOf('class="history-back"')>heading)
-  assert.ok(source.indexOf('class="history-back"')<source.indexOf('<div><h3>[{transcript.entry.backend}]'))
+  assert.ok(source.indexOf('class="history-back"')<source.indexOf('<div><h3>[{entry.backend}]'))
   assert.doesNotMatch(css,/\.history-back\{display:none/)
   assert.doesNotMatch(css,/\.history-back \{ display:block;width:100%/)
+})
+
+test('a conversation opens on the row that was clicked, never on a whole-transcript parse',()=>{
+  // The reader used to wait for `/transcript` - a parse of the entire file, every tool
+  // input included - before it drew anything, Resume with it: 1.5 s and 1.4 MB for a 6.9
+  // MiB conversation, measured 2026-10-12. It now draws the header and Resume from the row
+  // and reads the conversation out of the message index a page at a time.
+  assert.doesNotMatch(source,/\/transcript(?![A-Za-z])/,'the browser fetches the whole-transcript route again')
+  for(const route of ['${base}/detail','${base}/messages?','${base}/notes','${base}/matches?','${base}/tool-calls?']){
+    assert.ok(source.includes(route),route)
+  }
+  assert.match(source,/useState<HistoryEntry\|null>\(selection\.entry\|\|null\)/)
+  assert.match(source,/setSelected\(\{id:entry\.id,entry,/)
+  // One reader per conversation: switching conversations remounts it, which is what clears
+  // the old one off the screen and aborts its requests.
+  assert.match(source,/<HistoryDetail key=\{selected\.id\}/)
+  assert.match(source,/useEffect\(\(\)=>\(\)=>lifetime\.current\?\.abort\(\),\[\]\)/)
+  // Nothing waits on anything else: no Promise.all gates the view.
+  assert.ok(!source.includes('Promise.all'))
+})
+
+test('the browser, its rows and its messages are memoized with stable inputs',()=>{
+  assert.match(source,/export const HistoryBrowser=memo\(HistoryBrowserImpl\)/)
+  assert.match(source,/const HistoryRow=memo\(/)
+  assert.match(source,/const HistoryMessage=memo\(/)
+  assert.match(source,/const HistoryDetail=memo\(/)
+  assert.match(source,/<HistoryRow key=\{entry\.id\}/)
+  assert.match(source,/<HistoryMessage key=\{message\.ordinal\}/)
+  // The root re-renders on every session status event; the browser's props must not change
+  // when it does.
+  assert.match(app,/const orderedProjects = useMemo\(/)
+  assert.match(app,/onClose=\{historyCallbacks\.close\} onResume=\{historyCallbacks\.resume\} onScheduleResume=\{historyCallbacks\.schedule\} onHandoff=\{historyCallbacks\.handoff\}/)
+  assert.match(app,/const historyCallbacks = useMemo\(\(\) => \(\{[^]*?\}\), \[\]\)/)
+})
+
+test('results skip offscreen layout and the reader keeps its own place',()=>{
+  assert.match(css,/\.history-row \{ content-visibility:auto;contain-intrinsic-size:auto \d+px \}/)
+  // Anchoring by hand, so the browser's own is off rather than correcting the same insertion
+  // twice; and so the messages must not change height above the view on their own.
+  assert.match(css,/\.history-modal \.messages \{ overflow-anchor:none \}/)
+  assert.doesNotMatch(css,/\.history-modal \.messages[^{]*\{[^}]*content-visibility/)
+  // One formatter for the browser's local labels, not one per call.
+  assert.ok(!source.includes('toLocaleString('))
 })
 
 test('the filter block wraps content-width controls instead of stretching them',()=>{

@@ -15,6 +15,7 @@ rollover, are stated as such under "Completion gates" with the fixture tests tha
 them.
 What remains is maintenance: re-run the live canaries after a CLI upgrade, and re-run the
 measurements after a schema or index change.
+Schema 5 (2026-10-12) fixed a segment re-seal loop and the whole-file transcript re-reads that fed it; the measurements are under "Seal loop and full re-reads".
 
 ## Non-negotiable contracts
 
@@ -43,7 +44,8 @@ measurements after a schema or index change.
 - [x] Independent tool family, operation, transport, server, and raw-name dimensions.
 - [x] Field-level source enrichment with evidence links.
 - [x] Content-free output hashes and byte/character counts.
-- [x] Batched single-worker EventBus ingestion and background health reporting.
+- [x] Batched EventBus ingestion and background health reporting.
+  Since schema 5 ingestion has its own worker thread and ledger, beside a maintenance and a query thread that share its write lock.
 - [x] Content-sensitive hook result delivery only to the canonical consumer.
 - [x] Resumable, non-destructive import of legacy tool rows, run identities, and Tier 0 test
   outcomes.
@@ -62,6 +64,7 @@ measurements after a schema or index change.
   adding quality rollups and the per-run repeat counts the ten-million-call measurement
   demanded) with PRAGMA-introspected per-file signatures and a drift readout in the daemon's
   background health.
+  Schema 5 (2026-10-12, catalog only) adds per-segment write stamps, reconciliation cursors, and refused-observation counts.
 - [x] Module split: schema and migrations, legacy importers, direct native reconciliation, the
   query surface, the write path, and the daemon adapter are six files rather than one.
 
@@ -267,6 +270,63 @@ parse error and from a record that was read and held nothing.
 The on-demand pass before the audit scanned one changed store, skipped 1,753 unchanged ones
 by watermark, and inserted two calls.
 
+## Seal loop and full re-reads (2026-10-12)
+
+Measured read-only on offline copies of the live `catalog.sqlite3` and of the four largest live transcripts, with the running daemon untouched.
+The scripts copied the files first and read nothing live afterwards.
+
+### What was wrong
+
+- A segment was eligible for a seal when its newest evidence was a week old (`last_observed_at`), and a write unsealed it before `INSERT OR IGNORE` had said whether anything was written.
+- A month keeps receiving writes for as long as a run that began in it is alive: each event updates the run's row in its home segment, and each result updates its call there.
+  So a month that had stopped receiving evidence of its own was sealed, unsealed by the next event, and sealed again a rollup tick later, and every seal read the whole file twice (`quick_check`, then SHA-256).
+- Both reconcilers parsed every changed transcript whole, or its last 32 MiB above that size, on every pass.
+  The window's start moved as the file grew, and the identities derived from line positions and the per-read sequence numbers moved with it, so every pass re-inserted the whole window as new evidence, in the months the records came from.
+- An epoch-zero Codex OTel time, fixed at the source in `08cbc46a` on 2026-10-10, had opened `1970-01` and `1969-12` segments that went through the same loop.
+- All of it, and every query the routes made, ran on the one worker thread that live ingestion used.
+
+### Before
+
+| figure | value |
+| --- | --- |
+| seals in the last 24 hours | 27, all of `2026-09` (6.08 GiB), every one invalidated by late entity evidence |
+| seals in the last 7 days | 1,217: 1,039 of `1970-01` (0.30 GiB) and 178 of `2026-09` |
+| life of a `2026-09` seal | median 4.4 minutes; median 9.2 minutes between seals |
+| bytes read by sealing | 328 GiB in the last 24 hours; 2,790 GiB over 7 days, 398 GiB a day |
+| what the old rule would seal next | `1969-12` and `2026-09`, both written within the hour |
+| evidence re-inserted per pass by one growing transcript above 32 MiB | 417 and 482 (the two largest Claude transcripts), 12 and 15 (the two largest Codex rollouts) |
+| last canonical pass before the measurement | 3 transcripts scanned, 1,347 rows inserted |
+| live observations dropped by the full ingest queue | 710 |
+| decoding one changed transcript above 32 MiB | 77-105 ms for 30-32 MiB, every pass |
+
+### After
+
+| figure | value |
+| --- | --- |
+| what the new rule seals at the upgrade | nothing: every unsealed segment is stamped with the upgrade time and waits a grace period |
+| `2026-09` | sealed once, seven days after the last run that began in September stops writing to it |
+| `1969-12` and `1970-01` | never written again; `1969-12`, unsealed today, seals once a week after the upgrade |
+| sealing in steady state | one seal per month, reading it twice: about 12 GiB for a month the size of September |
+| a pass over a transcript that grew | 0.1-0.8 ms, decoding the 8-205 KiB appended since the pass before |
+| a pass over an unchanged transcript | 0.03-0.04 ms: a 4 KiB and a 256-byte sample |
+| evidence re-inserted per pass | none; a test asserts that incremental reads yield exactly the evidence ids of one whole read |
+| first read of a transcript above 32 MiB | 200-420 ms, once per file: the old decode plus counting the lines before the window |
+| first pass after the upgrade | no line counting: a resumed cursor counts only when something is appended past it |
+
+Expected I/O a day, from those figures and the last pass's three changed transcripts: sealing falls from 328-398 GiB to one seal per month, and transcript decoding from about 29 GiB (three files, 31 MiB each, 288 canonical and 24 legacy passes) to under 100 MiB.
+
+The fixes, all on schema 5:
+
+- A seal is eligible after seven days with no write, judged by a stamp every committed write moves on the segments it actually wrote, and recorded only if the stamp did not move during its checks.
+  Already-present evidence writes nothing and unseals nothing.
+- A checkpoint a reader pins defers the seal; a failed integrity check is retried after a day, not on the next tick.
+- Observations before 2020 or more than two days ahead are refused and counted (`rejected_observations`), and a start derived from a placeable observation is held to the same bounds.
+- Live ingestion, maintenance, and queries run on three threads with three ledgers, sharing one write lock; rollups read outside it.
+- Both reconcilers read past a cursor (`telemetry_cursor.py`), number lines from the start of the file, and name a result whose call an earlier pass read from the store's own row.
+
+The tests are `tests/test_telemetry_storage.py` and `tests/test_telemetry_incremental.py`.
+The duplicate-evidence, result-naming, window-edge, and live-twin tests were each run once with their mechanism reverted, and failed.
+
 ## Remaining implementation
 
 ### Native evidence
@@ -288,9 +348,10 @@ by watermark, and inserted two calls.
 - [x] Keep importing what the legacy store reconciles after the initial catch-up: every stream
   is re-read past its cursor on a five-minute cycle.
 - [x] Reconcile Claude, Codex, OMP, Pi, and OpenCode native stores directly into the canonical
-  reducer, without the legacy `tool_events` hop (`telemetry_reconcile.py`, watermarked per
-  run, every five minutes and on `POST /api/telemetry/v2/reconcile`; fixtures for all five
-  dialects and a read-only proof in `tests/test_telemetry_reconcile.py`).
+  reducer, without the legacy `tool_events` hop (`telemetry_reconcile.py`, read past a
+  per-run cursor since schema 5, every five minutes and on `POST /api/telemetry/v2/reconcile`;
+  fixtures for all five dialects and a read-only proof in `tests/test_telemetry_reconcile.py`,
+  incremental reads in `tests/test_telemetry_incremental.py`).
 - [x] Persist field-completeness denominators by harness version (`quality_summary.versions`).
 - [x] Classify incomplete calls as abandoned only when the owning run closes.
 - [x] Backfill turn boundaries from durable status timelines where exact run and turn identities
@@ -309,7 +370,8 @@ by watermark, and inserted two calls.
   a later day than it started.
 - [x] Query clean days from day rollups, clean hours of partial days from hour rollups, and the
   rest from canonical entities, merging consecutive raw stretches into one query per month.
-- [x] Seal inactive monthly segments after reconciliation and record segment hashes.
+- [x] Seal inactive monthly segments after reconciliation and record segment hashes; inactive
+  means no write for seven days since schema 5 (`tests/test_telemetry_storage.py`).
 - [x] Add integrity, schema-signature, and disk-pressure diagnostics for the telemetry directory.
 - [x] Add skill, verification, metric, run, turn, and generic entity-page APIs beyond the
   tool-call audit.

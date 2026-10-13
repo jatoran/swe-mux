@@ -12,6 +12,7 @@ from __future__ import annotations
 import base64
 import json
 import sqlite3
+import threading
 import time
 from collections.abc import Iterable, Iterator
 from datetime import UTC, datetime, timedelta
@@ -216,6 +217,7 @@ class LedgerQueryMixin:
 
     if TYPE_CHECKING:
         _catalog: sqlite3.Connection
+        _write_lock: threading.RLock
 
         def _segment(self, period: str) -> sqlite3.Connection: ...
 
@@ -1516,7 +1518,7 @@ class LedgerQueryMixin:
         if not finding_key or len(finding_key) != 64:
             raise ValueError("finding_key must be the finding's own key")
         reviewed_at = time.time() if now is None else now
-        with self._catalog:
+        with self._write_lock, self._catalog:
             self._catalog.execute(
                 "INSERT INTO finding_reviews(finding_key,kind,verdict,note,reviewed_at) "
                 "VALUES(?,?,?,?,?) ON CONFLICT(finding_key) DO UPDATE SET kind=excluded.kind,"

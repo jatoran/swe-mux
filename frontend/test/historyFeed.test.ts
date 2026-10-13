@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { groupHistoryFeed, type HistoryFeedEntry } from '../src/historyFeed.ts'
+import {
+  groupHistoryFeed, HISTORY_SEARCH_DEBOUNCE_MS, HISTORY_SEARCH_SHORT_WORD_DEBOUNCE_MS, historySearchDelay,
+  type HistoryFeedEntry,
+} from '../src/historyFeed.ts'
 
 const entry = (id: string, project?: string): HistoryFeedEntry & { id: string } =>
   ({ id, ...(project ? { project_id: project } : {}) })
@@ -65,4 +68,21 @@ test('a removed Project says so in its heading', () => {
 
 test('an empty page groups into nothing rather than an empty heading', () => {
   assert.deepEqual(groupHistoryFeed([], [], registered), [])
+})
+
+test('a one-letter word being typed waits longer than a whole one', () => {
+  // `contact s` is the broadest search a typist ever sends and the one most certain to be
+  // replaced by the next keystroke, so it is given time to be.
+  assert.equal(historySearchDelay('contact s'), HISTORY_SEARCH_SHORT_WORD_DEBOUNCE_MS)
+  assert.equal(historySearchDelay('s'), HISTORY_SEARCH_SHORT_WORD_DEBOUNCE_MS)
+  assert.equal(historySearchDelay('contact su'), HISTORY_SEARCH_DEBOUNCE_MS)
+  assert.equal(historySearchDelay('contact'), HISTORY_SEARCH_DEBOUNCE_MS)
+  assert.ok(HISTORY_SEARCH_SHORT_WORD_DEBOUNCE_MS > HISTORY_SEARCH_DEBOUNCE_MS)
+  // Trailing space means the word is finished; punctuation is not a letter of it.
+  assert.equal(historySearchDelay('contact s '), HISTORY_SEARCH_SHORT_WORD_DEBOUNCE_MS)
+  assert.equal(historySearchDelay('contact "s'), HISTORY_SEARCH_SHORT_WORD_DEBOUNCE_MS)
+  assert.equal(historySearchDelay('naïve é'), HISTORY_SEARCH_SHORT_WORD_DEBOUNCE_MS)
+  // Clearing the box lists immediately: there is nothing to wait for.
+  assert.equal(historySearchDelay(''), 0)
+  assert.equal(historySearchDelay('   '), 0)
 })

@@ -14,7 +14,16 @@ The shared schema, Project and layout persistence, run history, bounded post-sta
 `history_naming_rows` is the chunked bulk read behind display names for ended sessions.
 It is keyed by both row id and owning session id, where an exact row id outranks the session fallback, so the first run of a rolled-over session is not redirected to its last.
 
-**Not:** live PTY lifecycle, provenance evidence classification, or the naming rule itself (`session_titles.py`).
+The History reader's reads live here too:
+- `read_history_conversation` is the one seam through which History parses a native conversation.
+  Interactive reads pass `cached=True` and share `transcript_view`'s watermark-keyed cache; the indexer and the background reindex pass `False`, so walking thousands of conversations cannot evict a live reader's entry.
+- `transcript_index_state` answers what the index holds against the conversation's watermark and schedules `schedule_transcript_reindex` when it is behind.
+  The reindex runs on a one-thread pool, single-flight per run with a 30 s cooldown; `refresh_time_summaries` runs the listing's head/tail reads on a four-thread pool behind a bounded wait.
+  Both pools are threads rather than event-loop tasks so a job that outlives its request never calls into a closed loop, and `close` drains them before the database executor.
+  `wait_for_background` is for tests and nothing on a request path calls it.
+- `history_messages_page` pages `history_messages` by ordinal over `idx_history_messages_history`.
+
+**Not:** live PTY lifecycle, provenance evidence classification, the naming rule itself (`session_titles.py`), or parsing a transcript format (`transcript_view.py`).
 
 ### `history_backfill.py`
 
@@ -78,9 +87,23 @@ The bounded read runs off the daemon event loop through `observation.resolve_con
 Nested CLIs, native subagent transcripts, stale PIDs, and unavailable evidence cannot authorize a conversation replacement.
 
 `owned_rollout` additionally discovers the unique CLI-root transcript held open by the verified outermost Codex process.
-The observer throttles this off-loop fallback and applies normal live-session ownership checks before binding or rolling over.
+The observer runs this off-loop fallback only on evidence (`design/features/status-detection.md`, Codex branch and rewind recovery) and applies normal live-session ownership checks before binding or rolling over.
+On Windows the held files come from `win_process_files.py`, never `psutil.Process.open_files()`; an answer that query could not complete fails the proof closed, because the unnamed handle could have been the rollout.
+A proof slower than `SLOW_PROOF_WARN_SECONDS` is `codex_process_proof_slow` at WARNING.
 
 **Not:** conversation mutation, process termination, or command-line collection.
+
+### `win_process_files.py`
+
+Which files one Windows process holds open, from that process's own handle table.
+`NtQueryInformationProcess(ProcessHandleInformation)` lists the target's handles, file objects are recognised by the type index learned from a handle of our own, and each candidate is duplicated and named with `GetFinalPathNameByHandleW`.
+Measured 2026-10-12 on a host with ~450,000 open handles: 0.6-2 ms per process, against 234-340 ms for `psutil.Process.open_files()`, which enumerates every handle in the system and holds the GIL while it does (`development/PERFORMANCE_RUNBOOK.md` § Traps).
+Naming a handle can block in the kernel for as long as the target lives (a pipe with a read pending), so it runs on a worker thread that is abandoned after `NAME_QUERY_TIMEOUT_SECONDS`.
+An abandoned query marks the result incomplete and quarantines that one process until its stuck worker returns; `MAX_STUCK_WORKERS` is the global backstop.
+Access masks measured to hang (`HANG_PRONE_ACCESS`, which extends psutil's own list by two masks seen on node and python pipes) are skipped and counted rather than named.
+Counters are `transcript_observation.open_file_queries` on `/api/diagnostics/background`.
+
+**Not:** any decision about what a held file means - `codex_process_identity.py` owns that - or any non-Windows host, where `psutil` already reads the process's own descriptor table.
 
 ### `observation.py`
 

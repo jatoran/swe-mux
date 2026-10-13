@@ -234,11 +234,33 @@ Every cause was a per-item cost multiplied by something that grows with uptime o
   Every event outside a short list queued a five-endpoint fleet refresh that started the moment the previous one ended, so a subagent fleet's ~17 `subagent_activity` events a second held one window at 2.5 full refreshes a second, back to back.
   The frontend now spaces event-driven refreshes by at least a second, and by twice the last cycle's duration when the daemon is slow (`technical/frontend/packages/composition.md` § Fleet refresh).
   Two of those five reads were themselves expensive per call and are cheaper now: `/api/harnesses` reuses a detection up to ten seconds old (`design/features/backends.md`), and `/api/projects` stats Project roots in one worker call instead of one `is_dir` per Project on the loop.
+- **The Git monitor and the fleet refresh, again** (2026-10-12).
+  The monitor re-read every attached checkout every five seconds, about seven `git` processes each, whether or not anything had moved: `busy_share` 0.34 and a 9.9 s median iteration on the operator's fleet.
+  It now reads a checkout when an OS watch reports a change, with a 60 s sweep while attached and 300 s while detached, and keeps timed polling for any checkout without a live watch (`design/features/git.md`).
+  Its `git_monitor` block on `GET /api/diagnostics/background` says why each read happened: `reads` by cause, plus the watches' state under `watch`.
+  A healthy idle fleet reads almost only `sweep`; a climbing `poll` count means watches are not running (`watch.failures`, `watch.last_failure`, `git_watch_failed` in `daemon.log`), and `git_read_slow` names a read that took five seconds or more.
+  On the browser side, 645 events an hour still asked each desktop window for a five-endpoint fleet read (about 9 a minute per endpoint), and two thirds of them changed exactly one session's row.
+  `harness_status` and `git_changed` now carry that row's new values and are applied in place, every other one-row event re-reads that row alone, and only membership, Preview, Project-level and unknown events re-read the fleet (`technical/frontend/packages/composition.md` § Fleet refresh).
+  From the same 24-hour event mix, fleet reads should fall from about 535 an hour per window to the 60-second safety interval plus about 20 structural events an hour; about 270 events an hour now patch a row with no request at all, and about 410 one-row events become at most about 200 single-row reads an hour, because each row is read at most once a second.
+  To check it on a live daemon, count `GET /api/sessions` against `GET /api/sessions/<id>` per minute in `access.log`.
 - **Filesystem calls on the loop**, each small until a disk or a provider is slow: `project_watcher` resolving watch targets (`realpath`/`stat`, now `asyncio.to_thread`, with `register_async` for the route), the observation loop's `exists`/`stat`, the state watchdog resolving every session's cwd (`CliStateMonitor.poll` now resolves them in its worker thread), and the legacy meta-hooks engine re-reading its rules file, which now runs in a thread and reloads at most every `RELOAD_INTERVAL_SECONDS` (2s) however many events arrive.
 
 The sibling symptom was brief refusals rather than lag: a client that times out against a busy loop leaves a failed accept, and asyncio's proactor closed the listener for it (`design/features/daemon-resilience.md` § Listener guard).
 When a long-lived daemon feels slow, read the request rate per path in `access.log` and the event rate per type in `mux.db` (`events`) before profiling: a cost that is cheap per call and wrong per event is invisible in any single request and obvious in the counts.
 Then take a `py-spy record --gil --threads` profile, which shows only the thread holding the GIL and so names what is actually starving the loop.
+
+**Disk that is busy with nothing visible running: read the canonical telemetry block.**
+On 2026-10-12 the canonical ledger was reading about 330 GiB a day out of its own files, none of it on the loop, so no loop metric showed it.
+A month that kept receiving late entity evidence was resealed after every write that unsealed it - a `quick_check` and a SHA-256 of a 6 GiB segment, 27 times that day - and the writes came from the reconcilers re-inserting the 32 MiB tail of every growing transcript as new evidence on every pass (`development/TELEMETRY_HARDENING.md` § Seal loop and full re-reads).
+The same thread served live ingestion, which dropped 710 observations while it waited.
+`GET /api/diagnostics/background` → `canonical_telemetry` now answers it directly:
+
+- `seals` and `seal_invalidations` over the daemon's life, and `last_seal_seconds`; more than a handful of seals a week, or invalidations climbing with them, is the loop back.
+- `rejected_observations`, observations refused for a time before 2020 or more than two days ahead; non-zero names a producer with a broken clock, whose type and source are in the catalog's `rejected_observations` table and in the WARNING that logged the first.
+- `reconciliation.elapsed_s` for the last canonical pass; an incremental pass reads five minutes of appends, so seconds here mean something was read again from the start.
+- `provider_dropped`, live observations lost to a full ingest queue.
+
+The log says the same per event: `canonical telemetry segment ... sealed`/`unsealed: <reason>` at INFO, a seal of 30 seconds or more and a reconciliation pass of 30 seconds or more at WARNING, and `canonical telemetry re-read <run> from the start (<reason>)` when a transcript was replaced.
 
 ### 4. Profile, if the first three did not name the culprit
 
@@ -457,23 +479,42 @@ Frames expected in a healthy profile, so they are not mistaken for defects:
 | `_fanout (session.py)` | delivering output to attached clients; scales with panes |
 | `_refresh_tree (processes.py)` | the one permitted system-wide psutil snapshot per pass |
 | `_read (pty_host.py)`, supervisor only | the nonblocking reader poll; high sample share, near-zero CPU |
-| `_newest_rollouts (adapters/codex.py)` | Codex switch-watch tree walk; ~9% of a loaded profile with 3 Codex sessions |
+| `_newest_rollouts (adapters/codex.py)`, worker thread only | Codex switch-watch tree walk; only within two minutes of a submitted line or turn the followed rollout does not record |
 | `_normalize_tail_text (session.py)` | PTY screen classification for status detection |
 | `_read_and_decode (observation.py)`, worker thread only | one 512 KiB window of transcript replay; bursts at attach and rebind, silent at rest |
 
-`_newest_rollouts` is the largest remaining avoidable-looking cost and has been left alone
-deliberately.
+`_newest_rollouts` used to be the largest remaining avoidable-looking cost (~9% of a loaded
+profile with three Codex sessions) and the walk itself has been left alone deliberately.
 Its cache TTL is pinned below `TRANSCRIPT_SWITCH_FRESH_SECONDS`, its tree cannot be pruned by
 directory date because `codex resume` appends to old rollouts, and the watcher it feeds is the
-only path by which Codex `/new` is detected at all.
-At a daemon cost of 1.5% of a core the win is a fraction of a percent, against the subsystem
-with the longest history of subtle identity bugs in this repository.
+only path by which a hookless Codex `/new` is detected at all.
+What changed on 2026-10-12 is *when* it runs, not what it does: the watcher searches only after
+evidence a conversation could have moved (`design/features/status-detection.md`, Codex branch
+and rewind recovery), so an idle Codex pane no longer walks at all, and the headers it reads
+come from a per-file-instance cache (`rollout_identity`).
+Seeing this frame on an idle fleet is therefore a defect, and `transcript_observation` on
+`/api/diagnostics/background` says which pane is searching.
 
 ## Traps
 
 - **`asyncio.to_thread` does not make psutil work free.** Its Windows calls hold the GIL, so a
   long sampling pass in a worker thread starves the loop exactly as a blocking call would. It
   only stops *looking* like one.
+- **`psutil.Process.open_files()` on Windows is a system-wide call, whatever its name says.**
+  It answers for one process by enumerating every handle in the system
+  (`NtQuerySystemInformation`) and filtering, under the GIL. On the operator's host on
+  2026-10-12 that was ~450,000 handles and 234-340 ms per call; with four concurrent callers
+  the loop thread's own 0.2 ms `realpath`+`stat` took 500-700 ms, and the Codex ownership
+  proof was making the call every 10 s for every idle Codex pane. The stall dumps of that day
+  showed the loop in whatever innocent syscall it happened to be holding when the GIL came
+  back - `realpath`, `stat`, `resolve` - which is why the cause was not in any of them.
+  `win_process_files.py` asks the one process for its own handle table instead (0.6-2 ms),
+  and the proof now runs only on evidence. Measured on two live Codex panes, one full
+  ownership proof: **median 325 ms before, 1.8 ms after, same rollout found by both**. The
+  rule: on Windows, nothing on a cadence may call `open_files()`, `connections()` or any other
+  psutil call whose implementation walks the system table; a per-process answer, or no
+  answer, is the choice. And when stall frames name a cheap syscall, look for the thread
+  holding the GIL before optimising the syscall.
 - **`oneshot()` does not cache everything.** `Process.ppid()` on Windows carries no
   `@memoize_when_activated` and rebuilds the whole system parent table per call, sitting in the
   same `oneshot()` block as calls that are cached.
@@ -490,6 +531,20 @@ with the longest history of subtle identity bugs in this repository.
   remembers a resolved path for 30s. Both are counted on `/api/diagnostics/background`
   (`transcript_scans`), and a scan over a second is `transcript_scan_slow` at WARNING. The rule:
   a reading taken per session must be shared per *thing read*, and never taken on the loop.
+  A cache's *expiry* is a reading too: until 2026-10-12 an expired resolve re-ran `realpath` on
+  the loop, and the stall dumps had the loop inside one for 140 s in a day. An expired entry
+  now answers stale and refreshes in a worker, async callers resolve new paths off the loop
+  before asking (`resolve_paths_async`), and a first-ever resolution on the loop is counted
+  (`resolved_paths.loop_misses`) and warned when slow (`resolve_on_loop_slow`).
+  The same audit moved Project registration and re-rooting, the onboarding record, and the
+  Recent files existence filter into workers, each named in a stall dump of that day: a path on
+  an unreachable provider costs the request that asked about it, never every terminal.
+- **A window over a growing file is not a frame of reference.**
+  Anything numbered from where a bounded read starts (a line index, a sequence within the read) renumbers itself when the file grows and the window moves, so an idempotent insert keyed on it inserts everything again.
+  Number from the start of the file, and read past a cursor that verifies a sample of the file rather than trusting a size or an mtime (`telemetry_cursor.py`).
+- **An integrity check judged by the wrong clock repeats forever.**
+  A seal that becomes due by the age of a file's contents, and is invalidated by any write, re-reads the whole file after every write for as long as writes keep coming.
+  Judge it by when the file was last written, and invalidate only for a write that actually changed something.
 - **An unchanged arbitration is silence.** Several subsystems broadcast only on change, so
   "nothing was reported" is not evidence that nothing is wrong.
 - **`asyncio.to_thread` cannot be cancelled, and the loop joins what you abandon.** Cancelling

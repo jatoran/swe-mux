@@ -153,7 +153,14 @@ class BranchHarness:
         body: dict[str, Any] | None = None,
         titles: dict[str, str] | None = None,
     ) -> None:
-        self.adapter = ClaudeAdapter("claude.exe")
+        # The adapter's data home is the test's own, never `~/.claude`: the harness
+        # writes a real transcript and every fork beside it, and with the default
+        # resolver each run of this file left ~20 project folders in the operator's
+        # live Claude store (27,375 of them by 2026-10-12), which every walk of that
+        # store - Claude's own resume picker included - then paid for.
+        self.adapter = ClaudeAdapter(
+            "claude.exe", data_home_resolver=lambda: tmp_path / "claude-home"
+        )
         self.cwd = tmp_path / "project"
         self.cwd.mkdir(parents=True, exist_ok=True)
         self.transcripts = self.adapter.transcript_path("probe", self.cwd).parent
@@ -245,6 +252,23 @@ class BranchHarness:
     def forked_records(self) -> list[dict[str, Any]]:
         conversation = self.spawned[-1]["resume_native_id"]
         return read_records(self.transcripts / f"{conversation}.jsonl")
+
+
+async def test_the_harness_keeps_every_transcript_inside_the_test(tmp_path: Path) -> None:
+    """The source and every fork are written under `tmp_path`, never the real store.
+
+    Pinned because the failure is silent: nothing in this file reads the operator's
+    `~/.claude/projects`, so a harness that wrote there passed every assertion while
+    growing that directory by one folder per test per run.
+    """
+    harness = BranchHarness(tmp_path, body={})
+    response = await harness.run()
+
+    assert response.status == 201
+    assert harness.transcripts.is_relative_to(tmp_path)
+    assert harness.source_path.is_relative_to(tmp_path)
+    conversation = harness.spawned[0]["resume_native_id"]
+    assert (harness.transcripts / f"{conversation}.jsonl").is_file()
 
 
 async def test_branch_points_offer_both_cuts_and_say_which_are_available(

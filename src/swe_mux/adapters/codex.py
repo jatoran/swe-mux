@@ -7,21 +7,148 @@ import re
 import shlex
 import subprocess
 import sys
+import threading
 import time
 import tomllib
 import uuid
+from collections import OrderedDict
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from ..bundle_swap import hook_delivery_from_env
 from ..codex_tui import with_scrollback_safe_tui
 from ..harness import descriptor
+from ..transcript_scan import resolve_path_cached
 from .base import BackendAdapter, SpawnOptions, SpawnSpec, deliver_project_skill
 
 # Shared across every live Codex session: they all scan the same tree on the same
 # cadence, so one pass per window instead of one per session per tick.
 _ROLLOUT_CACHE_SECONDS = 2.0
 _ROLLOUT_CACHE: dict[str, tuple[float, list[tuple[float, Path]]]] = {}
+#: Per-file instance token and size from the same walk, so a header lookup for a
+#: listed rollout validates against what the walk already read instead of a stat.
+_ROLLOUT_STATS: dict[str, dict[str, tuple[tuple[int, ...], int]]] = {}
+
+
+@dataclass(frozen=True, slots=True)
+class RolloutIdentity:
+    """What a rollout's first record (`session_meta`) says about it.
+
+    Immutable for the life of the file: Codex writes `session_meta` once, when it
+    creates the rollout, and only ever appends after it - the file name itself
+    carries the thread id. That is what makes it cacheable by file instance.
+    """
+
+    native_id: str | None
+    cwd: str | None
+    parent_thread_id: str | None
+
+
+#: path -> (instance token, size when read, identity or None if unreadable).
+#: Bounded LRU; at 2,500 rollouts a fully-warm cache is a few hundred KB.
+_IDENTITY_LIMIT = 8192
+_IDENTITY_LOCK = threading.Lock()
+_IDENTITY_CACHE: OrderedDict[str, tuple[tuple[int, ...], int, RolloutIdentity | None]] = (
+    OrderedDict()
+)
+_IDENTITY_STATS: dict[str, int] = {"hits": 0, "reads": 0}
+
+
+def _instance_token(stat: os.stat_result) -> tuple[int, ...]:
+    """Something that changes when a path names a different file.
+
+    Windows: the creation time, which `os.scandir` already reports (its entries
+    carry no inode). Elsewhere: device and inode, which a real stat always has.
+    """
+    birth = getattr(stat, "st_birthtime_ns", None)
+    if sys.platform == "win32" and birth:
+        return (int(birth),)
+    return (int(stat.st_dev), int(stat.st_ino))
+
+
+#: Upper bound on one `session_meta` line. Measured headers are ~20 KB; the bound
+#: only keeps a corrupt file without newlines from being read whole.
+_IDENTITY_MAX_LINE_BYTES = 4 * 1024 * 1024
+
+
+def _read_identity(path: Path) -> RolloutIdentity | None:
+    try:
+        with path.open("rb") as handle:
+            line = handle.readline(_IDENTITY_MAX_LINE_BYTES)
+        first = json.loads(line.decode("utf-8", "replace"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(first, dict):
+        return None
+    payload = first.get("payload")
+    if not isinstance(payload, dict):
+        payload = {}
+    native = payload.get("id")
+    cwd = payload.get("cwd")
+    parent = payload.get("parent_thread_id")
+    return RolloutIdentity(
+        str(native) if native else None,
+        str(cwd) if cwd else None,
+        str(parent) if parent else None,
+    )
+
+
+def rollout_identity(
+    path: Path, hint: tuple[tuple[int, ...], int] | None = None
+) -> RolloutIdentity | None:
+    """The rollout's `session_meta` identity, read once per file instance.
+
+    ``hint`` is the (instance token, size) a directory walk already holds, which
+    makes a warm lookup free of syscalls; without it one `stat` validates. A cached
+    entry is reused while the path names the same file and has not shrunk - a
+    rollout only grows - so the per-tick header reads of the switch watcher
+    (2,495 rollouts on the operator's host, the newest 20 re-read every 2 s per
+    idle Codex pane) collapse to dictionary lookups.
+    """
+    key = str(path)
+    if hint is None:
+        try:
+            stat = path.stat()
+        except OSError:
+            return None
+        hint = (_instance_token(stat), stat.st_size)
+    token, size = hint
+    with _IDENTITY_LOCK:
+        cached = _IDENTITY_CACHE.get(key)
+        if cached is not None and cached[0] == token and size >= cached[1]:
+            _IDENTITY_CACHE.move_to_end(key)
+            _IDENTITY_STATS["hits"] += 1
+            return cached[2]
+    identity = _read_identity(path)
+    with _IDENTITY_LOCK:
+        _IDENTITY_STATS["reads"] += 1
+        if identity is not None:
+            if cached is not None and cached[0] == token and cached[2] == identity:
+                # A walk's size can trail a fresh stat's by a tick. Keep the
+                # smaller one so neither reading misses against the other; a real
+                # truncation still lands below it.
+                size = min(size, cached[1])
+            _IDENTITY_CACHE[key] = (token, size, identity)
+            _IDENTITY_CACHE.move_to_end(key)
+            while len(_IDENTITY_CACHE) > _IDENTITY_LIMIT:
+                _IDENTITY_CACHE.popitem(last=False)
+    return identity
+
+
+def rollout_identity_stats() -> dict[str, Any]:
+    """Counters for `/api/diagnostics/background`."""
+    with _IDENTITY_LOCK:
+        return {**_IDENTITY_STATS, "entries": len(_IDENTITY_CACHE)}
+
+
+def reset_rollout_identity_cache() -> None:
+    """Forget every cached identity. For tests that rewrite a rollout in place."""
+    with _IDENTITY_LOCK:
+        _IDENTITY_CACHE.clear()
+        _IDENTITY_STATS.update(hits=0, reads=0)
+
 
 CODEX_LIFECYCLE_HOOK_EVENTS = descriptor("codex").hook_events
 
@@ -298,10 +425,11 @@ class CodexAdapter(BackendAdapter):
         if not native_id or not root.exists():
             return None
         suffix = f"-{native_id}.jsonl".casefold()
+        hints = _ROLLOUT_STATS.get(str(root), {})
         for _modified, path in self._rollouts(root):
             if not path.name.casefold().endswith(suffix):
                 continue
-            if self.transcript_native_id(path) == native_id:
+            if self._native_id(path, hints.get(str(path))) == native_id:
                 return path
         return None
 
@@ -331,17 +459,29 @@ class CodexAdapter(BackendAdapter):
     def graceful_exit_keys(self) -> str:
         return "/exit\r"
 
-    def _association(self, path: Path) -> tuple[str, str] | None:
-        try:
-            with path.open("r", encoding="utf-8", errors="replace") as handle:
-                first = json.loads(handle.readline())
-            payload = first.get("payload") or {}
-            if payload.get("parent_thread_id"):
-                return None
-            if payload.get("id") and payload.get("cwd"):
-                return str(payload["id"]), str(Path(payload["cwd"]).resolve())
-        except (OSError, json.JSONDecodeError):
-            pass
+    @staticmethod
+    def _native_id(path: Path, hint: tuple[tuple[int, ...], int] | None = None) -> str | None:
+        """The root conversation id a rollout names, or None for a child or a stub.
+
+        A child rollout (``parent_thread_id``) is never a root conversation, and a
+        rollout without a recorded cwd cannot be correlated with a pane, so both
+        answer None - the same rule `_association` always applied.
+        """
+        identity = rollout_identity(path, hint)
+        if identity is None or identity.parent_thread_id:
+            return None
+        if identity.native_id and identity.cwd:
+            return identity.native_id
+        return None
+
+    def _association(
+        self, path: Path, hint: tuple[tuple[int, ...], int] | None = None
+    ) -> tuple[str, str] | None:
+        identity = rollout_identity(path, hint)
+        if identity is None or identity.parent_thread_id:
+            return None
+        if identity.native_id and identity.cwd:
+            return identity.native_id, resolve_path_cached(identity.cwd)
         return None
 
     def _rollouts(self, root: Path) -> list[tuple[float, Path]]:
@@ -378,6 +518,7 @@ class CodexAdapter(BackendAdapter):
         if cached and now - cached[0] < _ROLLOUT_CACHE_SECONDS:
             return cached[1]
         found: list[tuple[float, Path]] = []
+        hints: dict[str, tuple[tuple[int, ...], int]] = {}
         stack = [str(root)]
         while stack:
             try:
@@ -389,15 +530,16 @@ class CodexAdapter(BackendAdapter):
                             elif entry.name.startswith(
                                 self.rollout_file_prefix
                             ) and entry.name.endswith(".jsonl"):
-                                found.append(
-                                    (entry.stat(follow_symlinks=False).st_mtime, Path(entry.path))
-                                )
+                                stat = entry.stat(follow_symlinks=False)
+                                found.append((stat.st_mtime, Path(entry.path)))
+                                hints[entry.path] = (_instance_token(stat), stat.st_size)
                         except OSError:
                             continue
             except OSError:
                 continue
         found.sort(key=lambda item: item[0], reverse=True)
         _ROLLOUT_CACHE[key] = (now, found)
+        _ROLLOUT_STATS[key] = hints
         return found
 
     def _newest_rollouts(self, root: Path) -> list[tuple[float, Path]]:
@@ -408,12 +550,14 @@ class CodexAdapter(BackendAdapter):
         root = self._data_home_resolver() / "sessions"
         if not root.exists():
             return []
-        resolved = str(cwd.resolve()).casefold()
+        resolved = resolve_path_cached(cwd).casefold()
         result: list[tuple[float, Path, str]] = []
-        for modified, path in self._newest_rollouts(root):
+        newest = self._newest_rollouts(root)
+        hints = _ROLLOUT_STATS.get(str(root), {})
+        for modified, path in newest:
             if modified + 2 < created_at:
                 continue
-            association = self._association(path)
+            association = self._association(path, hints.get(str(path)))
             if association and association[1].casefold() == resolved:
                 result.append((modified, path, association[0]))
         return result
@@ -435,8 +579,14 @@ class CodexAdapter(BackendAdapter):
         return None
 
     def transcript_native_id(self, path: Path) -> str | None:
-        association = self._association(path)
-        return association[0] if association else None
+        """The conversation id a rollout's own first record names.
+
+        Read through the identity cache and never resolves the recorded cwd: the
+        caller asked which conversation, not where it ran, and the `realpath` the
+        old reading took here was the single most frequent frame in the event-loop
+        stall log (2026-10-12) once the switch watcher called it from the loop.
+        """
+        return self._native_id(path)
 
     def model_context_window(self, provider: str, model: str) -> int:
         del provider, model

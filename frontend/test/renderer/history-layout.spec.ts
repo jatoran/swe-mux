@@ -1,10 +1,20 @@
 import { expect, test } from 'playwright/test'
 
-/** Click the row and wait for the detail view, so a geometry read cannot race the fetch. */
+/** Click the row and wait for everything the geometry reads, so a read cannot race a fetch.
+ *
+ *  The heading alone is no longer enough: it draws from the clicked row at once, and the
+ *  conversation, the commits and the timeline each arrive on a request of their own. */
 const openConversation=async(page:import('playwright/test').Page)=>{
   await page.getByRole('button',{name:'[claude] Optimize Workout Plan'}).click()
   await page.locator('.transcript-heading').waitFor()
+  await page.locator('.transcript-message').first().waitFor()
+  await page.locator('.transcript-section-commits').waitFor()
+  await page.locator('.transcript-section-timeline').waitFor()
 }
+const releaseReads=(page:import('playwright/test').Page)=>
+  page.evaluate(()=>(window as unknown as {releaseHistoryReads:()=>void}).releaseHistoryReads())
+const ordinalsShown=(page:import('playwright/test').Page)=>
+  page.locator('.transcript-message').evaluateAll(nodes=>nodes.map(node=>Number((node as HTMLElement).dataset.messageOrdinal)))
 
 for(const viewport of [{name:'compact desktop',width:820,height:500},{name:'mobile',width:390,height:520}]){
   test(`history actions remain reachable with dense metadata on ${viewport.name}`,async({page})=>{
@@ -178,4 +188,88 @@ test('the behavioural timeline shows two entries and hides the rest behind a dis
   await expect(more.locator('>summary')).toHaveText('3 earlier entries')
   await more.locator('>summary').click()
   await expect(more.locator('>.transcript-row')).toHaveCount(3)
+})
+
+for(const viewport of [{name:'desktop',width:1200,height:800},{name:'mobile',width:390,height:720}]){
+  test(`Resume is there on the click, before the conversation answers, on ${viewport.name}`,async({page})=>{
+    // The reader used to draw nothing until a parse of the whole transcript came back.
+    await page.setViewportSize({width:viewport.width,height:viewport.height})
+    await page.goto('/history-harness.html')
+    await page.getByRole('button',{name:'[codex] Long Conversation'}).click()
+    await expect(page.locator('.transcript-heading h3')).toHaveText('[codex] Long Conversation')
+    await expect(page.getByRole('button',{name:'Resume',exact:true})).toBeVisible()
+    await expect(page.locator('.no-transcript')).toHaveText('Loading conversation…')
+    await expect(page.locator('.transcript-message')).toHaveCount(0)
+    await releaseReads(page)
+    await expect(page.locator('.transcript-message').first()).toBeVisible()
+    await expect(page.locator('.transcript-section-toggle')).toContainText('1000 messages')
+  })
+}
+
+test('opening another conversation clears the previous one at once',async({page})=>{
+  // Nothing of the conversation being left may be drawn under the heading of the one being
+  // opened, however slowly the new one answers.
+  await page.setViewportSize({width:1200,height:800})
+  await page.goto('/history-harness.html')
+  await openConversation(page)
+  await expect(page.locator('.transcript-message')).toContainText('Optimize my workout plan.')
+  await page.getByRole('button',{name:'[codex] Long Conversation'}).click()
+  await expect(page.locator('.transcript-heading h3')).toHaveText('[codex] Long Conversation')
+  await expect(page.locator('.transcript-message')).toHaveCount(0)
+  await expect(page.locator('.no-transcript')).toHaveText('Loading conversation…')
+  await expect(page.locator('.history-row.active')).toContainText('Long Conversation')
+  await releaseReads(page)
+  await expect(page.locator('.transcript-message').first()).toContainText('long conversation message 0')
+})
+
+test('a long conversation pages in from either edge and keeps a bounded window',async({page})=>{
+  await page.setViewportSize({width:1200,height:800})
+  await page.goto('/history-harness.html')
+  await releaseReads(page)
+  await page.getByRole('button',{name:'[codex] Long Conversation'}).click()
+  const messages=page.locator('.transcript-message')
+  await expect(messages).toHaveCount(60)
+  expect((await ordinalsShown(page))[0]).toBe(0)
+
+  // Each scroll to the bottom brings the next page; past six pages the top is let go.
+  let last=59
+  for(let pageNumber=0;pageNumber<7;pageNumber++){
+    await page.locator('.messages').evaluate(node=>{node.scrollTop=node.scrollHeight})
+    await expect.poll(async()=>(await ordinalsShown(page)).at(-1)).toBeGreaterThan(last)
+    last=(await ordinalsShown(page)).at(-1)!
+  }
+  const held=await ordinalsShown(page)
+  expect(held.length).toBeLessThanOrEqual(360)
+  expect(held[0]).toBeGreaterThan(0)
+  expect(held).toEqual([...held].sort((left,right)=>left-right))
+  expect(new Set(held).size).toBe(held.length)
+  await expect(page.locator('.history-page-edge').first()).toBeAttached()
+
+  // Back to the top: the earlier page lands above the reader without moving what they see.
+  const first=held[0]
+  await page.locator('.messages').evaluate(node=>{node.scrollTop=0})
+  await expect.poll(async()=>(await ordinalsShown(page))[0]).toBeLessThan(first)
+  const place=await page.evaluate(ordinal=>{
+    const container=document.querySelector<HTMLElement>('.messages')!
+    const node=container.querySelector<HTMLElement>(`[data-message-ordinal="${ordinal}"]`)!
+    return {offset:node.getBoundingClientRect().top-container.getBoundingClientRect().top,scrollTop:container.scrollTop,height:container.clientHeight}
+  },first)
+  expect(place.scrollTop).toBeGreaterThan(0)
+  expect(place.offset).toBeGreaterThanOrEqual(0)
+  expect(place.offset).toBeLessThan(place.height)
+})
+
+test('a match far into a long conversation is opened around, not scrolled to through it',async({page})=>{
+  await page.setViewportSize({width:1200,height:800})
+  await page.goto('/history-harness.html')
+  await releaseReads(page)
+  await page.getByRole('textbox',{name:'Search session history'}).fill('needle')
+  await page.getByRole('button',{name:'[codex] Long Conversation'}).click()
+  const match=page.locator('.transcript-message.active-search-match')
+  await expect(match).toHaveAttribute('data-message-ordinal','900')
+  await expect(match).toBeInViewport()
+  const held=await ordinalsShown(page)
+  expect(held.length).toBeLessThanOrEqual(60)
+  expect(held[0]).toBeGreaterThan(800)
+  await expect(page.locator('.transcript-match-nav span')).toHaveText('1/1')
 })

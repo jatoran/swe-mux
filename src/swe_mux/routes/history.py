@@ -8,6 +8,7 @@ import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Any
 
 from aiohttp import web
 
@@ -19,21 +20,70 @@ from ..harness import (
     AGENT_BACKENDS,
     has_observable_transcript,
 )
-from ..history import BROWSER_SEARCH_BUDGET_MS
+from ..history import (
+    BROWSER_SEARCH_BUDGET_MS,
+    HISTORY_MESSAGES_PAGE,
+    read_history_conversation,
+)
 from ..http_support import json_response
 from ..layouts import attach_terminal
 from ..session import (
     SessionManager,
 )
 from ..session_resume import ResumeRefused, resume_run
-from ..transcript_repair import resolve_row_transcript
-from ..transcript_view import (
-    ParsedConversation,
-    parse_transcript_with_watermark,
-)
+from ..transcript_repair import TranscriptLocation, resolve_row_transcript
+from ..transcript_view import TRANSCRIPT_PARSER_VERSION, ParsedConversation
 from . import sessions
 
 log = logging.getLogger(__name__)
+
+#: A History open is the operator waiting on a click; anything slower than this is
+#: worth a WARNING line with the sizes that explain it.
+SLOW_HISTORY_READ_MS = 1_000
+
+
+def _slim_history_row(item: dict[str, Any]) -> dict[str, Any]:
+    """A History row as the browser reads it: no argv, no whole title annotation.
+
+    `generated_title_annotation` is decorated with the full annotation row (evidence,
+    provenance, costs) because the sessions listing shares the decorator; History reads
+    only its `stability`, and the full row was 16% of a listing page.
+    """
+    item.pop("argv_json", None)
+    annotation = item.get("generated_title_annotation")
+    if isinstance(annotation, dict):
+        item["generated_title_annotation"] = {"stability": annotation.get("stability")}
+    return item
+
+
+async def _locate(request: web.Request, row: dict[str, Any]) -> TranscriptLocation:
+    """Where this row's conversation can be read, repairing a moved one (`transcript_repair`)."""
+    return await resolve_row_transcript(
+        row,
+        # `.get`: reading a conversation must not start depending on a live session
+        # manager. With no adapters there is nothing to search with and this degrades to
+        # the readability test it replaced.
+        adapters=getattr(request.app.get(keys.SESSIONS), "adapters", {}),
+        history=request.app[keys.HISTORY],
+        events=request.app[keys.EVENTS],
+    )
+
+
+async def _history_row(request: web.Request) -> dict[str, Any]:
+    row = await request.app[keys.HISTORY].history_entry(request.match_info["sid"])
+    if not row:
+        raise NotFound(request.match_info["sid"], kind="session")
+    return row
+
+
+def _optional_int(request: web.Request, name: str) -> int | None:
+    raw = request.query.get(name)
+    if raw is None or raw == "":
+        return None
+    try:
+        return int(raw)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be an integer") from exc
 
 
 class SearchAbandoned(Exception):
@@ -128,9 +178,22 @@ async def list_history(request: web.Request) -> web.Response:
             len(page["items"]),
             elapsed_ms,
         )
-    await history.refresh_time_summaries(page["items"])
+    # Bounded: rows whose time span is still being re-read answer with what is stored
+    # and land in SQLite for the next listing (`HistoryIndex.refresh_time_summaries`).
+    refreshed = await history.refresh_time_summaries(page["items"])
     await sessions._decorate_generated_titles(request.app, page["items"])
     sessions._decorate_conversation_holders(request.app, page["items"])
+    for item in page["items"]:
+        _slim_history_row(item)
+    elapsed_ms = (time.monotonic() - started) * 1000
+    log.log(
+        logging.WARNING if elapsed_ms > SLOW_HISTORY_READ_MS else logging.DEBUG,
+        "history listing rows=%d refreshed=%d query=%s elapsed_ms=%.0f",
+        len(page["items"]),
+        refreshed,
+        bool(query),
+        elapsed_ms,
+    )
     return json_response(page)
 
 
@@ -182,32 +245,31 @@ async def cancel_history_scan(request: web.Request) -> web.Response:
 def _parse_conversation(
     path: Path | None, backend: str, native_id: str | None
 ) -> ParsedConversation:
-    """`parse_transcript_with_watermark` with the conversation reference spelled out.
+    """History's cached conversation read, positional for `asyncio.to_thread`.
 
-    A one-line wrapper so the two `asyncio.to_thread` call sites pass the same three
-    arguments positionally; `to_thread` cannot forward keywords.
+    Goes through `history.read_history_conversation`, the one seam the shared transcript
+    reader replaces.
     """
-    return parse_transcript_with_watermark(path, backend, native_id=native_id)
+    return read_history_conversation(path, backend, native_id, cached=True)
 
 
 async def history_transcript(request: web.Request) -> web.Response:
-    row = await request.app[keys.HISTORY].history_entry(request.match_info["sid"])
-    if not row:
-        raise NotFound(request.match_info["sid"], kind="session")
+    """The whole conversation in one payload, for callers that want all of it.
+
+    The History browser no longer reads this: it opens on `/detail` and pages
+    `/messages` out of the index, because this route parses the entire transcript and
+    ships every tool input on every open (seconds and megabytes for a long
+    conversation). It stays for the CLI, scripts and the repair contract, and it no
+    longer rewrites the run's indexed messages on every call: the index is replaced only
+    when its watermark says the parse describes something it does not hold.
+    """
+    row = await _history_row(request)
     # Ask where the conversation *is* rather than testing where it was recorded: the CLI
     # moves these files (`transcript_repair`), and a row whose path went stale refused to
     # open with a message blaming the CLI's pruning for a file sitting one slug away.
     # The search only runs once the recorded path has already missed, and it writes the
     # repair back so Resume and the reindexer stop reading the same dead row.
-    located = await resolve_row_transcript(
-        row,
-        # `.get`, like the holder decoration below it: reading a conversation must not
-        # start depending on a live session manager. With no adapters there is nothing to
-        # search with and this degrades to the readability test it replaced.
-        adapters=getattr(request.app.get(keys.SESSIONS), "adapters", {}),
-        history=request.app[keys.HISTORY],
-        events=request.app[keys.EVENTS],
-    )
+    located = await _locate(request, row)
     backend = str(row["backend"])
     native_id = str(row.get("native_id") or "") or None
     if not located.readable:
@@ -216,17 +278,29 @@ async def history_transcript(request: web.Request) -> web.Response:
             409,
         )
     path = located.path
+    history = request.app[keys.HISTORY]
     # Parse off the event loop and reuse the shared watermark-keyed cache; large
     # conversations otherwise block the loop on every open. The watermark comes back
     # from the same call, so it can never claim to cover content this parse did not
     # read.
     parsed = await asyncio.to_thread(_parse_conversation, path, backend, native_id)
     messages = parsed.messages
-    await request.app[keys.HISTORY].replace_history_messages(
-        str(row["id"]), messages, mtime_ns=parsed.mtime_ns, size=parsed.size
+    index = await history.transcript_index_state(
+        str(row["id"]), path, backend, native_id, readable=True, schedule=False
     )
-    row = await request.app[keys.HISTORY].history_entry(str(row["id"])) or row
-    matches = await request.app[keys.HISTORY].history_message_matches(
+    if not (
+        index["abandoned_messages"] is not None
+        and index["watermark"] == (parsed.mtime_ns, parsed.size, TRANSCRIPT_PARSER_VERSION)
+    ):
+        await history.replace_history_messages(
+            str(row["id"]),
+            messages,
+            mtime_ns=parsed.mtime_ns,
+            size=parsed.size,
+            abandoned=parsed.abandoned,
+        )
+        row = await history.history_entry(str(row["id"])) or row
+    matches = await history.history_message_matches(
         str(row["id"]), request.query.get("q", ""), request.query.get("scope", "all")
     )
     annotations = await request.app[keys.AUTOMATION_STORE].annotations(
@@ -253,6 +327,156 @@ async def history_transcript(request: web.Request) -> web.Response:
             "scan_records": scan_records,
         }
     )
+
+
+async def history_detail(request: web.Request) -> web.Response:
+    """What the History reader needs to draw a conversation's header, without its body.
+
+    Answered from the row and the message index: no transcript is parsed on this path.
+    An index that is missing, stale, or older than the abandoned-message count is
+    rebuilt in the background (`HistoryIndex.transcript_index_state`), and the answer
+    says so with `transcript.indexing` so the reader can poll this route until it is
+    done. A conversation whose file is gone still opens on whatever was indexed, with
+    `transcript.available` false: the indexed text is still the conversation, and Resume
+    refuses on its own (`session_resume`).
+    """
+    started = time.monotonic()
+    row = await _history_row(request)
+    located = await _locate(request, row)
+    history = request.app[keys.HISTORY]
+    state = await history.transcript_index_state(
+        str(row["id"]),
+        located.path,
+        str(row["backend"]),
+        str(row.get("native_id") or "") or None,
+        readable=located.readable,
+    )
+    state.pop("watermark", None)
+    await sessions._decorate_generated_titles(request.app, [row])
+    sessions._decorate_conversation_holders(request.app, [row])
+    elapsed_ms = (time.monotonic() - started) * 1000
+    log.log(
+        logging.WARNING if elapsed_ms > SLOW_HISTORY_READ_MS else logging.DEBUG,
+        "history detail history_id=%s available=%s indexed=%s current=%s indexing=%s "
+        "messages=%s elapsed_ms=%.0f",
+        row["id"],
+        state["available"],
+        state["indexed"],
+        state["current"],
+        state["indexing"],
+        state["message_count"],
+        elapsed_ms,
+    )
+    return json_response({"entry": _slim_history_row(row), "transcript": state})
+
+
+async def history_messages(request: web.Request) -> web.Response:
+    """One page of a conversation's indexed messages (`HistoryIndex.history_messages_page`)."""
+    started = time.monotonic()
+    row = await _history_row(request)
+    page = await request.app[keys.HISTORY].history_messages_page(
+        str(row["id"]),
+        after=_optional_int(request, "after"),
+        before=_optional_int(request, "before"),
+        around=_optional_int(request, "around"),
+        limit=_optional_int(request, "limit") or HISTORY_MESSAGES_PAGE,
+    )
+    elapsed_ms = (time.monotonic() - started) * 1000
+    log.log(
+        logging.WARNING if elapsed_ms > SLOW_HISTORY_READ_MS else logging.DEBUG,
+        "history messages page history_id=%s count=%d elapsed_ms=%.0f",
+        row["id"],
+        len(page["messages"]),
+        elapsed_ms,
+    )
+    return json_response(page)
+
+
+async def history_matches(request: web.Request) -> web.Response:
+    """Where a search's words occur inside one conversation, by ordinal."""
+    row = await _history_row(request)
+    matches = await request.app[keys.HISTORY].history_message_matches(
+        str(row["id"]), request.query.get("q", ""), request.query.get("scope", "all")
+    )
+    return json_response({"matches": matches})
+
+
+async def history_notes(request: web.Request) -> web.Response:
+    """A run's notes and behavioural timeline, loaded beside the conversation, not with it."""
+    row = await _history_row(request)
+    store = request.app[keys.AUTOMATION_STORE]
+    annotations = await store.annotations(agent_run_id=str(row["id"]), limit=200)
+    scan_records = await store.scan_records(agent_run_id=str(row["id"]), limit=500)
+    return json_response({"annotations": annotations, "scan_records": scan_records})
+
+
+def _tool_call_messages(
+    parsed: ParsedConversation, first: int | None, last: int | None
+) -> list[dict[str, Any]]:
+    """Each message in ``[first, last]`` that carries tool calls, inputs included."""
+    found: list[dict[str, Any]] = []
+    for ordinal, message in enumerate(parsed.messages):
+        if first is not None and ordinal < first:
+            continue
+        if last is not None and ordinal > last:
+            break
+        blocks = [
+            {"id": block.get("id"), "name": block.get("name"), "input": block.get("input")}
+            for block in message.get("content") or []
+            if isinstance(block, dict)
+            and block.get("type") == "tool_use"
+            and str(block.get("name") or "").strip()
+        ]
+        if not blocks:
+            continue
+        has_text = any(
+            isinstance(block, dict) and block.get("type") == "text" and block.get("text")
+            for block in message.get("content") or []
+        )
+        found.append(
+            {
+                "ordinal": ordinal,
+                "role": message.get("role"),
+                "ts": message.get("ts"),
+                "has_text": has_text,
+                "tool_calls": blocks,
+            }
+        )
+    return found
+
+
+async def history_tool_calls(request: web.Request) -> web.Response:
+    """Tool calls for a range of ordinals, read only when the reader asks to see them.
+
+    The one History read that still parses, because tool inputs are deliberately not
+    indexed. It goes through the cached read, so paging through one conversation with
+    the toggle on parses it once. `mtime_ns`/`size` say which revision the ordinals
+    describe; a reader holding messages from another revision reloads.
+    """
+    started = time.monotonic()
+    row = await _history_row(request)
+    located = await _locate(request, row)
+    if not located.readable:
+        return json_response(
+            {"error": "native transcript is unavailable", "code": "transcript_unavailable"},
+            409,
+        )
+    backend = str(row["backend"])
+    native_id = str(row.get("native_id") or "") or None
+    parsed = await asyncio.to_thread(_parse_conversation, located.path, backend, native_id)
+    messages = _tool_call_messages(
+        parsed, _optional_int(request, "from"), _optional_int(request, "to")
+    )
+    elapsed_ms = (time.monotonic() - started) * 1000
+    log.log(
+        logging.WARNING if elapsed_ms > SLOW_HISTORY_READ_MS else logging.DEBUG,
+        "history tool calls history_id=%s messages=%d bytes=%d elapsed_ms=%.0f",
+        row["id"],
+        len(messages),
+        parsed.size,
+        elapsed_ms,
+    )
+    return json_response({"messages": messages, "mtime_ns": parsed.mtime_ns, "size": parsed.size})
 
 
 async def resume_history(request: web.Request) -> web.Response:
@@ -410,6 +634,14 @@ ROUTES: tuple[web.RouteDef, ...] = (
     web.get("/api/history/duplicates", list_history_duplicates),
     web.post("/api/history/duplicates/repair", repair_history_duplicates),
     web.get("/api/history/{sid}/transcript", history_transcript),
+    # The reader's routes. Two segments deep on purpose: a bare `/api/history/{sid}`
+    # would shadow single-segment static paths other modules register under
+    # `/api/history/` (`scan-search`) whenever it happened to be added first.
+    web.get("/api/history/{sid}/detail", history_detail),
+    web.get("/api/history/{sid}/messages", history_messages),
+    web.get("/api/history/{sid}/matches", history_matches),
+    web.get("/api/history/{sid}/notes", history_notes),
+    web.get("/api/history/{sid}/tool-calls", history_tool_calls),
     web.post("/api/history/{sid}/resume", resume_history),
     web.delete("/api/history/{sid}", delete_history_entry),
     web.get("/api/events", list_events),

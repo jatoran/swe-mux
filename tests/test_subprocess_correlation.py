@@ -139,8 +139,15 @@ async def test_a_git_query_carries_the_request_that_caused_it(
 
 async def test_the_git_poll_mints_an_id_for_its_own_iteration() -> None:
     """`git-monitor` has no request behind it, so it makes one."""
-    monitor = cast(Any, git_monitor.GitMonitor.__new__(git_monitor.GitMonitor))
-    monitor.cadence = 0.01
+    # A real monitor over an empty fleet rather than a bare `__new__`: the loop
+    # body reads state the constructor builds (its wake event), and a half-built
+    # instance answers that with `AttributeError` instead of exercising the loop.
+    monitor = cast(
+        Any,
+        git_monitor.GitMonitor(
+            cast(Any, SimpleNamespace(sessions={})), EventBus(), cadence=0.01, watch=False
+        ),
+    )
     seen: list[str] = []
     ran = asyncio.Event()
 

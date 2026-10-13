@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -438,3 +439,82 @@ def test_delivery_draft_cannot_smuggle_unrelated_config_fields() -> None:
     )
     with pytest.raises(ValueError, match="automatic-delivery"):
         onboarding.validate_patch({"draft": {"autonomy_overrides": {"port": 1}}})
+
+
+def test_the_installation_identity_is_computed_once_per_process(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """It probes every PATH entry; it ran on the event loop for every GET."""
+    from swe_mux import install_location
+
+    calls: list[int] = []
+
+    def described() -> Any:
+        calls.append(1)
+        return SimpleNamespace(environment_root=tmp_path)
+
+    monkeypatch.setattr(install_location, "detect_install_location", described)
+    onboarding.installation_identity.cache_clear()
+    try:
+        first = onboarding.installation_identity()
+        assert onboarding.installation_identity() == first
+        assert len(calls) == 1
+    finally:
+        onboarding.installation_identity.cache_clear()
+
+
+def test_concurrent_changes_at_one_revision_admit_exactly_one(tmp_path: Path) -> None:
+    """The routes run these in workers, so the revision check must hold across threads."""
+    config = config_at(tmp_path)
+    onboarding.read_state(config, installation="install")
+    start = threading.Barrier(6)
+    outcomes: list[str] = []
+
+    def change(step: str) -> None:
+        start.wait()
+        try:
+            onboarding.change_state(config, {"step": step}, 0)
+            outcomes.append("saved")
+        except ValueError:
+            outcomes.append("refused")
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(onboarding, "installation_identity", lambda: "install")
+        workers = [
+            threading.Thread(target=change, args=(step,))
+            for step in ("projects", "keymap", "voice", "phone", "desktop", "finish")
+        ]
+        for worker in workers:
+            worker.start()
+        for worker in workers:
+            worker.join(10)
+    assert sorted(outcomes) == ["refused"] * 5 + ["saved"]
+    assert onboarding.read_state(config, installation="install")["revision"] == 1
+
+
+async def test_the_routes_read_and_write_setup_progress_in_a_worker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = config_at(tmp_path)
+    loop_thread = threading.current_thread()
+    threads: list[threading.Thread] = []
+    real_read, real_change = onboarding.read_state, onboarding.change_state
+    monkeypatch.setattr(onboarding, "installation_identity", lambda: "install")
+
+    def read(config: Config, **kwargs: Any) -> dict[str, Any]:
+        threads.append(threading.current_thread())
+        return real_read(config, **kwargs)
+
+    def change(config: Config, patch: dict[str, Any], revision: int) -> dict[str, Any]:
+        threads.append(threading.current_thread())
+        return real_change(config, patch, revision)
+
+    monkeypatch.setattr(onboarding, "read_state", read)
+    monkeypatch.setattr(onboarding, "change_state", change)
+    await routes.get_onboarding(cast(Any, Request(config, {})))
+    response = await routes.patch_onboarding(
+        cast(Any, Request(config, {"revision": 0, "step": "projects"}))
+    )
+    assert response.status == 200
+    assert len(threads) >= 3
+    assert all(thread is not loop_thread for thread in threads)

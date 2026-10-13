@@ -354,6 +354,13 @@ export interface Session {
   _snapshot_revision?: number
   /** True only for REST snapshots that authoritatively include generated-title fields. */
   _snapshot_enriched?: boolean
+  /**
+   * Client-side only: fields an event patched in place (`applySessionRowPatch`) at a
+   * session revision newer than `_snapshot_revision`, keyed to that revision. A
+   * snapshot older than one of these keeps the patched value; one at or past it
+   * replaces it and drops the entry.
+   */
+  _field_revisions?: Record<string, number>
 }
 
 export type VoiceContent = 'summary' | 'verbatim'

@@ -79,6 +79,7 @@ It is unaffected: first and last conversational timestamps are the same whicheve
 | --- | --- |
 | Drawer Transcript tab (`GET /sessions/{id}/transcript`) | Kept, marked `abandoned`, folded per contiguous run; `abandoned_messages` counts them |
 | History transcript (`GET /history/{id}/transcript`) | Absent; `abandoned_messages` reports how many |
+| History reader (`GET /history/{id}/messages`, `/detail`) | Absent; `transcript.abandoned_messages` reports how many, stored at index time |
 | History search / FTS index | Absent |
 | MCP `read_transcript` | Absent; `abandoned_messages` counts them per page |
 | Branch points (`GET /sessions/{id}/branch-points`, `GET /history/{id}/branch-points`) | Not offered |

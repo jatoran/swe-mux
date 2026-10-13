@@ -451,6 +451,11 @@ async def get_background_health(request: web.Request) -> web.Response:
             # builds, appends decoded, rebuilds after a rewrite, single-flight joins and
             # evictions. A reader that stopped extending reads as `builds` climbing.
             "transcript_index": conversation_index.status(),
+            # What the switch watcher spent and skipped (`session.py`
+            # `_watch_transcript_switch`): an idle fleet reads as `*_skipped`
+            # climbing and `process_proofs`/`heuristic_searches` flat. Also the
+            # rollout identity cache and, on Windows, the per-process handle query.
+            "transcript_observation": request.app[keys.SESSIONS].observation_cost_snapshot(),
             # Whether each bound listener still has its socket, and how many times
             # one had to be re-created (`listener_guard.py`). Absent on a daemon
             # started without `__main__.serve` (tests build the app directly).
@@ -459,6 +464,13 @@ async def get_background_health(request: web.Request) -> web.Response:
             ),
             # What the inspector has lowered to keep the fleet below this process.
             "process_priority": request.app[keys.PROCESS_INSPECTOR].priority_stats(),
+            # Why each Git read happened (`initial`, `change`, `sweep`, or `poll` for a
+            # checkout that fell back to timed polling) and the OS watches behind it.
+            # `poll` climbing with `watch.unwatched_roots` above zero is a watch that
+            # failed; `watch.last_failure` says which and why.
+            "git_monitor": (
+                monitor.status() if (monitor := request.app.get(keys.GIT_MONITOR)) else None
+            ),
             "event_bus": events.drop_stats(),
             "canonical_telemetry": (
                 request.app[keys.CANONICAL_TELEMETRY].health()

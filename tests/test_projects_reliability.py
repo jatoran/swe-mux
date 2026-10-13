@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import threading
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -769,3 +771,58 @@ def test_v6_files_leaves_are_pruned_rather_than_rejected() -> None:
         }
     )
     assert emptied == {"version": 7, "root": None}
+
+
+async def test_registration_touches_the_filesystem_only_in_a_worker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A root on a slow provider must cost the request, not every terminal.
+
+    `register` resolved, stat'ed and seeded the folder on the event loop until
+    2026-10-12, when one resolve held the whole daemon for 196 s.
+    """
+    from swe_mux import projects as projects_module
+
+    loop_thread = threading.current_thread()
+    threads: list[threading.Thread] = []
+    real = projects_module.canonical_project_root
+
+    def recording(value: str | Path, *, create: bool = False) -> Path:
+        threads.append(threading.current_thread())
+        return real(value, create=create)
+
+    monkeypatch.setattr(projects_module, "canonical_project_root", recording)
+    history = HistoryIndex(tmp_path / "mux.db")
+    projects = ProjectManager(history)
+    await projects.start()
+    try:
+        root = tmp_path / "repo"
+        project = await projects.create("Repo", str(root), create_missing=True)
+        moved = tmp_path / "moved"
+        moved.mkdir()
+        await projects.update(project.id, root=str(moved))
+        assert len(threads) == 2
+        assert all(thread is not loop_thread for thread in threads)
+        assert (moved / ".swe-mux" / "config.toml").is_file()
+    finally:
+        history.close()
+
+
+async def test_concurrent_registrations_of_one_folder_admit_exactly_one(tmp_path: Path) -> None:
+    """The duplicate check and the insert are separated by a worker call now."""
+    history = HistoryIndex(tmp_path / "mux.db")
+    projects = ProjectManager(history)
+    await projects.start()
+    try:
+        root = tmp_path / "repo"
+        root.mkdir()
+        outcomes = await asyncio.gather(
+            *(projects.create(f"Repo {index}", str(root)) for index in range(4)),
+            return_exceptions=True,
+        )
+        refused = [item for item in outcomes if isinstance(item, ValueError)]
+        assert len(projects.projects) == 1
+        assert len(refused) == 3
+        assert all("already registered" in str(item) for item in refused)
+    finally:
+        history.close()

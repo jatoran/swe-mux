@@ -82,6 +82,7 @@ Fields and invariants: `features/daemon-resilience.md`.
   It lets an agent-initiated graceful end record `agent_ended` even when the CLI exits on its
   own and the ordinary process-exit path is what marks the record; `None` leaves the terminal
   path to classify the exit as it always has (`features/sessions.md`).
+  An in-place Restart sets `restarted`.
   Round-tripped through the record snapshot, so supervisor adoption preserves it across a daemon restart.
 - `SessionRecord.configurator`: true only for a session the daemon itself launched as the
   configurator agent (`features/configurator.md`). It is the whole of that tool family's
@@ -175,9 +176,11 @@ Fields and invariants: `features/daemon-resilience.md`.
   It exists because every session attached to a checkout watches the same reference move, so recording the move per session wrote one row each for sessions that had nothing to do with the commits involved — and a landing fast-forward, which authors nothing at all, wrote the most of them.
   A move is classified from the repository rather than accumulated from sightings, so the newest reading replaces the previous one outright; taking a maximum of the counts pinned a miscount in place where a later classifier fix could never displace it.
 - `history_messages`: derived role-aware user/assistant text, provider-native optional timestamp, and nullable materialized `ts_epoch` used for indexed message-time boundaries.
-  `history_messages_fts` provides Unicode token-prefix lookup and `history_messages_trigram` provides case-insensitive literal substring lookup.
+  `history_messages_fts` provides Unicode token-prefix lookup, with a `prefix='1 2 3'` index so one- to three-character prefixes do not walk the term list, and `history_messages_trigram` provides case-insensitive literal substring lookup.
   Both FTS5 tables are external-content derivatives of `history_messages` and stay synchronized by triggers.
-  `history_transcript_index` stores source mtime/size, parser version, message count, and index time so empty/unchanged transcripts remain incremental and MCP hit watermarks can reject stale pointers.
+  A run's messages are written in one transaction, so their row ids are contiguous and per-conversation lookups bound the FTS walk with `rowid BETWEEN`.
+  `history_transcript_index` stores the source watermark (mtime/size, or a harness's own pair), parser version, message count, index time, and the parse's `abandoned_messages` and `tool_calls` counts, so empty/unchanged transcripts remain incremental, MCP hit watermarks can reject stale pointers, and the History reader can describe a conversation without parsing it.
+  The two counts are `NULL` on a row indexed before they existed, which the reader treats as a reason to reindex once.
 - `events`: monotonically sequenced mux events.
 - `process_evidence`: bounded PID+creation-time fingerprints, owner/lineage/Job Object
   evidence, stable attribution version/source and confirmation times, mutable state/reason/confidence, and exit or ownership-rejection evidence; command text is never stored.
@@ -195,6 +198,7 @@ Fields and invariants: `features/daemon-resilience.md`.
 - `context_compactions`, `tool_events`, and `transcript_telemetry_coverage`: deduplicated
   explicit provider evidence plus versioned parser coverage. These are rebuildable for one
   session after a proven identity repair; its process evidence is retained and re-attributed.
+  Since operational-telemetry schema 9 the coverage row carries the transcript read cursor (`cursor_offset`, `cursor_line`, `cursor_head_sha256`, `cursor_tail_sha256`, `cursor_truncated`), and its counts accumulate across the passes that continued it.
 - `status_timeline`: the durable per-session detection timeline — every transition-ledger
   entry (transitions *and* the non-transition kinds: `watchdog_recovery`,
   `standing_activity`, `cli_state`, `layer_reading`, `screen_classifier_blind`,
@@ -228,8 +232,8 @@ Fields and invariants: `features/daemon-resilience.md`.
   see the same call, and the richer record wins whichever arrives first.
   Both columns are additive migrations (schema version 2) and are NULL for facts recorded
   before them and for facts that are not tool calls.
-- `<data_dir>/telemetry/catalog.sqlite3`: canonical telemetry catalog (schema 4 since
-  2026-09-03) with monthly-segment inventory, entity locations, resumable legacy-import
+- `<data_dir>/telemetry/catalog.sqlite3`: canonical telemetry catalog (schema 5 since
+  2026-10-12) with monthly-segment inventory, entity locations, resumable legacy-import
   cursors, dirty rollup days and hours, the exact closed-day `tool_daily`, `workload_daily`,
   `quality_daily`, `skill_daily`, `verification_daily`, and `compaction_daily` rollups, the
   closed-hour `tool_hourly`, `workload_hourly`, and `quality_hourly` rollups, segment seals,
@@ -239,6 +243,9 @@ Fields and invariants: `features/daemon-resilience.md`.
   `native_reconciliations` (per run: the store watermark read, the parser revision, what it
   found, and what was inserted).
   `ledger_meta` carries the schema version.
+  Version 5 adds `ledger_segments.last_written_at`, the time of the last committed write to each segment, which is what seal eligibility is judged by.
+  It adds the transcript read cursor to `native_reconciliations` (`cursor_offset`, `cursor_line`, `cursor_head_sha256`, `cursor_tail_sha256`, `cursor_truncated`), counts accumulated across the passes that continued it.
+  It adds `rejected_observations`, one row per refusal reason, event type, and source with the count and the newest claimed time, for observations whose time the ledger cannot place.
   The tool rollup key includes `evidence_quality`, which is why version 3 recreates the
   daily tool rollup and dirties every rolled day rather than altering it in place; version 4
   adds the quality rollups (field-completeness counts per backend, harness version, model,

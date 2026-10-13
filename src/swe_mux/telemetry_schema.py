@@ -26,7 +26,15 @@ from typing import Any
 
 from .harness import HARNESSES
 
-LEDGER_SCHEMA_VERSION = 4
+LEDGER_SCHEMA_VERSION = 5
+
+#: The earliest instant an observation may claim (2020-01-01T00:00:00Z). Nothing this
+#: ledger records predates it, so an earlier time is a producer that sent no time at
+#: all (an OTLP zero, an unset field) rather than old evidence.
+PLAUSIBLE_OBSERVATION_FLOOR = 1_577_836_800.0
+#: How far ahead of this host's clock an observation may claim to be. A provider's
+#: clock can lead ours a little; a day or more is a unit or epoch mistake.
+PLAUSIBLE_FUTURE_SKEW_SECONDS = 2 * 86400.0
 
 _SOURCE_RANK = {
     "otel": 400,
@@ -198,7 +206,18 @@ CREATE TABLE IF NOT EXISTS ledger_segments (
   last_observed_at REAL,
   evidence_rows INTEGER NOT NULL DEFAULT 0,
   sealed_at REAL,
-  sha256 TEXT
+  sha256 TEXT,
+  last_written_at REAL
+);
+CREATE TABLE IF NOT EXISTS rejected_observations (
+  reason TEXT NOT NULL,
+  event_type TEXT NOT NULL,
+  source_kind TEXT NOT NULL,
+  occurrences INTEGER NOT NULL DEFAULT 0,
+  first_seen_at REAL NOT NULL,
+  last_seen_at REAL NOT NULL,
+  last_claimed_at REAL,
+  PRIMARY KEY(reason,event_type,source_kind)
 );
 CREATE TABLE IF NOT EXISTS rollup_dirty_days (
   day TEXT PRIMARY KEY,
@@ -332,7 +351,12 @@ CREATE TABLE IF NOT EXISTS native_reconciliations (
   compaction_events INTEGER NOT NULL DEFAULT 0,
   inserted INTEGER NOT NULL DEFAULT 0,
   diagnostic TEXT,
-  reconciled_at REAL NOT NULL
+  reconciled_at REAL NOT NULL,
+  cursor_offset INTEGER,
+  cursor_line INTEGER,
+  cursor_head_sha256 TEXT,
+  cursor_tail_sha256 TEXT,
+  cursor_truncated INTEGER NOT NULL DEFAULT 0
 );
 """
 
@@ -760,6 +784,28 @@ def _backfill_call_repeats(connection: sqlite3.Connection) -> None:
     )
 
 
+def _stamp_segment_writes(connection: sqlite3.Connection) -> None:
+    """Version 5 seals a segment by how long ago it was last *written*.
+
+    Version 4 decided from the newest event time a segment held, which a month-old
+    segment never changes, so a segment that kept receiving late entity evidence was
+    resealed - a full integrity check and SHA-256 of a multi-gigabyte file - every
+    time the rollup worker found it idle, and unsealed by the next write. A sealed
+    segment was last written before its seal; an unsealed one's last write is not
+    known, so it is treated as written now, which delays its first seal by one grace
+    period rather than sealing a file that may still be receiving evidence.
+    """
+
+    connection.execute(
+        "UPDATE ledger_segments SET last_written_at=sealed_at "
+        "WHERE last_written_at IS NULL AND sealed_at IS NOT NULL"
+    )
+    connection.execute(
+        "UPDATE ledger_segments SET last_written_at=? WHERE last_written_at IS NULL",
+        (time.time(),),
+    )
+
+
 #: Additive statements per target version. Each `ADD COLUMN` is checked against
 #: `PRAGMA table_info` before it runs, so a file created from the current schema
 #: (which already carries the column) and a file created by an older daemon both
@@ -770,6 +816,16 @@ CATALOG_MIGRATIONS: dict[int, tuple[MigrationStep, ...]] = {
     2: (),
     3: (_recreate_rollups,),
     4: (_dirty_rolled_buckets,),
+    5: (
+        "ALTER TABLE ledger_segments ADD COLUMN last_written_at REAL",
+        "ALTER TABLE native_reconciliations ADD COLUMN cursor_offset INTEGER",
+        "ALTER TABLE native_reconciliations ADD COLUMN cursor_line INTEGER",
+        "ALTER TABLE native_reconciliations ADD COLUMN cursor_head_sha256 TEXT",
+        "ALTER TABLE native_reconciliations ADD COLUMN cursor_tail_sha256 TEXT",
+        "ALTER TABLE native_reconciliations ADD COLUMN "
+        "cursor_truncated INTEGER NOT NULL DEFAULT 0",
+        _stamp_segment_writes,
+    ),
 }
 SEGMENT_MIGRATIONS: dict[int, tuple[MigrationStep, ...]] = {
     2: (

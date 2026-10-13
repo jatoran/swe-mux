@@ -112,6 +112,19 @@
   Search remains complete during that repair through a bounded literal `LIKE` fallback and reports whether ranked indexes are ready.
   FTS update triggers run only when searchable text is in the `UPDATE` statement, so timestamp and parser metadata changes cannot delete and reinsert index terms.
   An MCP message hit carries the transcript-index watermark and ordinal; reading around it returns indexed neighboring messages only while that watermark is current.
+- **The token index carries a prefix index, `prefix='1 2 3'`** (`_FTS_PREFIX_OPTION`).
+  Every search word is a prefix query, and between keystrokes the word being typed is one or two characters long: without the index, each such word walked every term in the archive that starts with it.
+  Measured 2026-10-12 on a 120k-message sample of the live archive: `"s"*` went from 88 ms to 2 ms and `"contact"* AND "s"*` from 85 ms to 1 ms, for an index about 42% larger.
+  `prefix='2 3'` alone left the one-character case at 38 ms.
+  An FTS5 table's options are fixed when the table is created, so an archive indexed by an earlier build is recognised from the definition stored in `sqlite_master` and rebuilt through the same post-startup reset as any other index repair.
+  The reset drops and recreates the token table, both indexes are repopulated in 250-row batches, and search answers through the bounded `LIKE` fallback until they are ready.
+  The browser also waits 450 ms rather than 220 ms before sending a search whose last word is one letter (`historySearchDelay`), because that search is the broadest a typist sends and the one most certain to be replaced.
+- **One conversation's match lookup walks only that conversation's matches.**
+  A run's messages are written by one `executemany` in one transaction, so their row ids form one contiguous range (`_message_id_ranges`), and FTS5 takes a `rowid BETWEEN` constraint into its own index walk.
+  Filtering on `history_id` alone was applied after FTS5 had produced every match in the archive: measured 2026-10-12 on a full prefix-indexed copy of the live archive, `"the"*` went from 74 ms to 3 ms and `"cont"*` from 59 ms to 9 ms per open.
+  The statement still filters on `history_id`, so a range that ever included another run's row would cost speed, never correctness.
+  A results page's excerpts deliberately stay one `MATCH ... history_id IN (...)` over the page.
+  Each range-bounded `MATCH` re-pays the query's term setup, which for a prefix is a walk of every term carrying it, so a union of fifty range-bounded parts measured 71-756 ms where the single statement measured 14-111 ms on the same copy.
 - Session rows show the chronological minimum and maximum provider-native conversational
   timestamps plus the final speaker, so out-of-order native JSONL records cannot produce a start
   after the last message. Transcript cards show each provider-native message timestamp.
@@ -265,11 +278,44 @@
   focused, and replacing its retained scrollback with a splash would take a readable post-mortem
   away for the seconds the proof takes. Its banner button reports the attempt and refuses a
   second one instead (`session-recovery.md`).
+- **A conversation opens on the row that was clicked, and its text is read out of the message index a page at a time.**
+  The reader used to wait for `GET /history/{id}/transcript`, which parsed the entire native file, rewrote the run's indexed messages and shipped every tool input, before it drew anything - Resume included.
+  Measured 2026-10-12: 1,462 ms and 1.36 MB to open a 6.9 MiB Claude conversation, and 1,329 ms and 4.82 MB for a 48.7 MiB Codex rollout, while the text it waited for was readable from `history_messages` in 2-9 ms.
+  - The header, the action bar and Resume draw from the list row on the click.
+  - `GET /history/{id}/detail` refreshes the row and reports what the message index holds, without parsing.
+  - `GET /history/{id}/messages` pages the indexed text by ordinal.
+    Matches, run notes, lineage and commits each arrive on a request of their own, and nothing waits on anything else.
+  - The reader is mounted per conversation, so opening another one clears the previous one at once and aborts its requests.
+- **An index that is missing or behind its conversation is rebuilt in the background, never on the reader's path** (`HistoryIndex.transcript_index_state`).
+  `/detail` compares the index's watermark with the conversation's, schedules a reindex when they differ, and answers with `transcript.indexing`.
+  The reader shows what is indexed, polls `/detail` with a backoff, and reloads where the reader is when the reindex finishes.
+  The reindex is single-flight per conversation, and it re-checks the watermark before it parses, because a session end or a reconcile may have indexed the conversation while the job queued.
+  It parses outside the shared transcript cache, so a reindex cannot evict a live reader's entry or pin a large conversation in memory.
+  A conversation is reindexed at most once per 30 s (`REINDEX_COOLDOWN_SECONDS`), because a live one goes stale again the moment it is indexed and a polling reader would otherwise reparse it on every poll.
+  The jobs run on thread pools rather than as event-loop tasks, so a job that outlives its request can never call back into a loop that has closed, and `HistoryIndex.close` drains them before it closes the database.
+  An index written before the abandoned-message count existed is reindexed once on open, which is how `abandoned_messages` and `tool_calls` reach older conversations.
+  `GET /history/{id}/transcript` remains for callers that want a whole conversation, and it no longer rewrites an index whose watermark already matches the parse it holds.
+- **The reader holds a bounded window of the conversation** (`historyMessages.ts`).
+  Pages of 60 are fetched as either edge of the window comes within 600 px of view, and past 360 messages the far edge is let go, so scrolling a 5,000-message conversation on a phone does not leave 5,000 rendered articles behind.
+  A page that no longer touches the edge it was asked for is dropped rather than joined, because joining it would leave a gap that nothing fills.
+  The reader keeps its own place when a page lands above it, by hand: Safari has no scroll anchoring and Chromium skips anchoring at scroll position 0, which is exactly where a fling lands.
+  A search match outside the window replaces the window with the page around the match, so stepping to the fortieth match of a long conversation is one page read rather than a scroll through everything before it.
+  Opening a conversation from a search jumps to its first match; a reload under a finished reindex keeps the reader where they were.
+- **Tool calls are the one History read that still parses**, because their inputs are deliberately not indexed (`GET /history/{id}/tool-calls`).
+  They are fetched only while the toggle is on, only for the ordinal span the window covers, and never twice for one span; spans the window leaves are let go.
+  The read goes through the cached parse, so paging through one conversation with the toggle on parses it once.
+  A message that is nothing but tool calls has no indexed text, so the route returns it with `has_text: false` and the reader places it at its own ordinal.
+- **An open History browser re-renders only for what it draws.**
+  It is mounted in the app root, which re-renders on every session status event in the fleet.
+  The browser, its result rows and its messages are memoized, and the root hands it a memoized Project list and ref-backed handlers whose identities do not change when nothing the browser shows has.
+  Result rows skip offscreen layout and paint (`content-visibility: auto`).
+  Messages do not, because a message first drawn above the view changes height there, and the reader's hand-kept place would not account for it.
 - **Another surface can open History on one conversation.**
-  The overlay accepts an entry id and loads that conversation directly instead of a filtered list, which is how a surface that already knows *which* session it means (the Git tab's session links and a recovered pane's transcript action) reaches an ended one.
+  The overlay accepts an entry id and opens that conversation directly instead of a filtered list, which is how a surface that already knows *which* session it means (the Git tab's session links and a recovered pane's transcript action) reaches an ended one.
   The request is unscoped on purpose: the row is named by id, and pre-filtering to a Project would hide a conversation that belongs to another one.
-  Two misses are expected rather than exceptional and are reported as themselves, leaving the browser open on its list so the reader can still search by hand: a deleted row answers 404, and a harness that kept no readable transcript answers 409 `transcript_unavailable`.
-  That 409 says something definite: the route searches for a conversation whose recorded path went stale before it answers, so reaching it means no file on disk answers to that conversation id at all.
+  A deleted row is the one miss left (404), and it is reported as itself with the browser left open on its list, so the reader can still search by hand.
+  A conversation whose transcript is gone still opens, on what was indexed, with `transcript.available: false`, and Resume is withheld there because it would be refused.
+  That state says something definite: `/detail` searches for a conversation whose recorded path went stale before it answers, so reaching it means no file on disk answers to that conversation id at all.
   The overlay clears its deep-linked entry when it closes, or the next plain "Session history" open would land on a conversation nobody asked for.
 - Transcript controls occupy a dedicated non-shrinking action bar before verbose run metadata.
   The controls wrap at narrow widths, while metadata wraps inside a bounded scroll region, so
@@ -282,10 +328,10 @@
   SQLite as `0`/`1`, and an `is not False` test matched every row, so a renamed conversation
   came back titled by the titler.
 - **Live sessions read their own transcript through a separate route.** The drawer's Transcript
-  tab (`ui.md`) uses `GET /sessions/{id}/transcript`, not the history transcript route: the
-  history route reindexes a run's searchable messages and loads its annotations on every call,
-  which is right for opening an entry once and wrong for a surface that refreshes on observed user
-  messages and assistant turn boundaries.
+  tab (`ui.md`) uses `GET /sessions/{id}/transcript`, not the History routes: History reads a
+  run's indexed copy and keeps it current in the background, which is right for an ended
+  conversation and wrong for a surface that refreshes on observed user messages and assistant
+  turn boundaries.
   Both parse the same native files through `transcript_view.py` and neither mutates them.
   History indexes everything text-shaped because search wants recall.
   The reader keeps conversational prose as its default projection.
@@ -321,8 +367,8 @@
   of the view empty. The band and the conversation are tied together by `aria-controls` instead,
   and the band is drawn to match the five above it exactly.
 - **The behavioural timeline previews its two newest entries.** The rest are behind a second
-  disclosure inside the band, and the preview is sorted here rather than trusted from the
-  transcript route, which returns a run's records oldest-first: a mis-ordered preview is
+  disclosure inside the band, and the preview is sorted here rather than trusted from
+  `GET /history/{id}/notes`, which returns a run's records oldest-first: a mis-ordered preview is
   indistinguishable from a run that did those things in that order.
 - **A commit, a lineage link, a run note, and a timeline entry are all one row that opens.**
   Commits and lineage were a sideways strip of fixed-width cards, which put the subject - the
@@ -339,8 +385,8 @@
   preview dialog it was the sole entry point to.
   `POST /history/{id}/second-opinion` remains a supported daemon route with its own tests; it
   simply has no in-app caller.
-- **Phase 7.7 scan-timeline surfaces.** The history transcript payload carries the run's
-  `scan_records` alongside its annotations, so the Run-notes view renders the behavioral spine; the
+- **Phase 7.7 scan-timeline surfaces.** `GET /history/{id}/notes` (and the whole-transcript
+  payload) carries the run's `scan_records` alongside its annotations, so the Run-notes view renders the behavioral spine; the
   handoff export (`GET /history/{id}/handoff`) is regenerated phase-structured from that spine when
   the run's Project opts into `timeline_handoff`, falling back to annotation summaries otherwise; and
   the second-opinion prompt sources its prior-run summaries from the spine. The turn summarizer that
@@ -368,8 +414,14 @@
   incrementally indexes changed message bodies, and never moves vendor files.
 - Managed transcripts are indexed once more after session exit so the list's last-message
   summary is current without waiting for the periodic reconciler.
-- Visible History pages refresh changed timestamp summaries from bounded transcript head/tail
-  reads. Codex indexing prefers current `response_item/message` user/assistant records and
+- **A listing answers within a bounded wait and ships what the list draws.**
+  A row whose conversation changed since its time summary was read is re-read from a bounded head and tail on a worker pool.
+  The listing waits at most 250 ms for those reads (`TIME_SUMMARY_WAIT_SECONDS`), and the rest land in SQLite for the next listing.
+  The pair stored against a summary is the conversation's watermark (`conversation_watermark`), which is the pair it is compared against.
+  It used to be the file's `stat`, which a Codex rollout's `(0, total)` watermark never equals, so every listing re-read every Codex row (122 rows on the development host, 2026-10-12).
+  A listing selects explicit columns without `argv_json`, and the route trims `generated_title_annotation` to its `stability`: the two were 66% and 16% of a 199 KB page.
+  The single-row read keeps `argv_json`, because Resume reads it from there.
+- Codex indexing prefers current `response_item/message` user/assistant records and
   suppresses their duplicate legacy `event_msg` copies; older event-only transcripts remain
   supported.
 - `Scan historical sessions` is an explicit, project-scoped background job. It bypasses the
@@ -421,7 +473,8 @@
 
 ## Key files
 
-- `src/swe_mux/history.py`
+- `src/swe_mux/history.py` (the index, its background reindex and time-summary pools, `read_history_conversation` as History's one parse seam)
+- `src/swe_mux/routes/history.py` (the listing and the reader's routes)
 - `src/swe_mux/event_bus.py`
 - `src/swe_mux/reconcile.py`
 - `src/swe_mux/history_backfill.py`
@@ -431,4 +484,4 @@
 - `src/swe_mux/transcript_repair.py` (finding a conversation the CLI moved, and repairing its row)
 - `frontend/src/TranscriptTab.tsx`, `frontend/src/transcriptView.ts`
 - `src/swe_mux/operational_telemetry.py`
-- `frontend/src/HistoryBrowser.tsx`, `frontend/src/historyDetail.ts`
+- `frontend/src/HistoryBrowser.tsx`, `frontend/src/historyDetail.ts`, `frontend/src/historyMessages.ts` (the reader's window), `frontend/src/historyFeed.ts`

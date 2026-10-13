@@ -14,7 +14,7 @@ import threading
 import time
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -25,6 +25,7 @@ from swe_mux.transcript_scan import (
     reset_resolved_path_cache,
     resolve_path_cached,
 )
+from tests.support.settle import until
 
 
 class CountingAdapter:
@@ -191,6 +192,121 @@ def test_resolved_paths_are_remembered_and_bounded(tmp_path: Path) -> None:
     assert len(transcript_scan._RESOLVED) <= RESOLVED_PATH_CACHE_LIMIT
     reset_resolved_path_cache()
     assert transcript_scan._RESOLVED == {}
+
+
+def resolve_calls(
+    monkeypatch: pytest.MonkeyPatch, gate: threading.Event | None = None
+) -> list[tuple[str, str]]:
+    """Record every real resolve as (path, thread name), then let it run.
+
+    With a ``gate``, a resolve on any thread but this one waits for it, which is
+    what holds a background refresh open while the test asks again.
+    """
+    calls: list[tuple[str, str]] = []
+    real = transcript_scan._resolve_uncached
+    asker = threading.current_thread()
+
+    def recording(key: str) -> str | None:
+        calls.append((key, threading.current_thread().name))
+        if gate is not None and threading.current_thread() is not asker:
+            gate.wait(5)
+        return real(key)
+
+    monkeypatch.setattr(transcript_scan, "_resolve_uncached", recording)
+    return calls
+
+
+async def test_an_expired_path_asked_on_the_loop_answers_stale_and_refreshes_in_a_worker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    reset_resolved_path_cache()
+    target = tmp_path / "real"
+    target.mkdir()
+    gate = threading.Event()
+    calls = resolve_calls(monkeypatch, gate)
+    first = resolve_path_cached(target, now=0.0)
+    assert len(calls) == 1
+    loop_thread = threading.current_thread().name
+    before = transcript_scan.resolved_path_snapshot()
+
+    expired = transcript_scan.RESOLVED_PATH_CACHE_SECONDS + 1.0
+    assert resolve_path_cached(target, now=expired) == first
+    await until(lambda: len(calls) == 2, what="the refresh started in a worker")
+    # A second ask while that refresh is open answers stale and schedules nothing.
+    assert resolve_path_cached(target, now=expired) == first
+    assert transcript_scan.resolved_path_snapshot()["refreshing"] == 1
+    gate.set()
+
+    await until(lambda: transcript_scan.resolved_path_snapshot()["refreshes"] > before["refreshes"])
+    assert len(calls) == 2
+    assert calls[1][1] != loop_thread
+    after = transcript_scan.resolved_path_snapshot()
+    assert after["stale_served"] - before["stale_served"] == 2
+    assert after["refreshing"] == 0
+    assert after["loop_misses"] == before["loop_misses"]
+    reset_resolved_path_cache()
+
+
+def test_an_expired_path_asked_off_the_loop_is_re_resolved_inline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    reset_resolved_path_cache()
+    calls = resolve_calls(monkeypatch)
+    resolve_path_cached(tmp_path, now=0.0)
+    resolve_path_cached(tmp_path, now=transcript_scan.RESOLVED_PATH_CACHE_SECONDS + 1.0)
+    assert [thread for _, thread in calls] == [threading.current_thread().name] * 2
+    reset_resolved_path_cache()
+
+
+async def test_priming_takes_first_resolutions_off_the_loop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    reset_resolved_path_cache()
+    calls = resolve_calls(monkeypatch)
+    loop_thread = threading.current_thread().name
+    paths = [tmp_path / f"p{index}" for index in range(3)]
+    before = transcript_scan.resolved_path_snapshot()
+
+    await transcript_scan.resolve_paths_async([*paths, paths[0]])
+    assert len(calls) == 3
+    assert all(thread != loop_thread for _, thread in calls)
+    for path in paths:
+        assert resolve_path_cached(path) == str(path.resolve())
+        assert transcript_scan.cached_resolution(path) == str(path.resolve())
+    assert len(calls) == 3
+    middle = transcript_scan.resolved_path_snapshot()
+    assert middle["loop_misses"] == before["loop_misses"]
+    assert middle["primed"] - before["primed"] == 3
+    # Already remembered: priming again is a dict lookup, not a worker call.
+    await transcript_scan.resolve_paths_async(paths)
+    assert len(calls) == 3
+
+    # An unprimed first resolution on the loop is counted, and a slow one warned.
+    monkeypatch.setattr(transcript_scan, "SLOW_LOOP_RESOLVE_WARN_SECONDS", 0.0)
+    with caplog.at_level(logging.WARNING, logger="swe_mux.transcript_scan"):
+        resolve_path_cached(tmp_path / "unprimed")
+    assert transcript_scan.resolved_path_snapshot()["loop_misses"] == middle["loop_misses"] + 1
+    slow = [record for record in caplog.records if "resolve_on_loop_slow" in record.message]
+    assert len(slow) == 1
+    assert cast(Any, slow[0]).resolve_path == str(tmp_path / "unprimed")
+    reset_resolved_path_cache()
+
+
+def test_the_resolve_cache_evicts_the_least_recently_used_entry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    reset_resolved_path_cache()
+    monkeypatch.setattr(transcript_scan, "RESOLVED_PATH_CACHE_LIMIT", 3)
+    first, second, third, fourth = (tmp_path / name for name in ("a", "b", "c", "d"))
+    for path in (first, second, third):
+        resolve_path_cached(path, now=0.0)
+    resolve_path_cached(first, now=0.0)  # touched: now the most recent
+    resolve_path_cached(fourth, now=0.0)
+    assert transcript_scan.cached_resolution(first) is not None
+    assert transcript_scan.cached_resolution(second) is None
+    assert transcript_scan.cached_resolution(third) is not None
+    assert transcript_scan.cached_resolution(fourth) is not None
+    reset_resolved_path_cache()
 
 
 def test_session_manager_path_helpers_read_through_the_cache(tmp_path: Path) -> None:

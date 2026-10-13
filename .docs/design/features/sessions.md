@@ -144,6 +144,22 @@ and reattachable browser viewports.
   They are excluded from bulk ended-session removal.
   Agent Resume continues the provider conversation; shell Restart replays the recorded launch contract.
   Both create a fresh session id and replace the inactive layout identity only after the new process is proven live.
+- **Restart agent replaces a live agent's process without leaving its conversation** (`session_restart.py`, `POST /api/sessions/{id}/restart`).
+  A CLI that has carried one conversation for days holds process state the conversation does not need: more memory than a fresh load of the same transcript, and every MCP helper its subagents ever started.
+  The restart runs the shared graceful end (`session_control_graceful_timeout_s`, then the hard stop) with the end reason `restarted`, waits for the old session's whole teardown (`Session.end_settled`, set when `_mark_ended` returns, because the state reads `exited` at its first line while the run row is still being written), then resumes the same conversation through the single resume authority (`session_resume.resume_run`) into the same pane.
+  The layout swap is the same helper Resume uses (`routes/sessions._install_replacement`): the layout is written first and only then is the old identity dropped, so a failed swap leaves the old pane in place.
+  The name follows the pane: an auto-named pane passes no name and keeps following its generated title, a pinned name stays pinned.
+  A replacement that opens a new run row is linked by a `restart` lineage edge, which `resolve_latest_run` follows exactly like `resume`.
+  The old session's media directory is kept, because the continuing conversation may read its pasted images back.
+  - **Identity refusals are never overridable**: not an agent, ended, inactive or cold, already restarting, a remote terminal boundary, a conversation that is unknown (including a Codex placeholder id), unproven (`transcript_provisional`), stale (`observation_stale_since`), without a history row or without a readable transcript, the session that hosts the daemon, and a missing Project.
+    Each would end a working process and then open the wrong conversation or none.
+  - **Activity refusals yield only to a human `force`**: a turn in flight or starting, a pending approval or question, standing background work, unsent composer text or an unsubmitted delivery, operator input in the last three seconds, queued messages that would strand (they bind to the pane's session id), and an open auto-merge request whose answer would not reach the new process.
+    Each blocker carries the sentence the confirmation shows, so the list of losses is the daemon's and not the browser's guess.
+  - The route refuses an agent session's own caller identity and the operation is not on the MCP surface, so no agent can restart a session, its own included.
+  - A failure after the old process has ended (`restart_settle_timeout`, any resume refusal, or `restart_replace_failed` when the layout write fails and the replacement is stopped) leaves the pane showing that ended session, whose ordinary Resume is then the way back; the conversation is on disk throughout.
+    The layout write is the commit point for Resume and Restart alike: the lineage edge, the recovery row and the media cleanup after it are logged on failure and never undo a swap that already happened.
+  - The session menu reads `GET /api/sessions/{id}/restart` when it opens, the same assessment the restart enforces, and draws an unavailable row with its reason on the row itself, or a two-press "Restart agent anyway" whose second press lists the losses.
+    The palette command `session.restartAgent` never forces and has no voice phrase.
 - **Removal is asynchronous by contract.** `DELETE /api/sessions/{id}` cannot be quick for a
   live session: it types the backend's graceful exit keys, waits out an agent mid-turn that
   never processes them, force-kills the tree, persists the run, and clears the session's media
@@ -181,6 +197,7 @@ and reattachable browser viewports.
   gained a `reason` parameter (default `killed`) and `_mark_ended` prefers
   `requested_end_reason`, so a post-mortem can tell an agent-directed end from an operator one
   (`data-model.md`).
+  An in-place Restart records `restarted` the same way, so the run row of a process retired for a fresh one does not read as a kill.
 - Ended-session history remains durable.
 - Sessions do not own notes.
   Notes are created and managed through the owning Project's flat Notes collection.
@@ -420,6 +437,10 @@ and reattachable browser viewports.
     transcript
     additionally requires that this session's own PTY produced output around the time the
     candidate appeared. An outside CLI leaves our PTY silent, which is what distinguishes it.
+    It also runs only when there is something to find: within two minutes of a submitted line
+    or turn hook that the followed transcript does not record, or for a provisional binding.
+    An idle pane walks no directory and proves no process ownership
+    (`status-detection.md`, Codex branch and rewind recovery).
   - **Unresolved siblings block.** Another live session in the same cwd makes a fresh
     transcript ambiguous — but only while it *is* ambiguous. A same-backend sibling is ruled
     out per candidate when its own transcript was still being written after the candidate

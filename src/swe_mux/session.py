@@ -14,10 +14,11 @@ import os
 import re
 import secrets
 import sqlite3
+import sys
 import time
 import uuid
 from collections import deque
-from collections.abc import Callable, Coroutine
+from collections.abc import Callable, Coroutine, Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -94,7 +95,12 @@ from .supervisor_client import (
 from .telemetry_otlp import provider_otel_args, provider_otel_env
 from .terminal_arbitration import OwnerState, effective_geometry, release_owner
 from .transcript_repair import resolve_row_transcript
-from .transcript_scan import TranscriptScanCache, resolve_path_cached
+from .transcript_scan import (
+    TranscriptScanCache,
+    cached_resolution,
+    resolve_path_cached,
+    resolve_paths_async,
+)
 from .transcript_view import conversation_is_readable
 
 log = logging.getLogger(__name__)
@@ -105,6 +111,35 @@ log = logging.getLogger(__name__)
 TRANSCRIPT_SWITCH_POLL_SECONDS = 2.0
 TRANSCRIPT_SWITCH_QUIET_SECONDS = 5.0
 TRANSCRIPT_SWITCH_FRESH_SECONDS = 5.0
+
+# A conversation cannot move without the CLI being handed a line (`/new`,
+# `/resume`, a prompt) or running a turn, so both are the evidence the switch
+# watcher waits for before it looks anywhere (`_switch_evidence_at`). The
+# heuristic directory search stays armed this long after the latest of them:
+# a replacement rollout appears within seconds of the line that caused it, and
+# an idle pane with nothing submitted then costs nothing at all.
+SWITCH_EVIDENCE_WINDOW_SECONDS = 120.0
+
+# The OS-handle proof of which rollout a Codex process holds open runs at most
+# this often per session, doubling up to the cap each time it only confirms what
+# is already followed. Evidence (`_process_proof_due`) decides *whether*; this
+# decides how often at most.
+PROCESS_PROOF_MIN_INTERVAL_SECONDS = 10.0
+PROCESS_PROOF_MAX_INTERVAL_SECONDS = 160.0
+
+# How long the tailer's own stat of the followed file is treated as current.
+# The tailer re-stats every 250 ms, so a reading older than this means it is
+# busy draining (or gone) and the watcher takes one stat of its own, in a worker.
+TRANSCRIPT_STAT_FRESH_SECONDS = 2.0
+
+# The switch watcher's decisions, counted on `SessionManager.observation_costs`.
+_OBSERVATION_COST_KEYS = (
+    "process_proofs",
+    "process_proofs_skipped",
+    "heuristic_searches",
+    "heuristic_searches_skipped",
+    "watcher_stat_fallbacks",
+)
 
 # When the followed transcript has been quiet this long while the PTY kept
 # producing output and no replacement could be corroborated, observation is marked
@@ -470,6 +505,63 @@ def _safe_mtime(path: Path) -> float | None:
         return float(path.stat().st_mtime)
     except OSError:
         return None
+
+
+#: `_tail_stat_reading`'s answer when the tailer has no current reading of the file.
+_NO_TAIL_READING = object()
+
+
+def _tail_stat_reading(session: Any, current: Path) -> object:
+    """The tailer's mtime for ``current`` (None: the file is missing), or the sentinel.
+
+    The sentinel means "no current first-hand reading" - the tailer follows another
+    path, has not stat-ed yet, or has not stat-ed for `TRANSCRIPT_STAT_FRESH_SECONDS`
+    (it is draining a backlog) - and the caller must take its own reading.
+    """
+    reading = getattr(session, "transcript_stat", None)
+    if not reading:
+        return _NO_TAIL_READING
+    path, mtime, stamp = reading
+    if path != current or time.monotonic() - stamp > TRANSCRIPT_STAT_FRESH_SECONDS:
+        return _NO_TAIL_READING
+    return mtime
+
+
+def _switch_evidence_at(session: Any, last_write: float | None) -> float:
+    """When this pane last gave its CLI a reason to change conversation that the
+    followed file does not explain (epoch s; zero means none).
+
+    A conversation moves only on `/new`, `/resume`, `/fork` or a turn, so the
+    evidence is a submitted line (`ComposerState.last_submit_at`, which every input
+    path - browser, queue, voice, approvals - stamps) or a turn-bearing hook
+    (`last_turn_hook_ts`). Either is explained away by the followed file being
+    written after it, because a line answered in the same conversation lands there.
+    A turn hook gets the same `TRANSCRIPT_SWITCH_QUIET_SECONDS` of slack the
+    staleness rule gives it: `Stop` fires just after the turn's last record is
+    written, and reading that as unexplained would arm the search after every turn.
+    An idle pane has neither, so the switch watcher has nothing to look for.
+    """
+    written = last_write or 0.0
+    evidence = 0.0
+    composer = getattr(session, "composer", None)
+    submitted = float(getattr(composer, "last_submit_at", 0.0) or 0.0)
+    if submitted > written:
+        evidence = submitted
+    turn = float(getattr(session, "last_turn_hook_ts", 0.0) or 0.0)
+    if turn > written + TRANSCRIPT_SWITCH_QUIET_SECONDS:
+        evidence = max(evidence, turn)
+    return evidence
+
+
+def _proof_baseline_key(current: Path | None) -> str:
+    """Which followed file a baseline process proof was taken for."""
+    return str(current) if current is not None else ""
+
+
+def _back_off_process_proof(state: dict[str, Any]) -> None:
+    """Double the minimum spacing between proofs, up to the cap."""
+    spacing = float(state.get("process_proof_spacing", PROCESS_PROOF_MIN_INTERVAL_SECONDS))
+    state["process_proof_spacing"] = min(spacing * 2, PROCESS_PROOF_MAX_INTERVAL_SECONDS)
 
 
 def _consuming_spool_path(spool: Path) -> Path:
@@ -2191,6 +2283,11 @@ class Session:
         # exact conversation wrote them. Kept separate from growth so a daemon
         # restart never invents a fresh write merely by replaying old bytes.
         self.transcript_record_ts = 0.0
+        # The tailer's latest stat of the followed file, taken in its worker every
+        # 250 ms: (path, mtime or None when the file is missing, monotonic stamp).
+        # The switch watcher reads this instead of stat-ing on the event loop,
+        # which was among its most frequent stall frames (2026-10-12).
+        self.transcript_stat: tuple[Path, float | None, float] | None = None
         diagnostic = record.observation_diagnostic or ""
         if " last written " in diagnostic:
             self.observation_stale_reason: str | None = "transcript_stale"
@@ -2235,6 +2332,16 @@ class Session:
         self.watchdog_recovery_actions: dict[str, int] = {}
         self.terminal_latencies: deque[dict[str, Any]] = deque(maxlen=32)
         self.agent_stop_event = asyncio.Event()
+        # Set once `_mark_ended` has finished *all* of its teardown - the history
+        # row, the transcript index, the recovery row - not merely flipped the state.
+        # The state reads `exited` at the first line of that method and the run row
+        # is still being written for some time after, so anything that must act on
+        # a fully retired run (an in-place restart resuming the same conversation)
+        # waits for this rather than for the state.
+        self.end_settled = asyncio.Event()
+        # An in-place restart owns this session from its first refusal check to the
+        # replacement's layout swap; a second request in that window is refused.
+        self.restart_in_progress = False
         self.observer_task: asyncio.Task[Any] | None = None
         self.transcript_path: Path | None = None
         # A transcript adopted by elimination rather than by identity evidence
@@ -2896,6 +3003,30 @@ class SessionManager:
         # the adapter on the loop, which at seven fresh sessions in one 836-file
         # directory was the load that made the daemon read as hung (2026-09-14).
         self.transcript_scans = TranscriptScanCache()
+        # What the switch watcher actually spent, by decision. An idle fleet should
+        # read as `*_skipped` climbing and `process_proofs`/`heuristic_searches`
+        # flat; the reverse is the 2026-10-12 shape this counts against.
+        self.observation_costs: dict[str, int] = dict.fromkeys(_OBSERVATION_COST_KEYS, 0)
+
+    def observation_cost_snapshot(self) -> dict[str, Any]:
+        """Switch-watcher counters plus the caches it reads, for diagnostics."""
+        from .adapters.codex import rollout_identity_stats
+
+        costs = getattr(self, "observation_costs", None) or {}
+        snapshot: dict[str, Any] = {key: int(costs.get(key, 0)) for key in _OBSERVATION_COST_KEYS}
+        snapshot["rollout_identities"] = rollout_identity_stats()
+        if sys.platform == "win32":
+            from .win_process_files import query_stats
+
+            snapshot["open_file_queries"] = query_stats()
+        return snapshot
+
+    def _count_observation_cost(self, key: str) -> None:
+        costs = getattr(self, "observation_costs", None)
+        if costs is None:
+            # Managers built with `__new__` in tests never ran `__init__`.
+            costs = self.observation_costs = dict.fromkeys(_OBSERVATION_COST_KEYS, 0)
+        costs[key] = costs.get(key, 0) + 1
 
     async def _recent_transcripts(
         self, adapter: BackendAdapter, cwd: Path, created_at: float
@@ -3688,6 +3819,34 @@ class SessionManager:
                     paths.add(self._path_key(transcript_path))
         return native_ids, paths
 
+    async def _prime_claim_keys(
+        self, session: Session | None, extra: Iterable[Path | str] = ()
+    ) -> None:
+        """Resolve, in one worker call, every path the sync claim checks will key.
+
+        `_live_transcript_claims`, `_path_key`, `_resolved_cwd` and
+        `_same_cwd_siblings` read keys through `resolve_path_cached`, which only
+        pays a syscall the first time it sees a path. Async callers prime here
+        first, so that one time is never on the loop: the fleet's transcript paths
+        and working directories, plus whatever the caller is about to compare.
+        """
+        paths: list[Path | str] = list(extra)
+        for other in getattr(self, "sessions", {}).values():
+            record = getattr(other, "record", None)
+            if record is None or getattr(record, "state", None) in {"exited", "crashed"}:
+                continue
+            transcript = getattr(other, "transcript_path", None)
+            if transcript:
+                paths.append(transcript)
+            cwd = getattr(record, "run_cwd", None) or getattr(record, "cwd", None)
+            if cwd:
+                paths.append(cwd)
+        if session is not None:
+            cwd = session.record.run_cwd or session.record.cwd
+            if cwd:
+                paths.append(cwd)
+        await resolve_paths_async(paths)
+
     def _unclaimed_transcripts(
         self,
         session: Session,
@@ -3731,17 +3890,24 @@ class SessionManager:
         record = session.record
         if not record.native_session_id or record.native_session_id == record.id:
             return None
+        adapter = session.adapter
+        native_id = record.native_session_id
+
+        def locate() -> Path | None:
+            path = adapter.transcript_path(native_id, cwd)
+            return path if path is not None and path.is_file() else None
+
         try:
-            path = session.adapter.transcript_path(record.native_session_id, cwd)
-            if path is None:
-                return None
-            # The one syscall here, in a thread: this runs on the 0.5s discovery
-            # tick of every session waiting for its CLI's first record.
-            if not await asyncio.to_thread(path.is_file):
-                return None
+            # In a thread, adapter lookup included: this runs on the 0.5s discovery
+            # tick of every session waiting for its CLI's first record, and a Codex
+            # lookup walks the rollout tree and reads a header to prove the id.
+            path = await asyncio.to_thread(locate)
         except OSError:
             return None
+        if path is None:
+            return None
         backend = session.adapter.name
+        await self._prime_claim_keys(session, (path,))
         claimed_ids, claimed_paths = self._live_transcript_claims(session)
         if (backend, record.native_session_id) in claimed_ids:
             return None
@@ -3810,9 +3976,9 @@ class SessionManager:
             if proven is not None:
                 return proven, False
             try:
-                candidates = self._unclaimed_transcripts(
-                    session, await self._recent_transcripts(session.adapter, cwd, started)
-                )
+                listing = await self._recent_transcripts(session.adapter, cwd, started)
+                await self._prime_claim_keys(session, [item[1] for item in listing])
+                candidates = self._unclaimed_transcripts(session, listing)
             except OSError:
                 candidates = []
             exact = [item for item in candidates if item[2] == session.record.native_session_id]
@@ -3842,8 +4008,10 @@ class SessionManager:
                 )
                 if located is not None:
                     return located, False
-            if len(candidates) == 1 and self._may_adopt_sole_candidate(
-                session, candidates[0][1], started
+            # In a thread: the creation-time gate is a stat, and this loop ticks
+            # every 0.5 s for as long as the CLI has not written its first record.
+            if len(candidates) == 1 and await asyncio.to_thread(
+                self._may_adopt_sole_candidate, session, candidates[0][1], started
             ):
                 return candidates[0][1], True
             try:
@@ -3852,22 +4020,93 @@ class SessionManager:
                 pass
         return None
 
-    async def _process_owned_transcript(self, session: Session) -> Path | None:
+    @staticmethod
+    def _process_proof_due(
+        session: Session, current: Path | None, last_write: float | None, now: float
+    ) -> str | None:
+        """Why the OS-handle proof should run now, or None when it should not.
+
+        The proof answers "which rollout does this pane's Codex process hold open",
+        and the answer can only change when the conversation moves. A conversation
+        cannot move without the CLI being handed a line or running a turn
+        (`_switch_evidence_at`), so after one baseline proof per followed file the
+        proof waits for such evidence - and for the evidence to have settled
+        without the followed file being written, because a prompt answered in the
+        same conversation writes it and proves the file still followed. Before this
+        (2026-09-22 to 2026-10-12) it ran every 10 s for every idle Codex pane,
+        forever, and each run enumerated the host's ~450,000 handles under the GIL.
+
+        A pane that follows nothing yet, or follows a provisional binding, keeps
+        probing without evidence, because finding the file or upgrading a guess to
+        a proof is what this exists for; that probing backs off while the answer
+        stays empty (`process_proof_spacing`), and fresh evidence cuts the wait
+        back to the minimum. No proof ever runs closer together than
+        `PROCESS_PROOF_MIN_INTERVAL_SECONDS`.
+        """
+        state = session.observation_state
+        since = now - float(state.get("process_transcript_probe_at", 0.0))
+        if since < PROCESS_PROOF_MIN_INTERVAL_SECONDS:
+            return None
+        evidence = _switch_evidence_at(session, last_write)
+        fresh = evidence > float(state.get("process_proof_evidence", 0.0))
+        searching = "unbound" if current is None else None
+        if searching is None and getattr(session, "transcript_provisional", False):
+            searching = "provisional"
+        if searching is not None:
+            spacing = float(state.get("process_proof_spacing", PROCESS_PROOF_MIN_INTERVAL_SECONDS))
+            return searching if fresh or since >= spacing else None
+        if state.get("process_proof_baseline") != _proof_baseline_key(current):
+            return "baseline"
+        if not fresh:
+            return None
+        if time.time() - evidence < TRANSCRIPT_SWITCH_QUIET_SECONDS:
+            # Not settled: the CLI may yet write this line into the followed file.
+            return None
+        return "evidence"
+
+    async def _process_owned_transcript(
+        self,
+        session: Session,
+        current: Path | None = None,
+        last_write: float | None = None,
+    ) -> Path | None:
         resolver = getattr(session.adapter, "process_transcript_path", None)
         if not callable(resolver) or session.record.pid <= 0 or not session.record.root_started_at:
             return None
         now = time.monotonic()
         state = session.observation_state
-        if now - float(state.get("process_transcript_probe_at", 0)) < 10:
+        reason = self._process_proof_due(session, current, last_write, now)
+        if reason is None:
+            self._count_observation_cost("process_proofs_skipped")
             return None
+        self._count_observation_cost("process_proofs")
         state["process_transcript_probe_at"] = now
+        state["process_proof_baseline"] = _proof_baseline_key(current)
+        state["process_proof_evidence"] = max(
+            float(state.get("process_proof_evidence", 0.0)),
+            _switch_evidence_at(session, last_write),
+        )
+        state["process_proof_reason"] = reason
         native_before = session.record.native_session_id
-        path = await asyncio.to_thread(resolver, session.record.pid, session.record.root_started_at)
+        adapter = session.adapter
+        pid, started_at = session.record.pid, session.record.root_started_at
+
+        def prove() -> tuple[Path | None, str | None]:
+            # The OS query and the identity read it needs both run here: the
+            # identity read was on the loop until 2026-10-12, where its `realpath`
+            # was the single most frequent frame in the stall log.
+            proven = resolver(pid, started_at)
+            if not isinstance(proven, Path):
+                return None, None
+            return proven, adapter.transcript_native_id(proven)
+
+        path, native = await asyncio.to_thread(prove)
         # A hook may have bound/rolled this session while the OS query ran.
-        if not isinstance(path, Path) or native_before != session.record.native_session_id:
+        if path is None or native_before != session.record.native_session_id:
             state["process_transcript_probe"] = "unavailable_or_superseded"
+            _back_off_process_proof(state)
             return None
-        native = session.adapter.transcript_native_id(path)
+        await self._prime_claim_keys(session, (path,) if current is None else (path, current))
         claimed_ids, claimed_paths = self._live_transcript_claims(session)
         if (
             not native
@@ -3875,7 +4114,14 @@ class SessionManager:
             or self._path_key(path) in claimed_paths
         ):
             state["process_transcript_probe"] = "identity_unavailable_or_owned_elsewhere"
+            _back_off_process_proof(state)
             return None
+        if current is not None and self._path_key(path) == self._path_key(current):
+            # Confirmed what is already followed: nothing moved, so the next proof
+            # (which still needs fresh evidence) may wait longer.
+            _back_off_process_proof(state)
+        else:
+            state["process_proof_spacing"] = PROCESS_PROOF_MIN_INTERVAL_SECONDS
         state["process_transcript_probe"] = "root_process_open_file"
         if state.get("process_transcript_proof") != str(path):
             state["process_transcript_proof"] = str(path)
@@ -5332,14 +5578,15 @@ class SessionManager:
         adapter = session.adapter
         path = transcript
         provisional = False
-        if path is None or not path.exists():
+        if path is None or not await asyncio.to_thread(path.exists):
             found = await self._await_owned_transcript(session, stop_event)
             path, provisional = found if found else (None, False)
         backoff = OBSERVER_RESTART_BACKOFF_MIN_SECONDS
         while path and not stop_event.is_set():
             self._aim_observer(session, path)
             session.transcript_provisional = provisional
-            native_id = adapter.transcript_native_id(path)
+            # Off the loop: an adapter answers this from the file's own first record.
+            native_id = await asyncio.to_thread(adapter.transcript_native_id, path)
             if native_id and native_id != session.record.native_session_id and not provisional:
                 # A harness that mints its own id binds a placeholder until the
                 # transcript names the real conversation, so re-deriving from the
@@ -5393,12 +5640,13 @@ class SessionManager:
                 await asyncio.gather(observe_task, return_exceptions=True)
             if switch is not None:
                 process_proven = session.observation_state.pop("process_transcript_switch", False)
+                switched_native = await asyncio.to_thread(adapter.transcript_native_id, switch)
                 if process_proven and provisional:
                     # The old file was only a guess, so there is no owned run to
                     # retire. Bind and replay the proven file in this same run.
                     provisional = False
                     session.record.native_session_id = (
-                        adapter.transcript_native_id(switch) or session.record.native_session_id
+                        switched_native or session.record.native_session_id
                     )
                 # Following a different transcript is not a file-path detail: the
                 # CLI is on another conversation, so the agent run ends here and a
@@ -5410,7 +5658,6 @@ class SessionManager:
                 # history row, and mints a new agent run — and none of that is
                 # meaningful for a guess. Re-aim the guess instead and stay
                 # provisional; the hook still decides what this session really is.
-                switched_native = adapter.transcript_native_id(switch)
                 # A file naming the conversation this session already owns is a
                 # *relocation*, not a rollover. Rolling would rekey identity,
                 # close the history row, and mint a new agent run for a
@@ -5475,6 +5722,12 @@ class SessionManager:
         arrive through `roll_agent_conversation`, and guessing from mtimes is the
         one mechanism that can latch onto a sibling's conversation in a shared
         cwd. For them this watcher only keeps staleness detection alive.
+
+        Nothing here touches the filesystem on the event loop. One "last written"
+        reading is taken per tick (the tailer's own stat when it is current, else
+        one stat in a worker) and handed to every rule below, and the searches
+        that do read files run in workers - and only when the pane has given its
+        CLI something that could have moved the conversation (`_switch_evidence_at`).
         """
         heuristic = not getattr(session.adapter, "reports_conversation_rollover", False)
         while not stop_event.is_set() and not observe_task.done():
@@ -5483,22 +5736,22 @@ class SessionManager:
                 break
             if not has_observable_transcript(session.record.backend):
                 break
+            last_write = await self._transcript_last_write(session, current)
             # An exact OS ownership proof precedes filesystem heuristics. Include
             # the same path to upgrade a provisional binding without waiting for
             # a first-turn completion hook.
             if (
                 session.transcript_provisional
-                or time.time() - (self._transcript_last_write_ts(session, current) or 0)
-                >= TRANSCRIPT_SWITCH_QUIET_SECONDS
+                or time.time() - (last_write or 0) >= TRANSCRIPT_SWITCH_QUIET_SECONDS
             ):
-                proven = await self._process_owned_transcript(session)
+                proven = await self._process_owned_transcript(session, current, last_write)
                 if proven is not None and (proven != current or session.transcript_provisional):
                     session.observation_state["process_transcript_switch"] = True
                     return proven
             # The CLI's own word first. A hook names the file it is writing, which
             # settles in one comparison what the readings below have to infer from
             # a cwd the poller happened to catch and a path the daemon recomputes.
-            reported = self._staged_transcript_relocation(session, current)
+            reported = await self._consume_staged_relocation(session, current)
             if reported is not None:
                 await self.events.emit(
                     "transcript_relocated",
@@ -5516,8 +5769,9 @@ class SessionManager:
                 return reported
             pending_resolver = getattr(session.adapter, "pending_transcript_path", None)
             try:
+                # In a worker: omp answers this from a breadcrumb file on disk.
                 pending = (
-                    pending_resolver(session.record.id, current)
+                    await asyncio.to_thread(pending_resolver, session.record.id, current)
                     if callable(pending_resolver)
                     else None
                 )
@@ -5533,7 +5787,14 @@ class SessionManager:
                     path=str(pending),
                 )
                 return pending
-            relocated = self._relocated_transcript_candidate(session, current)
+            # Only a followed file that is gone can have been relocated, and the
+            # reading above already says whether it is: a live file costs nothing.
+            relocated = None
+            if last_write is None:
+                await self._prime_claim_keys(session, (current,))
+                relocated = await asyncio.to_thread(
+                    self._relocated_transcript_candidate, session, current
+                )
             if relocated is not None:
                 await self.events.emit(
                     "transcript_relocated",
@@ -5544,9 +5805,15 @@ class SessionManager:
                     path=str(relocated),
                 )
                 return relocated
-            candidate = (
-                await self._transcript_switch_candidate(session, current) if heuristic else None
-            )
+            candidate = None
+            if heuristic:
+                if self._switch_search_armed(session, last_write):
+                    self._count_observation_cost("heuristic_searches")
+                    candidate = await self._transcript_switch_candidate(
+                        session, current, known_last_write=last_write
+                    )
+                else:
+                    self._count_observation_cost("heuristic_searches_skipped")
             if candidate is not None:
                 await self.events.emit(
                     "transcript_retargeted",
@@ -5557,8 +5824,41 @@ class SessionManager:
                     path=str(candidate),
                 )
                 return candidate
-            await self._note_transcript_staleness(session, current)
+            await self._note_transcript_staleness(session, current, known_last_write=last_write)
         return None
+
+    @staticmethod
+    def _switch_search_armed(session: Session, last_write: float | None) -> bool:
+        """Whether the heuristic directory search has anything to look for.
+
+        A replacement conversation appears within seconds of the line or turn that
+        made it, so the search runs only while such evidence is newer than the
+        followed file's last write and younger than `SWITCH_EVIDENCE_WINDOW_SECONDS`
+        - and always for a provisional binding, which is a guess being refined. An
+        idle pane therefore walks no directory and reads no header at all, where
+        every idle Codex pane used to walk the whole rollout tree every 2 s.
+        """
+        if getattr(session, "transcript_provisional", False):
+            return True
+        evidence = _switch_evidence_at(session, last_write)
+        return evidence > 0 and time.time() - evidence <= SWITCH_EVIDENCE_WINDOW_SECONDS
+
+    async def _consume_staged_relocation(self, session: Session, current: Path) -> Path | None:
+        """`_staged_transcript_relocation` with its file checks off the loop.
+
+        The signal and the staged path are consumed here on the loop (the event is
+        an asyncio object and the hand-off ordering is what keeps a report from
+        being dropped); only the validation, which stats and resolves, moves.
+        """
+        session.transcript_relocation_signal.clear()
+        staged = session.pending_transcript_path
+        if staged is None:
+            return None
+        session.pending_transcript_path = None
+        if getattr(session, "transcript_provisional", False):
+            return None
+        await self._prime_claim_keys(session, (staged, current))
+        return await asyncio.to_thread(self._validate_staged_relocation, session, staged, current)
 
     @staticmethod
     async def _await_switch_tick(session: Session, stop_event: asyncio.Event) -> None:
@@ -5604,6 +5904,12 @@ class SessionManager:
             # A provisional follow has not established which conversation this is,
             # so there is no identity for a reported path to match against.
             return None
+        return self._validate_staged_relocation(session, staged, current)
+
+    def _validate_staged_relocation(
+        self, session: Session, staged: Path, current: Path
+    ) -> Path | None:
+        """Whether a hook-reported path is this conversation's live file. Reads disk."""
         if self._path_key(staged) == self._path_key(current) or not staged.is_file():
             return None
         native_id = session.record.native_session_id
@@ -5658,8 +5964,19 @@ class SessionManager:
         reported = Path(raw)
         if session.adapter.transcript_native_id(reported) != record.native_session_id:
             return
-        if current is not None and self._path_key(reported) == self._path_key(current):
-            return
+        # This runs on the hook ingress task, so the comparison takes only what is
+        # already resolved. A spelling never seen before is staged and the switch
+        # watcher, which rechecks identity in a worker, discards it if it turns out
+        # to be the followed file after all.
+        if current is not None:
+            reported_key = cached_resolution(reported)
+            current_key = cached_resolution(current)
+            if (
+                reported_key is not None
+                and current_key is not None
+                and reported_key.casefold() == current_key.casefold()
+            ):
+                return
         session.pending_transcript_path = reported
         session.transcript_relocation_signal.set()
 
@@ -5729,6 +6046,7 @@ class SessionManager:
         if session.transcript_path != path:
             session.transcript_growth_ts = 0.0
             session.transcript_record_ts = 0.0
+            session.transcript_stat = None
         session.transcript_path = path
 
     @staticmethod
@@ -5756,16 +6074,38 @@ class SessionManager:
         Replaying an old file does not make this value fresh because it retains the
         record's original wall time. All three readings are lower bounds on "this
         file was alive at T", so the later one is the better answer.
+
+        The filesystem reading comes from the tailer's own stat when it is current
+        (`Session.transcript_stat`), so for a followed file this takes no syscall;
+        only without one does it stat, and the loop-side caller
+        (`_transcript_last_write`) does that in a worker.
         """
-        try:
-            mtime = current.stat().st_mtime
-        except OSError:
+        reading = _tail_stat_reading(session, current)
+        if reading is _NO_TAIL_READING:
+            try:
+                mtime: float = current.stat().st_mtime
+            except OSError:
+                return None
+        elif reading is None:
             return None
+        else:
+            mtime = cast(float, reading)
         return max(
             mtime,
             float(getattr(session, "transcript_growth_ts", 0.0)),
             float(getattr(session, "transcript_record_ts", 0.0)),
         )
+
+    async def _transcript_last_write(self, session: Session, current: Path) -> float | None:
+        """`_transcript_last_write_ts` without a stat on the event loop.
+
+        Answered in place from the tailer's current reading; otherwise (the tailer is
+        draining a large backlog, or has not started) one stat in a worker.
+        """
+        if _tail_stat_reading(session, current) is not _NO_TAIL_READING:
+            return self._transcript_last_write_ts(session, current)
+        self._count_observation_cost("watcher_stat_fallbacks")
+        return await asyncio.to_thread(self._transcript_last_write_ts, session, current)
 
     async def _clear_transcript_staleness(self, session: Session, evidence: str) -> None:
         """Retract the staleness claim once the followed file proves itself alive.
@@ -5805,7 +6145,9 @@ class SessionManager:
             stale_for_s=round(max(0.0, time.time() - marked), 3),
         )
 
-    async def _note_transcript_staleness(self, session: Session, current: Path) -> None:
+    async def _note_transcript_staleness(
+        self, session: Session, current: Path, *, known_last_write: object = _NO_TAIL_READING
+    ) -> None:
         """Fail closed when the conversation moved somewhere we cannot prove.
 
         A Codex `SessionStart` normally reports `/new`, but hooks may be disabled,
@@ -5831,9 +6173,16 @@ class SessionManager:
         (`_transcript_authoritative` goes false) and delivery hard-blocks. It is
         cleared by the next record read on any followed transcript, by the followed
         file growing again (below), or by a rollover.
+
+        ``known_last_write`` is the switch watcher's reading for this tick, taken
+        off the loop; called without it this takes its own.
         """
         record = session.record
-        last_write = self._transcript_last_write_ts(session, current)
+        last_write = (
+            self._transcript_last_write_ts(session, current)
+            if known_last_write is _NO_TAIL_READING
+            else cast("float | None", known_last_write)
+        )
         now = time.time()
         if last_write is None:
             # The followed file is unreadable or gone. This used to return -
@@ -5994,7 +6343,13 @@ class SessionManager:
             for other in self._same_cwd_siblings(session, cwd)
         )
 
-    def _unresolved_transcript_sibling(self, session: Session, cwd: Path, created: float) -> bool:
+    def _unresolved_transcript_sibling(
+        self,
+        session: Session,
+        cwd: Path,
+        created: float,
+        sibling_writes: Mapping[str, float | None] | None = None,
+    ) -> bool:
         """True when a same-backend sibling here cannot be excluded as the writer.
 
         The blanket "any sibling in this cwd blocks the switch" rule was correct
@@ -6012,6 +6367,10 @@ class SessionManager:
 
         Anything else — a quiet sibling that was also talking, or one with no
         transcript bound yet — stays a blocker. Uncertainty keeps the old answer.
+
+        ``sibling_writes`` holds readings the caller already took off the loop,
+        keyed by session id (`_sibling_last_writes`); a sibling missing from it is
+        read here.
         """
         backend = session.record.backend
         for other in self._same_cwd_siblings(session, cwd):
@@ -6022,7 +6381,10 @@ class SessionManager:
                 # The sibling's own growth reading counts here for the same reason
                 # it does for ours: a frozen mtime would hide the very evidence
                 # that clears this sibling of having written the candidate.
-                sibling_write = self._transcript_last_write_ts(other, sibling_path)
+                if sibling_writes is not None and other.record.id in sibling_writes:
+                    sibling_write = sibling_writes[other.record.id]
+                else:
+                    sibling_write = self._transcript_last_write_ts(other, sibling_path)
                 if sibling_write is not None and sibling_write > created:
                     continue
             last_output = other.record.last_activity_ts
@@ -6031,12 +6393,17 @@ class SessionManager:
             return True
         return False
 
-    async def _transcript_switch_candidate(self, session: Session, current: Path) -> Path | None:
+    async def _transcript_switch_candidate(
+        self, session: Session, current: Path, *, known_last_write: object = _NO_TAIL_READING
+    ) -> Path | None:
         """The transcript the agent appears to have moved to, by mtime and ownership.
 
-        The directory listing comes through the shared off-loop scan and the
-        per-candidate creation-time stats run in one worker call; the ownership
-        analysis stays on the loop because it reads live session state.
+        The directory listing comes through the shared off-loop scan; the
+        per-candidate creation-time stats and the siblings' last-write readings
+        run in one worker call; and the path keys the sibling rules compare are
+        resolved in a worker first (`_prime_claim_keys`). The ownership analysis
+        stays on the loop because it reads live session state. ``known_last_write``
+        is the switch watcher's reading for this tick; without it this takes its own.
         """
         record = session.record
         now = time.time()
@@ -6046,13 +6413,18 @@ class SessionManager:
         # this ran its candidate search against an actively-written file, and the
         # only thing standing between that and adopting a sibling's conversation
         # was the ownership evidence below.
-        last_write = self._transcript_last_write_ts(session, current)
+        last_write = (
+            self._transcript_last_write_ts(session, current)
+            if known_last_write is _NO_TAIL_READING
+            else cast("float | None", known_last_write)
+        )
         if last_write is None:
             last_write = 0.0
         if now - last_write < TRANSCRIPT_SWITCH_QUIET_SECONDS:
             return None
         started = record.agent_run_started_at or record.created_at
         cwd = Path(record.run_cwd or record.cwd)
+        await self._prime_claim_keys(session, (cwd,))
         # A shim-less agent launch in a sibling shell is about to create a
         # transcript here and cannot be ruled out by any evidence, so it blocks
         # every candidate. Same-backend siblings are evaluated per candidate below.
@@ -6101,14 +6473,29 @@ class SessionManager:
             return None
         # One worker call for every candidate's creation time, rather than a stat
         # on the loop per candidate (`_session_could_have_written` needs the same
-        # reading, so it takes it as an argument instead of stat-ing again).
-        created_ats = await asyncio.to_thread(
-            lambda: [file_created_at(path) for _, path in plausible]
-        )
+        # reading, so it takes it as an argument instead of stat-ing again), and
+        # for the readings the sibling rule compares those times against.
+        siblings = [
+            (other, other.transcript_path)
+            for other in self._same_cwd_siblings(session, cwd)
+            if other.record.backend == record.backend and other.transcript_path is not None
+        ]
+
+        def read_times() -> tuple[list[float | None], dict[str, float | None]]:
+            created = [file_created_at(path) for _, path in plausible]
+            writes = {
+                other.record.id: self._transcript_last_write_ts(other, path)
+                for other, path in siblings
+            }
+            return created, writes
+
+        created_ats, sibling_writes = await asyncio.to_thread(read_times)
         for (modified, path), created in zip(plausible, created_ats, strict=True):
             if not self._session_could_have_written(session, path, created):
                 continue
-            if created is None or self._unresolved_transcript_sibling(session, cwd, created):
+            if created is None or self._unresolved_transcript_sibling(
+                session, cwd, created, sibling_writes
+            ):
                 continue
             if best is None or modified > best[0]:
                 best = (modified, path)
@@ -7801,6 +8188,17 @@ class SessionManager:
     async def _mark_ended(self, session: Session, reason: str) -> None:
         if session.record.state in {"exited", "crashed"}:
             return
+        try:
+            await self._retire_ended_session(session, reason)
+        finally:
+            # Set however the teardown ended, including by raising: a waiter that
+            # outlived a failed teardown would otherwise wait out its whole bound for
+            # an end that has already happened.
+            settled = getattr(session, "end_settled", None)
+            if settled is not None:
+                settled.set()
+
+    async def _retire_ended_session(self, session: Session, reason: str) -> None:
         exit_status = getattr(session.pty, "exit_status", None)
         exit_code = exit_status() if callable(exit_status) else None
         session.record.exit_code = exit_code
