@@ -293,6 +293,40 @@ def test_implausible_times_are_refused_counted_and_never_open_a_segment(
     ledger.close()
 
 
+def test_an_implausible_derived_start_never_homes_an_entity_in_an_old_month(
+    tmp_path: Path,
+) -> None:
+    """A placeable observation can still carry a start nothing could have had.
+
+    A history row whose `spawned_at` is zero declared the run to have begun at the
+    epoch, and a model request's start is its result's time minus its duration;
+    either used to open a segment for the month that arithmetic named.
+    """
+
+    root = tmp_path / "telemetry"
+    now = 1_788_000_000.0  # 2026-08-29
+    ledger = CanonicalTelemetryLedger(root, clock=Clock(now))
+    dims = dimensions()
+    dims["run_started_at"] = 1.0
+    ledger.record_event(event("tool_use", ts=now, tool="Read", call_id="call-1"), dims)
+    ledger.record_event(
+        event(
+            "canonical_model_request",
+            ts=now + 5,
+            source="otel",
+            request_id="request-1",
+            duration_ms=now * 1000,
+        ),
+        dimensions(),
+    )
+    assert sorted(path.stem for path in (root / "segments").glob("*.sqlite3")) == ["2026-08"]
+    run = ledger.run_audit("run-1")
+    assert run is not None
+    assert run["run"]["started_at_source"] == "first_evidence"
+    assert run["run"]["started_at"] == now
+    ledger.close()
+
+
 def test_storage_status_reads_the_catalog_and_two_directory_listings(tmp_path: Path) -> None:
     root = tmp_path / "telemetry"
     ledger = CanonicalTelemetryLedger(root, clock=Clock(DAY + 60))

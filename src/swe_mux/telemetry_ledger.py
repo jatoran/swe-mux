@@ -749,7 +749,11 @@ class CanonicalTelemetryLedger(LegacyImportMixin, NativeReconcileMixin, LedgerQu
         declared = dimensions.get("run_started_at")
         # A declared start comes from the session record or the history row. Without
         # one, the earliest evidence is the only start there is, and the row says so
-        # rather than presenting the estimate as a fact.
+        # rather than presenting the estimate as a fact. A declared start this ledger
+        # cannot place (a history row's zero) is no declaration, and must not give
+        # the run a home in a `1970-01` segment.
+        if declared and self._plausible(float(declared)) is not None:
+            declared = None
         started_at = float(declared) if declared else float(event.ts)
         started_at_source = "declared" if declared else "first_evidence"
         connection = self._entity_connection("run", run_id, period_of(started_at))
@@ -1468,9 +1472,10 @@ class CanonicalTelemetryLedger(LegacyImportMixin, NativeReconcileMixin, LedgerQu
         duration = payload.get("duration_ms")
         duration_ms = float(duration) if isinstance(duration, (int, float)) else None
         started_at = event.ts - duration_ms / 1000 if duration_ms is not None else None
-        connection = self._entity_connection(
-            "model_request", request_id, period_of(started_at or event.ts)
-        )
+        # A start derived from a nonsensical duration homes the request in its result's
+        # month rather than in whatever month that subtraction lands on.
+        home = started_at if started_at and self._plausible(started_at) is None else event.ts
+        connection = self._entity_connection("model_request", request_id, period_of(home))
         connection.execute(
             "INSERT INTO telemetry_model_requests"
             "(model_request_id,run_id,turn_id,agent_id,session_id,project_id,backend,model,"
