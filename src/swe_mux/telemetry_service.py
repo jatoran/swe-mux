@@ -1,10 +1,14 @@
 """Batched EventBus adapter that keeps canonical telemetry SQLite work off the loop.
 
-One dedicated worker thread owns every ledger call: live ingestion, the legacy
-catch-up importer, direct native reconciliation, the rollup and sealing worker, and
-every query the routes make. That single writer is what lets the storage core stay
-synchronous and simple, and the batching is what keeps a busy fleet from paying one
-commit per observation.
+Three worker threads, each owning its own ledger (and so its own connections) over
+the same files: live ingestion; maintenance - the legacy catch-up importer, direct
+native reconciliation, rollups, and sealing; and the queries the routes make. They
+used to share one thread, so a seal's integrity check of a multi-gigabyte month or a
+first reconciliation of a long transcript held every live observation behind it for
+minutes. The ledgers share a `LedgerShared` write lock, so writes still happen one
+transaction at a time and every lock order stays inside one thread; a long read
+holds nothing. The batching is what keeps a busy fleet from paying one commit per
+observation.
 """
 
 from __future__ import annotations
@@ -21,7 +25,7 @@ from typing import Any
 from .background_tasks import background
 from .event_bus import EventBus
 from .models import MuxEvent
-from .telemetry_ledger import CanonicalTelemetryLedger
+from .telemetry_ledger import CanonicalTelemetryLedger, LedgerShared
 from .telemetry_queries import Filters
 
 CANONICAL_TELEMETRY_LOOP = "canonical-telemetry"
@@ -37,6 +41,13 @@ _BACKFILL_RECHECK_SECONDS = 300.0
 #: conversation costs one stat.
 _RECONCILE_SECONDS = 300.0
 _RECONCILE_INVENTORY = 2000
+#: A reconciliation pass at or above this is logged at WARNING. An incremental pass
+#: reads what was appended in five minutes; one that takes this long re-read
+#: something whole.
+SLOW_RECONCILE_SECONDS = 30.0
+#: Storage status walks the ledger directory and counts the rollup tables; it is
+#: refreshed this often, and after every seal, rather than on every rollup tick.
+_STORAGE_REFRESH_SECONDS = 600.0
 
 #: (backend, harness version, parser version, {(event name, recognised): count})
 PendingSignatures = tuple[str, str | None, str, dict[tuple[str, bool], int]]
@@ -48,8 +59,18 @@ class CanonicalTelemetryService:
     """Daemon adapter around `CanonicalTelemetryLedger`."""
 
     def __init__(self, root: Path) -> None:
-        self.ledger = CanonicalTelemetryLedger(root)
+        shared = LedgerShared()
+        #: Live ingestion's ledger; only `_executor` calls into it while running.
+        self.ledger = CanonicalTelemetryLedger(root, shared=shared)
+        self._maintenance = CanonicalTelemetryLedger(root, shared=shared)
+        self._queries = CanonicalTelemetryLedger(root, shared=shared)
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="telemetry-ledger")
+        self._maintenance_executor = ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="telemetry-maintenance"
+        )
+        self._query_executor = ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="telemetry-query"
+        )
         self._events: EventBus | None = None
         self._queue: asyncio.Queue[MuxEvent | None] | None = None
         self._sessions: Any = None
@@ -71,6 +92,7 @@ class CanonicalTelemetryService:
         self._last_sealed_period: str | None = None
         self._last_sealed_at: float | None = None
         self._reconcile_summary: dict[str, Any] = {}
+        self._storage_refreshed_at: float | None = None
         self._storage: dict[str, Any] = {
             "bytes": 0,
             "segments": 0,
@@ -232,30 +254,31 @@ class CanonicalTelemetryService:
         if signatures:
             await loop.run_in_executor(self._executor, self._record_batch, [], signatures)
 
+    async def _maintain(self, function: Any, /, *args: Any, **kwargs: Any) -> Any:
+        """Run one maintenance-ledger call on the maintenance thread."""
+
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            self._maintenance_executor, partial(function, *args, **kwargs)
+        )
+
     async def _backfill(self) -> None:
         assert self._legacy_database is not None
         await asyncio.sleep(10)
-        loop = asyncio.get_running_loop()
+        ledger = self._maintenance
         importers = (
-            ("history", self.ledger.import_legacy_runs_batch),
-            ("status_turns", self.ledger.import_legacy_turns_batch),
-            ("compactions", self.ledger.import_legacy_compactions_batch),
-            ("tier0_tests", self.ledger.import_legacy_verifications_batch),
-            ("tool_events", self.ledger.import_legacy_batch),
+            ("history", ledger.import_legacy_runs_batch),
+            ("status_turns", ledger.import_legacy_turns_batch),
+            ("compactions", ledger.import_legacy_compactions_batch),
+            ("tier0_tests", ledger.import_legacy_verifications_batch),
+            ("tool_events", ledger.import_legacy_batch),
         )
         stream_index = 0
         while True:
             stream, importer = importers[stream_index]
             self._backfill_stream = stream
             with background.iteration(CANONICAL_TELEMETRY_BACKFILL_LOOP):
-                result = await loop.run_in_executor(
-                    self._executor,
-                    partial(
-                        importer,
-                        self._legacy_database,
-                        batch_size=250,
-                    ),
-                )
+                result = await self._maintain(importer, self._legacy_database, batch_size=250)
                 self._backfilled += int(result["imported"])
                 if result["completed"]:
                     stream_index += 1
@@ -274,21 +297,49 @@ class CanonicalTelemetryService:
         """Read each native store past its watermark straight into the reducer."""
 
         await asyncio.sleep(60)
-        loop = asyncio.get_running_loop()
         while True:
             with background.iteration(CANONICAL_TELEMETRY_RECONCILE_LOOP):
-                rows = await self._history.telemetry_history_rows(_RECONCILE_INVENTORY)
-                summary = await loop.run_in_executor(
-                    self._executor, self.ledger.reconcile_native_rows, rows
-                )
-                self._reconcile_summary = {**summary, "at": time.time(), "inventory": len(rows)}
+                await self._reconcile_pass()
             await asyncio.sleep(_RECONCILE_SECONDS)
+
+    async def _reconcile_pass(self) -> dict[str, Any]:
+        rows = await self._history.telemetry_history_rows(_RECONCILE_INVENTORY)
+        started = time.perf_counter()
+        summary: dict[str, Any] = await self._maintain(
+            self._maintenance.reconcile_native_rows, rows
+        )
+        elapsed = round(time.perf_counter() - started, 3)
+        self._reconcile_summary = {
+            **summary,
+            "at": time.time(),
+            "inventory": len(rows),
+            "elapsed_s": elapsed,
+        }
+        log.log(
+            logging.WARNING if elapsed >= SLOW_RECONCILE_SECONDS else logging.DEBUG,
+            "canonical telemetry reconciliation scanned=%d skipped=%d errors=%d inserted=%d "
+            "in %.1fs",
+            summary["scanned"],
+            summary["skipped"],
+            summary["errors"],
+            summary["inserted"],
+            elapsed,
+            extra={"elapsed_s": elapsed, "inventory": len(rows)},
+        )
+        return self._reconcile_summary
+
+    async def _refresh_storage(self, *, force: bool = False) -> None:
+        now = time.monotonic()
+        refreshed = self._storage_refreshed_at
+        if not force and refreshed is not None and now - refreshed < _STORAGE_REFRESH_SECONDS:
+            return
+        self._storage = await self._maintain(self._maintenance.storage_status)
+        self._storage_refreshed_at = now
 
     async def _rollup(self) -> None:
         await asyncio.sleep(30)
-        loop = asyncio.get_running_loop()
         with background.iteration(CANONICAL_TELEMETRY_ROLLUP_LOOP):
-            self._schema = await loop.run_in_executor(self._executor, self.ledger.schema_status)
+            self._schema = await self._maintain(self._maintenance.schema_status)
             if self._schema.get("drift"):
                 log.warning(
                     "canonical telemetry schema drift in %s", ", ".join(self._schema["drift"])
@@ -298,24 +349,17 @@ class CanonicalTelemetryService:
             with background.iteration(CANONICAL_TELEMETRY_ROLLUP_LOOP):
                 # Rollups wait for the first catch-up pass so a day is not rebuilt
                 # once per import batch; storage is reported regardless.
+                sealed = None
                 if self._backfill_completed:
-                    rebuilt = await loop.run_in_executor(
-                        self._executor, self.ledger.rebuild_next_closed_day
-                    )
+                    rebuilt = await self._maintain(self._maintenance.rebuild_next_closed_day)
                     if rebuilt is None:
-                        rebuilt = await loop.run_in_executor(
-                            self._executor, self.ledger.rebuild_next_closed_hour
-                        )
+                        rebuilt = await self._maintain(self._maintenance.rebuild_next_closed_hour)
                     if rebuilt is None:
-                        sealed = await loop.run_in_executor(
-                            self._executor, self.ledger.seal_next_segment
-                        )
+                        sealed = await self._maintain(self._maintenance.seal_next_segment)
                         if sealed is not None:
                             self._last_sealed_period = str(sealed["period"])
                             self._last_sealed_at = float(sealed["sealed_at"])
-                self._storage = await loop.run_in_executor(
-                    self._executor, self.ledger.storage_status
-                )
+                await self._refresh_storage(force=sealed is not None)
             if rebuilt is not None:
                 await asyncio.sleep(0.25)
             elif not self._backfill_completed:
@@ -338,10 +382,12 @@ class CanonicalTelemetryService:
         if self._task is not None:
             await self._task
         self._task = None
-        await asyncio.to_thread(self._executor.shutdown, wait=True)
+        for executor in (self._executor, self._maintenance_executor, self._query_executor):
+            await asyncio.to_thread(executor.shutdown, wait=True)
 
     def close(self) -> None:
-        self.ledger.close()
+        for ledger in (self.ledger, self._maintenance, self._queries):
+            ledger.close()
 
     def health(self) -> dict[str, Any]:
         return {
@@ -356,7 +402,16 @@ class CanonicalTelemetryService:
             "reconciliation": dict(self._reconcile_summary),
             "last_sealed_period": self._last_sealed_period,
             "last_sealed_at": self._last_sealed_at,
+            "last_seal_seconds": self._maintenance.last_seal_seconds,
+            "seals": self._maintenance.seals,
+            "seal_invalidations": sum(
+                ledger.seal_invalidations for ledger in (self.ledger, self._maintenance)
+            ),
+            "rejected_observations": sum(
+                ledger.rejected_observations for ledger in (self.ledger, self._maintenance)
+            ),
             "storage": dict(self._storage),
+            "storage_refreshed_at": self._storage_refreshed_at,
             "schema": {
                 key: self._schema[key]
                 for key in ("version", "drift", "migrations")
@@ -369,11 +424,17 @@ class CanonicalTelemetryService:
         }
 
     async def _call(self, function: Any, /, *args: Any, **kwargs: Any) -> Any:
+        """Run one query-ledger call on the query thread."""
+
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(self._executor, partial(function, *args, **kwargs))
+        return await loop.run_in_executor(
+            self._query_executor, partial(function, *args, **kwargs)
+        )
 
     async def schema_status(self) -> dict[str, Any]:
-        result: dict[str, Any] = await self._call(self.ledger.schema_status)
+        # A route asks for this; it reads schema signatures and must not wait out a
+        # seal on the maintenance thread.
+        result: dict[str, Any] = await self._call(self._queries.schema_status)
         self._schema = result
         return result
 
@@ -382,10 +443,7 @@ class CanonicalTelemetryService:
 
         if self._history is None:
             return {"scanned": 0, "skipped": 0, "errors": 0, "inserted": 0}
-        rows = await self._history.telemetry_history_rows(_RECONCILE_INVENTORY)
-        summary: dict[str, Any] = await self._call(self.ledger.reconcile_native_rows, rows)
-        self._reconcile_summary = {**summary, "at": time.time(), "inventory": len(rows)}
-        return self._reconcile_summary
+        return await self._reconcile_pass()
 
     async def _windowed(
         self,
@@ -403,54 +461,54 @@ class CanonicalTelemetryService:
         return result
 
     async def tool_summary(self, **scope: Any) -> dict[str, Any]:
-        return await self._windowed(self.ledger.tool_summary, **scope)
+        return await self._windowed(self._queries.tool_summary, **scope)
 
     async def skill_summary(self, **scope: Any) -> dict[str, Any]:
-        return await self._windowed(self.ledger.skill_summary, **scope)
+        return await self._windowed(self._queries.skill_summary, **scope)
 
     async def verification_summary(self, **scope: Any) -> dict[str, Any]:
-        return await self._windowed(self.ledger.verification_summary, **scope)
+        return await self._windowed(self._queries.verification_summary, **scope)
 
     async def workload_summary(self, **scope: Any) -> dict[str, Any]:
-        return await self._windowed(self.ledger.workload_summary, **scope)
+        return await self._windowed(self._queries.workload_summary, **scope)
 
     async def compaction_summary(self, **scope: Any) -> dict[str, Any]:
-        return await self._windowed(self.ledger.compaction_summary, **scope)
+        return await self._windowed(self._queries.compaction_summary, **scope)
 
     async def quality_summary(self, **scope: Any) -> dict[str, Any]:
-        return await self._windowed(self.ledger.quality_summary, **scope)
+        return await self._windowed(self._queries.quality_summary, **scope)
 
     async def metric_summary(self, **scope: Any) -> dict[str, Any]:
-        return await self._windowed(self.ledger.metric_summary, **scope)
+        return await self._windowed(self._queries.metric_summary, **scope)
 
     async def inefficiency_findings(self, **scope: Any) -> dict[str, Any]:
-        return await self._windowed(self.ledger.inefficiency_findings, **scope)
+        return await self._windowed(self._queries.inefficiency_findings, **scope)
 
     async def compare_cohorts(self, **scope: Any) -> dict[str, Any]:
-        return await self._windowed(self.ledger.compare_cohorts, **scope)
+        return await self._windowed(self._queries.compare_cohorts, **scope)
 
     async def tool_page(self, **filters: Any) -> dict[str, Any]:
-        result: dict[str, Any] = await self._call(self.ledger.tool_page, **filters)
+        result: dict[str, Any] = await self._call(self._queries.tool_page, **filters)
         return result
 
     async def entity_page(self, **arguments: Any) -> dict[str, Any]:
-        result: dict[str, Any] = await self._call(self.ledger.entity_page, **arguments)
+        result: dict[str, Any] = await self._call(self._queries.entity_page, **arguments)
         return result
 
     async def tool_audit(self, tool_call_id: str) -> dict[str, Any] | None:
-        result: dict[str, Any] | None = await self._call(self.ledger.tool_audit, tool_call_id)
+        result: dict[str, Any] | None = await self._call(self._queries.tool_audit, tool_call_id)
         return result
 
     async def run_audit(self, run_id: str) -> dict[str, Any] | None:
-        result: dict[str, Any] | None = await self._call(self.ledger.run_audit, run_id)
+        result: dict[str, Any] | None = await self._call(self._queries.run_audit, run_id)
         return result
 
     async def turn_audit(self, turn_id: str) -> dict[str, Any] | None:
-        result: dict[str, Any] | None = await self._call(self.ledger.turn_audit, turn_id)
+        result: dict[str, Any] | None = await self._call(self._queries.turn_audit, turn_id)
         return result
 
     async def review_finding(self, **arguments: Any) -> dict[str, Any]:
-        result: dict[str, Any] = await self._call(self.ledger.review_finding, **arguments)
+        result: dict[str, Any] = await self._call(self._queries.review_finding, **arguments)
         return result
 
     async def shadow_comparison(self, *, from_ts: float, to_ts: float) -> dict[str, Any]:
@@ -465,26 +523,26 @@ class CanonicalTelemetryService:
                 "interpretation": "no legacy database is attached to this daemon",
             }
         result: dict[str, Any] = await self._call(
-            self.ledger.shadow_comparison, self._legacy_database, from_ts=from_ts, to_ts=to_ts
+            self._queries.shadow_comparison, self._legacy_database, from_ts=from_ts, to_ts=to_ts
         )
         return result
 
     async def export_page(self, **arguments: Any) -> dict[str, Any]:
-        result: dict[str, Any] = await self._call(self.ledger.export_page, **arguments)
+        result: dict[str, Any] = await self._call(self._queries.export_page, **arguments)
         return result
 
     async def quota_usage_evidence(
         self, backend: str, from_ts: float, to_ts: float
     ) -> dict[str, list[tuple[Any, ...]]]:
         result: dict[str, list[tuple[Any, ...]]] = await self._call(
-            self.ledger.quota_usage_evidence, backend, from_ts, to_ts
+            self._queries.quota_usage_evidence, backend, from_ts, to_ts
         )
         return result
 
     async def quota_usage_coverage(self, backend: str | None = None) -> float | None:
-        result: float | None = await self._call(self.ledger.quota_usage_coverage, backend)
+        result: float | None = await self._call(self._queries.quota_usage_coverage, backend)
         return result
 
     async def parser_signatures(self) -> list[dict[str, Any]]:
-        result: list[dict[str, Any]] = await self._call(self.ledger.parser_signatures)
+        result: list[dict[str, Any]] = await self._call(self._queries.parser_signatures)
         return result

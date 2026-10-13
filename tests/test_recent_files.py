@@ -208,3 +208,32 @@ async def test_read_recent_files_drops_a_deleted_committed_path(tmp_path: Path) 
 
     payload = await read_recent_files(repo)
     assert [item["path"] for item in payload["items"]] == ["stays.py"]
+
+
+@pytest.mark.asyncio
+async def test_read_recent_files_checks_existence_off_the_loop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Up to `CANDIDATE_LIMIT` stats per call; on the loop they stalled every terminal."""
+    import os
+    import threading
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    (repo / "first.py").write_text("print(1)\n", encoding="utf-8")
+    loop_thread = threading.current_thread()
+    threads: list[threading.Thread] = []
+    real_isfile = os.path.isfile
+
+    def recording(path: str | os.PathLike[str]) -> bool:
+        # `os.path` is shared, so only this repository's checks are the ones in question.
+        if str(path).startswith(str(repo)):
+            threads.append(threading.current_thread())
+        return real_isfile(path)
+
+    monkeypatch.setattr(os.path, "isfile", recording)
+    payload = await read_recent_files(repo)
+    assert [item["path"] for item in payload["items"]] == ["first.py"]
+    assert threads
+    assert all(thread is not loop_thread for thread in threads)

@@ -7,22 +7,29 @@ content-free evidence trail. Detailed provider output remains in the provider
 transcript or conversation store.
 
 The storage core is synchronous on purpose: the daemon adapter
-(`telemetry_service.CanonicalTelemetryService`) runs every call on one dedicated
-executor, and migrations, corpus backfills, and deterministic tests use this same
-reducer rather than an async twin. Schema and migrations live in
-`telemetry_schema.py`, the legacy importers in `telemetry_imports.py`, direct native
-reconciliation in `telemetry_reconcile.py`, and the query surface in
-`telemetry_queries.py`; this module owns identity, precedence, and the write path.
+(`telemetry_service.CanonicalTelemetryService`) opens one ledger per worker thread -
+live ingestion, maintenance, and queries - over the same files, and migrations,
+corpus backfills, and deterministic tests use this same reducer rather than an async
+twin. Ledgers over one root share a `LedgerShared`: its re-entrant write lock is held
+around every write transaction, so the threads never contend inside SQLite and a
+long read (a rollup's, a seal's integrity check) never holds the writer. Schema and
+migrations live in `telemetry_schema.py`, the legacy importers in
+`telemetry_imports.py`, direct native reconciliation in `telemetry_reconcile.py`,
+and the query surface in `telemetry_queries.py`; this module owns identity,
+precedence, and the write path.
 """
 
 from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import shutil
 import sqlite3
+import threading
 import time
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -36,6 +43,8 @@ from .telemetry_schema import (
     CALL_REPEATS_INSERT,
     CALL_REPEATS_SELECT,
     LEDGER_SCHEMA_VERSION,
+    PLAUSIBLE_FUTURE_SKEW_SECONDS,
+    PLAUSIBLE_OBSERVATION_FLOOR,
     QUALITY_FIELDS,
     canonical_json,
     classify_tool,
@@ -91,28 +100,99 @@ _RUN_LIFECYCLE_EVENTS = frozenset(
 _RUN_ENDING_EVENTS = frozenset({"agent_run_ended", "session_exited", "session_crashed"})
 _NATIVE_SOURCES = frozenset({"otel", "provider_otel", "transcript"})
 _UNMEASURED = "unknown"
+#: How long a connection waits on another process's write lock (the audit tool, a
+#: second daemon during a restart's drain) before SQLite reports it busy.
+_BUSY_TIMEOUT_SECONDS = 30.0
+#: A seal at or above this many seconds is logged at WARNING: it read a whole
+#: segment twice, which is minutes of disk on a multi-gigabyte month.
+SLOW_SEAL_SECONDS = 30.0
+#: How long a segment whose integrity check failed is left alone before another
+#: attempt. Retrying every rollup tick would re-read a broken file once a minute.
+SEAL_FAILURE_BACKOFF_SECONDS = 24 * 3600.0
+#: Rejected observations are logged at WARNING on the first of each kind and then
+#: every this-many, so a misbehaving producer is visible without flooding the log.
+_REJECTION_LOG_EVERY = 1000
+
+
+@dataclass
+class LedgerShared:
+    """State every ledger over one telemetry root shares within a process.
+
+    The write lock serialises write transactions across the ledgers' threads, so
+    two of them never wait on each other inside SQLite: a batch that writes a
+    segment and then the catalog while another holds the catalog and wants that
+    segment is a lock-order deadlock SQLite cannot detect, and both would sit out
+    their busy timeout. Migration outcomes are shared so the one ledger that
+    happened to open a file first is not the only one that can report it.
+    """
+
+    write_lock: threading.RLock = field(default_factory=threading.RLock)
+    migrations: dict[str, dict[str, Any]] = field(default_factory=dict)
+    seal_failures: dict[str, float] = field(default_factory=dict)
+    _tick_lock: threading.Lock = field(default_factory=threading.Lock)
+    _last_tick: float = float("-inf")
+
+    def tick(self, clock: Callable[[], float]) -> float:
+        """A clock reading strictly later than every earlier one, across the ledgers.
+
+        A rollup keeps a dirty mark made after its read began (`dirtied_at` later
+        than the read's start). With a coarse clock a write committed just after
+        the read took its snapshot can stamp the same reading the read started at,
+        and the mark would be taken as already covered; strictly increasing
+        readings make "after" mean after.
+        """
+
+        with self._tick_lock:
+            reading = max(clock(), self._last_tick + 1e-6)
+            self._last_tick = reading
+            return reading
 
 
 class CanonicalTelemetryLedger(LegacyImportMixin, NativeReconcileMixin, LedgerQueryMixin):
     """Synchronous core for segmented canonical telemetry."""
 
-    def __init__(self, root: Path) -> None:
+    def __init__(
+        self,
+        root: Path,
+        *,
+        shared: LedgerShared | None = None,
+        clock: Callable[[], float] = time.time,
+    ) -> None:
         self.root = root
         self.segments_dir = root / "segments"
         self.segments_dir.mkdir(parents=True, exist_ok=True)
-        # The service constructs the ledger during startup and performs every live
-        # operation on its dedicated single-worker executor.
-        self._catalog = sqlite3.connect(root / "catalog.sqlite3", check_same_thread=False)
+        self._shared = shared or LedgerShared()
+        self._write_lock = self._shared.write_lock
+        self._clock = clock
+        # Each ledger's connections are used only by the one worker thread that owns
+        # the ledger; `check_same_thread=False` is because that thread is not the
+        # one constructing it.
+        self._catalog = sqlite3.connect(
+            root / "catalog.sqlite3", check_same_thread=False, timeout=_BUSY_TIMEOUT_SECONDS
+        )
         self._catalog.row_factory = sqlite3.Row
-        self._migrations: dict[str, dict[str, Any]] = {
-            "catalog": migrate_catalog(self._catalog)
-        }
+        with self._write_lock:
+            self._shared.migrations.setdefault("catalog", migrate_catalog(self._catalog))
+        self._migrations = self._shared.migrations
         self._segments: dict[str, sqlite3.Connection] = {}
         self._dirty_segments: set[str] = set()
+        # Segments a batch actually wrote a row to, with the first reason. Only
+        # these lose a seal and get a new last-write stamp at commit.
+        self._written_segments: dict[str, str] = {}
+        # The month of the observation being reduced, against which an entity
+        # update elsewhere is named late entity evidence.
+        self._event_period: str | None = None
         # Timestamps of entities a batch touched *besides* the events' own: the
         # start of a run or turn that ended later, a call abandoned by a run end.
         # Their day and hour are dirtied so the rollup they live in is rebuilt.
         self._extra_dirty_stamps: set[float] = set()
+        # Observations refused for an implausible time, per (reason, type, source),
+        # waiting for the batch's catalog commit: [count, newest claimed time].
+        self._pending_rejections: dict[tuple[str, str, str], list[float]] = {}
+        self.rejected_observations = 0
+        self.seals = 0
+        self.seal_invalidations = 0
+        self.last_seal_seconds: float | None = None
         self._closed = False
 
     def close(self) -> None:
@@ -158,23 +238,26 @@ class CanonicalTelemetryLedger(LegacyImportMixin, NativeReconcileMixin, LedgerQu
         if existing is not None:
             return existing
         path = self.segments_dir / f"{period}.sqlite3"
-        connection = sqlite3.connect(path, check_same_thread=False)
+        connection = sqlite3.connect(path, check_same_thread=False, timeout=_BUSY_TIMEOUT_SECONDS)
         connection.row_factory = sqlite3.Row
-        outcome = migrate_segment(connection)
-        if outcome["applied"]:
-            log.info(
-                "canonical telemetry segment %s migrated from schema %s to %s (%d steps)",
-                period,
-                outcome["found"],
-                outcome["version"],
-                len(outcome["applied"]),
+        with self._write_lock:
+            outcome = migrate_segment(connection)
+            if outcome["applied"]:
+                log.info(
+                    "canonical telemetry segment %s migrated from schema %s to %s (%d steps)",
+                    period,
+                    outcome["found"],
+                    outcome["version"],
+                    len(outcome["applied"]),
+                )
+            # The first ledger to open a file is the one that saw its migration.
+            if outcome["applied"] or period not in self._migrations:
+                self._migrations[period] = outcome
+            self._catalog.execute(
+                "INSERT OR IGNORE INTO ledger_segments(period,relative_path) VALUES(?,?)",
+                (period, str(path.relative_to(self.root))),
             )
-        self._migrations[period] = outcome
-        self._catalog.execute(
-            "INSERT OR IGNORE INTO ledger_segments(period,relative_path) VALUES(?,?)",
-            (period, str(path.relative_to(self.root))),
-        )
-        self._catalog.commit()
+            self._catalog.commit()
         self._segments[period] = connection
         return connection
 
@@ -219,9 +302,10 @@ class CanonicalTelemetryLedger(LegacyImportMixin, NativeReconcileMixin, LedgerQu
             "expected_segment_signature": expected_segment,
             "segment_signatures": segments,
             "drift": drift,
+            # A copy: another ledger's thread may open a new month's file meanwhile.
             "migrations": {
                 name: {"found": item["found"], "applied": len(item["applied"])}
-                for name, item in self._migrations.items()
+                for name, item in dict(self._migrations).items()
                 if item["applied"] or item["found"] != LEDGER_SCHEMA_VERSION
             },
         }
@@ -239,27 +323,129 @@ class CanonicalTelemetryLedger(LegacyImportMixin, NativeReconcileMixin, LedgerQu
                 "INSERT INTO entity_locations(entity_kind,entity_id,period) VALUES(?,?,?)",
                 (entity_kind, entity_id, period),
             )
-        self._dirty_segments.add(period)
-        return self._writable_segment(period, reason="late entity evidence")
+        # Every caller writes the entity's row next (an upsert, an evidence link for
+        # evidence that was just inserted), so the home segment is written. An
+        # entity whose home is not the month of the evidence being reduced - a run
+        # that began last month - is late entity evidence for that home.
+        late = period != (self._event_period or preferred_period)
+        self._note_write(period, "late entity evidence" if late else "new observation")
+        return self._segment(period)
 
-    def _writable_segment(self, period: str, *, reason: str) -> sqlite3.Connection:
-        connection = self._segment(period)
-        sealed = self._catalog.execute(
-            "SELECT sealed_at FROM ledger_segments WHERE period=? AND sealed_at IS NOT NULL",
-            (period,),
-        ).fetchone()
-        if sealed is not None:
-            now = time.time()
-            self._catalog.execute(
-                "UPDATE segment_seals SET invalidated_at=?,invalidation_reason=? "
-                "WHERE period=? AND sealed_at=?",
-                (now, reason, period, sealed["sealed_at"]),
-            )
-            self._catalog.execute(
-                "UPDATE ledger_segments SET sealed_at=NULL,sha256=NULL WHERE period=?",
+    def _note_write(self, period: str, reason: str) -> None:
+        """Record that this batch wrote a row to `period`'s segment.
+
+        Only a real write invalidates a seal and moves the segment's last-write
+        stamp; both happen at commit (`_stamp_written_segments`). Deciding here,
+        before an `INSERT OR IGNORE` had answered, is what used to unseal a segment
+        for evidence that turned out to be already present.
+        """
+
+        self._dirty_segments.add(period)
+        self._written_segments.setdefault(period, reason)
+
+    def _stamp_written_segments(self, now: float) -> None:
+        """After the segment commits: drop any seal on what was written, stamp it.
+
+        Runs after the segments are committed and before the catalog is, under the
+        write lock. A seal the maintenance thread recorded while this batch was
+        writing is therefore always either invalidated here or refused by the
+        seal's own conditional update (`seal_next_segment`), never left describing
+        bytes that changed under it.
+        """
+
+        for period, reason in self._written_segments.items():
+            sealed = self._catalog.execute(
+                "SELECT sealed_at FROM ledger_segments WHERE period=? AND sealed_at IS NOT NULL",
                 (period,),
+            ).fetchone()
+            if sealed is not None:
+                self._catalog.execute(
+                    "UPDATE segment_seals SET invalidated_at=?,invalidation_reason=? "
+                    "WHERE period=? AND sealed_at=?",
+                    (now, reason, period, sealed["sealed_at"]),
+                )
+                self._catalog.execute(
+                    "UPDATE ledger_segments SET sealed_at=NULL,sha256=NULL WHERE period=?",
+                    (period,),
+                )
+                self.seal_invalidations += 1
+                log.info(
+                    "canonical telemetry segment %s unsealed: %s",
+                    period,
+                    reason,
+                    extra={"period": period, "reason": reason},
+                )
+            self._catalog.execute(
+                "UPDATE ledger_segments SET last_written_at=? WHERE period=?", (now, period)
             )
-        return connection
+        self._written_segments.clear()
+
+    def _plausible(self, observed_at: float) -> str | None:
+        """Why an observation's time cannot place it, or None when it can."""
+
+        if observed_at != observed_at or observed_at < PLAUSIBLE_OBSERVATION_FLOOR:
+            return "before_floor"
+        if observed_at > self._clock() + PLAUSIBLE_FUTURE_SKEW_SECONDS:
+            return "in_future"
+        return None
+
+    def _reject(self, event: MuxEvent, reason: str) -> None:
+        """Count an observation whose time cannot be believed, and say so.
+
+        It is refused rather than filed at its receipt time: nothing here is
+        estimated, and a reconciled record carries a time from the past that its
+        receipt would misfile into the current month. Live sources resolve an
+        absent event time at the source (`telemetry_otlp._timestamp`), where the
+        receipt time is honest, so what reaches this point is unplaceable.
+        """
+
+        key = (reason, str(event.type), str(event.source))
+        pending = self._pending_rejections.setdefault(key, [0.0, float("-inf")])
+        pending[0] += 1
+        if event.ts == event.ts:
+            pending[1] = max(pending[1], float(event.ts))
+        self.rejected_observations += 1
+        count = self.rejected_observations
+        if count == 1 or count % _REJECTION_LOG_EVERY == 0:
+            log.warning(
+                "canonical telemetry refused %d observation(s) with an implausible time; "
+                "latest %s %s from %s claimed ts=%s",
+                self.rejected_observations,
+                event.type,
+                reason,
+                event.source,
+                event.ts,
+                extra={"reason": reason, "event_type": event.type, "source": event.source},
+            )
+
+    def _flush_rejections(self, now: float) -> None:
+        for (reason, event_type, source), (count, claimed) in self._pending_rejections.items():
+            self._catalog.execute(
+                "INSERT INTO rejected_observations(reason,event_type,source_kind,occurrences,"
+                "first_seen_at,last_seen_at,last_claimed_at) VALUES(?,?,?,?,?,?,?) "
+                "ON CONFLICT(reason,event_type,source_kind) DO UPDATE SET "
+                "occurrences=occurrences+excluded.occurrences,last_seen_at=excluded.last_seen_at,"
+                "last_claimed_at=excluded.last_claimed_at",
+                (
+                    reason,
+                    event_type,
+                    source,
+                    int(count),
+                    now,
+                    now,
+                    claimed if claimed != float("-inf") else None,
+                ),
+            )
+        self._pending_rejections.clear()
+
+    def rejected_observation_summary(self) -> list[dict[str, Any]]:
+        """Every kind of refused observation, with how often and when it was last seen."""
+
+        rows = self._catalog.execute(
+            "SELECT reason,event_type,source_kind,occurrences,first_seen_at,last_seen_at,"
+            "last_claimed_at FROM rejected_observations ORDER BY last_seen_at DESC"
+        ).fetchall()
+        return [dict(row) for row in rows]
 
     # -- write path -------------------------------------------------------------
 
@@ -269,10 +455,40 @@ class CanonicalTelemetryLedger(LegacyImportMixin, NativeReconcileMixin, LedgerQu
     def record_events(
         self, items: Iterable[tuple[MuxEvent, Mapping[str, Any]]]
     ) -> int:
-        """Reduce a batch and commit each touched segment exactly once."""
+        """Reduce a batch and commit each touched segment exactly once.
 
-        self._dirty_segments.clear()
+        The whole batch is one write transaction per file under the shared write
+        lock: segments commit first, then the catalog, which is the order the
+        rollup worker's conditional dirty-mark delete and the sealer's conditional
+        seal both rely on.
+        """
+
+        with self._write_lock:
+            try:
+                return self._record_events_locked(items)
+            except BaseException:
+                # Never leave a half-written batch open for the next one to commit:
+                # it would land without the stamp that unseals what it changed.
+                self._rollback_batch()
+                raise
+
+    def _rollback_batch(self) -> None:
+        for connection in self._segments.values():
+            if connection.in_transaction:
+                connection.rollback()
+        if self._catalog.in_transaction:
+            self._catalog.rollback()
+        self._written_segments.clear()
+        self._pending_rejections.clear()
         self._extra_dirty_stamps.clear()
+
+    def _record_events_locked(
+        self, items: Iterable[tuple[MuxEvent, Mapping[str, Any]]]
+    ) -> int:
+        self._dirty_segments.clear()
+        self._written_segments.clear()
+        self._extra_dirty_stamps.clear()
+        self._event_period = None
         changed: dict[str, list[float]] = {}
         inserted = 0
         for event, dimensions in items:
@@ -283,7 +499,9 @@ class CanonicalTelemetryLedger(LegacyImportMixin, NativeReconcileMixin, LedgerQu
                 inserted += 1
         for period in self._dirty_segments:
             self._segment(period).commit()
-        now = time.time()
+        now = self._shared.tick(self._clock)
+        self._stamp_written_segments(now)
+        self._flush_rejections(now)
         stamps = set(self._extra_dirty_stamps)
         for period, timestamps in changed.items():
             first = min(timestamps)
@@ -298,7 +516,7 @@ class CanonicalTelemetryLedger(LegacyImportMixin, NativeReconcileMixin, LedgerQu
             )
             stamps.update(timestamps)
         self._mark_dirty(stamps, now)
-        if changed or stamps:
+        if self._catalog.in_transaction:
             self._catalog.commit()
         return inserted
 
@@ -333,7 +551,7 @@ class CanonicalTelemetryLedger(LegacyImportMixin, NativeReconcileMixin, LedgerQu
             return
         seen_at = time.time() if now is None else now
         version = harness_version or "unknown"
-        with self._catalog:
+        with self._write_lock, self._catalog:
             for (name, recognized), count in signatures.items():
                 self._catalog.execute(
                     "INSERT INTO parser_signatures(backend,harness_version,parser_version,"
@@ -377,8 +595,16 @@ class CanonicalTelemetryLedger(LegacyImportMixin, NativeReconcileMixin, LedgerQu
         if not event.session_id:
             return False
         observed_at = float(event.ts)
+        implausible = self._plausible(observed_at)
+        if implausible is not None:
+            # Never let a time this ledger cannot place open a segment: a zero
+            # filed 181k observations into a `1970-01` segment that was then
+            # resealed fifteen thousand times.
+            self._reject(event, implausible)
+            return False
         period = period_of(observed_at)
-        connection = self._writable_segment(period, reason="new observation")
+        self._event_period = period
+        connection = self._segment(period)
         self._dirty_segments.add(period)
         payload_bytes = canonical_json(event.payload)
         payload_sha = digest(payload_bytes)
@@ -431,7 +657,9 @@ class CanonicalTelemetryLedger(LegacyImportMixin, NativeReconcileMixin, LedgerQu
             ),
         ).rowcount
         if not inserted:
+            # Already recorded: nothing was written, so nothing is unsealed.
             return False
+        self._note_write(period, "new observation")
         self._upsert_run(connection, event, dimensions, evidence_id, run_id, backend)
         if event.type in _RUN_ENDING_EVENTS:
             self._close_incomplete_entities(event, evidence_id, run_id)
@@ -538,7 +766,7 @@ class CanonicalTelemetryLedger(LegacyImportMixin, NativeReconcileMixin, LedgerQu
                 )
                 self._extra_dirty_stamps.update(open_turns)
             if tool_rows or open_turns:
-                self._dirty_segments.add(period)
+                self._note_write(period, "run end abandonment")
 
     def _upsert_run(
         self,
@@ -555,7 +783,11 @@ class CanonicalTelemetryLedger(LegacyImportMixin, NativeReconcileMixin, LedgerQu
         declared = dimensions.get("run_started_at")
         # A declared start comes from the session record or the history row. Without
         # one, the earliest evidence is the only start there is, and the row says so
-        # rather than presenting the estimate as a fact.
+        # rather than presenting the estimate as a fact. A declared start this ledger
+        # cannot place (a history row's zero) is no declaration, and must not give
+        # the run a home in a `1970-01` segment.
+        if declared and self._plausible(float(declared)) is not None:
+            declared = None
         started_at = float(declared) if declared else float(event.ts)
         started_at_source = "declared" if declared else "first_evidence"
         connection = self._entity_connection("run", run_id, period_of(started_at))
@@ -1274,9 +1506,10 @@ class CanonicalTelemetryLedger(LegacyImportMixin, NativeReconcileMixin, LedgerQu
         duration = payload.get("duration_ms")
         duration_ms = float(duration) if isinstance(duration, (int, float)) else None
         started_at = event.ts - duration_ms / 1000 if duration_ms is not None else None
-        connection = self._entity_connection(
-            "model_request", request_id, period_of(started_at or event.ts)
-        )
+        # A start derived from a nonsensical duration homes the request in its result's
+        # month rather than in whatever month that subtraction lands on.
+        home = started_at if started_at and self._plausible(started_at) is None else event.ts
+        connection = self._entity_connection("model_request", request_id, period_of(home))
         connection.execute(
             "INSERT INTO telemetry_model_requests"
             "(model_request_id,run_id,turn_id,agent_id,session_id,project_id,backend,model,"
@@ -1568,24 +1801,33 @@ class CanonicalTelemetryLedger(LegacyImportMixin, NativeReconcileMixin, LedgerQu
         rows = self._segment(period).execute(sql, (start, end)).fetchall()
         return [tuple(row) for row in rows]
 
-    def _rebuild_bucket(
+    def _bucket_rows(
+        self, period: str, start: float, end: float
+    ) -> tuple[list[tuple[Any, ...]], list[dict[str, Any]], list[tuple[Any, ...]]]:
+        """Read one bucket's tool, workload, and quality rows; writes nothing."""
+
+        known = self._catalog.execute(
+            "SELECT 1 FROM ledger_segments WHERE period=?", (period,)
+        ).fetchone()
+        if known is None:
+            return [], [], []
+        return (
+            self._tool_rollup_rows(period, start, end),
+            self.workload_rows_between(period, start, end),
+            self._quality_rollup_rows(period, start, end),
+        )
+
+    def _write_bucket(
         self,
         *,
         bucket_column: str,
         bucket: str,
-        start: float,
-        end: float,
-        period: str,
         tool_table: str,
         workload_table: str,
         quality_table: str,
+        rows: tuple[list[tuple[Any, ...]], list[dict[str, Any]], list[tuple[Any, ...]]],
     ) -> None:
-        known = self._catalog.execute(
-            "SELECT 1 FROM ledger_segments WHERE period=?", (period,)
-        ).fetchone()
-        tool_rows = self._tool_rollup_rows(period, start, end) if known is not None else []
-        workload_rows = self.workload_rows_between(period, start, end) if known is not None else []
-        quality_rows = self._quality_rollup_rows(period, start, end) if known is not None else []
+        tool_rows, workload_rows, quality_rows = rows
         self._catalog.execute(f"DELETE FROM {quality_table} WHERE {bucket_column}=?", (bucket,))
         self._catalog.executemany(
             f"INSERT INTO {quality_table}({bucket_column},{self._QUALITY_ROLLUP_INSERT_COLUMNS}) "
@@ -1612,66 +1854,83 @@ class CanonicalTelemetryLedger(LegacyImportMixin, NativeReconcileMixin, LedgerQu
             ],
         )
 
-    def _rebuild_daily_entities(self, day: str, start: float, end: float, period: str) -> None:
+    def _daily_entity_rows(
+        self, start: float, end: float, period: str
+    ) -> tuple[list[tuple[Any, ...]], list[tuple[Any, ...]], list[tuple[Any, ...]]] | None:
+        """Read one day's skill, verification, and compaction rows; writes nothing."""
+
         known = self._catalog.execute(
             "SELECT 1 FROM ledger_segments WHERE period=?", (period,)
         ).fetchone()
-        connection = self._segment(period) if known is not None else None
+        if known is None:
+            return None
+        connection = self._segment(period)
+        skills = [
+            tuple(row)
+            for row in connection.execute(
+                "SELECT backend,COALESCE(model,'unknown'),COALESCE(project_id,''),origin,"
+                "skill_name,COALESCE(invocation_trigger,'unknown'),"
+                "COALESCE(skill_source,'unknown'),COALESCE(skill_scope,'unknown'),"
+                "SUM(occurrences) FROM telemetry_skill_invocations "
+                "WHERE activated_at>=? AND activated_at<? GROUP BY 1,2,3,4,5,6,7,8",
+                (start, end),
+            ).fetchall()
+        ]
+        verifications = [
+            tuple(row)
+            for row in connection.execute(
+                "SELECT backend,COALESCE(model,'unknown'),COALESCE(project_id,''),origin,"
+                "framework,COUNT(*),SUM(successful=1),SUM(COALESCE(passed,0)),"
+                "SUM(COALESCE(failed,0)),SUM(COALESCE(errors,0)),SUM(COALESCE(skipped,0)) "
+                "FROM telemetry_verifications WHERE finished_at>=? AND finished_at<? "
+                "GROUP BY 1,2,3,4,5",
+                (start, end),
+            ).fetchall()
+        ]
+        compactions = [
+            tuple(row)
+            for row in connection.execute(
+                "SELECT backend,COALESCE(model,'unknown'),COALESCE(project_id,''),origin,"
+                "COALESCE(trigger,'unknown'),COUNT(*),"
+                "SUM(CASE WHEN success=0 THEN 1 ELSE 0 END),"
+                "SUM(duration_ms IS NOT NULL),SUM(COALESCE(duration_ms,0)),"
+                "SUM(tokens_before IS NOT NULL AND tokens_after IS NOT NULL),"
+                "SUM(CASE WHEN tokens_before IS NOT NULL AND tokens_after IS NOT NULL "
+                "THEN tokens_before-tokens_after ELSE 0 END) "
+                "FROM telemetry_compactions WHERE observed_at>=? AND observed_at<? "
+                "GROUP BY 1,2,3,4,5",
+                (start, end),
+            ).fetchall()
+        ]
+        return skills, verifications, compactions
+
+    def _write_daily_entities(
+        self,
+        day: str,
+        rows: tuple[list[tuple[Any, ...]], list[tuple[Any, ...]], list[tuple[Any, ...]]] | None,
+    ) -> None:
         self._catalog.execute("DELETE FROM skill_daily WHERE day=?", (day,))
         self._catalog.execute("DELETE FROM verification_daily WHERE day=?", (day,))
         self._catalog.execute("DELETE FROM compaction_daily WHERE day=?", (day,))
-        if connection is None:
+        if rows is None:
             return
+        skills, verifications, compactions = rows
         self._catalog.executemany(
             "INSERT INTO skill_daily(day,backend,model,project_id,origin,skill_name,"
             "invocation_trigger,skill_source,skill_scope,invocations) VALUES(?,?,?,?,?,?,?,?,?,?)",
-            [
-                (day, *tuple(row))
-                for row in connection.execute(
-                    "SELECT backend,COALESCE(model,'unknown'),COALESCE(project_id,''),origin,"
-                    "skill_name,COALESCE(invocation_trigger,'unknown'),"
-                    "COALESCE(skill_source,'unknown'),COALESCE(skill_scope,'unknown'),"
-                    "SUM(occurrences) FROM telemetry_skill_invocations "
-                    "WHERE activated_at>=? AND activated_at<? GROUP BY 1,2,3,4,5,6,7,8",
-                    (start, end),
-                ).fetchall()
-            ],
+            [(day, *row) for row in skills],
         )
         self._catalog.executemany(
             "INSERT INTO verification_daily(day,backend,model,project_id,origin,framework,"
             "verifications,successful,passed,failed,errors,skipped) "
             "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
-            [
-                (day, *tuple(row))
-                for row in connection.execute(
-                    "SELECT backend,COALESCE(model,'unknown'),COALESCE(project_id,''),origin,"
-                    "framework,COUNT(*),SUM(successful=1),SUM(COALESCE(passed,0)),"
-                    "SUM(COALESCE(failed,0)),SUM(COALESCE(errors,0)),SUM(COALESCE(skipped,0)) "
-                    "FROM telemetry_verifications WHERE finished_at>=? AND finished_at<? "
-                    "GROUP BY 1,2,3,4,5",
-                    (start, end),
-                ).fetchall()
-            ],
+            [(day, *row) for row in verifications],
         )
         self._catalog.executemany(
             "INSERT INTO compaction_daily(day,backend,model,project_id,origin,trigger,count,"
             "failures,duration_count,duration_ms,token_count,tokens_reclaimed) "
             "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
-            [
-                (day, *tuple(row))
-                for row in connection.execute(
-                    "SELECT backend,COALESCE(model,'unknown'),COALESCE(project_id,''),origin,"
-                    "COALESCE(trigger,'unknown'),COUNT(*),"
-                    "SUM(CASE WHEN success=0 THEN 1 ELSE 0 END),"
-                    "SUM(duration_ms IS NOT NULL),SUM(COALESCE(duration_ms,0)),"
-                    "SUM(tokens_before IS NOT NULL AND tokens_after IS NOT NULL),"
-                    "SUM(CASE WHEN tokens_before IS NOT NULL AND tokens_after IS NOT NULL "
-                    "THEN tokens_before-tokens_after ELSE 0 END) "
-                    "FROM telemetry_compactions WHERE observed_at>=? AND observed_at<? "
-                    "GROUP BY 1,2,3,4,5",
-                    (start, end),
-                ).fetchall()
-            ],
+            [(day, *row) for row in compactions],
         )
 
     def rebuild_next_closed_day(self, *, now: float | None = None) -> str | None:
@@ -1681,9 +1940,15 @@ class CanonicalTelemetryLedger(LegacyImportMixin, NativeReconcileMixin, LedgerQu
         together. The day's hour rollups are left alone: a full-day window reads
         the day, a partial-day window still needs the hours, and the hours that
         changed are dirty in their own right and rebuilt by the hour worker.
+
+        The entities are read first and the rollups written after, in one short
+        transaction under the write lock, so a slow read never holds the writer
+        that live ingestion needs. A day dirtied again while it was being read
+        keeps its mark - the delete only takes a mark at or before the read began -
+        and is rebuilt on the next tick rather than left describing older rows.
         """
 
-        current_day = day_of(time.time() if now is None else now)
+        current_day = day_of(self._clock() if now is None else now)
         row = self._catalog.execute(
             "SELECT day FROM rollup_dirty_days WHERE day<? ORDER BY day LIMIT 1",
             (current_day,),
@@ -1694,23 +1959,27 @@ class CanonicalTelemetryLedger(LegacyImportMixin, NativeReconcileMixin, LedgerQu
         start = datetime.strptime(day, "%Y-%m-%d").replace(tzinfo=UTC).timestamp()
         end = start + 86400
         period = day[:7]
-        with self._catalog:
-            self._rebuild_bucket(
+        read_started = self._shared.tick(self._clock)
+        bucket = self._bucket_rows(period, start, end)
+        entities = self._daily_entity_rows(start, end, period)
+        with self._write_lock, self._catalog:
+            self._write_bucket(
                 bucket_column="day",
                 bucket=day,
-                start=start,
-                end=end,
-                period=period,
                 tool_table="tool_daily",
                 workload_table="workload_daily",
                 quality_table="quality_daily",
+                rows=bucket,
             )
-            self._rebuild_daily_entities(day, start, end, period)
-            self._catalog.execute("DELETE FROM rollup_dirty_days WHERE day=?", (day,))
+            self._write_daily_entities(day, entities)
+            self._catalog.execute(
+                "DELETE FROM rollup_dirty_days WHERE day=? AND dirtied_at<=?",
+                (day, read_started),
+            )
             self._catalog.execute(
                 "INSERT INTO rollup_days(day,rebuilt_at) VALUES(?,?) "
                 "ON CONFLICT(day) DO UPDATE SET rebuilt_at=excluded.rebuilt_at",
-                (day, time.time()),
+                (day, self._clock()),
             )
         return day
 
@@ -1719,10 +1988,11 @@ class CanonicalTelemetryLedger(LegacyImportMixin, NativeReconcileMixin, LedgerQu
 
         Hours serve the sub-day windows (the last 24 hours spans two partial days
         that no day rollup can answer), so every closed dirty hour is rebuilt even
-        when its day already has a rollup of its own.
+        when its day already has a rollup of its own. Read first, then written
+        under the write lock, exactly as `rebuild_next_closed_day`.
         """
 
-        current_hour = hour_of(time.time() if now is None else now)
+        current_hour = hour_of(self._clock() if now is None else now)
         row = self._catalog.execute(
             "SELECT hour FROM rollup_dirty_hours WHERE hour<? ORDER BY hour LIMIT 1",
             (current_hour,),
@@ -1731,77 +2001,151 @@ class CanonicalTelemetryLedger(LegacyImportMixin, NativeReconcileMixin, LedgerQu
             return None
         hour = str(row["hour"])
         start = datetime.strptime(hour, "%Y-%m-%dT%H").replace(tzinfo=UTC).timestamp()
-        with self._catalog:
-            self._rebuild_bucket(
+        read_started = self._shared.tick(self._clock)
+        bucket = self._bucket_rows(hour[:7], start, start + 3600)
+        with self._write_lock, self._catalog:
+            self._write_bucket(
                 bucket_column="hour",
                 bucket=hour,
-                start=start,
-                end=start + 3600,
-                period=hour[:7],
                 tool_table="tool_hourly",
                 workload_table="workload_hourly",
                 quality_table="quality_hourly",
+                rows=bucket,
             )
             self._catalog.execute(
                 "INSERT INTO rollup_hours(hour,rebuilt_at) VALUES(?,?) "
                 "ON CONFLICT(hour) DO UPDATE SET rebuilt_at=excluded.rebuilt_at",
-                (hour, time.time()),
+                (hour, self._clock()),
             )
-            self._catalog.execute("DELETE FROM rollup_dirty_hours WHERE hour=?", (hour,))
+            self._catalog.execute(
+                "DELETE FROM rollup_dirty_hours WHERE hour=? AND dirtied_at<=?",
+                (hour, read_started),
+            )
         return hour
+
+    def _seal_candidate(self, cutoff: float) -> sqlite3.Row | None:
+        now = self._clock()
+        backed_off = [
+            period
+            for period, retry_after in self._shared.seal_failures.items()
+            if retry_after > now
+        ]
+        excluded = f" AND period NOT IN ({','.join('?' for _ in backed_off)})" if backed_off else ""
+        row: sqlite3.Row | None = self._catalog.execute(
+            "SELECT period,relative_path,last_written_at FROM ledger_segments "
+            "WHERE sealed_at IS NULL AND last_written_at IS NOT NULL AND last_written_at<? "
+            "AND NOT EXISTS (SELECT 1 FROM rollup_dirty_days d "
+            f"WHERE substr(d.day,1,7)=ledger_segments.period){excluded} "
+            "ORDER BY period LIMIT 1",
+            (cutoff, *backed_off),
+        ).fetchone()
+        return row
 
     def seal_next_segment(
         self, *, now: float | None = None, grace_days: int = 7
     ) -> dict[str, Any] | None:
-        """Integrity-check and hash one inactive segment without deleting it."""
+        """Integrity-check and hash one inactive segment without deleting it.
 
-        current = time.time() if now is None else now
-        cutoff = current - max(1, grace_days) * 86400
-        row = self._catalog.execute(
-            "SELECT period,relative_path FROM ledger_segments WHERE sealed_at IS NULL "
-            "AND last_observed_at<? AND NOT EXISTS "
-            "(SELECT 1 FROM rollup_dirty_days d "
-            "WHERE substr(d.day,1,7)=ledger_segments.period) ORDER BY period LIMIT 1",
-            (cutoff,),
-        ).fetchone()
+        Inactive means nothing has been *written* to it for `grace_days`, judged by
+        the stamp every committing write moves (`_stamp_written_segments`), not by
+        how old its evidence is. A month keeps receiving late evidence for as long
+        as a run that began in it is alive, and deciding by evidence time resealed
+        such a month - a full integrity check and SHA-256 of a multi-gigabyte file -
+        after every write that unsealed it.
+
+        The checks read the whole file and take no lock; the seal is then recorded
+        only if the segment's last-write stamp is still the one read before them, so
+        a write that landed during the read wins and the seal is simply not made.
+        """
+
+        current = self._clock() if now is None else now
+        row = self._seal_candidate(current - max(1, grace_days) * 86400)
         if row is None:
             return None
         period = str(row["period"])
+        written = float(row["last_written_at"])
+        started = time.perf_counter()
         connection = self._segment(period)
-        connection.commit()
-        connection.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchall()
+        # Outside the write lock: a checkpoint waits out any reader still on an older
+        # snapshot, and holding the lock meanwhile would stall every write. Only a
+        # write to this segment can wait behind it, and it has had none for the
+        # whole grace period.
+        busy, _log_frames, _checkpointed = connection.execute(
+            "PRAGMA wal_checkpoint(TRUNCATE)"
+        ).fetchone()
+        if busy:
+            log.info(
+                "canonical telemetry seal of %s deferred: its WAL could not be checkpointed",
+                period,
+                extra={"period": period},
+            )
+            return None
         verdict = connection.execute("PRAGMA quick_check").fetchone()
         if verdict is None or str(verdict[0]) != "ok":
-            raise sqlite3.DatabaseError(
-                f"canonical telemetry segment {period} failed quick_check"
+            self._shared.seal_failures[period] = self._clock() + SEAL_FAILURE_BACKOFF_SECONDS
+            log.error(
+                "canonical telemetry segment %s failed quick_check (%s); not sealed, "
+                "retrying in %.0fh",
+                period,
+                None if verdict is None else str(verdict[0])[:200],
+                SEAL_FAILURE_BACKOFF_SECONDS / 3600,
+                extra={"period": period},
             )
+            return None
         path = self.root / str(row["relative_path"])
         file_digest = hashlib.sha256()
+        size = 0
         with path.open("rb") as handle:
             for block in iter(lambda: handle.read(8 * 1024 * 1024), b""):
                 file_digest.update(block)
+                size += len(block)
         sha256 = file_digest.hexdigest()
-        sealed_at = time.time()
-        with self._catalog:
-            self._catalog.execute(
-                "UPDATE ledger_segments SET sealed_at=?,sha256=? WHERE period=?",
-                (sealed_at, sha256, period),
+        sealed_at = self._clock()
+        with self._write_lock, self._catalog:
+            recorded = self._catalog.execute(
+                "UPDATE ledger_segments SET sealed_at=?,sha256=? "
+                "WHERE period=? AND sealed_at IS NULL AND last_written_at=?",
+                (sealed_at, sha256, period, written),
+            ).rowcount
+            if recorded:
+                self._catalog.execute(
+                    "INSERT INTO segment_seals(period,sealed_at,sha256) VALUES(?,?,?)",
+                    (period, sealed_at, sha256),
+                )
+        elapsed = time.perf_counter() - started
+        self.last_seal_seconds = elapsed
+        if not recorded:
+            log.info(
+                "canonical telemetry seal of %s superseded by a write during its checks",
+                period,
+                extra={"period": period, "elapsed_s": round(elapsed, 2)},
             )
-            self._catalog.execute(
-                "INSERT INTO segment_seals(period,sealed_at,sha256) VALUES(?,?,?)",
-                (period, sealed_at, sha256),
-            )
+            return None
+        self.seals += 1
+        log.log(
+            logging.WARNING if elapsed >= SLOW_SEAL_SECONDS else logging.INFO,
+            "canonical telemetry segment %s sealed: %d bytes in %.1fs",
+            period,
+            size,
+            elapsed,
+            extra={"period": period, "bytes": size, "elapsed_s": round(elapsed, 2)},
+        )
         return {"period": period, "sealed_at": sealed_at, "sha256": sha256}
 
     def storage_status(self) -> dict[str, Any]:
-        files = [path for path in self.root.rglob("*") if path.is_file()]
-        bytes_used = sum(path.stat().st_size for path in files)
+        bytes_used = 0
+        for directory in (self.root, self.segments_dir):
+            with os.scandir(directory) as entries:
+                bytes_used += sum(
+                    entry.stat().st_size for entry in entries if entry.is_file()
+                )
         usage = shutil.disk_usage(self.root)
         warning = usage.free < max(2 * 1024**3, int(usage.total * 0.05))
         segments = self._catalog.execute(
             "SELECT COUNT(*) count,SUM(sealed_at IS NOT NULL) sealed,"
-            "MIN(first_observed_at) oldest,MAX(last_observed_at) newest "
-            "FROM ledger_segments"
+            "MIN(CASE WHEN first_observed_at>=? THEN first_observed_at END) oldest,"
+            "MAX(last_observed_at) newest FROM ledger_segments",
+            (PLAUSIBLE_OBSERVATION_FLOOR,),
         ).fetchone()
         counts = {
             name: int(self._catalog.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] or 0)
@@ -1812,6 +2156,9 @@ class CanonicalTelemetryLedger(LegacyImportMixin, NativeReconcileMixin, LedgerQu
                 ("rolled_hours", "rollup_hours"),
             )
         }
+        rejected = self._catalog.execute(
+            "SELECT COALESCE(SUM(occurrences),0) FROM rejected_observations"
+        ).fetchone()[0]
         return {
             "bytes": bytes_used,
             "disk_free_bytes": usage.free,
@@ -1822,6 +2169,7 @@ class CanonicalTelemetryLedger(LegacyImportMixin, NativeReconcileMixin, LedgerQu
             "oldest_at": segments["oldest"],
             "newest_at": segments["newest"],
             **counts,
+            "rejected_observations": int(rejected or 0),
             "retention": "forever",
             "automatic_deletion": False,
         }

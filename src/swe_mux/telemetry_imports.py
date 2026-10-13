@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 import time
 from collections.abc import Iterable, Mapping
 from pathlib import Path
@@ -20,9 +21,6 @@ from typing import TYPE_CHECKING, Any
 
 from .models import MuxEvent
 from .telemetry_schema import digest
-
-if TYPE_CHECKING:
-    pass
 
 _MAX_BATCH = 5000
 
@@ -32,6 +30,7 @@ class LegacyImportMixin:
 
     if TYPE_CHECKING:
         _catalog: sqlite3.Connection
+        _write_lock: threading.RLock
 
         def record_events(self, items: Iterable[tuple[MuxEvent, Mapping[str, Any]]]) -> int: ...
 
@@ -61,22 +60,22 @@ class LegacyImportMixin:
         processed: int,
         completed: bool,
     ) -> None:
-        self._catalog.execute(
-            "INSERT INTO legacy_imports"
-            "(source_id,source_path,cursor_rowid,imported_rows,completed,updated_at) "
-            "VALUES(?,?,?,?,?,?) ON CONFLICT(source_id) DO UPDATE SET "
-            "cursor_rowid=excluded.cursor_rowid,imported_rows=excluded.imported_rows,"
-            "completed=excluded.completed,updated_at=excluded.updated_at",
-            (
-                source_id,
-                source_path,
-                cursor,
-                previous_imported + processed,
-                int(completed),
-                time.time(),
-            ),
-        )
-        self._catalog.commit()
+        with self._write_lock, self._catalog:
+            self._catalog.execute(
+                "INSERT INTO legacy_imports"
+                "(source_id,source_path,cursor_rowid,imported_rows,completed,updated_at) "
+                "VALUES(?,?,?,?,?,?) ON CONFLICT(source_id) DO UPDATE SET "
+                "cursor_rowid=excluded.cursor_rowid,imported_rows=excluded.imported_rows,"
+                "completed=excluded.completed,updated_at=excluded.updated_at",
+                (
+                    source_id,
+                    source_path,
+                    cursor,
+                    previous_imported + processed,
+                    int(completed),
+                    time.time(),
+                ),
+            )
 
     @staticmethod
     def _read_legacy_rows(database: Path, sql: str, args: tuple[Any, ...]) -> list[sqlite3.Row]:

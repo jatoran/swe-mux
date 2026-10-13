@@ -132,8 +132,9 @@ The synchronous write path of the canonical ledger under `<data_dir>/telemetry/`
 identity, field-level source precedence, evidence quality, approval-wait pairing, declared
 against first-evidence run starts, evidence links, the per-run repeat counts every tool-call
 write keeps current, closed-day and closed-hour rollup rebuilds (tool, workload, and quality
-per bucket; skill, verification, and compaction per day), segment sealing, and storage and
-schema status.
+per bucket; skill, verification, and compaction per day, read outside the write lock and written
+inside it), segment sealing judged by each segment's last-write stamp, the refusal and count
+of observations whose time it cannot place, and storage and schema status.
 Reduces content-free evidence into run, turn, tool-call, model-request, compaction,
 skill-invocation, verification, and provider-metric entities, one home segment per entity
 across months.
@@ -158,11 +159,29 @@ keeps `duration_ms` NULL.
 
 Direct reconciliation of every transcript harness's native store (Claude, Codex, OMP, Pi,
 OpenCode) into the canonical reducer, without the legacy `tool_events` hop: the same dialect
-scanner the legacy store uses (`operational_telemetry.scan_native_telemetry`) is run past a
-per-run watermark and its records become `reconciled_transcript` evidence.
-Each pass is recorded in `native_reconciliations` with the watermark, the parser revision, and
-what it found, which is what makes "unchanged since last time" a stat rather than a re-parse
-and what `tools/telemetry_audit_window.py` compares the ledger against call by call.
+scanner the legacy store uses (`operational_telemetry.scan_native_telemetry_since`) reads a
+transcript past the run's cursor, or a store-backed conversation past its watermark, and its
+records become `reconciled_transcript` evidence.
+Each pass is recorded in `native_reconciliations` with the watermark, the cursor, the parser
+revision, and what it found, which is what makes "unchanged since last time" two small samples
+rather than a re-parse and what `tools/telemetry_audit_window.py` compares the ledger against
+call by call.
+Evidence sequence numbers derive from a record's absolute line, and a result whose call an
+earlier pass read is named from the ledger's call row, so incremental reads yield exactly the
+evidence of one whole read.
+
+## `telemetry_cursor.py`
+
+Incremental reads of append-only JSONL transcripts for both reconcilers: a `ScanCursor` (byte
+offset past the last complete line, that line's absolute number, SHA-256 samples of the head
+and of the bytes before the offset), the read that verifies it and decodes only the
+newline-terminated lines appended since, and the restart from byte zero when a file shrank or
+its samples no longer match.
+A first read of a file above 32 MiB decodes its tail and counts the lines before it, so line
+numbers are absolute on every read.
+
+**Not:** file timestamps, which Windows does not move while a CLI holds the file open; or any
+dialect knowledge, which stays in `operational_telemetry.reduce_native_records`.
 
 **Not:** a writer of any native store (a test proves every store is byte-identical after a
 pass), or a source that outranks live native OTel or transcript evidence.
@@ -184,10 +203,13 @@ the quality readout by backend and by harness version.
 
 ## `telemetry_service.py`
 
-The daemon adapter: one worker thread owning every ledger call, batched EventBus ingestion,
-the legacy catch-up loop, the five-minute native reconciliation loop, the rollup (days, then
-hours) and sealing worker, schema-drift logging, and the health block
-`GET /api/diagnostics/background` reports.
+The daemon adapter: three worker threads, each owning one ledger over the same files - live
+ingestion, maintenance, and queries - sharing one `LedgerShared` write lock; batched EventBus
+ingestion, the legacy catch-up loop, the five-minute native reconciliation loop, the rollup
+(days, then hours) and sealing worker, storage status refreshed every ten minutes or after a
+seal, schema-drift logging, and the health block `GET /api/diagnostics/background` reports
+(seal and invalidation counts, the last seal's duration, refused observations, the last
+reconciliation's elapsed time).
 
 **Not:** the reducer's rules; it only schedules them.
 

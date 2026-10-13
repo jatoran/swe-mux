@@ -125,20 +125,104 @@ def test_open_file_binding_excludes_native_subagents_and_nested_clis(
         lambda self: [processes[101]] if self.pid == 100 else [processes[102]],
         raising=False,
     )
-    monkeypatch.setattr(
-        Process,
-        "open_files",
-        lambda self: [SimpleNamespace(path=str(p)) for p in (root_path, child_path)],
-        raising=False,
-    )
+    held: list[list[str] | None] = [[str(p) for p in (root_path, child_path)]]
+    asked: list[int] = []
+
+    def held_file_paths(process: Process) -> list[str] | None:
+        asked.append(process.pid)
+        return held[0]
+
+    monkeypatch.setattr(identity, "held_file_paths", held_file_paths)
     assert identity.owned_rollout(100, 10.0, tmp_path) == root_path
+    # Only the Codex process's own handles are ever asked about.
+    assert asked == [101]
     assert identity.owned_rollout(100, 9.0, tmp_path) is None
+    # A handle query that could not complete is not evidence of absence.
+    held[0] = None
+    assert identity.owned_rollout(100, 10.0, tmp_path) is None
+    held[0] = [str(p) for p in (root_path, child_path)]
     # Another root conversation held open is ambiguous, even in this process.
     child_path.write_text(
         json.dumps({"type": "session_meta", "payload": {"id": ORIGINAL, "source": "cli"}}) + "\n",
         encoding="utf-8",
     )
     assert identity.owned_rollout(100, 10.0, tmp_path) is None
+
+
+@pytest.mark.skipif(os.name != "nt", reason="the per-process handle query is Windows-only")
+def test_per_process_handle_query_finds_files_held_for_writing(tmp_path: Path) -> None:
+    """The query the Codex proof runs, against this test process's own handles.
+
+    A file held for appending is listed by its final path; one held only for
+    reading is not, because its generic read mask is one of the masks a pipe with a
+    pending read carries and is never named (`HANG_PRONE_ACCESS`); and a closed file
+    is gone. This is the real Win32 path - `NtQueryInformationProcess(
+    ProcessHandleInformation)` plus a name query per File handle - not a stand-in.
+    """
+    from swe_mux import win_process_files
+
+    appended = tmp_path / "rollout-held.jsonl"
+    read_only = tmp_path / "read-only.txt"
+    read_only.write_text("x", encoding="utf-8")
+    skipped_before = win_process_files.query_stats()["skipped_handles"]
+    with appended.open("ab") as writer, read_only.open("rb"):
+        writable = win_process_files.open_file_paths(os.getpid())
+        everything = win_process_files.open_file_paths(os.getpid(), writable_only=False)
+    assert writable is not None and writable.complete
+    assert everything is not None and everything.complete
+    resolved = {str(Path(p).resolve()).casefold() for p in writable.paths}
+    assert str(appended.resolve()).casefold() in resolved
+    assert str(read_only.resolve()).casefold() not in resolved
+    assert str(appended.resolve()).casefold() in {
+        str(Path(p).resolve()).casefold() for p in everything.paths
+    }
+    assert win_process_files.query_stats()["skipped_handles"] > skipped_before
+    del writer
+    after = win_process_files.open_file_paths(os.getpid())
+    assert after is not None
+    assert str(appended.resolve()).casefold() not in {
+        str(Path(p).resolve()).casefold() for p in after.paths
+    }
+    stats = win_process_files.query_stats()
+    assert stats["queries"] >= 3
+
+
+@pytest.mark.skipif(os.name != "nt", reason="the per-process handle query is Windows-only")
+def test_a_hanging_name_query_quarantines_only_its_own_process(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A name query that never returns is abandoned, not killed, and costs one pid.
+
+    Simulated by a name resolver that blocks until released: the query reports
+    itself incomplete within its timeout, the same process is refused while its
+    worker is still stuck, and once the kernel (here, the release) answers, the
+    worker exits and the process is queryable again.
+    """
+    import threading
+
+    from swe_mux import win_process_files
+
+    release = threading.Event()
+    real_final_path = win_process_files._final_path
+
+    def blocking_final_path(handle: int) -> str | None:
+        release.wait(10)
+        return real_final_path(handle)
+
+    held = tmp_path / "held.jsonl"
+    with held.open("ab"):
+        monkeypatch.setattr(win_process_files, "_final_path", blocking_final_path)
+        monkeypatch.setattr(win_process_files, "NAME_QUERY_TIMEOUT_SECONDS", 0.05)
+        first = win_process_files.open_file_paths(os.getpid())
+        assert first is not None and not first.complete
+        assert win_process_files.open_file_paths(os.getpid()) is None
+        release.set()
+        monkeypatch.setattr(win_process_files, "_final_path", real_final_path)
+        stuck = list(win_process_files._stuck_workers)
+        for worker in stuck:
+            worker.thread.join(5)
+        again = win_process_files.open_file_paths(os.getpid())
+    assert again is not None and again.complete
 
 
 def test_direct_codex_root_is_accepted(

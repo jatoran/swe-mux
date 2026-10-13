@@ -11,6 +11,7 @@ import uuid
 from bisect import bisect_left
 from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TypeVar, assert_never
 
@@ -35,6 +36,7 @@ from .sqlite_store import (
     run_sqlite_operation,
     write_schema_version,
 )
+from .telemetry_cursor import AppendedRecords, ScanCursor, read_appended, resumed_cursor
 
 T = TypeVar("T")
 
@@ -43,8 +45,29 @@ log = logging.getLogger(__name__)
 TELEMETRY_EVENT_LOOP = "operational-telemetry"
 TELEMETRY_RETENTION_LOOP = "telemetry-retention"
 
-TELEMETRY_SCHEMA_VERSION = 8
+TELEMETRY_SCHEMA_VERSION = 9
 TOOL_PARSER_VERSION = "phase2-v1"
+#: A reconciliation pass at or above this is logged at WARNING. Incremental passes
+#: over a fleet's appended records take well under a second; this is the shape of
+#: the whole-file re-reads it replaced.
+SLOW_RECONCILE_SECONDS = 30.0
+
+
+@dataclass(frozen=True)
+class CoverageState:
+    """A transcript's recorded coverage, as a pass that continues it needs it."""
+
+    cursor: ScanCursor | None
+    #: How far the last read reached; for a row older than cursors, the size its
+    #: whole-file read saw.
+    size: int | None
+    recognized: int
+    unknown: int
+    tools: int
+    skills: int
+    compactions: int
+
+
 # Parser revisions, keyed by transcript *dialect* rather than by harness.
 #
 # The version's job is cache invalidation: a stored coverage row is reusable only
@@ -332,7 +355,12 @@ CREATE TABLE IF NOT EXISTS transcript_telemetry_coverage (
   skill_events INTEGER NOT NULL,
   compaction_events INTEGER NOT NULL,
   reconciled_at REAL NOT NULL,
-  diagnostic TEXT
+  diagnostic TEXT,
+  cursor_offset INTEGER,
+  cursor_line INTEGER,
+  cursor_head_sha256 TEXT,
+  cursor_tail_sha256 TEXT,
+  cursor_truncated INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS notification_decisions (
@@ -576,6 +604,26 @@ class OperationalTelemetryStore(QuotaUsageMixin):
             self._db.execute(
                 "ALTER TABLE process_evidence ADD COLUMN last_job_confirmed_at REAL"
             )
+        # Schema 9: where the last transcript pass stopped, so the next one reads only
+        # what was appended (`telemetry_cursor.py`). Existing rows have no cursor and
+        # resume from the size their last whole-file read recorded.
+        coverage_columns = {
+            str(row["name"])
+            for row in self._db.execute(
+                "PRAGMA table_info(transcript_telemetry_coverage)"
+            ).fetchall()
+        }
+        for column, kind in (
+            ("cursor_offset", "INTEGER"),
+            ("cursor_line", "INTEGER"),
+            ("cursor_head_sha256", "TEXT"),
+            ("cursor_tail_sha256", "TEXT"),
+            ("cursor_truncated", "INTEGER NOT NULL DEFAULT 0"),
+        ):
+            if column not in coverage_columns:
+                self._db.execute(
+                    f"ALTER TABLE transcript_telemetry_coverage ADD COLUMN {column} {kind}"
+                )
 
     def _repair_duplicate_process_ownership(self) -> None:
         """Retire every live claim when one OS process fingerprint has multiple owners.
@@ -707,58 +755,147 @@ class OperationalTelemetryStore(QuotaUsageMixin):
             await asyncio.sleep(60 * 60)
 
     async def reconcile_transcripts(self, *, limit: int = 2000) -> dict[str, int]:
+        """Read each changed conversation's new records into `tool_events`.
+
+        A transcript is read past the cursor its coverage row keeps
+        (`telemetry_cursor.py`), so a pass costs what was appended since the last one
+        rather than a whole-file parse per changed conversation. A store-backed
+        conversation keeps its watermark model: its projection is re-read whole
+        when the harness's own updated-time or message count moves.
+        """
+
         if self.history is None:
             return {"scanned": 0, "skipped": 0, "errors": 0}
+        started = time.perf_counter()
         rows = await self.history.telemetry_history_rows(limit)
         summary = {"scanned": 0, "skipped": 0, "errors": 0}
         for row in rows:
-            raw_path = row.get("transcript_path")
-            path = Path(str(raw_path)) if raw_path else None
-            backend_name = str(row["backend"])
-            native_id = str(row.get("native_id") or "") or None
-            store = conversation_store_path(backend_name)
+            outcome = await self._reconcile_one_transcript(row)
+            summary[outcome] += 1
+        elapsed = time.perf_counter() - started
+        log.log(
+            logging.WARNING if elapsed >= SLOW_RECONCILE_SECONDS else logging.INFO,
+            "legacy transcript reconciliation scanned=%d skipped=%d errors=%d elapsed_s=%.2f",
+            summary["scanned"],
+            summary["skipped"],
+            summary["errors"],
+            elapsed,
+        )
+        return summary
+
+    async def _reconcile_one_transcript(self, row: dict[str, Any]) -> str:
+        """One conversation's pass: `scanned`, `skipped`, or `errors`."""
+
+        raw_path = row.get("transcript_path")
+        path = Path(str(raw_path)) if raw_path else None
+        backend_name = str(row["backend"])
+        native_id = str(row.get("native_id") or "") or None
+        store = conversation_store_path(backend_name)
+        if store is not None:
             try:
-                if store is not None:
-                    # A store-backed conversation has no file to stat. Its watermark
-                    # is the harness's own updated-time and message count, which is
-                    # what makes "unchanged" answerable per conversation rather than
-                    # per database file.
-                    pair = await asyncio.to_thread(store_watermark, store, native_id or "")
-                    if pair is None:
-                        raise OSError("conversation is not in the store")
-                    first, second = pair
-                    source: Path | list[dict[str, Any]] = await asyncio.to_thread(
-                        conversation_records, store, native_id or ""
-                    )
-                else:
-                    if path is None:
-                        raise OSError("no transcript path")
-                    stat = await asyncio.to_thread(path.stat)
-                    first, second = stat.st_mtime_ns, stat.st_size
-                    source = path
-            except OSError:
-                await self._record_coverage_error(row, "transcript_unavailable")
-                summary["errors"] += 1
-                continue
-            if await self._coverage_current(str(row["id"]), backend_name, first, second):
-                summary["skipped"] += 1
-                continue
-            try:
-                backend = require_backend(backend_name)
+                # A store-backed conversation has no file to stat. Its watermark
+                # is the harness's own updated-time and message count, which is
+                # what makes "unchanged" answerable per conversation rather than
+                # per database file.
+                pair = await asyncio.to_thread(store_watermark, store, native_id or "")
+                if pair is None:
+                    raise OSError("conversation is not in the store")
+                first, second = pair
+                if await self._coverage_current(str(row["id"]), backend_name, first, second):
+                    return "skipped"
+                records = await asyncio.to_thread(conversation_records, store, native_id or "")
                 scan = await asyncio.to_thread(
                     scan_native_telemetry,
-                    source,
-                    backend,
+                    records,
+                    require_backend(backend_name),
                     str(row["id"]),
                     row.get("project_id"),
                     row.get("model"),
                 )
                 await self._persist_transcript_scan(row, first, second, scan)
-                summary["scanned"] += 1
-            except (OSError, ValueError, json.JSONDecodeError) as exc:
+                return "scanned"
+            except OSError:
+                await self._record_coverage_error(row, "transcript_unavailable")
+                return "errors"
+            except (ValueError, json.JSONDecodeError) as exc:
                 await self._record_coverage_error(row, str(exc)[:500])
-                summary["errors"] += 1
-        return summary
+                return "errors"
+        if path is None:
+            await self._record_coverage_error(row, "transcript_unavailable")
+            return "errors"
+        try:
+            prior = await self._coverage_state(str(row["id"]), backend_name)
+            cursor = prior.cursor if prior is not None else None
+            if cursor is None and prior is not None and prior.size is not None:
+                # Coverage from a whole-file read that predates cursors: it covered
+                # everything up to the size it recorded.
+                cursor = await asyncio.to_thread(resumed_cursor, path, prior.size)
+            scan, read = await asyncio.to_thread(
+                scan_native_telemetry_since,
+                path,
+                require_backend(backend_name),
+                str(row["id"]),
+                cursor,
+            )
+            stat = await asyncio.to_thread(path.stat)
+        except FileNotFoundError:
+            await self._record_coverage_error(row, "transcript_unavailable")
+            return "errors"
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            await self._record_coverage_error(row, str(exc)[:500])
+            return "errors"
+        if read.reason == "unchanged" and prior is not None and prior.cursor is not None:
+            return "skipped"
+        await self._persist_transcript_scan(
+            row,
+            stat.st_mtime_ns,
+            read.cursor.offset,
+            scan,
+            cursor=read.cursor,
+            prior=None if read.rescanned else prior,
+        )
+        return "skipped" if read.reason == "unchanged" else "scanned"
+
+    async def _coverage_state(self, session_id: str, backend: str) -> CoverageState | None:
+        """The coverage a pass may continue, or None when it must start over."""
+
+        def op() -> CoverageState | None:
+            row = self._db.execute(
+                "SELECT transcript_size,parser_version,status,recognized_records,"
+                "unknown_records,tool_events,skill_events,compaction_events,cursor_offset,"
+                "cursor_line,cursor_head_sha256,cursor_tail_sha256,cursor_truncated "
+                "FROM transcript_telemetry_coverage WHERE session_id=?",
+                (session_id,),
+            ).fetchone()
+            if (
+                row is None
+                or row["status"] != "ready"
+                or row["parser_version"]
+                != TOOL_PARSER_VERSIONS.get(backend, f"{backend}-{TOOL_PARSER_VERSION}")
+            ):
+                return None
+            cursor = (
+                ScanCursor(
+                    offset=int(row["cursor_offset"]),
+                    line=None if row["cursor_line"] is None else int(row["cursor_line"]),
+                    head_sha256=row["cursor_head_sha256"],
+                    tail_sha256=row["cursor_tail_sha256"],
+                    truncated=bool(row["cursor_truncated"]),
+                )
+                if row["cursor_offset"] is not None
+                else None
+            )
+            return CoverageState(
+                cursor=cursor,
+                size=int(row["transcript_size"]) if row["transcript_size"] is not None else None,
+                recognized=int(row["recognized_records"] or 0),
+                unknown=int(row["unknown_records"] or 0),
+                tools=int(row["tool_events"] or 0),
+                skills=int(row["skill_events"] or 0),
+                compactions=int(row["compaction_events"] or 0),
+            )
+
+        return await self._run(op)
 
     async def _coverage_current(
         self, session_id: str, backend: str, mtime_ns: int, size: int
@@ -782,6 +919,16 @@ class OperationalTelemetryStore(QuotaUsageMixin):
 
     async def _record_coverage_error(self, row: dict[str, Any], diagnostic: str) -> None:
         def op() -> None:
+            existing = self._db.execute(
+                "SELECT status,diagnostic FROM transcript_telemetry_coverage WHERE session_id=?",
+                (row["id"],),
+            ).fetchone()
+            if existing is not None and (existing["status"], existing["diagnostic"]) == (
+                "error",
+                diagnostic,
+            ):
+                # Already recorded; a gone transcript stays gone every pass.
+                return
             self._db.execute(
                 "INSERT INTO transcript_telemetry_coverage"
                 "(session_id,backend,project_id,parser_version,status,recognized_records,"
@@ -816,15 +963,34 @@ class OperationalTelemetryStore(QuotaUsageMixin):
         mtime_ns: int,
         size: int,
         scan: dict[str, Any],
+        *,
+        cursor: ScanCursor | None = None,
+        prior: CoverageState | None = None,
     ) -> None:
+        """Write one pass's evidence and coverage.
+
+        With `prior`, the scan is what was appended since that coverage, and the
+        coverage counts accumulate; without it the scan is a whole read and replaces
+        them.
+        """
+
         path_hash = hashlib.sha256(str(row["transcript_path"]).encode()).hexdigest()
+        totals = {
+            "recognized": scan["recognized"] + (prior.recognized if prior else 0),
+            "unknown": scan["unknown"] + (prior.unknown if prior else 0),
+            "tools": len(scan["tools"]) + (prior.tools if prior else 0),
+            "skills": sum(bool(item.get("explicit_skill")) for item in scan["tools"])
+            + (prior.skills if prior else 0),
+            "compactions": len(scan["compactions"]) + (prior.compactions if prior else 0),
+        }
 
         def op() -> None:
             # Pull possible live duplicates once, then batch the transcript inserts.
             # The previous per-tool SELECT made a large transcript hold swe-mux's
             # shared SQLite writer slot for tens of seconds, delaying terminal spawn.
             tool_items = scan["tools"]
-            live_tools: dict[tuple[str, str], list[float]] = {}
+            self._name_results_from_earlier_passes(tool_items)
+            live_tools: dict[tuple[str, str | None], list[float]] = {}
             if tool_items:
                 first_at = min(float(item["observed_at"]) for item in tool_items) - 2
                 last_at = max(float(item["observed_at"]) for item in tool_items) + 2
@@ -833,14 +999,16 @@ class OperationalTelemetryStore(QuotaUsageMixin):
                     "AND source!='reconciled_transcript' AND observed_at BETWEEN ? AND ?",
                     (row["id"], first_at, last_at),
                 ).fetchall():
-                    live_tools.setdefault((live["kind"], live["raw_tool"]), []).append(
-                        float(live["observed_at"])
-                    )
+                    for key in ((live["kind"], live["raw_tool"]), (live["kind"], None)):
+                        live_tools.setdefault(key, []).append(float(live["observed_at"]))
                 for observed in live_tools.values():
                     observed.sort()
 
             def duplicates_live_tool(item: dict[str, Any]) -> bool:
-                observed = live_tools.get((item["kind"], item["raw_tool"]), [])
+                # A result no pass could name is matched on its kind and time alone,
+                # as a whole read would have matched it on its name.
+                name = None if item.get("named") is False else item["raw_tool"]
+                observed = live_tools.get((item["kind"], name), [])
                 target = float(item["observed_at"])
                 index = bisect_left(observed, target - 2)
                 return index < len(observed) and observed[index] <= target + 2
@@ -959,15 +1127,22 @@ class OperationalTelemetryStore(QuotaUsageMixin):
                 "INSERT INTO transcript_telemetry_coverage"
                 "(session_id,backend,project_id,transcript_path_hash,transcript_mtime_ns,"
                 "transcript_size,parser_version,status,recognized_records,unknown_records,"
-                "tool_events,skill_events,compaction_events,reconciled_at,diagnostic) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(session_id) DO UPDATE SET "
+                "tool_events,skill_events,compaction_events,reconciled_at,diagnostic,"
+                "cursor_offset,cursor_line,cursor_head_sha256,cursor_tail_sha256,"
+                "cursor_truncated) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+                "ON CONFLICT(session_id) DO UPDATE SET "
                 "project_id=excluded.project_id,transcript_path_hash=excluded.transcript_path_hash,"
                 "transcript_mtime_ns=excluded.transcript_mtime_ns,"
                 "transcript_size=excluded.transcript_size,parser_version=excluded.parser_version,"
                 "status=excluded.status,recognized_records=excluded.recognized_records,"
                 "unknown_records=excluded.unknown_records,tool_events=excluded.tool_events,"
                 "skill_events=excluded.skill_events,compaction_events=excluded.compaction_events,"
-                "reconciled_at=excluded.reconciled_at,diagnostic=excluded.diagnostic",
+                "reconciled_at=excluded.reconciled_at,diagnostic=excluded.diagnostic,"
+                "cursor_offset=excluded.cursor_offset,cursor_line=excluded.cursor_line,"
+                "cursor_head_sha256=excluded.cursor_head_sha256,"
+                "cursor_tail_sha256=excluded.cursor_tail_sha256,"
+                "cursor_truncated=excluded.cursor_truncated",
                 (
                     row["id"],
                     row["backend"],
@@ -979,39 +1154,73 @@ class OperationalTelemetryStore(QuotaUsageMixin):
                         str(row["backend"]), f"{row['backend']}-{TOOL_PARSER_VERSION}"
                     ),
                     "ready",
-                    scan["recognized"],
-                    scan["unknown"],
-                    len(scan["tools"]),
-                    sum(bool(item.get("explicit_skill")) for item in scan["tools"]),
-                    len(scan["compactions"]),
+                    totals["recognized"],
+                    totals["unknown"],
+                    totals["tools"],
+                    totals["skills"],
+                    totals["compactions"],
                     time.time(),
                     scan.get("diagnostic"),
+                    cursor.offset if cursor else None,
+                    cursor.line if cursor else None,
+                    cursor.head_sha256 if cursor else None,
+                    cursor.tail_sha256 if cursor else None,
+                    int(cursor.truncated) if cursor else 0,
                 ),
             )
             self._db.commit()
 
         await self._run(op)
+        newest = max((item["observed_at"] for item in scan["compactions"]), default=None)
+        if prior is not None and newest is None:
+            # Nothing appended moved the summary; it already says what the earlier
+            # passes found, including when the last compaction was.
+            return
         await self.history.set_context_compaction_summary(
             str(row["id"]),
-            len(scan["compactions"]),
-            max((item["observed_at"] for item in scan["compactions"]), default=None),
-            "explicit_native" if scan["compactions"] else None,
-            "high" if scan["compactions"] else None,
+            totals["compactions"],
+            newest,
+            "explicit_native" if totals["compactions"] else None,
+            "high" if totals["compactions"] else None,
         )
         if scan.get("diagnostic") is None and self.sessions is not None:
             session = self.sessions.sessions.get(str(row["id"]))
             if session is not None and session.record.agent_run_id == str(row["id"]):
-                session.record.compaction_count = len(scan["compactions"])
-                session.record.last_compaction_at = max(
-                    (item["observed_at"] for item in scan["compactions"]), default=None
-                )
+                session.record.compaction_count = totals["compactions"]
+                session.record.last_compaction_at = newest
                 session.record.compaction_capability = (
-                    "explicit_native" if scan["compactions"] else None
+                    "explicit_native" if totals["compactions"] else None
                 )
                 session.record.compaction_confidence = (
-                    "high" if scan["compactions"] else None
+                    "high" if totals["compactions"] else None
                 )
                 session.publish_update()
+
+    def _name_results_from_earlier_passes(self, tool_items: list[dict[str, Any]]) -> None:
+        """Name a result whose call an earlier pass read, from that pass's own row.
+
+        A pass reads only what was appended, so a result whose call was appended
+        earlier arrives with no name. The call's row is already here under the
+        same native call id; without this the result would be filed as `tool`.
+        """
+
+        unnamed = {
+            str(item["source_identity"]).replace(":tool_result:", ":tool_use:", 1): item
+            for item in tool_items
+            if item.get("kind") == "tool_result" and item.get("named") is False
+        }
+        identities = list(unnamed)
+        for start in range(0, len(identities), 500):
+            chunk = identities[start : start + 500]
+            placeholders = ",".join("?" for _ in chunk)
+            for found in self._db.execute(
+                "SELECT source_identity,raw_tool FROM tool_events "
+                f"WHERE source_identity IN ({placeholders})",
+                chunk,
+            ).fetchall():
+                item = unnamed[str(found["source_identity"])]
+                item["raw_tool"] = str(found["raw_tool"])
+                item["named"] = True
 
     def _session_dimensions(self, session_id: str) -> dict[str, Any]:
         session = self.sessions.sessions.get(session_id) if self.sessions else None
@@ -2288,39 +2497,70 @@ def scan_native_telemetry(
     project_id: str | None,
     model: str | None,
 ) -> dict[str, Any]:
-    """Parse explicit telemetry from one conversation's records.
+    """Parse explicit telemetry from one conversation's records, whole.
 
     ``path`` is a native JSONL transcript, or an already-projected record list for a
     harness that keeps its conversation in a store and therefore has no file to
     bound by bytes (`opencode_store.conversation_records`).
 
     Prompt and result bodies are never retained. Files above 32 MiB are scanned from
-    the tail so startup work stays bounded; coverage reports that limitation.
+    the tail so startup work stays bounded; coverage reports that limitation. The
+    reconcilers read past a cursor instead (`scan_native_telemetry_since`); this is
+    the whole-file form the audit tool and the fixtures use.
     """
     del project_id, model
-    records: list[tuple[int, dict[str, Any]]] = []
     if isinstance(path, list):
-        truncated = False
-        records = list(enumerate(path))
-        base_time = time.time()
-    else:
-        size = path.stat().st_size
-        tail_bytes = 32 * 1024 * 1024
-        truncated = size > tail_bytes
-        with path.open("rb") as handle:
-            if truncated:
-                handle.seek(size - tail_bytes)
-                handle.readline()
-            for index, raw_line in enumerate(handle):
-                if not raw_line.strip():
-                    continue
-                try:
-                    item = json.loads(raw_line.decode("utf-8", "replace"))
-                except json.JSONDecodeError:
-                    continue
-                if isinstance(item, dict):
-                    records.append((index, item))
-        base_time = path.stat().st_mtime
+        return reduce_native_records(
+            list(enumerate(path)), backend, session_id, base_time=time.time()
+        )
+    read = read_appended(path, None)
+    return reduce_native_records(
+        read.records,
+        backend,
+        session_id,
+        base_time=path.stat().st_mtime,
+        truncated=read.cursor.truncated,
+    )
+
+
+def scan_native_telemetry_since(
+    path: Path, backend: Backend, session_id: str, cursor: ScanCursor | None
+) -> tuple[dict[str, Any], AppendedRecords]:
+    """Parse only what was appended to a transcript since `cursor`.
+
+    The scan describes the appended records alone; its `diagnostic` still reports a
+    coverage that began at a tail window, because the records before that window
+    were never read by any pass that continued from it.
+    """
+
+    read = read_appended(path, cursor)
+    scan = reduce_native_records(
+        read.records,
+        backend,
+        session_id,
+        base_time=path.stat().st_mtime,
+        truncated=read.cursor.truncated,
+    )
+    return scan, read
+
+
+def reduce_native_records(
+    records: list[tuple[int, dict[str, Any]]],
+    backend: Backend,
+    session_id: str,
+    *,
+    base_time: float,
+    truncated: bool = False,
+) -> dict[str, Any]:
+    """Explicit tool, skill, and compaction evidence from numbered native records.
+
+    Each record's number is its absolute line in the transcript (its position in a
+    store projection), so an identity built from it names the same record however
+    much of the file a read covered. Every item carries that number as `line`.
+    A result whose call was read by an earlier pass has no name here; it reports
+    `call_id` so a store can name it from what it already holds.
+    """
+
     tools: list[dict[str, Any]] = []
     compactions: list[dict[str, Any]] = []
     recognized = 0
@@ -2340,7 +2580,16 @@ def scan_native_telemetry(
                 pass
         return base_time + index / 1_000_000
 
+    # Items are stamped with their record's line once the next record starts, so
+    # the dialect branches below can `continue` freely.
+    stamped_tools = stamped_compactions = 0
+    last_index = 0
     for index, record in records:
+        for item in tools[stamped_tools:]:
+            item["line"] = last_index
+        for item in compactions[stamped_compactions:]:
+            item["line"] = last_index
+        stamped_tools, stamped_compactions, last_index = len(tools), len(compactions), index
         when = observed(record, index)
         if backend == "claude":
             outer = str(record.get("type") or "")
@@ -2393,6 +2642,7 @@ def scan_native_telemetry(
                                 "observed_at": when,
                                 "kind": "tool_result",
                                 "raw_tool": names.get(call_id, "tool"),
+                                "named": call_id in names,
                                 "success": int(not bool(block.get("is_error"))),
                             }
                         )
@@ -2457,6 +2707,7 @@ def scan_native_telemetry(
                         "observed_at": when,
                         "kind": "tool_result",
                         "raw_tool": names.get(call_id, str(codex_payload.get("name") or "tool")),
+                        "named": call_id in names or bool(codex_payload.get("name")),
                         "success": int(result_success),
                         "exit_code": exit_code if isinstance(exit_code, int) else None,
                         "duration_ms": _finite(codex_payload.get("duration_ms")),
@@ -2619,12 +2870,17 @@ def scan_native_telemetry(
                         "observed_at": when,
                         "kind": "tool_result",
                         "raw_tool": name,
+                        "named": call_id in names or bool(omp_message.get("toolName")),
                         "success": int(not bool(omp_message.get("isError"))),
                         "duration_ms": _finite(omp_message.get("duration")),
                     }
                 )
         else:
             assert_never(backend)
+    for item in tools[stamped_tools:]:
+        item["line"] = last_index
+    for item in compactions[stamped_compactions:]:
+        item["line"] = last_index
     return {
         "tools": tools,
         "compactions": compactions,

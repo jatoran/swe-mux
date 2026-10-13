@@ -749,15 +749,17 @@ def test_quality_reports_each_missing_field_denominator_separately(tmp_path: Pat
 
 def test_segment_seal_is_hashed_and_late_evidence_invalidates_it(tmp_path: Path) -> None:
     root = tmp_path / "telemetry"
-    ledger = CanonicalTelemetryLedger(root)
-    dims = dimensions()
     day_start = 1_767_225_600.0
+    clock = [day_start + 60]
+    ledger = CanonicalTelemetryLedger(root, clock=lambda: clock[0])
+    dims = dimensions()
     ledger.record_event(
         event("tool_use", ts=day_start + 10, tool="Read", call_id="call-1"), dims
     )
     assert ledger.rebuild_next_closed_day(now=day_start + 2 * 86400) == "2026-01-01"
 
-    sealed = ledger.seal_next_segment(now=day_start + 15 * 86400, grace_days=7)
+    clock[0] = day_start + 15 * 86400
+    sealed = ledger.seal_next_segment(grace_days=7)
     assert sealed is not None
     assert sealed["period"] == "2026-01"
     assert len(sealed["sha256"]) == 64

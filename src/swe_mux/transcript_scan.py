@@ -22,10 +22,20 @@ in-flight scan. `resolve_path_cached` remembers a resolved path for
 `RESOLVED_PATH_CACHE_SECONDS`; a working directory's identity does not change
 under a running session, so the syscall answers the same question every time.
 
+The resolve cache never re-resolves on the event loop. An expired entry asked
+for from the loop thread answers its previous value and refreshes in a worker
+(stale-while-revalidate), because "re-read the path every 30 s" is a freshness
+bound, not a reason to block every terminal: the 2026-10-12 stall dumps had the
+loop inside an expiry-driven `realpath` for 140 s in one day. Only a path the
+daemon has never resolved costs a synchronous syscall, and async callers take
+even that off the loop with `resolve_paths_async` before reading keys.
+
 Both are measured rather than trusted: a scan slower than
 `SLOW_SCAN_WARN_SECONDS` is a WARNING naming the backend, the directory and the
-file count, and `snapshot()` reports hit and miss counts on the diagnostics
-endpoint so a cache that stops sharing is visible.
+file count, a synchronous resolve on the loop slower than
+`SLOW_LOOP_RESOLVE_WARN_SECONDS` is a WARNING naming the path, and `snapshot()`
+reports hit and miss counts on the diagnostics endpoint so a cache that stops
+sharing is visible.
 """
 
 from __future__ import annotations
@@ -35,7 +45,8 @@ import logging
 import os
 import threading
 import time
-from collections.abc import Callable
+from collections import OrderedDict
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
@@ -60,8 +71,15 @@ RESOLVED_PATH_CACHE_SECONDS = 30.0
 
 #: The resolve cache is bounded by entry count rather than evicted by age, because
 #: an unbounded dict keyed by every path the daemon ever asked about is a leak. At
-#: fifty sessions the working set is a few hundred keys.
+#: fifty sessions the working set is a few hundred keys. Eviction is least
+#: recently used, one entry at a time: clearing the whole map at the bound made
+#: every live session's next key a synchronous miss at once.
 RESOLVED_PATH_CACHE_LIMIT = 4096
+
+#: A synchronous resolve on the event loop slower than this is reported. It can
+#: only be a first-ever resolution (expired entries refresh off the loop), so a
+#: recurring one names a caller that should be priming with `resolve_paths_async`.
+SLOW_LOOP_RESOLVE_WARN_SECONDS = 0.25
 
 Listing = list[tuple[float, Path, str]]
 
@@ -75,7 +93,69 @@ class ScansTranscripts(Protocol):
 
 
 _RESOLVED_GUARD = threading.Lock()
-_RESOLVED: dict[str, tuple[float, str]] = {}
+_RESOLVED: OrderedDict[str, tuple[float, str]] = OrderedDict()
+#: Keys with a background refresh in flight, so one expiry schedules one refresh
+#: however many callers ask during it.
+_REFRESHING: set[str] = set()
+_RESOLVED_STATS: dict[str, Any] = {
+    "hits": 0,
+    "misses": 0,
+    "stale_served": 0,
+    "refreshes": 0,
+    "loop_misses": 0,
+    "primed": 0,
+    "worst_loop_miss_seconds": 0.0,
+}
+
+
+def _on_loop_thread() -> asyncio.AbstractEventLoop | None:
+    """The running loop when called from its own thread, else None."""
+    try:
+        return asyncio.get_running_loop()
+    except RuntimeError:
+        return None
+
+
+def _resolve_uncached(key: str) -> str | None:
+    try:
+        return str(Path(key).resolve())
+    except OSError:
+        return None
+
+
+def _remember(key: str, moment: float, resolved: str) -> None:
+    with _RESOLVED_GUARD:
+        _RESOLVED[key] = (moment, resolved)
+        _RESOLVED.move_to_end(key)
+        while len(_RESOLVED) > RESOLVED_PATH_CACHE_LIMIT:
+            _RESOLVED.popitem(last=False)
+
+
+def _refresh_in_background(loop: asyncio.AbstractEventLoop, key: str) -> None:
+    """Re-resolve ``key`` in the loop's default executor, at most once at a time."""
+    with _RESOLVED_GUARD:
+        if key in _REFRESHING:
+            return
+        _REFRESHING.add(key)
+
+    def refresh() -> None:
+        try:
+            resolved = _resolve_uncached(key)
+            if resolved is not None:
+                _remember(key, time.monotonic(), resolved)
+            with _RESOLVED_GUARD:
+                _RESOLVED_STATS["refreshes"] += 1
+        finally:
+            with _RESOLVED_GUARD:
+                _REFRESHING.discard(key)
+
+    try:
+        loop.run_in_executor(None, refresh)
+    except RuntimeError:
+        # The loop is closing (shutdown, or a test tearing down). The stale answer
+        # is still the right one to give; the refresh simply does not happen.
+        with _RESOLVED_GUARD:
+            _REFRESHING.discard(key)
 
 
 def resolve_path_cached(path: Path | str, *, now: float | None = None) -> str:
@@ -86,28 +166,105 @@ def resolve_path_cached(path: Path | str, *, now: float | None = None) -> str:
     syscall rather than two. A resolve that fails with `OSError` answers the
     input unchanged, exactly as the uncached callers did, and is not remembered -
     a missing file may exist on the next ask.
+
+    An expired entry asked for on the event loop's own thread answers its
+    previous value and is refreshed in a worker, so the loop never pays for the
+    freshness bound. Off the loop (a worker thread, or no loop at all) an expired
+    entry is re-resolved inline, which is the old behaviour and costs nobody else.
     """
     key = str(path)
     moment = time.monotonic() if now is None else now
+    loop = _on_loop_thread()
     with _RESOLVED_GUARD:
         cached = _RESOLVED.get(key)
-        if cached is not None and moment - cached[0] < RESOLVED_PATH_CACHE_SECONDS:
-            return cached[1]
-    try:
-        resolved = str(Path(key).resolve())
-    except OSError:
+        if cached is not None:
+            _RESOLVED.move_to_end(key)
+            if moment - cached[0] < RESOLVED_PATH_CACHE_SECONDS:
+                _RESOLVED_STATS["hits"] += 1
+                return cached[1]
+            if loop is not None:
+                _RESOLVED_STATS["stale_served"] += 1
+        else:
+            _RESOLVED_STATS["misses"] += 1
+            if loop is not None:
+                _RESOLVED_STATS["loop_misses"] += 1
+    if cached is not None and loop is not None:
+        _refresh_in_background(loop, key)
+        return cached[1]
+    started = time.perf_counter()
+    resolved = _resolve_uncached(key)
+    elapsed = time.perf_counter() - started
+    if loop is not None and cached is None:
+        with _RESOLVED_GUARD:
+            _RESOLVED_STATS["worst_loop_miss_seconds"] = max(
+                _RESOLVED_STATS["worst_loop_miss_seconds"], elapsed
+            )
+        if elapsed >= SLOW_LOOP_RESOLVE_WARN_SECONDS:
+            log.warning(
+                "resolve_on_loop_slow path=%s elapsed_s=%.2f",
+                key,
+                elapsed,
+                extra={"resolve_path": key, "resolve_elapsed_s": round(elapsed, 3)},
+            )
+    if resolved is None:
         return key
-    with _RESOLVED_GUARD:
-        if len(_RESOLVED) >= RESOLVED_PATH_CACHE_LIMIT:
-            _RESOLVED.clear()
-        _RESOLVED[key] = (moment, resolved)
+    _remember(key, moment, resolved)
     return resolved
+
+
+def cached_resolution(path: Path | str) -> str | None:
+    """The remembered resolution of ``path`` (fresh or stale), without a syscall."""
+    with _RESOLVED_GUARD:
+        cached = _RESOLVED.get(str(path))
+    return cached[1] if cached is not None else None
+
+
+def _resolve_missing(keys: list[str]) -> int:
+    resolved = 0
+    for key in keys:
+        value = _resolve_uncached(key)
+        if value is not None:
+            _remember(key, time.monotonic(), value)
+            resolved += 1
+    return resolved
+
+
+async def resolve_paths_async(paths: Iterable[Path | str]) -> None:
+    """Resolve every path not yet remembered, in one worker call, off the loop.
+
+    For async callers about to ask `resolve_path_cached` about a set of paths
+    synchronously (claim checks, sibling comparisons): priming first means those
+    reads are cache hits rather than first-ever resolutions on the loop. Paths
+    already remembered, fresh or stale, cost one dict lookup here.
+    """
+    with _RESOLVED_GUARD:
+        missing = list(dict.fromkeys(str(p) for p in paths if str(p) not in _RESOLVED))
+    if not missing:
+        return
+    primed = await asyncio.to_thread(_resolve_missing, missing)
+    with _RESOLVED_GUARD:
+        _RESOLVED_STATS["primed"] += primed
+
+
+def resolved_path_snapshot() -> dict[str, Any]:
+    """Resolve-cache counters for `/api/diagnostics/background`."""
+    with _RESOLVED_GUARD:
+        return {
+            **{
+                key: (round(value, 3) if isinstance(value, float) else value)
+                for key, value in _RESOLVED_STATS.items()
+            },
+            "entries": len(_RESOLVED),
+            "refreshing": len(_REFRESHING),
+            "ttl_seconds": RESOLVED_PATH_CACHE_SECONDS,
+        }
 
 
 def reset_resolved_path_cache() -> None:
     """Forget every remembered path. For tests that rename what they resolved."""
     with _RESOLVED_GUARD:
         _RESOLVED.clear()
+        _REFRESHING.clear()
 
 
 @dataclass
@@ -254,4 +411,8 @@ class TranscriptScanCache:
             "slow_scans": self._slow_scans,
             "worst_seconds": round(self._worst_seconds, 3),
             "ttl_seconds": self._ttl,
+            # The resolve cache the same callers read keys through. `loop_misses`
+            # counts first-ever resolutions taken on the loop thread; a number that
+            # keeps climbing names a caller that should prime off the loop.
+            "resolved_paths": resolved_path_snapshot(),
         }

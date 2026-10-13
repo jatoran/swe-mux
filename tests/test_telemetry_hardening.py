@@ -73,7 +73,7 @@ def test_a_version_one_ledger_is_migrated_additively_on_open(tmp_path: Path) -> 
 
     reopened = CanonicalTelemetryLedger(root)
     status = reopened.schema_status()
-    assert status["version"] == LEDGER_SCHEMA_VERSION == 4
+    assert status["version"] == LEDGER_SCHEMA_VERSION == 5
     assert status["drift"] == []
     assert status["migrations"][segment.stem] == {
         "found": 0,

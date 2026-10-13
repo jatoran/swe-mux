@@ -198,6 +198,7 @@ Fields and invariants: `features/daemon-resilience.md`.
 - `context_compactions`, `tool_events`, and `transcript_telemetry_coverage`: deduplicated
   explicit provider evidence plus versioned parser coverage. These are rebuildable for one
   session after a proven identity repair; its process evidence is retained and re-attributed.
+  Since operational-telemetry schema 9 the coverage row carries the transcript read cursor (`cursor_offset`, `cursor_line`, `cursor_head_sha256`, `cursor_tail_sha256`, `cursor_truncated`), and its counts accumulate across the passes that continued it.
 - `status_timeline`: the durable per-session detection timeline — every transition-ledger
   entry (transitions *and* the non-transition kinds: `watchdog_recovery`,
   `standing_activity`, `cli_state`, `layer_reading`, `screen_classifier_blind`,
@@ -231,8 +232,8 @@ Fields and invariants: `features/daemon-resilience.md`.
   see the same call, and the richer record wins whichever arrives first.
   Both columns are additive migrations (schema version 2) and are NULL for facts recorded
   before them and for facts that are not tool calls.
-- `<data_dir>/telemetry/catalog.sqlite3`: canonical telemetry catalog (schema 4 since
-  2026-09-03) with monthly-segment inventory, entity locations, resumable legacy-import
+- `<data_dir>/telemetry/catalog.sqlite3`: canonical telemetry catalog (schema 5 since
+  2026-10-12) with monthly-segment inventory, entity locations, resumable legacy-import
   cursors, dirty rollup days and hours, the exact closed-day `tool_daily`, `workload_daily`,
   `quality_daily`, `skill_daily`, `verification_daily`, and `compaction_daily` rollups, the
   closed-hour `tool_hourly`, `workload_hourly`, and `quality_hourly` rollups, segment seals,
@@ -242,6 +243,9 @@ Fields and invariants: `features/daemon-resilience.md`.
   `native_reconciliations` (per run: the store watermark read, the parser revision, what it
   found, and what was inserted).
   `ledger_meta` carries the schema version.
+  Version 5 adds `ledger_segments.last_written_at`, the time of the last committed write to each segment, which is what seal eligibility is judged by.
+  It adds the transcript read cursor to `native_reconciliations` (`cursor_offset`, `cursor_line`, `cursor_head_sha256`, `cursor_tail_sha256`, `cursor_truncated`), counts accumulated across the passes that continued it.
+  It adds `rejected_observations`, one row per refusal reason, event type, and source with the count and the newest claimed time, for observations whose time the ledger cannot place.
   The tool rollup key includes `evidence_quality`, which is why version 3 recreates the
   daily tool rollup and dirties every rolled day rather than altering it in place; version 4
   adds the quality rollups (field-completeness counts per backend, harness version, model,

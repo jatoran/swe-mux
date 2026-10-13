@@ -67,18 +67,22 @@ new ledger.
 - `catalog.sqlite3` owns the schema version, segment inventory, entity-to-segment locations,
   exact closed-day tool, workload, skill, verification, and compaction rollups, exact
   closed-hour tool and workload rollups, dirty rollup days and hours, segment seal history,
-  parser signatures, finding reviews, native reconciliation records, and resumable
-  legacy-import cursors.
+  parser signatures, finding reviews, native reconciliation records and their read cursors,
+  counts of observations refused for an implausible time, and resumable legacy-import
+  cursors.
 - `segments/YYYY-MM.sqlite3` owns content-free evidence and canonical run, turn, tool-call,
   model-request, compaction, skill-invocation, verification, and provider-metric entities
   whose activity began in that UTC month.
-- Every file is versioned (`telemetry_schema.py`, `LEDGER_SCHEMA_VERSION`, 4 since
-  2026-09-03).
+- Every file is versioned (`telemetry_schema.py`, `LEDGER_SCHEMA_VERSION`, 5 since
+  2026-10-12).
   A migration step is a SQL statement or a callable, for the shapes SQL cannot express
   additively: recreating a derived rollup table whose key changed (version 3 put evidence
   quality into the tool rollup key), backfilling a new column from existing ones, and
   deriving a maintained table once (version 4's per-run repeat counts) while dirtying every
   rolled bucket so a new rollup (version 4's quality rollups) is built from the entities.
+  Version 5 changes only the catalog.
+  It adds each segment's `last_written_at`, stamped with the seal time for a sealed segment and with the upgrade time for any other, so nothing is sealed for one grace period after the upgrade.
+  It adds the reconciliation read cursor to `native_reconciliations` and the `rejected_observations` table.
   Opening a file creates missing tables from the current schema and then applies each
   additive migration the file has not seen, checking every `ADD COLUMN` against the table
   first, so a data directory written by an older daemon gains exactly the columns the current
@@ -129,9 +133,14 @@ new ledger.
   fields it carries, and does not turn `denied` back into `failed`.
 - Native stores are reconciled directly (`telemetry_reconcile.py`): every five minutes, and
   on `POST /api/telemetry/v2/reconcile`, each run's Claude, Codex, OMP, Pi, or OpenCode
-  record is read past its per-run watermark by the same dialect scanner the legacy store
-  uses and fed to the reducer as `reconciled_transcript` evidence, ranked below live native
-  and transcript evidence and above hooks and legacy imports.
+  record is read by the same dialect scanner the legacy store uses and fed to the reducer as
+  `reconciled_transcript` evidence, ranked below live native and transcript evidence and
+  above hooks and legacy imports.
+  A transcript file is read past the cursor its last reconciliation kept, so a pass decodes
+  only what was appended since (§ Transcript reconciliation); a store-backed OpenCode
+  conversation is re-read when its store watermark moves.
+  Evidence is written in transactions of 256 events, so a first read of a long transcript
+  never holds the writer for its whole length.
   The pass never writes a native store; a test proves every store byte-identical afterwards.
 - Provider metrics (Codex's `codex.tool.call`, token usage, turn durations, guardian reviews,
   and their siblings) are kept as aggregated points with allow-listed attributes and never
@@ -149,8 +158,28 @@ new ledger.
   is on (the default); the shadow comparison classifies every disagreement between the legacy
   `tool_events` table and the canonical calls, and the switch is the operator's to turn off
   after reading it.
-- Inactive segments are integrity-checked, WAL-checkpointed, SHA-256 sealed, and retained.
-  Late evidence invalidates the prior seal with a durable reason before updating the segment.
+- Inactive segments are WAL-checkpointed, integrity-checked (`PRAGMA quick_check`), SHA-256
+  sealed, and retained.
+  Inactive means nothing was written to the segment for seven days.
+  Every committed write stamps the segments it actually wrote (`ledger_segments.last_written_at`), including an entity update that lands in an earlier month because the entity began there.
+  Evidence the segment already holds writes nothing, so it neither unseals the segment nor moves the stamp.
+  A write to a sealed segment invalidates the seal with a durable reason (`new observation`, `late entity evidence`, or `run end abandonment`) in the same catalog transaction that stamps it.
+  The checks read the file without the write lock, and the seal is recorded only if the stamp is still the one read before them, so a write that lands during a seal wins and the seal is simply not made.
+  A checkpoint a reader is pinning defers the seal to the next tick; a failed integrity check is logged at ERROR and not retried for a day.
+  Seals and unseals are logged at INFO with the period and the reason, and a seal that takes 30 seconds or more at WARNING.
+  Before 2026-10-12 eligibility was the age of the month's evidence, and a segment was unsealed before `INSERT OR IGNORE` had said whether anything was written.
+  A month that kept receiving late entity evidence was therefore resealed after every write, which on the live ledger was 27 full reads of a 6 GiB September in one day.
+- An observation whose time is before 2020 or more than two days ahead of the ledger's clock is refused rather than filed.
+  Each refusal is counted per reason, event type, and source in `rejected_observations` and in background health, and logged at WARNING on the first and every thousandth.
+  Refusing is the rule because nothing here is estimated: a reconciled record carries a time from the past that its receipt time would misfile into the current month, and live sources already resolve an absent time where the receipt time is honest (`telemetry_otlp._timestamp`).
+  A start derived from a placeable observation is held to the same rule: a declared run start the ledger cannot place (a history row's zero) is treated as no declaration, and a model request whose start (its time minus its duration) is implausible is homed in its result's month.
+  An epoch-zero Codex OTel time from before that fix (commit `08cbc46a`, 2026-10-10) filed 181,110 observations into a `1970-01` segment, and the model requests among them, started a duration before the epoch, opened a `1969-12` segment that holds no evidence at all.
+  Both files stay on disk and in the catalog, and storage health ignores them when it reports the oldest observation.
+- Live ingestion, maintenance (legacy imports, native reconciliation, rollups, seals, the startup schema check), and queries each run on their own worker thread with their own ledger and SQLite connections (`telemetry_service.py`).
+  They shared one thread until 2026-10-12, so a seal or a first read of a long transcript held every live observation behind it, and the bounded ingest queue dropped 710 of them on the live daemon.
+  The three ledgers share one re-entrant write lock held around every write transaction, so writes never interleave inside SQLite, and long reads (a rollup's entity scan, a seal's integrity check and hash) hold nothing.
+  Rollups read first and write in one short locked transaction, and a dirty mark that moved during the read survives it.
+  Storage status lists two directories instead of walking the tree and is refreshed every ten minutes or after a seal rather than on every rollup tick.
 - Detailed pages are cursor-bounded, while matching counts and aggregates cover the complete
   requested time range.
 - The default query cohort is mux-owned runs from the last seven days.
@@ -317,8 +346,22 @@ A background loop (`quota-usage-attribution`) does the work off the poll path, a
 
 - Live normalized events enter through the persisted EventBus and deduplicate by native call
   identity/source identity.
-- A bounded background reconciliation scans recent Claude, Codex, and OMP transcript tails, at most
-  32 MiB per file and 2,000 histories per pass. It runs after startup and hourly.
+- A background reconciliation reads the transcripts of the 2,000 most recent histories after startup and hourly, and the canonical ledger's reconciler does the same every five minutes.
+  Both read a transcript incrementally (`telemetry_cursor.py`).
+  A cursor records the byte offset just past the last complete line, that line's absolute number, and SHA-256 samples of the file's first 4 KiB and of the 256 bytes before the offset.
+  A pass verifies both samples and decodes only the newline-terminated lines appended since; a line still being written waits for the next pass.
+  A file that shrank, or whose samples no longer match (a Claude rewind or a replaced file, which can keep the same size), is read again from the start and its counts replace the recorded ones instead of adding to them.
+  File times are never consulted: Windows leaves a file a CLI holds open dated at its creation however much it grows.
+  A first read of a file above 32 MiB decodes its last 32 MiB and counts the lines before them, so its lines are numbered from the start of the file; its coverage still reports `tail_32_mib_only`.
+  Coverage recorded before cursors existed resumes at the size its whole read recorded, and the lines before that size are counted only when something is appended past it, so the upgrade does not read every finished transcript once more.
+- Identities derived from a record's position use its absolute line, and the canonical evidence sequence is `line * 1024 + ordinal`.
+  The tail scan numbered both from the window's start and per read, and the window moved as the file grew, so every pass over a growing transcript above 32 MiB re-inserted its whole window as new evidence: 400 to 500 Claude tool events per file per pass on the live fleet.
+  Those inserts landed in whatever month the records were from, which is what kept old months unsealed.
+- A result whose call an earlier pass read cannot be named by the parser, which saw only the result.
+  It is named from what the store already holds (the legacy `tool_use` row, or the canonical call row by its native call id), so a set of incremental reads yields exactly the evidence one whole read would; a test asserts the evidence ids are identical.
+  A legacy result that nothing can name (its call was a hook-only live observation) is matched to a live result by kind and time rather than filed as an unnamed second result.
+- Legacy pass timing is logged per pass, at WARNING from 30 seconds; the canonical pass's elapsed time is in background health (`reconciliation.elapsed_s`) and logged at WARNING from 30 seconds.
+- The legacy pass stays because its rows are still read: the legacy dashboard (`canonical_telemetry_legacy_dashboard_enabled`), the shadow comparison, and the canonical catch-up importer all read `tool_events`, and `transcript_telemetry_coverage` feeds the dashboard's coverage readout.
 - The event consumer and the hourly prune/reconcile loop both run under the shared
   background-task supervisor. A transient SQLite error costs one iteration, not the feature:
   unguarded, the consumer's death silently ended tool and compaction capture, and the hourly
@@ -456,7 +499,8 @@ or session lifecycle.
 - Canonical ledger queries, filters, and exports: `src/swe_mux/telemetry_queries.py`
 - Legacy stream importers: `src/swe_mux/telemetry_imports.py`
 - Direct native-store reconciliation: `src/swe_mux/telemetry_reconcile.py`
-- Daemon adapter (batching, catch-up, reconciliation, rollup worker, health): `src/swe_mux/telemetry_service.py`
+- Incremental transcript reads for both reconcilers (cursor, samples, absolute line numbers): `src/swe_mux/telemetry_cursor.py`
+- Daemon adapter (the three worker threads, batching, catch-up, reconciliation, rollup worker, health): `src/swe_mux/telemetry_service.py`
 - Provider OTLP normalization: `src/swe_mux/telemetry_otlp.py`
 - Query benchmark on a seeded scratch ledger (`--fast-seed` for ten million calls): `tools/telemetry_benchmark.py`
 - Event-loop lag under an ingestion flood, with a no-ledger control: `tools/telemetry_ingest_latency.py`
@@ -474,6 +518,8 @@ or session lifecycle.
 - Fixtures/tests: `tests/fixtures/telemetry/` (OTLP captures and the per-dialect native-store
   fixtures), `tests/test_telemetry_otlp.py`, `tests/test_telemetry_ledger.py`,
   `tests/test_telemetry_hardening.py`, `tests/test_telemetry_reconcile.py`,
+  `tests/test_telemetry_storage.py` (seals, write stamps, refused times, the thread split),
+  `tests/test_telemetry_incremental.py` (cursor reads for both reconcilers),
   `tests/test_telemetry_analytics.py`, `tests/test_operational_telemetry_phase2.py`,
   `tests/test_live_agent_conformance.py`, `tests/test_live_otlp.py`
 
