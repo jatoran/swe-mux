@@ -97,9 +97,29 @@ def _message_blocks(content: Any, native_tool_type: str) -> list[dict[str, Any]]
         if _TOOL_REF_KEY in item:
             block[_TOOL_REF_KEY] = item[_TOOL_REF_KEY]
         else:
-            block["input"] = _tool_input(item.get("input", item.get("arguments")))
+            block["input"] = native_tool_input(item)
         blocks.append(block)
     return blocks
+
+
+def native_tool_input(item: dict[str, Any]) -> Any:
+    """The input a tool block carries, as the reader and the Claude/pi parse read it.
+
+    One function for every reader of a block's input, including
+    `conversation_index`, which reads an input back from the file long after the
+    block was projected: two copies of this rule would be two answers to "what did
+    the agent pass this tool".
+    """
+    return _tool_input(item.get("input", item.get("arguments")))
+
+
+def codex_call_input(payload: dict[str, Any]) -> Any:
+    """The input of a Codex call as the indexing parse reads it: ``arguments`` first.
+
+    Deliberately not :func:`native_tool_input`, whose ``input`` comes first. The
+    two parses have always differed here and History's index is keyed on this one.
+    """
+    return _tool_input(payload.get("arguments") or payload.get("input"))
 
 
 def _opencode_blocks(parts: Any) -> list[dict[str, Any]]:
@@ -1014,7 +1034,7 @@ def _parse_events_counted(
                 if _TOOL_REF_KEY in payload:
                     block[_TOOL_REF_KEY] = payload[_TOOL_REF_KEY]
                 else:
-                    block["input"] = _tool_input(payload.get("arguments") or payload.get("input"))
+                    block["input"] = codex_call_input(payload)
                 messages.append(
                     {"role": "assistant", "ts": event.get("timestamp"), "content": [block]}
                 )
@@ -1275,12 +1295,10 @@ def _tool_call_details(event: dict[str, Any], backend: str) -> list[dict[str, An
             # Kept without its input by the index; the input is read back from the
             # record on demand (`conversation_index.tool_calls`).
             detail[_TOOL_REF_KEY] = item[_TOOL_REF_KEY]
+        elif isinstance(state, dict):
+            detail["input"] = _tool_input(state.get("input"))
         else:
-            detail["input"] = _tool_input(
-                state.get("input")
-                if isinstance(state, dict)
-                else item.get("input", item.get("arguments"))
-            )
+            detail["input"] = native_tool_input(item)
         details.append(detail)
     return details
 

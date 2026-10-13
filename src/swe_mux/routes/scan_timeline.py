@@ -829,10 +829,20 @@ async def scan_timeline_search(request: web.Request) -> web.Response:
 async def session_transcript(request: web.Request) -> web.Response:
     """The focused session's readable conversation, for the drawer's reader tab.
 
-    Deliberately NOT `/api/history/{sid}/transcript`: that endpoint reindexes the
-    run's searchable messages and loads its annotations on every call, which is
-    right for opening a history entry once and wrong for a surface that refreshes
-    whenever a turn ends. This one only reads.
+    Deliberately NOT `/api/history/{sid}/transcript`: that endpoint returns the whole
+    conversation with every tool input, plus the run's search matches, annotations
+    and scan records, and replaces the run's searchable messages whenever its index is
+    behind the file. That is right for a script that wants everything once and wrong
+    for a surface that refreshes whenever a turn ends. This one only reads, pages from
+    the tail, and answers a reader that already holds the conversation with a delta
+    or a 304.
+
+    Paging and deltas (`conversation_index`): with no cursor the answer is the newest
+    ``limit`` messages; ``before=<message_id>`` asks for the page ending just before
+    that message; ``since=<seq>&generation=<token>&oldest=<message_id>`` asks for
+    every message changed since that reading, from ``replace_from`` onward. A cursor
+    or generation this reading cannot honour is answered with a fresh tail and
+    ``reset: true``. ``generation`` is an opaque token, never reused by another index.
 
     Every "there is nothing to show" case answers 200 with a `reason` rather than
     an error status. A shell pane and an agent that has not written its first

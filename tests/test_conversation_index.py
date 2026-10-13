@@ -186,6 +186,20 @@ def codex_turn(name: str, *, complete: bool = True) -> list[dict[str, Any]]:
                 "arguments": json.dumps({"command": ["ls", name]}),
             },
         },
+        {
+            # Both ids and both input keys: the reader's details and the indexing
+            # parse prefer different ones, and both must read the input back right.
+            "timestamp": "2026-08-18T16:31:02Z",
+            "type": "response_item",
+            "payload": {
+                "type": "custom_tool_call",
+                "id": f"ctc-{name}",
+                "call_id": f"custom-{name}",
+                "name": "apply_patch",
+                "input": f"*** Begin Patch {name}",
+                "arguments": json.dumps({"patch": name}),
+            },
+        },
         codex_message("assistant", f"progress {name}", "commentary"),
         codex_message("assistant", f"answer {name}", "final_answer"),
         codex_event("agent_message", message=f"answer {name}"),
@@ -244,23 +258,23 @@ def comparable(message: dict[str, Any]) -> dict[str, Any]:
     return shown
 
 
-@pytest.mark.parametrize(
-    ("backend", "events"),
-    [
-        ("claude", claude_conversation()),
-        (
-            "codex",
-            [
-                codex_meta(PARENT),
-                *codex_turn("A"),
-                *codex_turn("B"),
-                codex_event("thread_rolled_back", num_turns=1),
-                *codex_turn("C", complete=False),
-            ],
-        ),
-        ("omp", pi_conversation()),
-    ],
-)
+CONVERSATIONS = [
+    ("claude", claude_conversation()),
+    (
+        "codex",
+        [
+            codex_meta(PARENT),
+            *codex_turn("A"),
+            *codex_turn("B"),
+            codex_event("thread_rolled_back", num_turns=1),
+            *codex_turn("C", complete=False),
+        ],
+    ),
+    ("omp", pi_conversation()),
+]
+
+
+@pytest.mark.parametrize(("backend", "events"), CONVERSATIONS)
 def test_the_index_reads_what_a_full_read_reads(
     tmp_path: Path, backend: str, events: list[dict[str, Any]]
 ) -> None:
@@ -289,34 +303,29 @@ def test_the_index_reads_what_a_full_read_reads(
     assert expected, "the fixture must exercise something"
 
 
-def test_the_indexed_parse_is_the_full_parse_without_tool_inputs(tmp_path: Path) -> None:
-    path = write(tmp_path / "claude.jsonl", claude_conversation())
-    full = tv.parse_transcript_with_watermark(path, "claude")
+@pytest.mark.parametrize(("backend", "events"), CONVERSATIONS)
+@pytest.mark.parametrize("shared", [True, False])
+def test_the_indexed_parse_is_the_full_parse_exactly(
+    tmp_path: Path, backend: str, events: list[dict[str, Any]], shared: bool
+) -> None:
+    """History reads its conversations here (`history.read_history_conversation`).
 
-    indexed = indexed_parse(path, "claude")
+    Its index and its tool-call pages are keyed on the full parse's output, inputs
+    included, so the two must be indistinguishable - not merely close.
+    """
+    path = write(tmp_path / "conversation.jsonl", events)
+    full = tv.parse_transcript_with_watermark(path, backend)
 
-    def without_inputs(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        return [
-            {
-                **message,
-                "content": [
-                    {key: value for key, value in block.items() if key != "input"}
-                    for block in message["content"]
-                ],
-            }
-            for message in messages
-        ]
+    indexed = indexed_parse(path, backend, shared=shared)
 
-    assert without_inputs(indexed.messages) == without_inputs(full.messages)
-    assert indexed.abandoned == full.abandoned
-    assert (indexed.mtime_ns, indexed.size) == (full.mtime_ns, full.size)
+    assert indexed == full
     with_tools = [
         ordinal
         for ordinal, message in enumerate(full.messages)
         if any(block.get("type") == "tool_use" for block in message["content"])
     ]
     assert with_tools
-    assert parsed_tool_calls(path, "claude", ordinals=with_tools) == {
+    assert parsed_tool_calls(path, backend, ordinals=with_tools) == {
         ordinal: [
             {"id": block["id"], "name": block["name"], "input": block["input"]}
             for block in full.messages[ordinal]["content"]
@@ -324,6 +333,54 @@ def test_the_indexed_parse_is_the_full_parse_without_tool_inputs(tmp_path: Path)
         ]
         for ordinal in with_tools
     }
+
+
+def test_a_sweep_reads_without_evicting_or_pinning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The History indexer walks thousands of conversations through `shared=False`."""
+    registry = ConversationIndexRegistry(max_indexes=1)
+    monkeypatch.setattr(conversation_index, "REGISTRY", registry)
+    live = write(tmp_path / "live.jsonl", claude_conversation())
+    swept = write(tmp_path / "swept.jsonl", claude_conversation())
+    reading = registry.snapshot(live, "claude")
+
+    indexed_parse(swept, "claude", shared=False)
+    # The live reader's index is still the one held, untouched by the sweep...
+    assert registry.peek(live, "claude", None) is not None
+    assert registry.peek(swept, "claude", None) is None
+    assert registry.status()["indexes"] == 1
+    assert counters(registry)["sweep_builds"] == 1
+    # ...and a sweep of a conversation a reader holds reuses that index.
+    before = registry.peek(live, "claude", None)
+    indexed_parse(live, "claude", shared=False)
+    assert registry.peek(live, "claude", None) is before
+    assert counters(registry)["sweep_builds"] == 1
+    assert registry.snapshot(live, "claude") is reading
+
+
+def test_a_kept_parse_is_reused_until_the_conversation_changes(tmp_path: Path) -> None:
+    path = write(tmp_path / "claude.jsonl", claude_conversation())
+    registry = ConversationIndexRegistry()
+    index = registry.index_for(path, "claude", None)
+    index.refresh()
+    before = index.estimated_bytes
+    first, _ = index.parsed_with_inputs(keep=True)
+    kept = index.estimated_bytes
+    assert kept > before  # what it pins is counted against the budget
+    second, _ = index.parsed_with_inputs(keep=True)
+    assert second is first
+    # A sweep's ask neither returns nor replaces the kept one.
+    swept, _ = index.parsed_with_inputs(keep=False)
+    assert swept is not first and swept == first
+    assert index.estimated_bytes == kept
+    append(path, user("later", "call_c", "and then"))
+    index.refresh()
+    # The change drops the kept parse and its bytes; one short record is far smaller.
+    assert index.estimated_bytes < kept
+    third, _ = index.parsed_with_inputs(keep=True)
+    assert third is not first
+    assert third[-1]["content"][0]["text"] == "and then"
 
 
 def test_a_codex_fork_reads_its_parent_prefix_with_stable_identity(tmp_path: Path) -> None:
@@ -342,8 +399,10 @@ def test_a_codex_fork_reads_its_parent_prefix_with_stable_identity(tmp_path: Pat
     assert [comparable(m) for m in first.messages] == [comparable(m) for m in expected]
     assert [m["text"] for m in first.messages][:3] == ["question A", "progress A", "answer A"]
     assert all(m["message_id"].startswith("inherited:") for m in first.messages[:3])
+    # Inputs read back from the parent's file, through the fork.
     assert calls_at(first, first.messages[1]["message_id"]) == [
-        {"id": "call-A", "name": "shell", "input": {"command": ["ls", "A"]}}
+        {"id": "call-A", "name": "shell", "input": {"command": ["ls", "A"]}},
+        {"id": "ctc-A", "name": "apply_patch", "input": "*** Begin Patch A"},
     ]
 
     # The parent growing past the pinned boundary changes nothing the fork reads.

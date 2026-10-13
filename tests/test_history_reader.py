@@ -169,8 +169,9 @@ def forbid_parsing(monkeypatch: pytest.MonkeyPatch) -> None:
         raise AssertionError("the reader parsed a transcript on a path that must not")
 
     monkeypatch.setattr(history_module, "read_history_conversation", refuse)
-    monkeypatch.setattr(history_module, "_parse_transcript_counted", refuse)
-    monkeypatch.setattr(history_module, "parse_transcript_with_watermark", refuse)
+    # The reader behind that seam (`conversation_index`), in case a path reaches it
+    # without going through the seam.
+    monkeypatch.setattr(history_module, "indexed_parse", refuse)
     monkeypatch.setattr("swe_mux.routes.history.read_history_conversation", refuse)
 
 

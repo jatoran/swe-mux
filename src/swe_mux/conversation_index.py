@@ -516,8 +516,13 @@ class ConversationIndex:
         backend: str,
         native_id: str | None,
         stats: _Stats,
+        *,
+        quiet: bool = False,
     ) -> None:
         self.key = key
+        # A throwaway index (a sweep's) logs its builds at DEBUG unless they are slow:
+        # a reconcile reads thousands, and one INFO line each would bury the log.
+        self.quiet = quiet
         self.path = path
         self.backend = backend
         self.native_id = native_id
@@ -541,10 +546,16 @@ class ConversationIndex:
         self.sniffed = 0
         self.building = False
         self._parse: tuple[int, int, list[dict[str, Any]], int] | None = None
+        self._filled: tuple[ConversationSnapshot, list[dict[str, Any]], int] | None = None
 
     @property
     def name(self) -> str:
         return self.path.name if self.path is not None else self.key
+
+    @property
+    def _build_counter(self) -> str:
+        # Kept apart so a sweep cannot pass for live readers missing the index.
+        return "sweep_builds" if self.quiet else "builds"
 
     # -- refresh ------------------------------------------------------------
 
@@ -573,10 +584,11 @@ class ConversationIndex:
         # A store has no append contract to extend from; its records are small and
         # are re-read whole whenever the conversation's own watermark moves.
         self.events = [self._memoise(dict(record)) for record in records]
+        self._filled = None
         self.estimated_bytes = sum(_estimated_size(event.get("parts")) for event in self.events)
         self.store_mark = mark
         self._recompute(rebuilt=False)
-        self.stats.count("builds")
+        self.stats.count(self._build_counter)
         self._log_timing("store", started, len(self.events), 0)
         assert self.snapshot is not None
         return self.snapshot
@@ -595,7 +607,7 @@ class ConversationIndex:
             rebuilt = self.snapshot is not None
             self._build(path)
             self._recompute(rebuilt=rebuilt)
-            self.stats.count("rebuilds" if rebuilt else "builds")
+            self.stats.count("rebuilds" if rebuilt else self._build_counter)
             if rebuilt:
                 log.info(
                     "transcript_index_rebuilt path=%s backend=%s reason=%s generation=%d",
@@ -652,6 +664,7 @@ class ConversationIndex:
         self.prefix = b""
         self.boundary = b""
         self._parse = None
+        self._filled = None
         self.building = True
         try:
             sources: list[tuple[Path, int]]
@@ -837,6 +850,7 @@ class ConversationIndex:
             sources=tuple(segment.path for segment in self.segments),
         )
         self._parse = None
+        self._drop_filled()
 
     @staticmethod
     def _stamps(
@@ -884,6 +898,36 @@ class ConversationIndex:
             self._parse = (snapshot.generation, snapshot.seq, messages, abandoned)
             return messages, abandoned, snapshot
 
+    def parsed_with_inputs(self, *, keep: bool) -> tuple[list[dict[str, Any]], int]:
+        """:meth:`parsed` with every tool input read back - a full parse's exact output.
+
+        ``keep`` holds the result until the conversation next changes, counted against
+        the budget, for a reader a person is waiting on that may ask again (History's
+        tool-call pages); that result is SHARED between such readers and must be
+        treated as read-only, the contract the watermark-keyed parse cache it replaces
+        already had. A sweep over many conversations passes ``False``, so it pins
+        nothing and gets a list of its own.
+        """
+        messages, abandoned, reading = self.parsed()
+        with self.lock:
+            cached = self._filled
+            if keep and cached is not None and cached[0] is reading:
+                return cached[1], abandoned
+        filled = fill_parse_inputs(messages, reading)
+        if keep:
+            with self.lock:
+                if self.snapshot is reading:
+                    self._drop_filled()
+                    size = _estimated_size(filled)
+                    self._filled = (reading, filled, size)
+                    self.estimated_bytes += size
+        return filled, abandoned
+
+    def _drop_filled(self) -> None:
+        if self._filled is not None:
+            self.estimated_bytes -= self._filled[2]
+            self._filled = None
+
     def _log_timing(self, kind: str, started: float, records: int, read: int) -> None:
         elapsed = time.perf_counter() - started
         self.stats.note_elapsed(elapsed)
@@ -908,7 +952,8 @@ class ConversationIndex:
                 elapsed * 1000,
             )
         else:
-            log.info(
+            log.log(
+                logging.DEBUG if self.quiet else logging.INFO,
                 "transcript_index_built kind=%s path=%s backend=%s records=%d bytes=%d "
                 "messages=%d estimated_bytes=%d elapsed_ms=%.0f",
                 kind,
@@ -935,38 +980,60 @@ def _native_tool_block(event: dict[str, Any], block: int) -> dict[str, Any] | No
     return item if isinstance(item, dict) else None
 
 
-def _read_tool_inputs(
+_NATIVE_ID_KEYS = ("id", "call_id", "callID", "tool_use_id")
+
+
+def _carries_id(block: dict[str, Any], expected: str | None) -> bool:
+    """Whether ``block`` is the call a projection named ``expected``.
+
+    Membership rather than one key, because the projections name a call by
+    different keys (the reader's details prefer ``id``, the Codex parse prefers
+    ``call_id``, and a Codex function call carries both). A block with no id at all,
+    or an expectation that was synthesised from the record's position, cannot be
+    contradicted and is accepted.
+    """
+    ids = {str(block[key]) for key in _NATIVE_ID_KEYS if block.get(key)}
+    return not ids or not expected or expected in ids
+
+
+def _read_tool_blocks(
     sources: tuple[Path, ...], wanted: Iterable[tuple[ToolRef, str | None]]
-) -> dict[ToolRef, Any]:
-    """The native input behind each reference, decoded from the record holding it.
+) -> dict[ToolRef, dict[str, Any]]:
+    """The native block behind each reference, decoded from the record holding it.
 
     Records are grouped so each is read and decoded once however many of its blocks
-    were asked for. A reference is only answered when the block it lands on still
-    carries the call id the reader showed: a file rewritten since the reading puts
-    other bytes at that offset, and the honest answer then is no input rather than
-    another call's.
+    were asked for, and read in file order through one open handle per file. A
+    reference is only answered when the block it lands on still carries the call id
+    the reader showed: a file rewritten since the reading puts other bytes at that
+    offset, and the honest answer then is no input rather than another call's.
     """
     by_record: dict[tuple[int, int, int], list[tuple[ToolRef, str | None]]] = {}
     for ref, expected in wanted:
         by_record.setdefault(ref[:3], []).append((ref, expected))
-    result: dict[ToolRef, Any] = {}
+    result: dict[ToolRef, dict[str, Any]] = {}
     misses = 0
-    for (segment_index, start, end), items in by_record.items():
-        event: Any = None
-        if 0 <= segment_index < len(sources):
-            try:
-                event = json.loads(_read_range(sources[segment_index], start, end - start))
-            except (OSError, ValueError):
-                event = None
-        for ref, expected in items:
-            block = _native_tool_block(event, ref[3]) if isinstance(event, dict) else None
-            native_id = None
-            if block is not None:
-                native_id = block.get("id") or block.get("call_id") or block.get("callID")
-            if block is None or (native_id and expected and str(native_id) != expected):
-                misses += 1
-                continue
-            result[ref] = tv._tool_input(block.get("input", block.get("arguments")))
+    handles: dict[int, Any] = {}
+    try:
+        for (segment_index, start, end), items in sorted(by_record.items()):
+            event: Any = None
+            if 0 <= segment_index < len(sources):
+                try:
+                    handle = handles.get(segment_index)
+                    if handle is None:
+                        handle = handles[segment_index] = sources[segment_index].open("rb")
+                    handle.seek(start)
+                    event = json.loads(handle.read(end - start))
+                except (OSError, ValueError):
+                    event = None
+            for ref, expected in items:
+                block = _native_tool_block(event, ref[3]) if isinstance(event, dict) else None
+                if block is None or not _carries_id(block, expected):
+                    misses += 1
+                    continue
+                result[ref] = block
+    finally:
+        for handle in handles.values():
+            handle.close()
     if misses:
         REGISTRY.stats.count("tool_input_misses", misses)
         log.info("transcript_tool_input_unavailable count=%d", misses)
@@ -981,7 +1048,7 @@ def tool_inputs(
     A call whose input could not be read back keeps its name with ``input: None``.
     """
     tools = list(tools)
-    inputs = _read_tool_inputs(
+    blocks = _read_tool_blocks(
         reading.sources,
         [
             (tool[tv._TOOL_REF_KEY], str(tool.get("id") or "") or None)
@@ -989,16 +1056,54 @@ def tool_inputs(
             if tv._TOOL_REF_KEY in tool
         ],
     )
-    return [
-        {
-            "id": tool.get("id"),
-            "name": tool.get("name"),
-            "input": inputs.get(tool[tv._TOOL_REF_KEY])
-            if tv._TOOL_REF_KEY in tool
-            else tool.get("input"),
-        }
-        for tool in tools
+    result: list[dict[str, Any]] = []
+    for tool in tools:
+        value = tool.get("input")
+        if tv._TOOL_REF_KEY in tool:
+            block = blocks.get(tool[tv._TOOL_REF_KEY])
+            value = tv.native_tool_input(block) if block is not None else None
+        result.append({"id": tool.get("id"), "name": tool.get("name"), "input": value})
+    return result
+
+
+def fill_parse_inputs(
+    messages: list[dict[str, Any]], reading: ConversationSnapshot
+) -> list[dict[str, Any]]:
+    """The indexing parse with every ``tool_use`` input read back: a full parse's output.
+
+    Fresh dicts throughout, so a caller may keep or change the result without
+    touching the index's shared records. A block whose input can no longer be read
+    (the file was rewritten since ``reading``) carries ``input: None``.
+    """
+    wanted = [
+        (block[tv._TOOL_REF_KEY], str(block.get("id") or "") or None)
+        for message in messages
+        for block in message.get("content") or []
+        if isinstance(block, dict) and tv._TOOL_REF_KEY in block
     ]
+    natives = _read_tool_blocks(reading.sources, wanted) if wanted else {}
+    filled: list[dict[str, Any]] = []
+    for message in messages:
+        content = message.get("content")
+        if not isinstance(content, list):
+            filled.append(dict(message))
+            continue
+        blocks: list[Any] = []
+        for block in content:
+            if not isinstance(block, dict) or tv._TOOL_REF_KEY not in block:
+                blocks.append(block)
+                continue
+            ref = block[tv._TOOL_REF_KEY]
+            native = natives.get(ref)
+            value = None
+            if native is not None:
+                # The same rule the full parse applies to the same block.
+                value = tv.codex_call_input(native) if ref[3] < 0 else tv.native_tool_input(native)
+            blocks.append(
+                {**{k: v for k, v in block.items() if k != tv._TOOL_REF_KEY}, "input": value}
+            )
+        filled.append({**message, "content": blocks})
+    return filled
 
 
 def calls_at(reading: ConversationSnapshot, message_id: str | None) -> list[dict[str, Any]] | None:
@@ -1067,6 +1172,13 @@ class ConversationIndexRegistry:
         self._indexes: OrderedDict[str, ConversationIndex] = OrderedDict()
         self._inflight: dict[str, Future[ConversationSnapshot]] = {}
         self._executor: ThreadPoolExecutor | None = None
+
+    def peek(
+        self, path: Path | None, backend: str, native_id: str | None
+    ) -> ConversationIndex | None:
+        """The index already held for a conversation, without creating or touching one."""
+        with self._lock:
+            return self._indexes.get(_key(path, backend, native_id))
 
     def index_for(
         self, path: Path | None, backend: str, native_id: str | None
@@ -1217,37 +1329,34 @@ def tool_calls(
     return calls_at(snapshot(path, backend, native_id), message_id)
 
 
-def _strip_refs(message: dict[str, Any]) -> dict[str, Any]:
-    content = message.get("content")
-    if not isinstance(content, list):
-        return dict(message)
-    return {
-        **message,
-        "content": [
-            {key: value for key, value in block.items() if key != tv._TOOL_REF_KEY}
-            for block in content
-        ],
-    }
-
-
 def indexed_parse(
-    path: Path | None, backend: str, *, native_id: str | None = None
+    path: Path | None, backend: str, *, native_id: str | None = None, shared: bool = True
 ) -> tv.ParsedConversation:
-    """``parse_transcript_with_watermark`` served from the index, without tool inputs.
+    """``parse_transcript_with_watermark``'s exact output, served from the index.
 
-    The messages are the indexing projection - abandoned records dropped, ordinals
-    being positions in this list - and every ``tool_use`` block carries its ``id`` and
-    ``name`` but no ``input``; :func:`parsed_tool_calls` reads inputs back by ordinal.
-    The watermark is stamped before the refresh, the same conservative direction
+    The indexing projection - abandoned records dropped, ordinals being positions in
+    this list - with every ``tool_use`` input read back from the record holding it,
+    so a caller cannot tell it from a full parse except by how long it took. The
+    watermark is stamped before the refresh, the same conservative direction
     :func:`transcript_view.parse_transcript_with_watermark` takes.
+
+    ``shared`` reads through the registry and keeps the result for the next ask,
+    which is right for a person waiting on one conversation. A sweep over many
+    passes ``False``: it reuses an index a reader already holds, and otherwise reads
+    through a throwaway one, so walking thousands of conversations neither evicts the
+    indexes live readers depend on nor pins anything after it moves on.
     """
     _identity, first, second = tv.conversation_watermark(path, backend, native_id)
-    index = REGISTRY.index_for(path, backend, native_id)
+    index: ConversationIndex | None
+    if shared:
+        index = REGISTRY.index_for(path, backend, native_id)
+    else:
+        index = REGISTRY.peek(path, backend, native_id) or ConversationIndex(
+            _key(path, backend, native_id), path, backend, native_id, REGISTRY.stats, quiet=True
+        )
     index.refresh()
-    messages, abandoned, _reading = index.parsed()
-    return tv.ParsedConversation(
-        [_strip_refs(message) for message in messages], abandoned, first, second
-    )
+    messages, abandoned = index.parsed_with_inputs(keep=shared)
+    return tv.ParsedConversation(messages, abandoned, first, second)
 
 
 def parsed_tool_calls(
@@ -1257,21 +1366,22 @@ def parsed_tool_calls(
     native_id: str | None = None,
     ordinals: Iterable[int],
 ) -> dict[int, list[dict[str, Any]]]:
-    """``{ordinal: [{id, name, input}]}`` for the parse-list messages named."""
+    """``{ordinal: [{id, name, input}]}`` for the parse-list messages named.
+
+    Reads only those messages' inputs back, by the same rule the full parse applies.
+    """
     index = REGISTRY.index_for(path, backend, native_id)
     index.refresh()
     messages, _abandoned, reading = index.parsed()
+    wanted = sorted({ordinal for ordinal in ordinals if 0 <= ordinal < len(messages)})
+    filled = fill_parse_inputs([messages[ordinal] for ordinal in wanted], reading)
     return {
-        ordinal: tool_inputs(
-            reading,
-            (
-                block
-                for block in (messages[ordinal].get("content") or [])
-                if isinstance(block, dict) and block.get("type") == "tool_use"
-            ),
-        )
-        for ordinal in ordinals
-        if 0 <= ordinal < len(messages)
+        ordinal: [
+            {"id": block.get("id"), "name": block.get("name"), "input": block.get("input")}
+            for block in message.get("content") or []
+            if isinstance(block, dict) and block.get("type") == "tool_use"
+        ]
+        for ordinal, message in zip(wanted, filled, strict=True)
     }
 
 

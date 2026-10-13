@@ -16,6 +16,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, TypeVar
 
+from .conversation_index import indexed_parse
 from .errors import NotFound
 from .git_projects import ProjectIdentity
 from .harness import (
@@ -36,10 +37,8 @@ from .sqlite_store import (
 from .transcript_view import (
     TRANSCRIPT_PARSER_VERSION,
     ParsedConversation,
-    _parse_transcript_counted,
     conversation_is_readable,
     conversation_watermark,
-    parse_transcript_with_watermark,
     searchable_transcript_messages,
     transcript_time_summary,
 )
@@ -105,22 +104,21 @@ def read_history_conversation(
     """The one seam through which History reads a native conversation.
 
     Every History path that needs a parse comes through here: the indexer, the
-    background reindex an open schedules, and the lazily loaded tool calls. The shared
-    incremental transcript reader replaces the body of this function, not its callers.
+    background reindex an open schedules, and the lazily loaded tool calls. Both paths
+    read through the shared incremental conversation reader
+    (`conversation_index.indexed_parse`), whose output is a full parse's exactly, tool
+    inputs included, without decoding the whole file again for each ask.
 
-    ``cached`` picks the shared watermark-keyed LRU (`parse_transcript_with_watermark`),
-    which is right for a read a person is waiting on and may repeat (tool calls for one
-    open conversation, page after page). The indexer passes ``False``: a reconcile walks
-    thousands of conversations, and routing each through a 32-entry cache of whole
-    message lists would evict every live reader's entry and pin up to 32 large
-    conversations in memory at once. The watermark is stamped before the parse on both
-    paths, so it can only describe the same content or less than the messages returned.
+    ``cached`` reads through the reader's registry and keeps the result until the
+    conversation changes, which is right for a read a person is waiting on and may
+    repeat (tool calls for one open conversation, page after page); that result is
+    shared and read-only. The indexer passes ``False``: a reconcile walks thousands of
+    conversations, so it reuses an index a live reader already holds and otherwise
+    reads through a throwaway one, evicting no live reader's index and pinning
+    nothing. The watermark is stamped before the read on both paths, so it can only
+    describe the same content or less than the messages returned.
     """
-    if cached:
-        return parse_transcript_with_watermark(path, backend, native_id=native_id)
-    _identity, first, second = conversation_watermark(path, backend, native_id)
-    messages, abandoned = _parse_transcript_counted(path, backend, native_id=native_id)
-    return ParsedConversation(messages, abandoned, first, second)
+    return indexed_parse(path, backend, native_id=native_id, shared=cached)
 
 
 def _tool_call_count(messages: Sequence[dict[str, Any]]) -> int:
