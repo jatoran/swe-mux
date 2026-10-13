@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import secrets
@@ -16,6 +17,7 @@ from aiohttp import web
 
 from .. import (
     agent_environment,
+    conversation_index,
     git_review,
     mcp_tools,
 )
@@ -28,7 +30,7 @@ from ..harness import (
     has_observable_transcript,
     is_agent_harness,
 )
-from ..http_support import json_response
+from ..http_support import json_response, revalidated_json
 from ..project_context import ProjectContext
 from ..reply_snapshot import read_reply_snapshot
 from ..scan_consumers import catch_me_up, live_blocker, search_scan_records
@@ -39,7 +41,6 @@ from ..transcript_view import (
     CONVERSATION_DEFAULT_LIMIT,
     CONVERSATION_MAX_LIMIT,
     conversation_is_readable,
-    conversation_view_cached,
     conversation_watermark,
 )
 from .agent_ingress import HOOK_WINDOW_SWEEP_AT
@@ -48,10 +49,11 @@ from .support import _project_root_for
 log = logging.getLogger(__name__)
 
 
-# A parse this misses is a blank reading column, never a wrong one, so the
-# budget is generous: the largest Codex rollout on record (550 MB) parses in
-# about a second, and the byte cap in `conversation_view` bounds the rest.
-# Shared with the reply copy below, which reads the same view.
+# How long a reader waits on the conversation index before answering "indexing".
+# Only a first read of a very long conversation comes near it - every later read
+# decodes just what was appended - and that read is not abandoned at the deadline:
+# it keeps filling the index, so the client's retry finds it ready.
+# Shared with the reply copy below, which reads the same index.
 CONVERSATION_PARSE_TIMEOUT_SECONDS = 5.0
 
 
@@ -82,8 +84,25 @@ async def session_last_reply(request: web.Request) -> web.Response:
             },
             409,
         )
-    if not conversation_is_readable(path, session.record.backend, native_id):
+    if not await asyncio.to_thread(conversation_is_readable, path, backend, native_id):
         return json_response({"error": "the agent transcript is not available yet"}, 409)
+    try:
+        # Bring the conversation's index current on its own executor first, joining
+        # any reader already doing so: a first read of a long conversation then never
+        # runs on the default pool, and the fresh read below is an append-sized one.
+        await conversation_index.snapshot_async(
+            path, backend, native_id, wait_seconds=CONVERSATION_PARSE_TIMEOUT_SECONDS
+        )
+    except conversation_index.IndexBuilding:
+        return json_response(
+            {
+                "error": "The conversation is still being read. Try Copy again in a moment.",
+                "code": "conversation_indexing",
+            },
+            409,
+        )
+    except OSError as exc:
+        return json_response({"error": str(exc) or "the agent transcript could not be read"}, 409)
     try:
         async with asyncio.timeout(CONVERSATION_PARSE_TIMEOUT_SECONDS):
             snapshot = await asyncio.to_thread(read_reply_snapshot, path, backend, native_id)
@@ -824,9 +843,14 @@ async def session_transcript(request: web.Request) -> web.Response:
     record = session.record
     try:
         limit = int(request.query.get("limit") or CONVERSATION_DEFAULT_LIMIT)
+        since = _optional_int(request.query.get("since"))
     except ValueError:
-        raise web.HTTPBadRequest(text="limit must be an integer") from None
+        raise web.HTTPBadRequest(text="limit and since must be integers") from None
     limit = max(1, min(limit, CONVERSATION_MAX_LIMIT))
+    # Opaque tokens the previous answer handed out, echoed back unchanged.
+    generation = request.query.get("generation") or None
+    before = request.query.get("before") or None
+    oldest = request.query.get("oldest") or None
     empty: dict[str, Any] = {
         "session_id": record.id,
         "agent_run_id": record.agent_run_id,
@@ -842,6 +866,16 @@ async def session_transcript(request: web.Request) -> web.Response:
         "abandoned_messages": 0,
         "truncated": False,
         "reason": None,
+        # The paging and delta coordinates (`conversation_index`). `None` on every
+        # "nothing to show" answer, which a client reads as "no reading to extend".
+        "generation": None,
+        "seq": None,
+        "total": 0,
+        "has_older": False,
+        "page": None,
+        "delta": False,
+        "replace_from": None,
+        "reset": False,
     }
     if record.runtime_boundary != "local":
         boundary = record.runtime_boundary
@@ -860,41 +894,131 @@ async def session_transcript(request: web.Request) -> web.Response:
         )
     if not has_observable_transcript(record.backend):
         return json_response({**empty, "reason": "not_agent"})
-    path = session.transcript_path
-    # `conversation_is_readable` rather than a file test: a store-backed harness has
-    # no path, and testing one answered "no transcript" for every opencode session.
     native_id = record.native_session_id
-    if not conversation_is_readable(path, record.backend, native_id):
-        # A pane with no process behind it cannot re-find its own conversation: the
-        # observer that follows the file when the CLI moves it died with the process,
-        # and an ended, inactive or recovered pane keeps whatever address was true when
-        # it stopped (`transcript_repair`). Searching by conversation id is what makes
-        # its reader work at all. Deliberately not for a live pane: an agent that has
-        # not written its first record yet is the ordinary early state of every agent
-        # session, its observer is already resolving the binding, and a search on every
-        # poll of that window would buy nothing.
-        located = (
-            await locate_conversation(getattr(session, "adapter", None), native_id, record.backend)
-            if record.state in TERMINAL_SESSION_STATES
-            else None
-        )
-        if located is None:
-            return json_response({**empty, "reason": "no_transcript"})
-        path = located
+    found, path = await _reader_conversation(session)
+    if not found:
+        return json_response({**empty, "reason": "no_transcript"})
     try:
-        view = await asyncio.wait_for(
+        reading = await conversation_index.snapshot_async(
+            path, record.backend, native_id, wait_seconds=CONVERSATION_PARSE_TIMEOUT_SECONDS
+        )
+    except conversation_index.IndexBuilding as building:
+        # A first read of a very large conversation is still running. It keeps
+        # running, so this is "ask again shortly", not "could not be read".
+        return json_response({**empty, "reason": "indexing", "progress": building.progress})
+    except OSError:
+        return json_response({**empty, "reason": "unreadable"})
+    # Everything the body depends on: the reading, the request's own coordinates, and
+    # the record fields `empty` carries. A tag that left one out would let a browser
+    # keep showing a body that is no longer what this URL answers. Hashed, because a
+    # message id is the conversation's own string and need not be legal in a header.
+    request_shape = json.dumps(
+        [
+            record.agent_run_id or record.id,
+            record.backend,
+            record.observation_stale_since,
+            limit,
+            since,
+            generation,
+            before,
+            oldest,
+        ]
+    )
+    digest = hashlib.blake2s(request_shape.encode(), digest_size=8).hexdigest()
+    etag = f'W/"{reading.etag}.{digest}"'
+
+    def body() -> dict[str, Any]:
+        reset = False
+        payload: dict[str, Any] | None = None
+        if since is not None and generation == reading.token:
+            payload = reading.delta(since, oldest)
+        elif before is not None:
+            payload = reading.page(limit, before)
+        if payload is None:
+            # A delta from another generation, or a cursor this reading no longer
+            # holds: no splice is honest, so the client starts again from the tail.
+            reset = since is not None or before is not None
+            payload = reading.page(limit)
+        assert payload is not None
+        return {**empty, **payload, "reset": reset}
+
+    return revalidated_json(request, etag, body)
+
+
+def _optional_int(value: str | None) -> int | None:
+    return int(value) if value not in {None, ""} else None
+
+
+async def _reader_conversation(session: Any) -> tuple[bool, Path | None]:
+    """``(readable, path)`` for the conversation a session's reader shows.
+
+    `conversation_is_readable` rather than a file test: a store-backed harness has no
+    path, and testing one answered "no transcript" for every opencode session. In a
+    thread: it is a `stat`, and a stat on the loop is the shape of every multi-second
+    stall the watchdog has named.
+
+    A pane with no process behind it cannot re-find its own conversation: the observer
+    that follows the file when the CLI moves it died with the process, and an ended,
+    inactive or recovered pane keeps whatever address was true when it stopped
+    (`transcript_repair`). Searching by conversation id is what makes its reader work
+    at all. Deliberately not for a live pane: an agent that has not written its first
+    record yet is the ordinary early state of every agent session, its observer is
+    already resolving the binding, and a search on every poll of that window would buy
+    nothing.
+    """
+    record = session.record
+    path = session.transcript_path
+    native_id = record.native_session_id
+    if await asyncio.to_thread(conversation_is_readable, path, record.backend, native_id):
+        return True, path
+    located = (
+        await locate_conversation(getattr(session, "adapter", None), native_id, record.backend)
+        if record.state in TERMINAL_SESSION_STATES
+        else None
+    )
+    return located is not None, located
+
+
+async def session_transcript_tool_calls(request: web.Request) -> web.Response:
+    """The inputs of the tool calls at one boundary of the reader, read on demand.
+
+    The reader payload names each call without its input, because inputs were
+    88-96% of its bytes and are shown only behind a disclosure that starts closed.
+    Opening one asks here: ``message_id`` for the calls before that message, or
+    ``trailing=1`` for the calls after the newest one. Results are never included.
+    """
+    session = request.app[keys.SESSIONS].resolve(request.match_info["sid"])
+    record = session.record
+    message_id = request.query.get("message_id") or None
+    trailing = request.query.get("trailing") in {"1", "true"}
+    if (message_id is None) == (not trailing):
+        raise web.HTTPBadRequest(text="exactly one of message_id or trailing=1 is required")
+    if record.runtime_boundary != "local" or not has_observable_transcript(record.backend):
+        return json_response({"calls": [], "reason": "not_agent"})
+    native_id = record.native_session_id
+    found, path = await _reader_conversation(session)
+    if not found:
+        return json_response({"calls": [], "reason": "no_transcript"})
+    try:
+        # The reading first, so a conversation whose index was dropped is rebuilt on
+        # the index's own executor and joined by every other reader, never on the
+        # default pool; then only the few records holding these inputs are read.
+        reading = await conversation_index.snapshot_async(
+            path, record.backend, native_id, wait_seconds=CONVERSATION_PARSE_TIMEOUT_SECONDS
+        )
+        calls = await asyncio.wait_for(
             asyncio.to_thread(
-                conversation_view_cached,
-                path,
-                record.backend,
-                limit=limit,
-                native_id=native_id,
+                conversation_index.calls_at, reading, None if trailing else message_id
             ),
             timeout=CONVERSATION_PARSE_TIMEOUT_SECONDS,
         )
+    except conversation_index.IndexBuilding as building:
+        return json_response({"calls": [], "reason": "indexing", "progress": building.progress})
     except (OSError, TimeoutError):
-        return json_response({**empty, "reason": "unreadable"})
-    return json_response({**empty, **view})
+        return json_response({"calls": [], "reason": "unreadable"})
+    if calls is None:
+        return json_response({"calls": [], "reason": "message_unavailable"})
+    return json_response({"calls": calls, "reason": None})
 
 
 async def session_skills(request: web.Request) -> web.Response:
@@ -1175,6 +1299,7 @@ ROUTES: tuple[web.RouteDef, ...] = (
     web.get("/api/sessions/{sid}/last-reply", session_last_reply),
     web.post("/api/sessions/{sid}/reply-copy", session_reply_copy),
     web.get("/api/sessions/{sid}/transcript", session_transcript),
+    web.get("/api/sessions/{sid}/transcript/tool-calls", session_transcript_tool_calls),
     web.get("/api/sessions/{sid}/scan-timeline", session_scan_timeline),
     web.put("/api/sessions/{sid}/scan-timeline", put_session_scan_timeline),
     web.post("/api/sessions/{sid}/scan-timeline/scan", scan_session_now),

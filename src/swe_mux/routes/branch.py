@@ -15,6 +15,7 @@ from .. import (
     app_keys as keys,
 )
 from .. import (
+    conversation_index,
     session_titles,
 )
 from ..errors import NotFound
@@ -41,9 +42,8 @@ from ..transcript_view import (
     CONVERSATION_DEFAULT_LIMIT,
     CONVERSATION_MAX_LIMIT,
     CutPoint,
-    conversation_cut_points,
     conversation_is_readable,
-    conversation_view_cached,
+    cut_points_from,
     resolve_cut_offset,
 )
 
@@ -271,47 +271,35 @@ async def _read_branch_points(
 ) -> tuple[list[CutPoint], dict[str, str], bool] | str:
     """``(points, text_by_id, truncated)`` for this conversation, or a refusal code.
 
-    The reader answers two questions in one parse: where the cuts are, and what the
-    operator would recognise each one by. Both come from the same window, so a point
-    can never be offered with somebody else's words beside it.
+    The reader answers two questions from one reading of the conversation's index:
+    where the cuts are, and what the operator would recognise each one by. Both come
+    from the same reading, so a point can never be offered with somebody else's words
+    beside it - and every point has its words, which a separately windowed view could
+    not promise once abandoned messages took up part of the window.
 
     Takes a conversation rather than a session, because the two pickers that need it
     do not both have a pane: the rail's Branch button has one, and choosing the fixed
     point a *schedule* will fork every night is done from a History row whose session
     ended weeks ago.
     """
-    if not conversation_is_readable(path, backend, native_id):
+    if not await asyncio.to_thread(conversation_is_readable, path, backend, native_id):
         return "no_transcript"
+    if path is None:
+        return "dialect_unsupported"
     try:
-        points = await asyncio.wait_for(
-            asyncio.to_thread(
-                conversation_cut_points,
-                path,
-                backend,
-                limit=limit,
-                native_id=native_id,
-            ),
-            timeout=BRANCH_POINTS_TIMEOUT_SECONDS,
+        reading = await conversation_index.snapshot_async(
+            path, backend, native_id, wait_seconds=BRANCH_POINTS_TIMEOUT_SECONDS
         )
-        view = await asyncio.wait_for(
-            asyncio.to_thread(
-                conversation_view_cached,
-                path,
-                backend,
-                limit=limit,
-                native_id=native_id,
-            ),
-            timeout=BRANCH_POINTS_TIMEOUT_SECONDS,
-        )
-    except (OSError, TimeoutError):
+    except (OSError, conversation_index.IndexBuilding):
         return "unreadable"
+    points = cut_points_from(reading, limit=limit)
     if points is None:
         return "dialect_unsupported"
+    live = reading.live_messages or ()
     text_by_id = {
-        str(message["message_id"]): str(message.get("text") or "")
-        for message in view.get("messages", [])
+        str(message["message_id"]): str(message.get("text") or "") for message in live[-limit:]
     }
-    return points, text_by_id, bool(view.get("truncated"))
+    return points, text_by_id, len(live) > limit
 
 
 async def session_branch_points(request: web.Request) -> web.Response:

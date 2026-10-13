@@ -16,6 +16,7 @@ from pathlib import Path
 
 import pytest
 
+from swe_mux.conversation_index import tool_calls
 from swe_mux.opencode_store import conversation_records, conversation_watermark
 from swe_mux.transcript_view import (
     conversation_is_readable,
@@ -203,12 +204,14 @@ def test_the_conversation_view_hides_tool_turns_and_counts_them(store: Path) -> 
     # The reader is told how much work happened in the gap rather than left to infer
     # that two messages written either side of a tool call were one thought.
     assert view["messages"][-1]["preceding_tool_calls"] == 1
-    assert view["messages"][-1]["preceding_tools"] == [
-        {"id": "call-1", "name": "bash", "input": {"command": "pytest"}}
-    ]
+    # The view names the call; its input is read on demand, like every dialect's.
+    assert view["messages"][-1]["preceding_tools"] == [{"id": "call-1", "name": "bash"}]
     # Identity is opencode's own primary key, which survives compaction; a byte
     # offset would not.
     assert view["messages"][-1]["message_id"] == "record:msg_3"
+    assert tool_calls(None, "opencode", SESSION, message_id="record:msg_3") == [
+        {"id": "call-1", "name": "bash", "input": {"command": "pytest"}}
+    ]
 
 
 def test_copy_reply_and_time_summary_read_the_same_conversation(store: Path) -> None:

@@ -50,6 +50,37 @@ def json_response(data: Any, status: int = 200) -> web.Response:
     return compact_json_response(data, status=status)
 
 
+def etag_matches(header: str | None, etag: str) -> bool:
+    """RFC 9110 `If-None-Match`: `*`, or any listed tag by weak comparison.
+
+    Weak comparison, so `W/"x"` and `"x"` name the same reading and a client library
+    that strips the prefix does not silently stop matching.
+    """
+    if not header:
+        return False
+    candidates = [item.strip() for item in header.split(",")]
+    if "*" in candidates:
+        return True
+    target = etag.removeprefix("W/")
+    return any(item.removeprefix("W/") == target for item in candidates if item)
+
+
+def revalidated_json(request: web.Request, etag: str, build: Any) -> web.Response:
+    """A JSON response a browser may store but must revalidate, or its 304.
+
+    ``build`` is a zero-argument callable producing the body, so a matching
+    `If-None-Match` answers without building or serialising anything. `no-cache` is
+    "store, but revalidate before every use", which is what makes a browser send the
+    conditional request at all; `fetch` turns the 304 back into the stored 200.
+    """
+    headers = {"ETag": etag, "Cache-Control": "no-cache"}
+    if etag_matches(request.headers.get("If-None-Match"), etag):
+        return web.Response(status=304, headers=headers)
+    response = json_response(build())
+    response.headers.update(headers)
+    return response
+
+
 def log_task_failure(task: asyncio.Task[Any]) -> None:
     """Surface a one-shot background task's death instead of swallowing it."""
     if task.cancelled():

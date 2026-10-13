@@ -14,7 +14,8 @@ import json
 from pathlib import Path
 from typing import Any
 
-from swe_mux import transcript_view as tv
+from swe_mux import conversation_index
+from swe_mux.conversation_index import tool_calls
 from swe_mux.transcript_view import (
     conversation_view,
     conversation_view_cached,
@@ -153,14 +154,23 @@ def test_a_tool_call_ends_a_message_and_the_boundary_is_counted(tmp_path: Path) 
     ]
     # The count is what tells a reader the two agent messages are not one thought.
     assert [item["preceding_tool_calls"] for item in view["messages"]] == [0, 0, 3, 0]
+    # The payload names each call; its input stays in the file until it is asked for.
     assert view["messages"][2]["preceding_tools"] == [
+        {"id": f"read-{index}", "name": "Read"} for index in range(3)
+    ]
+    assert tool_calls(path, "claude", message_id=view["messages"][2]["message_id"]) == [
         {"id": f"read-{index}", "name": "Read", "input": {"file_path": f"src/{index}.py"}}
         for index in range(3)
     ]
     assert final_reply_text(path, "claude") == "Nine tabs, all registered."
 
 
-def test_tool_inputs_are_exposed_but_tool_results_are_not(tmp_path: Path) -> None:
+def test_tool_inputs_are_read_on_demand_and_tool_results_never(tmp_path: Path) -> None:
+    """Inputs leave the reader payload (they were 88-96% of its bytes) but stay readable.
+
+    The indexing parse is unchanged: it keeps inputs, because the automation and
+    scan readers render digests of them. Results are excluded everywhere.
+    """
     path = write_jsonl(
         tmp_path / "claude.jsonl",
         [
@@ -194,9 +204,11 @@ def test_tool_inputs_are_exposed_but_tool_results_are_not(tmp_path: Path) -> Non
     ]
     assert "private file contents" not in repr(messages)
     view = conversation_view(path, "claude")
-    assert view["trailing_tool_calls"] == [
-        {"id": "read-0", "name": "Read", "input": {"file_path": "src/0.py"}}
-    ]
+    assert view["trailing_tool_calls"] == [{"id": "read-0", "name": "Read"}]
+    trailing = tool_calls(path, "claude", message_id=None)
+    assert trailing == [{"id": "read-0", "name": "Read", "input": {"file_path": "src/0.py"}}]
+    assert "private file contents" not in repr(trailing)
+    assert tool_calls(path, "claude", message_id="offset:999999") is None
 
 
 def test_a_streaming_split_with_no_tool_between_is_still_one_message(tmp_path: Path) -> None:
@@ -337,7 +349,8 @@ def test_omp_keeps_conversation_text_and_drops_protocol_messages_and_tools(
         ("assistant", "Verified."),
     ]
     assert [item["preceding_tool_calls"] for item in view["messages"]] == [0, 0, 1]
-    assert view["messages"][-1]["preceding_tools"] == [
+    assert view["messages"][-1]["preceding_tools"] == [{"id": "call-1", "name": "read"}]
+    assert tool_calls(path, "omp", message_id=view["messages"][-1]["message_id"]) == [
         {"id": "call-1", "name": "read", "input": {"path": "README.md"}}
     ]
     assert view["hidden"] == 0
@@ -377,7 +390,10 @@ def test_codex_drops_tool_calls_and_harness_blocks_but_keeps_its_instructions(
     assert view["hidden"] == 2
     # Codex names the call in the payload type rather than a content block.
     assert [item["preceding_tool_calls"] for item in view["messages"]] == [0, 0, 1]
-    assert view["messages"][-1]["preceding_tools"] == [
+    assert view["messages"][-1]["preceding_tools"] == [{"id": "shell-1", "name": "shell"}]
+    # Codex keeps its arguments as a JSON string; the on-demand read decodes them the
+    # way the full read always did.
+    assert tool_calls(path, "codex", message_id=view["messages"][-1]["message_id"]) == [
         {"id": "shell-1", "name": "shell", "input": {"command": "pytest -q"}}
     ]
 
@@ -412,38 +428,42 @@ def test_only_the_newest_messages_are_returned_and_the_cut_is_reported(tmp_path:
     view = conversation_view(path, "claude", limit=2)
     assert [item["text"] for item in view["messages"]] == ["turn 4", "turn 5"]
     assert view["truncated"] is True
-    # Ordinals number the returned window, so they are display keys and not the
-    # position of a message in the conversation.
-    assert [item["ordinal"] for item in view["messages"]] == [0, 1]
+    # Ordinals are positions in the whole conversation, so a message keeps its number
+    # when the window moves past it - which is what lets a reader page backwards.
+    assert [item["ordinal"] for item in view["messages"]] == [4, 5]
 
     previous_last = view["messages"][-1]["message_id"]
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(claude_user("turn 6", **HUMAN)) + "\n")
     moved = conversation_view(path, "claude", limit=2)
     assert [item["text"] for item in moved["messages"]] == ["turn 5", "turn 6"]
-    assert moved["messages"][0]["ordinal"] == 0
+    assert moved["messages"][0]["ordinal"] == 5
     assert moved["messages"][0]["message_id"] == previous_last
     assert len({item["message_id"] for item in moved["messages"]}) == 2
 
 
-def test_an_unchanged_transcript_is_parsed_once(tmp_path: Path, monkeypatch: Any) -> None:
+def test_an_unchanged_transcript_is_decoded_once_and_an_append_only_its_bytes(
+    tmp_path: Path,
+) -> None:
+    """The index decodes a file once, then only what was appended to it.
+
+    The watermark-keyed cache this replaced missed on every append, so a working
+    agent's whole transcript was decoded again on every read of its tab.
+    """
     path = write_jsonl(tmp_path / "claude.jsonl", [claude_user("hello", **HUMAN)])
-    calls = 0
-    real = tv.conversation_view
 
-    def counting(*args: Any, **kwargs: Any) -> Any:
-        nonlocal calls
-        calls += 1
-        return real(*args, **kwargs)
+    def decoded() -> int:
+        return int(conversation_index.status().get("lines_decoded", 0))
 
-    monkeypatch.setattr(tv, "conversation_view", counting)
+    start = decoded()
     first = conversation_view_cached(path, "claude")
+    assert decoded() - start == 1
     second = conversation_view_cached(path, "claude")
-    assert calls == 1
+    assert decoded() - start == 1
     assert first is second
-    # An append is a different (mtime, size), so the next read reparses.
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(claude_assistant("hi")) + "\n")
     third = conversation_view_cached(path, "claude")
-    assert calls == 2
+    # One appended line decoded, not two: the first record was not read again.
+    assert decoded() - start == 2
     assert [item["text"] for item in third["messages"]] == ["hello", "hi"]

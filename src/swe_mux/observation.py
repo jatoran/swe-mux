@@ -56,6 +56,11 @@ PARSER_DEGRADE_MIN_EVENTS = 20
 PARSER_DEGRADE_UNKNOWN_RATIO = 0.25
 INTERRUPT_PTY_SETTLE_SECONDS = 2.0
 INTERRUPT_INTENT_TIMEOUT_SECONDS = 120.0
+#: Floor between two `transcript_appended` notices for one session's reader.
+TRANSCRIPT_APPENDED_INTERVAL_SECONDS = 2.0
+#: The event-bus label every browser `/events` socket subscribes under
+#: (`routes/pty.events_ws`), which is the only audience `transcript_appended` has.
+TRANSCRIPT_READER_SUBSCRIBER = "events-ws"
 
 CLAUDE_KNOWN_RECORDS = {
     "ai-title",
@@ -1129,6 +1134,53 @@ async def _dispatch_transcript_event_inner(
         assert_never(backend)
 
 
+class AppendNotices:
+    """At most one notice per ``interval``, with the growth inside it announced at its end.
+
+    Tells an open reader the conversation grew mid-turn, so it can ask for a delta
+    instead of waiting for the turn to end. A working agent appends continuously, and
+    the reader's own request coalescing is what turns each notice into one small
+    read. The trailing edge is the point of the class: a leading-edge-only throttle
+    drops the last thing an agent wrote before going quiet until the turn ends.
+    """
+
+    def __init__(
+        self,
+        announce: Callable[[], None],
+        *,
+        interval: float,
+        clock: Callable[[], float] = time.monotonic,
+        later: Callable[[float, Callable[[], None]], asyncio.TimerHandle] | None = None,
+    ) -> None:
+        self._announce = announce
+        self._interval = interval
+        self._clock = clock
+        self._later = later
+        self._last: float | None = None
+        self._pending: asyncio.TimerHandle | None = None
+
+    def note(self) -> None:
+        """Growth happened: announce it now, or once the current interval closes."""
+        if self._pending is not None:
+            return
+        wait = 0.0 if self._last is None else self._interval - (self._clock() - self._last)
+        if wait <= 0:
+            self._fire()
+            return
+        later = self._later or asyncio.get_running_loop().call_later
+        self._pending = later(wait, self._fire)
+
+    def _fire(self) -> None:
+        self._pending = None
+        self._last = self._clock()
+        self._announce()
+
+    def close(self) -> None:
+        if self._pending is not None:
+            self._pending.cancel()
+            self._pending = None
+
+
 async def observe_transcript(
     session: Session, path: Path, events: EventBus, stop: asyncio.Event
 ) -> None:
@@ -1137,11 +1189,24 @@ async def observe_transcript(
     session.record.parser_diagnostic = f"tailing {path.name}"
     _publish_update(session)
 
+    def announce_append() -> None:
+        # To the browsers' event sockets only: it is a cue for an open reader, and
+        # no in-process consumer has any use for one every two seconds per agent.
+        events.emit_transient_to(
+            TRANSCRIPT_READER_SUBSCRIBER,
+            "transcript_appended",
+            session_id=session.record.id,
+            source="daemon",
+        )
+
+    appended = AppendNotices(announce_append, interval=TRANSCRIPT_APPENDED_INTERVAL_SECONDS)
+
     def note_growth() -> None:
         # Dated here rather than from the file's own timestamp; see
         # `Session.transcript_growth_ts`. Bound to `path` by the caller resetting
         # the stamp whenever it re-aims the observer at a different file.
         session.transcript_growth_ts = time.time()
+        appended.note()
 
     tailer = JsonlTailer(path, on_growth=note_growth)
     attach_ts = time.time()
@@ -1211,6 +1276,7 @@ async def observe_transcript(
             await _record_parser_observation(session, events, recognized, signature)
     finally:
         session.observation_replay = False
+        appended.close()
 
 
 async def _finish_transcript_catchup(

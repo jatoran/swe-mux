@@ -5,7 +5,7 @@ import logging
 import re
 import threading
 from collections import OrderedDict, defaultdict
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -27,13 +27,25 @@ _SOURCE_END_KEY = "__swe_mux_source_end"
 # Set on a record the conversation's own linkage proves is off the live branch.
 # Private to this module: readers see the public `abandoned` flag on a message.
 _ABANDONED_KEY = "__swe_mux_abandoned"
+# Codex turn bookkeeping `_mark_codex_turns` stamps onto records. Cleared before a
+# re-mark by anything that keeps records across reads (`conversation_index`).
+_TURN_ID_KEY = "__swe_mux_turn_id"
+_TURN_COMPLETE_KEY = "__swe_mux_turn_complete"
+# Carried by a tool block that `conversation_index` kept *without* its input: where
+# the record holding the input lives, so the input can be read back on demand. A
+# block that carries it projects as `{id, name, <ref>}` with no `input` key; a block
+# decoded whole never has it, so every full-read projection is byte-identical.
+_TOOL_REF_KEY = "__swe_mux_tool_ref"
+# `(tool details, conversation message, message text)` computed once per record by
+# `conversation_index`, so re-deriving the view after an append is a fold over
+# precomputed values rather than a re-classification of every record.
+_MEMO_KEY = "__swe_mux_memo"
 
 # Provider-specific file layouts. Absence means an ordinary standalone JSONL;
 # this dispatch is by transcript dialect, never a list of supported harnesses.
 _FILE_PAGES: dict[str, Callable[..., tuple[list[dict[str, Any]], bool, int]]] = {
     "codex": codex_history.page,
 }
-_FILE_SIZES: dict[str, Callable[[Path], int]] = {"codex": codex_history.size}
 _FILE_REVISIONS: dict[str, Callable[[Path], tuple[str, int, int]]] = {
     "codex": codex_history.revision,
 }
@@ -77,14 +89,16 @@ def _message_blocks(content: Any, native_tool_type: str) -> list[dict[str, Any]]
             continue
         if kind != native_tool_type:
             continue
-        blocks.append(
-            {
-                "type": "tool_use",
-                "id": item.get("id") or item.get("tool_use_id"),
-                "name": item.get("name") or item.get("tool") or "tool",
-                "input": _tool_input(item.get("input", item.get("arguments"))),
-            }
-        )
+        block: dict[str, Any] = {
+            "type": "tool_use",
+            "id": item.get("id") or item.get("tool_use_id"),
+            "name": item.get("name") or item.get("tool") or "tool",
+        }
+        if _TOOL_REF_KEY in item:
+            block[_TOOL_REF_KEY] = item[_TOOL_REF_KEY]
+        else:
+            block["input"] = _tool_input(item.get("input", item.get("arguments")))
+        blocks.append(block)
     return blocks
 
 
@@ -188,6 +202,18 @@ def _native_conversation_message(event: dict[str, Any], backend: str) -> dict[st
         if phase in {"commentary", "final_answer"}:
             message["phase"] = phase
     return message
+
+
+def _record_message(event: dict[str, Any], backend: str) -> dict[str, Any] | None:
+    """``_native_conversation_message``, answered from the record's memo when it has one.
+
+    A memoised message is shared by every read of the index that holds it, so it is
+    treated as read-only everywhere downstream.
+    """
+    memo = event.get(_MEMO_KEY)
+    if memo is not None:
+        return memo[1]  # type: ignore[no-any-return]
+    return _native_conversation_message(event, backend)
 
 
 def _timestamp_key(value: Any) -> float | None:
@@ -474,14 +500,14 @@ def _mark_codex_turns(events: list[dict[str, Any]]) -> int:
             turn_id = str(payload.get("turn_id") or _record_identity(event))
         current.append(event)
         if turn_id is not None:
-            event["__swe_mux_turn_id"] = turn_id
+            event[_TURN_ID_KEY] = turn_id
         if explicit:
-            event["__swe_mux_turn_complete"] = False
+            event[_TURN_COMPLETE_KEY] = False
         if kind == "task_complete":
             reported = payload.get("turn_id")
             if reported is None or reported == turn_id:
                 for record in current:
-                    record["__swe_mux_turn_complete"] = True
+                    record[_TURN_COMPLETE_KEY] = True
     return sum(bool(e.get(_ABANDONED_KEY)) for e in events)
 
 
@@ -939,9 +965,20 @@ def _parse_transcript_counted(
     "nine messages are not shown" is the difference between a fix and a
     disappearance.
     """
+    events = conversation_events(path, backend, max_bytes=max_bytes, native_id=native_id)
+    return _parse_events_counted(events, backend)
+
+
+def _parse_events_counted(
+    events: list[dict[str, Any]], backend: str
+) -> tuple[list[dict[str, Any]], int]:
+    """The parse over records already read and branch-marked.
+
+    Split from the reading so `conversation_index` can run the same projection over
+    the records it keeps, rather than a second implementation that would drift.
+    """
     messages: list[dict[str, Any]] = []
     abandoned = 0
-    events = conversation_events(path, backend, max_bytes=max_bytes, native_id=native_id)
     codex_response_messages = backend == "codex" and any(
         event.get("type") == "response_item"
         and (event.get("payload") or {}).get("type") == "message"
@@ -951,44 +988,40 @@ def _parse_transcript_counted(
     dialect = transcript_dialect(backend)
     for event in events:
         if event.get(_ABANDONED_KEY):
-            if _native_conversation_message(event, backend) is not None:
+            if _record_message(event, backend) is not None:
                 abandoned += 1
             continue
         if dialect == "claude" or dialect == "pi":
             # Both dialects put the whole message in one record, so the shared
             # extractor is the entire parse. Only codex splits tool calls out.
-            if message := _native_conversation_message(event, backend):
+            if message := _record_message(event, backend):
                 messages.append(message)
         elif dialect == "codex":
             payload = event.get("payload") or {}
             payload_type = payload.get("type")
             if event.get("type") == "response_item" and payload_type == "message":
-                if message := _native_conversation_message(event, backend):
+                if message := _record_message(event, backend):
                     messages.append(message)
             elif not codex_response_messages and payload_type in {"user_message", "agent_message"}:
-                if message := _native_conversation_message(event, backend):
+                if message := _record_message(event, backend):
                     messages.append(message)
             elif payload_type in {"function_call", "custom_tool_call"}:
+                block: dict[str, Any] = {
+                    "type": "tool_use",
+                    "id": payload.get("call_id") or payload.get("id"),
+                    "name": payload.get("name") or "tool",
+                }
+                if _TOOL_REF_KEY in payload:
+                    block[_TOOL_REF_KEY] = payload[_TOOL_REF_KEY]
+                else:
+                    block["input"] = _tool_input(payload.get("arguments") or payload.get("input"))
                 messages.append(
-                    {
-                        "role": "assistant",
-                        "ts": event.get("timestamp"),
-                        "content": [
-                            {
-                                "type": "tool_use",
-                                "id": payload.get("call_id") or payload.get("id"),
-                                "name": payload.get("name") or "tool",
-                                "input": _tool_input(
-                                    payload.get("arguments") or payload.get("input")
-                                ),
-                            }
-                        ],
-                    }
+                    {"role": "assistant", "ts": event.get("timestamp"), "content": [block]}
                 )
         elif dialect == "opencode":
             # One record is one message, with its tool calls already inside it, so
             # the shared extractor is the entire parse.
-            if message := _native_conversation_message(event, backend):
+            if message := _record_message(event, backend):
                 messages.append(message)
         elif dialect is None:
             # No parseable records exist for this backend (a shell).
@@ -1143,7 +1176,6 @@ def parse_transcript_with_watermark(
 # message the user wrote is the surface lying about the conversation, and a
 # CLI that renames a field must not be able to silently empty the view.
 
-CONVERSATION_MAX_BYTES = 64 * 1024 * 1024
 CONVERSATION_DEFAULT_LIMIT = 200
 CONVERSATION_MAX_LIMIT = 1000
 
@@ -1238,18 +1270,18 @@ def _tool_call_details(event: dict[str, Any], backend: str) -> list[dict[str, An
         if not name:
             continue
         native_id = item.get("id") or item.get("call_id") or item.get("callID")
-        tool_input = (
-            state.get("input")
-            if isinstance(state, dict)
-            else item.get("input", item.get("arguments"))
-        )
-        details.append(
-            {
-                "id": str(native_id or f"{record_id}:tool:{index}"),
-                "name": name,
-                "input": _tool_input(tool_input),
-            }
-        )
+        detail: dict[str, Any] = {"id": str(native_id or f"{record_id}:tool:{index}"), "name": name}
+        if _TOOL_REF_KEY in item:
+            # Kept without its input by the index; the input is read back from the
+            # record on demand (`conversation_index.tool_calls`).
+            detail[_TOOL_REF_KEY] = item[_TOOL_REF_KEY]
+        else:
+            detail["input"] = _tool_input(
+                state.get("input")
+                if isinstance(state, dict)
+                else item.get("input", item.get("arguments"))
+            )
+        details.append(detail)
     return details
 
 
@@ -1322,15 +1354,20 @@ def _conversation_records(
         if abandoned != pending_abandoned:
             pending_tools = []
             pending_abandoned = abandoned
-        tools = _tool_call_details(event, backend)
-        message = _native_conversation_message(event, backend)
+        memo = event.get(_MEMO_KEY)
+        if memo is not None:
+            tools, message, memo_text = memo
+        else:
+            tools = _tool_call_details(event, backend)
+            message = _native_conversation_message(event, backend)
+            memo_text = None
         if message is None:
             pending_tools.extend(tools)
             continue
         if backend == "codex" and codex_response_messages and event.get("type") != "response_item":
             pending_tools.extend(tools)
             continue
-        text = _message_text(message.get("content"))
+        text = memo_text if memo_text is not None else _message_text(message.get("content"))
         if not text:
             if not tools:
                 hidden += 1
@@ -1373,8 +1410,8 @@ def _conversation_records(
         }
         for field, source in (
             ("phase", None),
-            ("turn_id", "__swe_mux_turn_id"),
-            ("turn_complete", "__swe_mux_turn_complete"),
+            ("turn_id", _TURN_ID_KEY),
+            ("turn_complete", _TURN_COMPLETE_KEY),
         ):
             value = message.get(field) if source is None else event.get(source)
             if value is not None:
@@ -1382,7 +1419,9 @@ def _conversation_records(
         if abandoned:
             record["abandoned"] = True
         kept.append(record)
-        pending_tools = tools
+        # A copy: later records extend `pending_tools` in place, and `tools` may be a
+        # record's memoised list that every later read of the index shares.
+        pending_tools = list(tools)
     # Calls left over from an abandoned branch trail nothing a reader is shown.
     return kept, hidden, [] if pending_abandoned else pending_tools
 
@@ -1457,56 +1496,32 @@ def conversation_view(
 ) -> dict[str, Any]:
     """The readable conversation in a transcript, newest ``limit`` messages.
 
-    ``truncated`` covers both bounds that can drop older messages: the message
-    limit, and the byte cap that keeps one pathological transcript (a 550 MB
-    Codex rollout exists in the wild) from stalling a request. Ordinals number
-    the returned window for display. ``message_id`` is the stable identity for
-    state that must survive appends which move that window.
+    Served from the conversation's incremental index (`conversation_index`), so the
+    whole conversation is classified - there is no byte cap any more - and a read
+    after an append decodes only the appended bytes. ``truncated`` means older
+    messages exist outside the window. ``ordinal`` is a message's position in the
+    whole conversation, so it no longer moves when the window does; ``message_id``
+    remains the identity for state that must survive appends.
 
     ``preceding_tool_calls`` is how much work happened between a message and the
     one before it. Zero for everything a human typed and for the first message of
     a turn; non-zero wherever a reply resumed after tool use. It is the count of
     what is *not* shown, in the same spirit as ``hidden``: a reader is never left
     to infer that two paragraphs written twenty tool calls apart were one thought.
+    ``preceding_tools`` and ``trailing_tool_calls`` name each call (``id``, ``name``)
+    without its input, which `conversation_index.tool_calls` reads on demand.
 
     ``abandoned`` marks a message the conversation branched away from, and
     ``abandoned_messages`` counts them in the returned window. They are ordinary
     messages in every other respect, including their ordinals, because the reader
     folds them rather than removing them.
+
+    The returned dict is SHARED between readers of an unchanged conversation and
+    must be treated as read-only.
     """
-    # The byte cap applies to a file; a store-backed conversation is bounded by the
-    # message limit the reader already applies, so it asks for the whole record set
-    # and lets the window below do the trimming.
-    size_reader = _FILE_SIZES.get(transcript_dialect(backend) or "")
-    size = (size_reader(path) if size_reader else path.stat().st_size) if path else 0
-    max_bytes = CONVERSATION_MAX_BYTES if size > CONVERSATION_MAX_BYTES else None
-    records, hidden, trailing_tools = _conversation_records(
-        conversation_events(path, backend, max_bytes=max_bytes, native_id=native_id), backend
-    )
-    messages = _merge_assistant_segments(records)
-    truncated = max_bytes is not None
-    if len(messages) > limit:
-        messages = messages[-limit:]
-        truncated = True
-    return {
-        "messages": [
-            {"ordinal": index, **_without_source_span(message)}
-            for index, message in enumerate(messages)
-        ],
-        "trailing_tool_calls": trailing_tools,
-        "hidden": hidden,
-        "abandoned_messages": sum(1 for message in messages if message.get("abandoned")),
-        "truncated": truncated,
-    }
+    from .conversation_index import snapshot
 
-
-def _without_source_span(message: dict[str, Any]) -> dict[str, Any]:
-    """One reader message with its byte span removed."""
-    return {
-        key: value
-        for key, value in message.items()
-        if key not in {_SOURCE_OFFSET_KEY, _SOURCE_END_KEY}
-    }
+    return snapshot(path, backend, native_id).window(limit)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1557,17 +1572,30 @@ def conversation_cut_points(
     exists to name a moment in the conversation, and a session resent eight times
     through an outage would name the same moment eight identical times. A reader
     who wants an abandoned branch back is asking the CLI's own resume, not mux's.
+
+    Served from the conversation's index, whose open-call scan covers the whole file
+    rather than a bounded tail, so a call answered before the window is still known
+    to be answered.
     """
+    from .conversation_index import snapshot
+
     scanner = _OPEN_TOOL_SCANNERS.get(transcript_dialect(backend) or "")
     if scanner is None or path is None:
         return None
-    size = path.stat().st_size
-    max_bytes = CONVERSATION_MAX_BYTES if size > CONVERSATION_MAX_BYTES else None
-    events = conversation_events(path, backend, max_bytes=max_bytes, native_id=native_id)
-    open_calls = scanner(events)
-    records, _hidden, _trailing = _conversation_records(events, backend)
-    live = [record for record in records if not record.get("abandoned")]
-    messages = _merge_assistant_segments(live)[-limit:]
+    return cut_points_from(snapshot(path, backend, native_id), limit=limit)
+
+
+def cut_points_from(reading: Any, *, limit: int) -> list[CutPoint] | None:
+    """`conversation_cut_points` over a reading the caller already holds.
+
+    For a caller that also needs the reading's words beside each point: taking both
+    from one reading is what guarantees a point is never shown with text from a
+    different moment of the conversation.
+    """
+    if reading.open_calls is None or reading.live_messages is None:
+        return None
+    open_calls = reading.open_calls
+    messages = list(reading.live_messages)[-limit:]
     points: list[CutPoint] = []
     for ordinal, message in enumerate(messages):
         start = message.get(_SOURCE_OFFSET_KEY)
@@ -1668,11 +1696,6 @@ _OPEN_TOOL_SCANNERS: dict[str, Callable[[list[dict[str, Any]]], dict[int, int]]]
 }
 
 
-_conversation_cache: OrderedDict[tuple[str, int, int, str, int], dict[str, Any]] = OrderedDict()
-_conversation_cache_lock = threading.Lock()
-_CONVERSATION_CACHE_MAX = 8
-
-
 def conversation_view_cached(
     path: Path | None,
     backend: str,
@@ -1680,28 +1703,14 @@ def conversation_view_cached(
     limit: int = CONVERSATION_DEFAULT_LIMIT,
     native_id: str | None = None,
 ) -> dict[str, Any]:
-    """``conversation_view`` keyed on the conversation's watermark and the limit.
+    """``conversation_view``. Kept as a name because every reader already asks for it.
 
-    A live agent invalidates this on every append, which is correct and is why
-    the cap above exists. It pays for the other case: switching drawer tabs on
-    an idle session re-requests the same view, and re-parsing a finished
-    conversation to produce a byte-identical answer is pure waste. The returned
-    dict is SHARED and must be treated as read-only.
+    There is no separate cache any more: the index *is* the cache, and unlike the
+    watermark-keyed LRU this replaced it still pays off for a live agent, whose every
+    append used to miss and re-read the whole file. The returned dict is SHARED and
+    must be treated as read-only.
     """
-    identity, first, second = conversation_watermark(path, backend, native_id)
-    key = (identity, first, second, backend, limit)
-    with _conversation_cache_lock:
-        hit = _conversation_cache.get(key)
-        if hit is not None:
-            _conversation_cache.move_to_end(key)
-            return hit
-    result = conversation_view(path, backend, limit=limit, native_id=native_id)
-    with _conversation_cache_lock:
-        _conversation_cache[key] = result
-        _conversation_cache.move_to_end(key)
-        while len(_conversation_cache) > _CONVERSATION_CACHE_MAX:
-            _conversation_cache.popitem(last=False)
-    return result
+    return conversation_view(path, backend, limit=limit, native_id=native_id)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1726,13 +1735,13 @@ class SpokenExchange:
 _EMPTY_EXCHANGE = SpokenExchange(prompt="", reply="", message_id="", ts=None, ts_epoch=None)
 
 
-def _exchange_at(messages: list[dict[str, Any]], index: int) -> SpokenExchange:
+def _exchange_at(messages: Sequence[dict[str, Any]], index: int) -> SpokenExchange:
     """The assistant message at ``index`` plus the user message before it."""
     reply = messages[index]
     prompt = ""
-    for earlier in reversed(messages[:index]):
-        if earlier.get("role") == "user":
-            prompt = str(earlier.get("text") or "")
+    for earlier_index in range(index - 1, -1, -1):
+        if messages[earlier_index].get("role") == "user":
+            prompt = str(messages[earlier_index].get("text") or "")
             break
     return SpokenExchange(
         prompt=prompt,
@@ -1752,11 +1761,13 @@ def final_exchange_record(
     Commentary and abandoned or explicitly incomplete turns cannot replace a
     completed answer. Legacy messages without completion metadata remain readable.
 
-    Every field is empty when the conversation does not have a reply yet. Sharing
-    the cached view is also why this is cheap enough to call on the turn boundary
-    that prefetches the clipboard: the tab has usually just paid for it.
+    Every field is empty when the conversation does not have a reply yet. Reading
+    the shared index is why this is cheap enough to call on the turn boundary that
+    prefetches the clipboard: after the first read, an append costs only its bytes.
     """
-    messages = conversation_view_cached(path, backend, native_id=native_id)["messages"]
+    from .conversation_index import snapshot
+
+    messages = snapshot(path, backend, native_id).messages
     for index in range(len(messages) - 1, -1, -1):
         if is_completed_reply(messages[index]):
             return _exchange_at(messages, index)
@@ -1780,20 +1791,20 @@ def message_exchange(
 
     The per-message read-aloud path (`design/features/voice.md`): the reader can
     ask for any reply, not only the newest, and it names the one it means by the
-    same ``message_id`` it renders. Returns an empty exchange when the id is not
-    in the readable window - a message that scrolled out of the conversation view,
-    or a user message, is not a reply and has no audio to make.
+    same ``message_id`` it renders. Any message in the conversation resolves, so a
+    reply the reader paged back to is speakable too. Returns an empty exchange when
+    the id names no message, or names a user message, which is not a reply and has
+    no audio to make.
     """
     if not message_id:
         return _EMPTY_EXCHANGE
-    messages = conversation_view_cached(path, backend, native_id=native_id)["messages"]
-    for index, message in enumerate(messages):
-        if str(message.get("message_id") or "") != message_id:
-            continue
-        if message.get("role") != "assistant":
-            return _EMPTY_EXCHANGE
-        return _exchange_at(messages, index)
-    return _EMPTY_EXCHANGE
+    from .conversation_index import snapshot
+
+    reading = snapshot(path, backend, native_id)
+    index = reading.positions.get(message_id)
+    if index is None or reading.messages[index].get("role") != "assistant":
+        return _EMPTY_EXCHANGE
+    return _exchange_at(reading.messages, index)
 
 
 def final_exchange(

@@ -12,7 +12,7 @@ from typing import Any
 
 from aiohttp import web
 
-from .. import __version__, agent_surfaces
+from .. import __version__, agent_surfaces, conversation_index
 from .. import (
     app_keys as keys,
 )
@@ -447,6 +447,10 @@ async def get_background_health(request: web.Request) -> web.Response:
             # A cache that stops sharing reads as misses climbing with the fleet
             # and `slow_scans` counting; the loop_lag above is where that lands.
             "transcript_scans": request.app[keys.SESSIONS].transcript_scans.snapshot(),
+            # The shared incremental conversation reader (`conversation_index.py`):
+            # builds, appends decoded, rebuilds after a rewrite, single-flight joins and
+            # evictions. A reader that stopped extending reads as `builds` climbing.
+            "transcript_index": conversation_index.status(),
             # Whether each bound listener still has its socket, and how many times
             # one had to be re-created (`listener_guard.py`). Absent on a daemon
             # started without `__main__.serve` (tests build the app directly).
