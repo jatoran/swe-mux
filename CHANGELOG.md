@@ -35,6 +35,7 @@ The release procedure that maintains this file is [`RELEASING.md`](RELEASING.md)
 
 ### Fixed
 
+- **Reading a repository's diff no longer locks it.** The Git panel's line counts ran `git diff`, which takes `.git/index.lock` to refresh the index even when told not to take optional locks. In a large repository that read could hit its 4-second limit while holding the lock, and the lock it left behind blocked every commit there until someone deleted it by hand. Every read swe-mux makes now leaves the index alone.
 - **A one-point dip in a quota reading is no longer counted as a reset.** Codex sometimes reads a point or two lower inside the same window and climbs back, and each dip was booked as a fresh climb from zero, so a 57% to 56% dip added 56 points of usage to that account's attribution. Stored attribution is recomputed once at the next start.
 - **Quota → Attribution loads again.** Its request carried two query strings and was refused on every load.
 - **Codex telemetry events keep their real time.** Codex sends an empty event time, and every such event was being filed at 1970.

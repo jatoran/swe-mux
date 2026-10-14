@@ -15,6 +15,7 @@ from typing import Any, TypeVar
 from .background_tasks import background
 from .bounded_subprocess import run_bounded
 from .event_bus import EventBus
+from .git_readonly import READ_ONLY_GIT_OPTIONS
 from .git_review import resolve_comparison_ref
 from .git_watch import CheckoutLayout, CheckoutWatches
 from .logsetup import bound_request_id, current_request_id, new_request_id
@@ -71,7 +72,7 @@ async def _git(
     that hit the output cap - every caller here parses what it gets, so a truncated
     answer must read as a failure rather than as a shorter repository.
 
-    `--no-optional-locks` is what makes this read-only, and it is not a tuning knob.
+    `READ_ONLY_GIT_OPTIONS` is what makes this read-only, and it is not a tuning knob.
     `git status` refreshes the index and *writes it back* whenever any tracked file's
     mtime has moved, taking `.git/index.lock` to do so. In a repository where agents
     are editing files that is every single poll, so a monitor that merely wanted to
@@ -79,7 +80,9 @@ async def _git(
     contending for the lock with the agents it was watching. Verified 2026-08-05 by
     touching a tracked file and comparing `.git/index` mtime across both forms: plain
     `status` rewrote it, `--no-optional-locks status` did not, with byte-identical
-    output.
+    output. `--no-optional-locks` alone does not cover `git diff`, which this module
+    runs for every diffstat; `git_readonly.py` has that measurement and the
+    `diff.autoRefreshIndex=false` that closes it.
 
     The failure mode that makes this more than waste: a write in flight when the
     daemon is killed can strand `index.lock`, which blocks *every* git operation in
@@ -92,7 +95,7 @@ async def _git(
     """
     try:
         outcome = await run_bounded(
-            ("git", "--no-optional-locks", "-C", cwd, *args),
+            ("git", *READ_ONLY_GIT_OPTIONS, "-C", cwd, *args),
             label="git",
             timeout_seconds=timeout_seconds,
             output_limit=output_limit,
@@ -116,7 +119,7 @@ async def _git(
 
 #: The read-only runner under its public name, for callers outside this module that
 #: need one bounded Git query. Exported rather than reimplemented so no second caller
-#: can forget `--no-optional-locks` and start writing to the repository it is reading.
+#: can forget `READ_ONLY_GIT_OPTIONS` and start writing to the repository it is reading.
 read_git = _git
 
 
@@ -482,7 +485,7 @@ async def _git_bytes(cwd: str, *args: str, timeout_seconds: float = GIT_TIMEOUT_
     """
     try:
         outcome = await run_bounded(
-            ("git", "--no-optional-locks", "-C", cwd, *args),
+            ("git", *READ_ONLY_GIT_OPTIONS, "-C", cwd, *args),
             label="git-bytes",
             timeout_seconds=timeout_seconds,
             # The only caller digests a blob, and `read_blob_digest` has already

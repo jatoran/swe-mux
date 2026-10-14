@@ -30,6 +30,7 @@ from pathlib import Path
 
 from .bounded_subprocess import run_bounded
 from .git_operations import run_git_mutation
+from .git_readonly import READ_ONLY_GIT_OPTIONS
 from .project_files import ensure_project_local_data_ignored
 
 log = logging.getLogger(__name__)
@@ -163,7 +164,7 @@ class RepositorySetupError(RepositoryInitError):
 async def _read_git(root: str, *args: str, operation_id: str) -> tuple[int, bytes]:
     try:
         outcome = await run_bounded(
-            ["git", "-C", root, "--no-optional-locks", *args],
+            ["git", *READ_ONLY_GIT_OPTIONS, "-C", root, *args],
             label="git setup status",
             timeout_seconds=GIT_SETUP_READ_TIMEOUT_SECONDS,
             output_limit=GIT_SETUP_READ_LIMIT,

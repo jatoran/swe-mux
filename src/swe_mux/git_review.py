@@ -16,6 +16,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Literal, NotRequired, TypedDict
 
 from .bounded_subprocess import LANE_INTERACTIVE, run_bounded
+from .git_readonly import READ_ONLY_GIT_OPTIONS
 
 log = logging.getLogger(__name__)
 
@@ -152,9 +153,9 @@ def _git_argv(cwd: str | Path, args: Sequence[str]) -> tuple[str, ...]:
     # makes that true of the *repository* rather than only of the caller's intent:
     # `status` and `diff` refresh the index and write it back whenever a tracked
     # file's mtime has moved, taking `.git/index.lock` to do it. See
-    # `git_monitor._git` for the measurement and the stranded-lock failure that
-    # causes. Output is unaffected.
-    return ("git", "--no-optional-locks", "-C", str(cwd), *args)
+    # `git_monitor._git` and `git_readonly.py` for the measurements and the
+    # stranded-lock failure that causes. Output is unaffected.
+    return ("git", *READ_ONLY_GIT_OPTIONS, "-C", str(cwd), *args)
 
 
 async def _run_git_bytes(

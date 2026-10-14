@@ -145,15 +145,21 @@ Expensive-but-honest metrics such as unique set size are opt-in per request, nev
 
 ## Git
 
-**A monitor must not mutate what it monitors: every read-only Git call passes `--no-optional-locks`.**
+**A monitor must not mutate what it monitors: every read-only Git call passes `READ_ONLY_GIT_OPTIONS` (`git_readonly.py`), which is `--no-optional-locks -c diff.autoRefreshIndex=false`.**
 `git status` and `git diff` refresh the index and *write it back* whenever a tracked file's mtime has moved, taking `.git/index.lock` to do so.
 In a repository where agents are editing files that is every poll, so a 5-second read of the branch name was writing to the user's repository and contending with the agents it was watching.
 
 Verified 2026-08-05 by touching a tracked file and comparing `.git/index` mtime across both forms: plain `status` rewrote it, `--no-optional-locks status` did not, with byte-identical output.
 Effect on `git-monitor`, measured over 133 polls before and after: p50 321 ms to 73 ms, **p95 4,415 ms to 83 ms**, worst 5,629 ms to 169 ms, `busy_share` 9.1% to 1.5%.
 
-The failure mode this removes is worse than the waste: a write in flight when the daemon is killed strands `index.lock`, which blocks *every* Git operation in that repository for every agent until someone removes it by hand.
-The flag is global and must precede the subcommand; `tests/test_git_phase4.py` pins both facts.
+`--no-optional-locks` covers `status` only.
+Porcelain `diff`, which every diffstat runs, still refreshes a stat-dirty index (`diff.autoRefreshIndex`, on by default) and takes `index.lock` *before* that refresh, a stat of every tracked file.
+Measured 2026-10-13 in a scratch repository with one stat-dirty and one edited file: `--no-optional-locks diff --numstat HEAD` rewrote `.git/index`, adding `-c diff.autoRefreshIndex=false` did not, and the numstat output was identical.
+The same day the monitor's 4-second HEAD diffstat of a checkout with a 17 MB index timed out one second after creating `index.lock`; the killed `git` left the lock empty, and every Git write in that repository failed for hours until a person moved it.
+That repository had stranded its lock at least seven times in a month.
+
+The failure mode these options remove is worse than the waste: a write in flight when `git` is killed, by its timeout or by a daemon restart, strands `index.lock`, which blocks *every* Git operation in that repository for every agent until someone removes it by hand.
+The options are global and must precede the subcommand; `tests/test_git_phase4.py` pins both facts and reproduces the diff write against a real repository, with a control that proves the probe can see it.
 
 ## Session identity
 

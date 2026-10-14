@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -10,6 +12,7 @@ import pytest
 from swe_mux import git_monitor, git_review
 from swe_mux.event_bus import EventBus
 from swe_mux.git_monitor import read_git_reading, read_git_state, read_unique_git_states
+from swe_mux.git_readonly import READ_ONLY_GIT_OPTIONS
 
 from .host_paths import ABS_ROOT
 
@@ -1055,8 +1058,68 @@ async def test_repository_reads_never_write_the_repository(
     assert seen, "no git invocation was captured"
     for invocation in seen:
         assert invocation[0] == "git"
-        assert "--no-optional-locks" in invocation, (
+        # The options are global and must precede the subcommand to apply at all.
+        assert invocation[1 : 1 + len(READ_ONLY_GIT_OPTIONS)] == READ_ONLY_GIT_OPTIONS, (
             f"read-only git call may not take the index lock: {invocation}"
         )
-        # The flag is global and must precede the subcommand to apply at all.
-        assert invocation.index("--no-optional-locks") < invocation.index("-C")
+        assert invocation.index("-C") == 1 + len(READ_ONLY_GIT_OPTIONS)
+
+
+def _stat_dirty_repository(root: Path) -> tuple[Path, Path]:
+    """A repository with one edited file and one file whose stat moved but content did not.
+
+    The second is what makes `git diff` refresh the index. Its mtime is pushed forward
+    and the index's pushed back, both with `os.utime`, so a rewrite of the index is
+    visible as a changed mtime without betting on filesystem timestamp granularity.
+    """
+
+    def git(*args: str) -> None:
+        subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True)
+
+    root.mkdir(parents=True)
+    git("init", "-q")
+    git("config", "user.email", "test@example.com")
+    git("config", "user.name", "test")
+    git("config", "core.autocrlf", "false")
+    (root / "same.txt").write_text("unchanged\n", encoding="utf-8")
+    (root / "edited.txt").write_text("before\n", encoding="utf-8")
+    git("add", ".")
+    git("commit", "-qm", "init")
+    (root / "edited.txt").write_text("after\n", encoding="utf-8")
+    stat = (root / "same.txt").stat()
+    os.utime(root / "same.txt", ns=(stat.st_atime_ns, stat.st_mtime_ns + 10_000_000_000))
+    index = root / ".git" / "index"
+    old = index.stat().st_mtime_ns - 3_600_000_000_000
+    os.utime(index, ns=(old, old))
+    return root, index
+
+
+@pytest.mark.asyncio
+async def test_a_diff_read_never_takes_the_index_lock(tmp_path: Path) -> None:
+    """`--no-optional-locks` alone does not make `git diff` read-only; the options do.
+
+    Porcelain `diff` refreshes a stat-dirty index (`diff.autoRefreshIndex`) and takes
+    `.git/index.lock` before the refresh, so the monitor's 4-second diffstat of a large
+    checkout, killed mid-refresh, stranded an empty lock that blocked every Git write
+    in that repository (2026-10-13, `git_readonly.py`). The control half proves the
+    probe can see the write: the bare form still rewrites the index here.
+    """
+    repo, index = _stat_dirty_repository(tmp_path / "control")
+    before = index.stat().st_mtime_ns
+    await asyncio.to_thread(
+        subprocess.run,
+        ["git", "--no-optional-locks", "-C", str(repo), "diff", "--numstat", "HEAD"],
+        check=True,
+        capture_output=True,
+    )
+    assert index.stat().st_mtime_ns != before, "probe cannot see an index write"
+
+    repo, index = _stat_dirty_repository(tmp_path / "monitored")
+    before = index.stat().st_mtime_ns
+    code, output = await git_monitor._git(str(repo), "diff", "--numstat", "HEAD")
+    reviewed = await git_review._run_git_bytes(str(repo), "diff", "--numstat", "HEAD")
+    assert code == 0
+    assert output.splitlines() == ["1\t1\tedited.txt"]
+    assert reviewed.stdout.decode().splitlines() == ["1\t1\tedited.txt"]
+    assert index.stat().st_mtime_ns == before
+    assert not (repo / ".git" / "index.lock").exists()

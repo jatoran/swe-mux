@@ -5,7 +5,14 @@ Design: `../../../design/features/git.md`, `../../../design/features/land-queue.
 
 Each entry lists what the module owns, then **Not:** what it deliberately does not.
 
-**A monitor must not mutate what it monitors: every read-only Git call passes `--no-optional-locks`** (`runtime-rules.md`).
+**A monitor must not mutate what it monitors: every read-only Git call passes `READ_ONLY_GIT_OPTIONS`** (`git_readonly.py`, `runtime-rules.md`).
+
+## `git_readonly.py`
+
+The one definition of the global options a read-only Git query carries: `--no-optional-locks`, which stops `status` writing the index, and `-c diff.autoRefreshIndex=false`, which stops `diff` doing the same.
+`git_monitor`, `git_review`, `nested_worktrees` and `git_init`'s setup reads all build their argv from it.
+
+**Not:** a runner, a timeout, or any Git mutation.
 
 ## `git_review.py`
 
@@ -42,7 +49,7 @@ Project-scoped comparison-ref inference and bounded review reads.
 
 ## `git_monitor.py`
 
-Bounded read-only (`--no-optional-locks`) reads of every session's checkout for full HEAD, branch, dirty count, upstream divergence, worktree identity, root, HEAD-scoped diffstat, and merge-base comparison counts.
+Bounded read-only (`READ_ONLY_GIT_OPTIONS`) reads of every session's checkout for full HEAD, branch, dirty count, upstream divergence, worktree identity, root, HEAD-scoped diffstat, and merge-base comparison counts.
 A checkout is read when its watch reports a change, on a slow safety sweep, or on the old timed cadence while it has no live watch; `GitMonitor._due_cause` is the one place those rules live, and `status()` serves why each read happened (`design/features/git.md`).
 It memoizes the checkout layout the watches need, resolved off the loop, and attaches the row patch `git_changed` carries (`session_patch.py`).
 Also same-checkout previous-HEAD event evidence; bounded commit-range, changed-file, combined-merge-diff, excluded-range, and blob-digest readers for attribution; deduplication by `(cwd, comparison override)`; and memoization of both diffstats and of ref inference.

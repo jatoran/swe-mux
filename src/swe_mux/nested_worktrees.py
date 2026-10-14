@@ -33,6 +33,7 @@ import threading
 import time
 from pathlib import Path
 
+from .git_readonly import READ_ONLY_GIT_OPTIONS
 from .subprocess_flags import background_creation_flags
 
 log = logging.getLogger(__name__)
@@ -86,14 +87,14 @@ def parse_worktree_roots(output: str, root: Path) -> frozenset[str]:
 def _read_worktree_roots(root: Path) -> frozenset[str]:
     """Ask Git, bounded, read-only, and never raising.
 
-    `--no-optional-locks` for the same reason every other read in this codebase carries it
-    (`git_monitor._git`): a browse must not write to the repository it is browsing.
+    `READ_ONLY_GIT_OPTIONS` for the same reason every other read in this codebase carries them
+    (`git_readonly.py`): a browse must not write to the repository it is browsing.
     """
     try:
         completed = subprocess.run(
             [
                 "git",
-                "--no-optional-locks",
+                *READ_ONLY_GIT_OPTIONS,
                 "-C",
                 str(root),
                 "worktree",

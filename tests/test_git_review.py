@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 
 from swe_mux import git_review
+from swe_mux.git_readonly import READ_ONLY_GIT_OPTIONS
 
 
 def git(repo: Path, *args: str, input_text: str | None = None) -> str:
@@ -577,7 +578,12 @@ async def test_patch_runner_times_out_reaps_and_does_not_log_content(
         result = await git_review._run_patch("C:/repo", "diff", timeout_seconds=0.01)
     assert result.timed_out is True
     assert result.stdout == b""
-    assert seen[0]["argv"][:4] == ("git", "--no-optional-locks", "-C", "C:/repo")
+    assert seen[0]["argv"][: len(READ_ONLY_GIT_OPTIONS) + 3] == (
+        "git",
+        *READ_ONLY_GIT_OPTIONS,
+        "-C",
+        "C:/repo",
+    )
     assert seen[0]["lane"] == "interactive"
     assert "secret patch body" not in caplog.text
 
