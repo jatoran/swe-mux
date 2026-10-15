@@ -1010,7 +1010,10 @@ function previewBeats(mobile = false): Beat[] {
       spotlight: ['.terminal-pane.focused'] },
     { at: 12_000, say: 'Open the preview from the detected listener.',
       mutate: () => { createPreview({ session_id: shell }) } },
+    // A phone has one pane, so the new preview arrives as a tab that is not selected; the
+    // beat has to press it or the caption describes a preview nobody can see.
     { at: 17_000, say: mobile ? 'The preview opens as a full-width tab.' : 'The agent and preview are now side by side.',
+      ...(mobile ? { click: ['button[role="tab"][aria-label$=" preview tab"]'] } : {}),
       spotlight: ['.preview-frame'] },
     { at: 22_000, say: 'The server keeps running in its terminal tab.',
       body: ['The preview and terminal share the pane. Switching tabs does not stop either.'] },
