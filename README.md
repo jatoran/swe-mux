@@ -11,6 +11,14 @@ Dictate prompts, hear replies, and ask the assistant what needs attention.
 [Try the interactive demo](https://swemux.dev/demo/) or [read the setup guide](https://swemux.dev/docs/install/).
 The demo runs the real interface with simulated agent activity and needs no provider connection.
 
+On the phone: answer a waiting agent, then open the app it is building (50 seconds, recorded from the demo).
+
+https://github.com/user-attachments/assets/87d1c12c-8cfc-4632-a3bf-8d8c11f364a5
+
+Desktop and phone together, agents asking for agents, and the land queue (85 seconds, recorded from the demo).
+
+https://github.com/user-attachments/assets/1f964770-bee4-4823-a341-4c123b40605b
+
 ## What you can do
 
 - **See which agent needs you.** Live status, searchable alert history, per-event sounds and push notifications, quiet hours and separate Desktop/Mobile profiles.
