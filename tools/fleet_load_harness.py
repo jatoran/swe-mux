@@ -54,6 +54,9 @@ TOOLS = Path(__file__).resolve().parent
 GENERATOR = TOOLS / "load_session_generator.py"
 CONTROL_TOKEN = "fleet-load-harness-control-token"
 KEYSTROKE = "x"
+# What Tailscale Serve sends for a phone it proxies to the loopback listener: the
+# daemon names the peer from it (`network_usage.request_peer`).
+TAILNET_PEER = "100.64.0.10"
 CLEAR_LINE = "\x15"
 LOOP_STALL = re.compile(r"^(\S+ \S+) WARNING swe_mux\.server: loop_stall duration_s=([\d.]+)")
 
@@ -103,6 +106,8 @@ class Options:
     stall_threshold: float = 0.0
     hook_client: str = "bounded"
     decision_rate: float = 0.0
+    peer: str = "loopback"
+    ws_compress: str = "offer"
 
 
 @dataclass
@@ -158,6 +163,10 @@ class Harness:
         self.http: aiohttp.ClientSession | None = None
         self.clients: list[Client] = []
         self.probe: Client | None = None
+        # Every browser offers permessage-deflate (window bits 15); `none` offers nothing.
+        self.ws_compress = 15 if options.ws_compress == "offer" else 0
+        # What each socket negotiated: 0 when the daemon declined compression.
+        self.ws_negotiated: list[int] = []
 
     # ---- daemon lifecycle ---------------------------------------------------
 
@@ -316,7 +325,10 @@ class Harness:
 
     async def attach(self, sid: str, terminal_base: str) -> Client:
         assert self.http is not None
-        ws = await self.http.ws_connect(f"{terminal_base}/pty/{sid}", max_msg_size=0)
+        ws = await self.http.ws_connect(
+            f"{terminal_base}/pty/{sid}", max_msg_size=0, compress=self.ws_compress
+        )
+        self.ws_negotiated.append(ws.compress)
         client = Client(sid, ws)
         client.task = asyncio.create_task(client.run(), name=f"client-{sid}")
         await ws.send_json(
@@ -413,7 +425,10 @@ class Harness:
         never runs - so a harness without this measures a daemon nobody has open.
         """
         assert self.http is not None
-        ws = await self.http.ws_connect(f"{self.base}/events", max_msg_size=0)
+        ws = await self.http.ws_connect(
+            f"{self.base}/events", max_msg_size=0, compress=self.ws_compress
+        )
+        self.ws_negotiated.append(ws.compress)
         presence = {
             "type": "presence",
             "profile": "desktop",
@@ -495,7 +510,12 @@ class Harness:
     async def run(self) -> dict[str, Any]:
         options = self.options
         self.start_daemon()
-        self.http = aiohttp.ClientSession(connector=aiohttp.TCPConnector(limit=0))
+        # A tailnet run is the harness as a phone behind Tailscale Serve: the same
+        # loopback connection, carrying the forwarded peer on every request.
+        headers = {"X-Forwarded-For": TAILNET_PEER} if options.peer == "tailnet" else None
+        self.http = aiohttp.ClientSession(
+            connector=aiohttp.TCPConnector(limit=0), headers=headers
+        )
         try:
             await self.wait_ready()
             project_id = await self.register_project()
@@ -652,6 +672,11 @@ class Harness:
             # Past this the CLI stops waiting and asks the user (`hook_client.py`).
             "decisions_past_client_timeout": sum(1 for value in decisions if value >= 3.0),
             "decision_grants": granted,
+            "ws_compression": {
+                "offered": self.ws_compress != 0,
+                "negotiated": sum(1 for value in self.ws_negotiated if value),
+                "sockets": len(self.ws_negotiated),
+            },
             "otlp_round_trip_ms": percentiles(otlp),
             "ingress_statuses": statuses,
             "loop_stalls": {
@@ -704,6 +729,13 @@ def render(report: dict[str, Any]) -> None:
         f"hooks {options['hook_rate']}/s, otlp {options['otlp_rate']}/s, "
         f"window {report['window_seconds']}s, settings {options['settings'] or '{}'}"
     )
+    compression = report.get("ws_compression") or {}
+    if compression:
+        print(
+            f"  {options.get('peer', 'loopback')} peer, websocket compression "
+            f"{'offered' if compression.get('offered') else 'not offered'}, negotiated on "
+            f"{compression.get('negotiated')} of {compression.get('sockets')} sockets"
+        )
     print(f"  generators reported: {report['generators_reported']}/{options['sessions']}")
 
     def line(label: str, dist: dict[str, Any]) -> None:
@@ -861,6 +893,18 @@ def main() -> int:
         help="auto-approved PermissionRequest POSTs/s across the fleet (0 disables)",
     )
     parser.add_argument(
+        "--peer",
+        choices=("loopback", "tailnet"),
+        default="loopback",
+        help="connect as this machine, or as a phone behind Tailscale Serve (X-Forwarded-For)",
+    )
+    parser.add_argument(
+        "--ws-compress",
+        choices=("offer", "none"),
+        default="offer",
+        help="offer permessage-deflate on every socket as browsers do, or offer nothing",
+    )
+    parser.add_argument(
         "--otlp-rate", type=float, default=1.5, help="OTLP posts/s across the fleet"
     )
     parser.add_argument(
@@ -914,6 +958,8 @@ def main() -> int:
         hook_rate=args.hook_rate,
         hook_client=args.hook_client,
         decision_rate=args.decision_rate,
+        peer=args.peer,
+        ws_compress=args.ws_compress,
         otlp_rate=args.otlp_rate,
         spawn_interval=args.spawn_interval,
         probe_interval=args.probe_interval,

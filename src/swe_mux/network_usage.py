@@ -299,13 +299,33 @@ class MeteredWebSocketResponse(web.WebSocketResponse):
                 )
 
 
+def _is_loopback(peer: str) -> bool:
+    try:
+        return ipaddress.ip_address(peer).is_loopback
+    except ValueError:
+        return False
+
+
 def metered_websocket(
     request: web.Request, channel: str, **kwargs: Any
 ) -> MeteredWebSocketResponse:
+    """A metered WebSocket response, with per-message compression only off-host.
+
+    Every browser offers permessage-deflate and aiohttp accepts it by default. For a
+    peer on this machine the bytes it saves never cross a network, and the daemon
+    pays for them: frames of 16 KiB or less are deflated on the event loop itself,
+    larger ones on an executor thread, and every connection keeps a deflate window.
+    So a loopback peer is not offered it. The peer is the forwarded one
+    (`request_peer`): the phone reaches the loopback listener through Tailscale
+    Serve, which names it in `X-Forwarded-For`, and it keeps compression. A caller
+    that passes ``compress`` decides for itself.
+    """
     meter = request.app.get(keys.NETWORK_USAGE)
+    peer = request_peer(request)
+    kwargs.setdefault("compress", not _is_loopback(peer))
     return MeteredWebSocketResponse(
         meter=meter if isinstance(meter, NetworkUsage) else None,
-        peer=request_peer(request),
+        peer=peer,
         channel=channel,
         **kwargs,
     )

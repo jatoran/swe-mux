@@ -40,6 +40,13 @@ async def _network_snapshot(request: web.Request) -> web.Response:
     return compact_json_response(request.app[keys.NETWORK_USAGE].snapshot())
 
 
+async def _always_compressed(request: web.Request) -> web.WebSocketResponse:
+    ws = metered_websocket(request, "test", compress=True)
+    await ws.prepare(request)
+    await ws.send_str("ready")
+    return ws
+
+
 def _app() -> web.Application:
     app = web.Application(middlewares=[compressible_response_middleware])
     app[keys.NETWORK_USAGE] = NetworkUsage()
@@ -48,7 +55,41 @@ def _app() -> web.Application:
     app.router.add_get("/api/diagnostics/network", _network_snapshot)
     app.router.add_get("/socket", _echo)
     app.router.add_get("/classified", _classified_output)
+    app.router.add_get("/compressed", _always_compressed)
     return app
+
+
+async def test_a_loopback_peer_is_not_offered_per_message_compression() -> None:
+    """The client offers permessage-deflate, as every browser does, and is declined:
+    on this machine the saving never crosses a network and the daemon pays for it,
+    on the event loop for any frame of 16 KiB or less (`DAEMON_LOAD_ISOLATION.md`
+    item 8)."""
+    async with TestClient(TestServer(_app())) as client:
+        ws = await client.ws_connect("/classified", compress=15)
+        assert await ws.receive_bytes() == b"retained terminal"
+        assert ws.compress == 0
+        await ws.close()
+
+
+async def test_a_tailnet_peer_behind_the_serve_proxy_keeps_compression() -> None:
+    """Tailscale Serve reaches the loopback listener and names the phone in
+    `X-Forwarded-For`; deciding on the direct address would strip compression from
+    exactly the peer on a real network."""
+    async with TestClient(TestServer(_app())) as client:
+        ws = await client.ws_connect(
+            "/classified", compress=15, headers={"X-Forwarded-For": "100.64.1.2"}
+        )
+        assert await ws.receive_bytes() == b"retained terminal"
+        assert ws.compress == 15
+        await ws.close()
+
+
+async def test_a_caller_that_names_compression_decides_for_itself() -> None:
+    async with TestClient(TestServer(_app())) as client:
+        ws = await client.ws_connect("/compressed", compress=15)
+        assert await ws.receive_str() == "ready"
+        assert ws.compress == 15
+        await ws.close()
 
 
 async def test_http_usage_counts_compressed_bytes_by_template_and_peer() -> None:

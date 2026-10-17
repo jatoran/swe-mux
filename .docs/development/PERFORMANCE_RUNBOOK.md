@@ -344,6 +344,7 @@ uv run python tools/fleet_load_harness.py --set gil_switch_interval_ms=1
   starts child processes.
 - Hook bodies go through the shipped client's bounding by default; `--hook-client raw` posts them
   unbounded, as clients did before 2026-10-17, which is how the 413 refusals are reproduced.
+- `--peer tailnet` makes every request the harness sends carry `X-Forwarded-For`, as a phone behind Tailscale Serve does, so the daemon treats it as an off-host peer; `--ws-compress none` stops its sockets offering permessage-deflate, which every browser offers. The report says how many sockets negotiated compression.
 - `--decision-rate` (1 a second fleet-wide by default, 0 to disable) turns auto-approval on in the
   scratch config, gives every session an `allow_all` grant through the approval route, and posts
   `PermissionRequest`s for a `Read` the daemon answers. The report times each decision and counts

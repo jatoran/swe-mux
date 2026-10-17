@@ -282,6 +282,7 @@ Worktree transport - integrated or split create, setup, and spawn orchestration,
 ### `network_usage.py`
 
 Daemon-boot and reset-window HTTP encoded-body and WebSocket application-frame counters by bounded route, channel, and peer, including the non-additive sent-PTY payload-phase breakdown; compact JSON responses; dynamic text compression; and metered WebSocket responses.
+`metered_websocket` declines per-message compression for a loopback peer, judged on the forwarded peer (`request_peer`), so a phone behind Tailscale Serve keeps it; a caller that passes `compress` decides for itself.
 
 **Not:** packet, TLS, Tailscale, and HTTP-header overhead; durable raw request logs; or quotas.
 

@@ -245,10 +245,30 @@ Items are worked in order, and an item may reorder, split or remove later items 
   - **Tests:** `tests/test_pty_tail_cache.py` (every caller shares one classification; authorization re-measures changed bytes even under a warm display verdict; the cache is bounded), `tests/test_delivery_readiness_evidence.py`, `tests/test_session_row_routes.py`.
   - **Where:** `session.py`, `delivery_readiness.py`, `readiness_watch.py`, `observation.py`, `routes/sessions.py`, `prompt_queue.py`, `routes/diagnostics.py`, `design/features/delivery-readiness.md`, `development/PERFORMANCE_RUNBOOK.md`.
 
-- [ ] **8. WebSocket compression off for loopback peers.**
+- [x] **8. WebSocket compression off for loopback peers.**
   - **Why:** aiohttp negotiates permessage-deflate by default, compressing frames of 16 KiB or less on the loop and larger ones on an executor thread (`network_usage.py:302-311`; aiohttp `_websocket/writer.py`), and on loopback that buys nothing.
   - **Change:** `metered_websocket` disables compression for loopback peers on `/pty` and `/events`, and keeps it for tailnet peers unless the harness shows it costs more than it saves there.
   - **Done when:** harness numbers are recorded for both peer kinds.
+  - **Built:**
+    - `metered_websocket` declines compression when the peer is loopback, so every WebSocket that goes through it (`/pty`, `/events`, and the preview relay) negotiates permessage-deflate only off-host; a caller that passes `compress` still decides.
+    - The decision reads the forwarded peer (`request_peer`), not the socket's address. That matters: the phone does not connect to the tailnet listener but to loopback, through Tailscale Serve. Verified on the live daemon read-only: every request from the Android browser in `access.log` arrives from 127.0.0.1 with the `.ts.net` origin, and the network meter attributes 952 of its WebSocket connections to its tailnet address, which only `X-Forwarded-For` could have told it. Judging the direct address would have taken compression away from exactly the one peer on a real network.
+    - The harness gained `--peer tailnet` (every request carries `X-Forwarded-For`, as through Serve) and `--ws-compress {offer,none}`, and reports how many sockets negotiated compression.
+  - **Measured:**
+    - What compression saves and costs on real terminal bytes, framed as aiohttp sends them (one deflate context per connection, level 1, a sync flush per message): the repository's captured Claude screens deflate to 16-18% of their size, coloured `git log --stat` and `git log -p` to 31-38%, for 4.5-13 ms of CPU per MiB on the screens and 9-20 ms on the logs, the higher figures at 512-byte frames.
+    - The harness at 36 sessions (`scroll`, 20 KB/s each, 38 sockets; the same build both times):
+
+      | | Loopback peer | Tailnet peer |
+      | --- | --- | --- |
+      | Sockets that negotiated compression | 0 of 38 | 38 of 38 |
+      | GIL samples in deflate | 0 | 48 (5.8%) |
+      | GIL samples in the WebSocket writer, deflate included | 36 (4.5%) | 73 (8.8%) |
+      | Keystroke echo p50 / p99 | 3.6 / 47.6 ms | 3.9 / 43.2 ms |
+      | `GET /api/sessions` p99 | 55 ms | 79 ms |
+
+      Compression doubled the cost of sending: about 0.5 s of GIL in 45 s for 32 MiB, the 15 ms per MiB the offline measurement predicts. At this load that is not visible in latency, which is why the change is worth making on what it removes rather than on a latency number.
+    - Tailnet keeps compression. Paying 10-20 ms of CPU per MiB to send a third or less of the bytes is the right trade where bytes cross a network, a phone on a cellular link most of all; and a phone attaches the one or two panes it shows, not the 36 the tailnet run gave it, so its real cost is a small fraction of the 5.8% above.
+  - **Tests:** `tests/test_network_usage.py` (a loopback client that offers compression is declined, a peer forwarded from loopback keeps it, an explicit `compress` wins), each through a real handshake.
+  - **Where:** `network_usage.py`, `tools/fleet_load_harness.py`, `design/features/remote-access.md`, `technical/backend/packages/daemon-runtime.md`, `development/PERFORMANCE_RUNBOOK.md`.
 
 - [x] **9. Bounded hook payloads at the source.**
   - **Why:** hook bodies average 50 KiB and are parsed on the loop, oversized ones are refused and their events lost (1,688 in 2.5 hours), and the client resends every refused body three times.
