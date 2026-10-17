@@ -184,17 +184,39 @@ Items are worked in order, and an item may reorder, split or remove later items 
     - Readiness watcher and auto-delivery: replace the per-second queue `summary()` GROUP BY and the per-second policy query with in-memory state invalidated on writes (`readiness_watch.py:144`; `prompt_queue.py:760-778`; `auto_delivery.py:838`).
     - Ghost-window sweep: construct `psutil.Process` only on a cache miss (`ghost_windows.py:171-173`).
     - Process inspection: `_revalidate_unseen` builds a fresh `psutil.Process` per unseen pid and reads its `create_time` (`processes.py:1595`), 8.0% of all GIL samples in item 4; revalidate from the cached handles and the pass's own snapshot instead.
+    - State watchdog: `_check_ssh_boundary_state` classifies every session on every pass with the OSC title in the key, so a repainting screen misses the shared cache every time (5.4% of GIL samples after item 7); run it only where an SSH prompt is possible (a remote boundary, or a session whose screen or command shows `ssh`), or share the non-OSC verdict.
     - Git watch: raise `step` from 300 ms toward the 1,600 ms debounce, and drop `ALWAYS_NOISE` paths before they become Python objects wherever watchfiles allows (`git_watch.py:215-237,484-511`).
     - Bound the default executor (named `mux-default` and accounted per callable since item 2) to a measured size; it is `min(32, cpu + 4)` today, which lets 32 GIL-hungry workers contend with the loop.
     - Log writes off the loop: `access.log` takes a line per request and the incident's main-thread samples caught `flush` among the syscalls the convoy waited at. Measure a `QueueHandler` feeding a listener thread for `access.log` and `daemon.log` (which would also make gzip of rotated `access.log` free), against what an unflushed queue loses on a hard kill.
   - **Done when:** each change shows its own before and after on the harness and the gate is green.
 
-- [ ] **7. Screen classification keyed on the bytes it reads.**
-  - **Why:** the readiness watcher and auto-delivery classify the 32 KiB screen tail of each session every second without a cache, at about 2.1 ms each, and fleet intelligence classifies every session every 5 s (`delivery_readiness.py:109-150`; `readiness_watch.py:175-183`; `fleet_intelligence.py:680`).
+- [x] **7. Screen classification keyed on the bytes it reads.**
+  - **Why:** item 4 measured screen classification at 44.3% of all GIL samples at 36 sessions, almost all of it on the loop: the readiness watcher re-classified every repainting screen every second (34.1%), the state watchdog's SSH-boundary check re-classified on its own per-session cache (6.8%), and fleet rows paid whenever they reached a session first (item 1 measured them at 32.5%).
     Two incident stalls caught the loop in `_normalize_tail_text`.
-  - **Change:** cache the verdict keyed on `(agent_run_id, scrollback.written, cli_state_status)`.
-    The classifier is a pure function of those inputs, so authorization may read the cache and still never trusts a verdict measured on different bytes, which is the safety argument `_pty_state` already states.
-  - **Done when:** classifications per second under the harness fall to the rate of new output, and the delivery-readiness tests prove a changed tail is always re-measured.
+  - **Built:**
+    - `session.SCREEN_VERDICTS`, one process-wide exact-content cache every scrollback classifier reads through (`session_screen_explanation`): the readiness tracker, the state watchdog (`SessionManager._pty_tail_explanation`, whose per-session cache it replaces), and the observation helpers.
+      The key is a 128-bit BLAKE2b digest of the raw 32 KiB tail plus the backend, the normalized CLI status, the OSC title and progress, and the classifier function itself, so a hit is by construction what a recompute returns, authorization may take it, and a test that substitutes the classifier can neither read nor leave real verdicts.
+      512 entries, LRU; hits, classifications and classifying time are on `/api/diagnostics/background` as `screen_classification`.
+    - `DISPLAY_SCREEN_MAX_AGE_SECONDS` (2 s): the readiness watcher (previously 0), fleet rows and the queue summary (previously 1 s) may show a verdict measured on older bytes for that long while a screen keeps repainting. `screen_state`, the authorization path, passes zero.
+      The keying the plan first proposed, `(agent_run_id, scrollback.written, cli_state_status)`, was not used: it would have needed a generation counter in `scrollback.py`, which is supervisor source and would have forced the supervisor update for a daemon-only change, and the content digest makes the generation unnecessary.
+  - **Measured** (the item 4 configuration: 36 `scroll` sessions at 20 KB/s, an `/events` browser, `py-spy --gil --threads` for 45 s):
+
+    | | Item 4 | Item 7 |
+    | --- | --- | --- |
+    | GIL samples in 45 s | 1,950 | 1,092 |
+    | Screen classification samples (share) | about 864 (44.3%) | about 209 (19.1%) |
+    | Main-thread share of GIL samples | 81% | 71% |
+    | Keystroke echo p50 / p95 / p99 | 135 / 362 / 426 ms | 5.1 / 102 / 214 ms |
+    | `GET /api/sessions` p50 / p99 | 136 / 687 ms | 31 / 257 ms |
+    | Hook round trip p95 / p99 | 322 / 1,337 ms | 102 / 160 ms |
+    | Lag samples >= 100 ms | 25 / 230 | 3 / 239 |
+    | `readiness-watch` busy in the window | 17.1 s | 2.5 s |
+
+    Runs on this host vary with the live fleet beside them, so single-run latencies are indicative; the GIL sample counts are the direct measure and moved by the same factor.
+    What remains of classification is fleet rows 8.1%, the watcher 5.6% and the state watchdog's SSH check 5.4%; the last keys on the OSC title as well, so a repainting screen always misses for it, and is item 6's to narrow.
+    Process inspection is now the largest single consumer off the loop (18.0%, `create_time` alone 12.4%).
+  - **Tests:** `tests/test_pty_tail_cache.py` (every caller shares one classification; authorization re-measures changed bytes even under a warm display verdict; the cache is bounded), `tests/test_delivery_readiness_evidence.py`, `tests/test_session_row_routes.py`.
+  - **Where:** `session.py`, `delivery_readiness.py`, `readiness_watch.py`, `observation.py`, `routes/sessions.py`, `prompt_queue.py`, `routes/diagnostics.py`, `design/features/delivery-readiness.md`, `development/PERFORMANCE_RUNBOOK.md`.
 
 - [ ] **8. WebSocket compression off for loopback peers.**
   - **Why:** aiohttp negotiates permessage-deflate by default, compressing frames of 16 KiB or less on the loop and larger ones on an executor thread (`network_usage.py:302-311`; aiohttp `_websocket/writer.py`), and on loopback that buys nothing.

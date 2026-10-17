@@ -14,6 +14,14 @@ DeliveryState = Literal["safe", "blocked", "unknown"]
 READINESS_DEBOUNCE_SECONDS = 2.0
 TERMINAL_EVIDENCE_MAX_AGE_SECONDS = 10.0
 LIFECYCLE_EVIDENCE_MAX_AGE_SECONDS = 5 * 60.0
+#: How old a screen verdict a *display* may show while the screen keeps changing:
+#: the readiness watcher, the fleet rows and the queue summary. An unchanged screen
+#: is always current through the exact-content cache, so this bounds only a screen
+#: that is repainting, which is a working agent's spinner almost every time. At 36
+#: sessions the watcher alone re-classified every repainting screen every second,
+#: the largest GIL consumer in the daemon (`DAEMON_LOAD_ISOLATION.md` items 4, 7).
+#: Authorization never reads it: `screen_state` passes zero.
+DISPLAY_SCREEN_MAX_AGE_SECONDS = 2.0
 # How long a freshly started agent CLI is given before its first prompt may be
 # delivered. Measured 2026-07-30 against Claude Code v2.1.220 on this machine:
 # the session reports idle at spawn+1.02s (consistently, 9 runs) but a submitted
@@ -109,10 +117,14 @@ class DeliveryReadinessTracker:
     def _pty_state(self, session: ReadinessSession, *, snapshot_max_age: float) -> str:
         """Classify the screen, with a bounded cache only for UI snapshots.
 
-        Delivery authorization always passes ``snapshot_max_age=0`` and reads the
-        current PTY tail. The fleet endpoint is diagnostic-only (``authorized`` is
-        always false), so it may reuse a sub-second verdict instead of synchronously
-        rescanning 32 KiB for every browser refresh.
+        Two caches, with different safety arguments. Every caller reads through the
+        shared exact-content cache, whose hit is by construction what a fresh scan
+        of the current tail returns. On top of it, display callers may pass a
+        positive ``snapshot_max_age`` and reuse a verdict measured on *older* bytes
+        for that long; delivery authorization always passes ``snapshot_max_age=0``
+        and so reads the current PTY tail. The fleet endpoint is diagnostic-only
+        (``authorized`` is always false), so it may reuse a recent verdict instead
+        of rescanning 32 KiB for every browser refresh.
 
         The cache is *written* by every caller, including the ones that refuse to
         read it. Classification measured 2.1 ms on a full 32 KiB tail, so a fleet
@@ -134,16 +146,13 @@ class DeliveryReadinessTracker:
         ):
             return cached[2]
 
-        from .scrollback import SCREEN_TAIL_BYTES
-        from .session import pty_tail_state, session_cli_state_status
+        from .session import session_screen_explanation
 
+        # Through the shared exact-content cache (`session.SCREEN_VERDICTS`): a
+        # verdict measured on these very bytes by any other caller is the verdict a
+        # fresh scan would compute, so even authorization may take it.
         try:
-            tail = session.scrollback.tail_bytes(SCREEN_TAIL_BYTES).decode("utf-8", "replace")
-            state = pty_tail_state(
-                tail,
-                backend=session.record.backend,
-                cli_state_status=session_cli_state_status(session),
-            )
+            state = str(session_screen_explanation(session)["outcome"])
         except (AttributeError, OSError, ValueError):
             state = "unknown"
         self._snapshot_pty_states[session_id] = (run_id, now, state)

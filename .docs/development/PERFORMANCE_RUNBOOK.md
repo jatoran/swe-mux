@@ -144,7 +144,7 @@ synthetic `WheelEvent`s in-page when the notch rate is the variable under test.
 For a terminal that accepts keystrokes but displays them several seconds later, check both queue boundaries.
 The events WebSocket must not deliver audit-only `tool_use`, `tool_result`, `PreToolUse`, or `PostToolUse` payloads to browsers.
 Observation-only browser events such as `project_files_changed` must not refetch the full sessions/projects/previews/groups/harnesses snapshot.
-`GET /api/sessions` uses a one-second display-only PTY classification cache; authorization checks never use that cache.
+Screen classification goes through one exact-content cache (`session.SCREEN_VERDICTS`, `screen_classification` on `/api/diagnostics/background`), and the display callers - `GET /api/sessions`, the readiness watcher and the queue summary - may also show a verdict up to `DISPLAY_SCREEN_MAX_AGE_SECONDS` (2 s) old while a screen keeps repainting; authorization checks never use that bound.
 The PTY WebSocket should advertise `output_flow_control` and emit `output_ack` frames from xterm write callbacks.
 Durable `terminal_client_repair` events with phase `write_pipeline_backlog` mean live parsing exceeded 32 KiB for at least 750 ms, while `write_pipeline_dead` still means parse progress stopped entirely.
 

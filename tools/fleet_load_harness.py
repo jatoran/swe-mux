@@ -643,6 +643,11 @@ class Harness:
             # Off-loop CPU by callable over the scratch daemon's life, which the window
             # dominates (`executor_accounting.py`).
             "executor_work": (after.get("executor_work") or {}).get("since_start", []),
+            "screen_classification": _counter_delta(
+                before.get("screen_classification") or {},
+                after.get("screen_classification") or {},
+                ("hits", "classifications", "classify_seconds"),
+            ),
             "profile": profile_result,
             "workdir": str(self.workdir),
         }
@@ -688,6 +693,14 @@ def render(report: dict[str, Any]) -> None:
     print("  costliest loops in the window:")
     for row in report["loop_cost"][:8]:
         print(f"    {row['busy_seconds']:9.2f}s {row['iterations']:7d} it  {row['name']}")
+    screens = report.get("screen_classification") or {}
+    if screens:
+        window = max(1.0, float(report["window_seconds"]))
+        print(
+            f"  screen verdicts    {screens.get('classifications', 0) / window:.1f} classified/s, "
+            f"{screens.get('hits', 0) / window:.1f} cached/s, "
+            f"{screens.get('classify_seconds', 0.0):.2f}s classifying"
+        )
     if report.get("executor_work"):
         print("  costliest executor work (CPU since start):")
         for row in report["executor_work"][:10]:
@@ -716,6 +729,17 @@ def render(report: dict[str, Any]) -> None:
     elif profile:
         print(f"  profile unavailable: {profile['error']}")
     print(f"  artifacts: {report['workdir']}")
+
+
+def _counter_delta(
+    before: dict[str, Any], after: dict[str, Any], keys: tuple[str, ...]
+) -> dict[str, float]:
+    """Monotonic counters over the measurement window; empty when the daemon lacks them."""
+    if not after:
+        return {}
+    return {
+        key: round(float(after.get(key) or 0) - float(before.get(key) or 0), 3) for key in keys
+    }
 
 
 def parse_settings(values: list[str]) -> dict[str, str]:

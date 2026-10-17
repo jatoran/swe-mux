@@ -41,7 +41,8 @@ An observer must not be able to change the verdict it observes.
 
 The scan it does pay for is not additional: `_pty_state` writes the shared
 snapshot cache, so `GET /api/sessions` reuses this tick's classification instead
-of rescanning every terminal itself.
+of rescanning every terminal itself. A screen that keeps repainting is shown up to
+`DISPLAY_SCREEN_MAX_AGE_SECONDS` old rather than re-classified every tick.
 """
 
 from __future__ import annotations
@@ -52,7 +53,7 @@ import time
 from typing import Any
 
 from .background_tasks import background
-from .delivery_readiness import DeliveryReadinessTracker
+from .delivery_readiness import DISPLAY_SCREEN_MAX_AGE_SECONDS, DeliveryReadinessTracker
 from .event_bus import EventBus
 from .prompt_queue import PromptQueueService, delivery_summary
 
@@ -178,9 +179,15 @@ class ReadinessWatcher:
                 # promotion argument with watcher-driven evaluations: those counters
                 # are meant to describe delivery attempts, and this is not one.
                 record_metrics=False,
-                # Fresh, because this loop *is* the liveness. The scan it pays for
-                # populates the snapshot cache that `GET /api/sessions` reads.
-                snapshot_pty_cache_seconds=0.0,
+                # A display bound, not zero. The liveness this loop exists for is the
+                # clock-driven transitions (operator quiet, debounce, staleness),
+                # which read no screen; a screen that has not changed is current
+                # through the exact-content cache whatever this says; and a screen
+                # still repainting may be shown up to this old. Re-classifying every
+                # repainting screen each second made this loop the daemon's largest
+                # GIL consumer. The scans it does pay for populate the cache that
+                # `GET /api/sessions` reads.
+                snapshot_pty_cache_seconds=DISPLAY_SCREEN_MAX_AGE_SECONDS,
                 adopt=False,
             )
             state = str(evaluation["delivery_state"])

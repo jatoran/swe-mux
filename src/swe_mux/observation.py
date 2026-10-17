@@ -36,14 +36,12 @@ from .harness_status import (
 )
 from .models import SessionState
 from .path_identity import same_path
-from .scrollback import SCREEN_TAIL_BYTES
 from .session import (
     STANDING_ACTIVITY_TTL_SLACK_SECONDS,
     Session,
     clear_standing_activity,
-    pty_tail_state,
-    pty_tail_waiting_on_background,
-    session_cli_state_status,
+    explanation_waits_on_background,
+    session_screen_explanation,
     set_standing_activity,
     settle_running_work_anchor,
     standing_activity_kinds,
@@ -1824,17 +1822,9 @@ def _measurements_publishable(session: Session) -> bool:
 
 def session_pty_state(session: Session) -> str:
     """What this session's CLI is showing, or "unknown" without a scrollback."""
-    scrollback = getattr(session, "scrollback", None)
-    if scrollback is None:
+    if getattr(session, "scrollback", None) is None:
         return "unknown"
-    try:
-        return pty_tail_state(
-            scrollback.tail_bytes(SCREEN_TAIL_BYTES).decode("utf-8", "replace"),
-            backend=session.record.backend,
-            cli_state_status=session_cli_state_status(session),
-        )
-    except (OSError, ValueError):
-        return "unknown"
+    return str(session_screen_explanation(session)["outcome"])
 
 
 async def _resume_from_awaiting(
@@ -2203,18 +2193,13 @@ def _background_wait_reason(session: Session) -> str | None:
     accept input and a write is safe — the sub-reason exists so "ready" does not
     read as "finished, nothing more is coming".
     """
-    scrollback = getattr(session, "scrollback", None)
-    if scrollback is None:
+    if getattr(session, "scrollback", None) is None:
         return None
     try:
-        tail = scrollback.tail_bytes(SCREEN_TAIL_BYTES).decode("utf-8", "replace")
+        explanation = session_screen_explanation(session)
     except Exception:
         return None
-    return (
-        "waiting_on_background"
-        if pty_tail_waiting_on_background(tail, backend=session.record.backend)
-        else None
-    )
+    return "waiting_on_background" if explanation_waits_on_background(explanation) else None
 
 
 #: Turns longer than this are treated as an unclosed boundary rather than a real

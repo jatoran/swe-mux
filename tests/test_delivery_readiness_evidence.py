@@ -103,18 +103,12 @@ def test_ui_snapshot_reuses_a_bounded_pty_classification(monkeypatch: Any) -> No
     session, tracker, clock = _idle_agent()
     calls = 0
 
-    def classify(
-        _tail: str,
-        *,
-        backend: str | None = None,
-        cli_state_status: str | None = None,
-    ) -> str:
+    def classify(_tail: str, **_inputs: object) -> dict[str, object]:
         nonlocal calls
-        del backend, cli_state_status
         calls += 1
-        return "idle"
+        return {"outcome": "idle", "screen_outcome": "idle", "rules": []}
 
-    monkeypatch.setattr("swe_mux.session.pty_tail_state", classify)
+    monkeypatch.setattr("swe_mux.session.pty_tail_explain", classify)
     tracker.evaluate(session, record_metrics=False, snapshot_pty_cache_seconds=1.0)
     session.scrollback.data += b"new repaint traffic"
     tracker.evaluate(session, record_metrics=False, snapshot_pty_cache_seconds=1.0)

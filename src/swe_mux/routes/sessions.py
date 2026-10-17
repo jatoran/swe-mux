@@ -21,6 +21,7 @@ from .. import worktree_mutation
 from ..adapters import BackendAdapter
 from ..approvals import DEFAULT_ALLOW_RULES, normalize_rules
 from ..config import Config
+from ..delivery_readiness import DISPLAY_SCREEN_MAX_AGE_SECONDS
 from ..git_projects import resolve_project
 from ..harness import (
     HARNESSES,
@@ -109,7 +110,7 @@ def _session_row(app: web.Application, session: Session, *, now: float) -> dict[
     delivery = app[keys.FLEET].readiness.evaluate(
         session,
         record_metrics=False,
-        snapshot_pty_cache_seconds=1.0,
+        snapshot_pty_cache_seconds=DISPLAY_SCREEN_MAX_AGE_SECONDS,
     )
     item["delivery_readiness"] = delivery_summary(session.record, delivery, observed_at=now)
     # Present only while something is actually sitting in the composer, so a

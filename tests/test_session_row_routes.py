@@ -16,6 +16,7 @@ from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
 from swe_mux import app_keys as keys
+from swe_mux.delivery_readiness import DISPLAY_SCREEN_MAX_AGE_SECONDS
 from swe_mux.errors import NotFound
 from swe_mux.models import SessionRecord
 from swe_mux.routes.sessions import get_session, list_sessions
@@ -94,7 +95,10 @@ async def test_one_session_reads_back_exactly_as_its_row_in_the_list() -> None:
     assert row["generated_title"] == "title for run-typing"
     assert row["delivery_readiness"]["state"] == "ready"
     # Both paths reuse the bounded classifier verdict rather than rescanning a pane.
-    assert all(call["snapshot_pty_cache_seconds"] == 1.0 for call in readiness.calls)
+    assert readiness.calls and all(
+        call["snapshot_pty_cache_seconds"] == DISPLAY_SCREEN_MAX_AGE_SECONDS > 0
+        for call in readiness.calls
+    )
     assert all(call["record_metrics"] is False for call in readiness.calls)
 
 

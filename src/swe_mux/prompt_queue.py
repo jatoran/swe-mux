@@ -45,6 +45,7 @@ from typing import Any, TypeVar
 
 from .background_tasks import background
 from .composer_input import composer_insertion, note_unsubmitted_delivery
+from .delivery_readiness import DISPLAY_SCREEN_MAX_AGE_SECONDS
 from .executor_accounting import AccountedThreadPoolExecutor
 from .harness import (
     MAX_PASTE_SUBMIT_SETTLE_SECONDS,
@@ -2585,7 +2586,9 @@ class PromptQueueService:
                 delivery_summary(
                     session.record,
                     self.readiness.evaluate(
-                        session, record_metrics=False, snapshot_pty_cache_seconds=1.0
+                        session,
+                        record_metrics=False,
+                        snapshot_pty_cache_seconds=DISPLAY_SCREEN_MAX_AGE_SECONDS,
                     ),
                     observed_at=time.time(),
                 )

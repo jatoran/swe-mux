@@ -7,6 +7,7 @@ restarts and app rebuilds; this module holds only the daemon-side view of them.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import math
@@ -15,9 +16,10 @@ import re
 import secrets
 import sqlite3
 import sys
+import threading
 import time
 import uuid
-from collections import deque
+from collections import OrderedDict, deque
 from collections.abc import Callable, Coroutine, Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -1666,10 +1668,7 @@ def pty_tail_explain(
 
 def pty_tail_waiting_on_background(tail: str, *, backend: str | None = None) -> bool:
     """True when the live frame shows the CLI waiting on background work."""
-    explanation = pty_tail_explain(tail, backend=backend)
-    return any(
-        item["matched"] and item["state"] == "background_wait" for item in explanation["rules"]
-    )
+    return explanation_waits_on_background(pty_tail_explain(tail, backend=backend))
 
 
 def pty_tail_state(
@@ -1701,6 +1700,145 @@ def session_cli_state_status(session: Any) -> str | None:
 def pty_tail_appears_idle(tail: str, *, backend: str | None = None) -> bool:
     """True only when the CLI's latest frame is its idle input prompt."""
     return pty_tail_state(tail, backend=backend) == "idle"
+
+
+#: Distinct screens remembered: a few per session for a large fleet.
+SCREEN_VERDICT_CACHE_SIZE = 512
+
+
+class ScreenVerdictCache:
+    """Screen explanations keyed on the exact tail bytes and every other input.
+
+    Screen classification was the daemon's largest GIL consumer, 44% of all samples
+    at 36 sessions (`DAEMON_LOAD_ISOLATION.md` item 4), because several callers each
+    classified the same 32 KiB tails on their own schedules: the readiness watcher
+    every second, the fleet rows, the queue summary, the state watchdog and the
+    observation helpers. `pty_tail_explain` is a pure function of the tail and the
+    arbitration inputs, so one explanation per distinct input answers all of them,
+    and a quiet session's screen is classified once rather than once per caller per
+    tick.
+
+    The key is a 128-bit BLAKE2b digest of the raw bytes (a C loop, about a
+    hundredth of the regex work it replaces) plus the backend, the normalized CLI
+    status and the OSC title and progress. A hit is therefore exactly what a
+    recompute would return, which is what lets authorization use it: it never trusts
+    a verdict measured on different bytes. Returned explanations are shared and must
+    be treated as read-only.
+    """
+
+    def __init__(self, maxsize: int = SCREEN_VERDICT_CACHE_SIZE) -> None:
+        self._maxsize = maxsize
+        self._entries: OrderedDict[tuple[Any, ...], dict[str, Any]] = OrderedDict()
+        self._lock = threading.Lock()
+        self.hits = 0
+        self.misses = 0
+        self.classify_seconds = 0.0
+
+    def explain(
+        self,
+        raw: bytes,
+        *,
+        backend: str | None = None,
+        cli_state_status: str | None = None,
+        osc_title: str | None = None,
+        osc_progress: str | None = None,
+    ) -> dict[str, Any]:
+        cli_status = str(cli_state_status or "").strip().lower() or None
+        # The classifier itself is an input too: a test that substitutes it must
+        # neither read verdicts the real one cached nor leave its own behind for the
+        # next test in the same process.
+        classifier = pty_tail_explain
+        key = (
+            hashlib.blake2b(raw, digest_size=16).digest(),
+            len(raw),
+            backend,
+            cli_status,
+            osc_title,
+            osc_progress,
+            classifier,
+        )
+        with self._lock:
+            cached = self._entries.get(key)
+            if cached is not None:
+                self._entries.move_to_end(key)
+                self.hits += 1
+                return cached
+        started = time.perf_counter()
+        explanation = classifier(
+            raw.decode("utf-8", "replace"),
+            backend=backend,
+            cli_state_status=cli_status,
+            osc_title=osc_title,
+            osc_progress=osc_progress,
+        )
+        elapsed = time.perf_counter() - started
+        with self._lock:
+            self._entries[key] = explanation
+            while len(self._entries) > self._maxsize:
+                self._entries.popitem(last=False)
+            self.misses += 1
+            self.classify_seconds += elapsed
+        return explanation
+
+    def snapshot(self) -> dict[str, Any]:
+        with self._lock:
+            hits, misses, seconds = self.hits, self.misses, self.classify_seconds
+            entries = len(self._entries)
+        asked = hits + misses
+        return {
+            "entries": entries,
+            "hits": hits,
+            "classifications": misses,
+            "hit_rate": round(hits / asked, 4) if asked else None,
+            "classify_seconds": round(seconds, 3),
+            "mean_classify_ms": round(1000 * seconds / misses, 3) if misses else None,
+        }
+
+
+#: The process-wide cache every screen classifier reads through.
+SCREEN_VERDICTS = ScreenVerdictCache()
+
+
+def session_screen_explanation(session: Any, *, with_osc: bool = False) -> dict[str, Any]:
+    """Explain one session's current screen through the shared cache.
+
+    ``with_osc`` adds the OSC title and progress, which only the state watchdog's
+    rules read; the other callers leave them out and share entries with each other.
+    Returns a shared explanation (read-only); a session without a readable
+    scrollback explains as ``unknown``.
+    """
+    cli_state_status = session_cli_state_status(session)
+    scrollback = getattr(session, "scrollback", None)
+    raw: bytes | None = None
+    if scrollback is not None:
+        try:
+            raw = scrollback.tail_bytes(SCREEN_TAIL_BYTES)
+        except (OSError, ValueError):
+            raw = None
+    if raw is None:
+        return {
+            "outcome": "unknown",
+            "screen_outcome": "unknown",
+            "outcome_source": "screen",
+            "cli_state_status": cli_state_status,
+            "rules": [],
+        }
+    osc_signals = getattr(session, "osc_signals", None) if with_osc else None
+    return SCREEN_VERDICTS.explain(
+        raw,
+        backend=session.record.backend,
+        cli_state_status=cli_state_status,
+        osc_title=getattr(osc_signals, "title", None),
+        osc_progress=getattr(osc_signals, "progress", None),
+    )
+
+
+def explanation_waits_on_background(explanation: Mapping[str, Any]) -> bool:
+    """Whether an explanation's live frame shows the CLI waiting on background work."""
+    return any(
+        item["matched"] and item["state"] == "background_wait"
+        for item in explanation.get("rules") or ()
+    )
 
 
 def session_is_unwitnessed(session: Any) -> bool:
@@ -7346,60 +7484,16 @@ class SessionManager:
 
     @staticmethod
     def _pty_tail_explanation(session: Session) -> dict[str, Any]:
-        """Explain the raw screen and effective CLI-corroborated PTY state."""
-        scrollback = getattr(session, "scrollback", None)
-        if scrollback is None:
-            return {
-                "outcome": "unknown",
-                "screen_outcome": "unknown",
-                "outcome_source": "screen",
-                "cli_state_status": session_cli_state_status(session),
-                "rules": [],
-            }
-        try:
-            raw = scrollback.tail_bytes(SCREEN_TAIL_BYTES)
-            tail = raw.decode("utf-8", "replace")
-        except (OSError, ValueError):
-            return {
-                "outcome": "unknown",
-                "screen_outcome": "unknown",
-                "outcome_source": "screen",
-                "cli_state_status": session_cli_state_status(session),
-                "rules": [],
-            }
-        osc_signals = getattr(session, "osc_signals", None)
-        cli_state_status = session_cli_state_status(session)
-        osc_title = getattr(osc_signals, "title", None)
-        osc_progress = getattr(osc_signals, "progress", None)
-        # Every input is on the key, so a hit is exactly the answer a recompute would
-        # give. The explanation is regex work over 32 KiB of screen, on the loop, and
-        # it is asked for several times per status pass per session - the profile of
-        # the 2026-09-01 stall investigation put it first among the loop's own
-        # non-idle frames. A quiet session's screen does not change between asks.
-        # The key is the screen's *content* (a hash of the bytes is a C loop, far
-        # cheaper than the regexes) plus the buffer it came from: a byte count alone
-        # would let a swapped-in buffer of the same length answer for a different one.
-        key = (
-            id(scrollback),
-            getattr(scrollback, "written", None),
-            hash(raw),
-            session.record.backend,
-            cli_state_status,
-            osc_title,
-            osc_progress,
-        )
-        cached = getattr(session, "_pty_tail_explanation_cache", None)
-        if cached is not None and cached[0] == key:
-            return dict(cached[1])
-        explanation = pty_tail_explain(
-            tail,
-            backend=session.record.backend,
-            cli_state_status=cli_state_status,
-            osc_title=osc_title,
-            osc_progress=osc_progress,
-        )
-        session._pty_tail_explanation_cache = (key, explanation)
-        return dict(explanation)
+        """Explain the raw screen and effective CLI-corroborated PTY state.
+
+        Through the process-wide `SCREEN_VERDICTS`, whose key is the screen's exact
+        content plus every arbitration input, so a hit is the answer a recompute
+        would give. The per-session cache this replaced served only the watchdog;
+        the readiness watcher, the fleet rows and the queue summary classified the
+        same bytes again on their own schedules. A shallow copy, because callers
+        here annotate the result.
+        """
+        return dict(session_screen_explanation(session, with_osc=True))
 
     @staticmethod
     def _note_pty_tail_readings(

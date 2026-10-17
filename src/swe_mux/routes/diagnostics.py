@@ -38,6 +38,7 @@ from ..posix_firewall import inspect_posix_firewall, posix_firewall_supported
 from ..prerequisites import detect_prerequisites
 from ..scrollback import SCREEN_TAIL_BYTES
 from ..session import (
+    SCREEN_VERDICTS,
     SessionManager,
     pty_tail_explain,
     session_cli_state_status,
@@ -448,6 +449,10 @@ async def get_background_health(request: web.Request) -> web.Response:
             # (`executor_accounting.py`): which background work costs the most, since
             # start and over the last minute. Built off the loop; it scans the ring.
             "executor_work": await asyncio.to_thread(EXECUTOR_LEDGER.snapshot),
+            # The shared screen-verdict cache (`session.SCREEN_VERDICTS`): how many
+            # classifications ran and how many asks were answered without one.
+            # Classification was the daemon's largest GIL consumer before it.
+            "screen_classification": SCREEN_VERDICTS.snapshot(),
             # The shared off-loop transcript directory scans (`transcript_scan.py`).
             # A cache that stops sharing reads as misses climbing with the fleet
             # and `slow_scans` counting; the loop_lag above is where that lands.

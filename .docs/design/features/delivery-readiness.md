@@ -345,7 +345,8 @@ Four properties make a one-second loop affordable and safe, and each is load-bea
 - **Scoped.** Sessions with an attached terminal (somebody is looking) or a pending queue
   item (somebody is waiting on this exact verdict). Classification measured 2.1 ms on a
   full 32 KiB tail, so following a fleet nobody is reading would spend real event-loop time
-  on announcements with no recipient.
+  on announcements with no recipient. Within that scope a still-repainting screen is
+  re-classified at most every `DISPLAY_SCREEN_MAX_AGE_SECONDS`, below.
 
 **The watcher evaluates with `adopt=False`, and that is a correctness requirement rather
 than an optimization.** `evaluate` mutates: `_adopt_catchup_settle` and
@@ -368,6 +369,22 @@ cache from every caller and only *reads* it when the caller allows a bounded age
 `GET /api/sessions` reuses the watcher's classification instead of rescanning every terminal
 itself. Only reading is gated, which is the half that carries the safety argument:
 authorization never trusts a verdict it did not measure itself.
+
+Beneath that age-bounded cache sits an exact one, and the two carry different arguments.
+Every classifier - this tracker, the state watchdog, the observation helpers - reads through
+`session.SCREEN_VERDICTS`, keyed on a 128-bit digest of the raw tail bytes plus the backend,
+the normalized CLI status, the OSC title and progress, and the classifier itself.
+A hit there is by construction what a fresh scan of the current bytes returns, so authorization
+may take it: it is the same measurement, not an older one.
+The age bound is the only thing that lets a caller see a verdict measured on *different* bytes,
+and the display callers (the watcher, `GET /api/sessions`, the queue summary) pass
+`DISPLAY_SCREEN_MAX_AGE_SECONDS` (2 s) while `screen_state` passes zero.
+The watcher used to pass zero too, "because this loop is the liveness"; but the liveness it
+exists for is the clock-driven transitions, which read no screen, and re-classifying every
+repainting screen each second made it the daemon's largest GIL consumer at 34% of samples
+(`development/DAEMON_LOAD_ISOLATION.md` items 4 and 7).
+A screen-driven reason can therefore reach the UI up to two seconds late; a quiet screen is
+always current.
 
 ## Diagnostics
 
