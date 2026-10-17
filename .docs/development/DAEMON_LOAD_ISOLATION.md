@@ -139,12 +139,32 @@ Items are worked in order, and an item may reorder, split or remove later items 
   - **Tests:** `tests/test_win_process_files.py` forces both orders, the worker already back in its inbox when abandoned (failed before the fix: the thread was still alive after 5 s) and the worker still in a blocked name query, and asserts the thread exits and the pid's quarantine lifts.
   - **Where:** `win_process_files.py`, `technical/backend/packages/history-and-observation.md`.
 
-- [ ] **4. Rank the GIL consumers under load.**
+- [x] **4. Rank the GIL consumers under load.**
   - **Why:** which work leaves the daemon, and in what order, should follow measurement rather than the code reading this plan started from.
-  - **Change:** with items 1 and 2 in place, record a `py-spy record --gil --threads` profile and the per-thread CPU ranking at incident scale, and write the ranking into this item.
-    The code reading predicts, in order: process inspection, transcript tailing, canonical telemetry, event persistence and fanout, screen classification, the ghost-window sweep, SQLite operation-lock contention, and git-watch storms.
-    Item 1's profile already put screen classification on the loop first (47% of samples) and item 2's executor accounting puts process inspection first off the loop (`_collect_all`, about half a second of GIL per pass); `executor_work` on `/api/diagnostics/background` is now the off-loop half of the ranking, and the profile's main-thread share the on-loop half.
-  - **Done when:** the ranking is recorded and items 5-11 and 18-23 are reordered or trimmed to match it.
+  - **Measured** (2026-10-17, 36 `scroll` sessions at 20 KB/s with an `/events` browser, no burners, `py-spy record --gil --threads` for 45 s, 1,950 GIL samples; attribution by `.trash`-local scripts walking each stack to its subsystem entry point):
+
+    | Share of GIL samples | Where | Consumer |
+    | --- | --- | --- |
+    | 44.3% | loop | Screen classification (`pty_tail_explain`): 34.1% from the readiness watcher's per-second `evaluate`, 6.8% from the state watchdog's SSH-boundary check, 3.2% from `GET /api/sessions` fleet rows |
+    | 19.1% | loop | asyncio and aiohttp dispatch: IOCP polling, websocket sends, JSON encoding |
+    | 11.5% | executor | Process inspection, 8.0% of it `psutil` `create_time` in `_revalidate_unseen` building fresh `Process` objects |
+    | 4.9% | loop and executor | Transcript observation |
+    | 2.5% | loop and executor | Canonical telemetry |
+    | 2.5% | loop | `/pty` websocket handling |
+    | 1.8% | loop | Supervisor frame reading |
+    | 0.7% | loop | Fleet intelligence |
+    | 0.6% | executor and loop | Event persistence |
+    | 0.2% each or less | | Plugin events, `/events` fanout, session recovery, status timeline, ghost-window sweep, git watch |
+
+    The main thread held the GIL in 81% of samples (item 1: 83%).
+    Which caller pays for screen classification depends on which one reaches a session first each second, because they share `_pty_state`'s time-based cache: item 1's profile charged 32.5% to the fleet rows, this one 34.1% to the readiness watcher.
+    The off-loop half agrees with item 2's executor accounting: `ProcessInspector._collect_all` 6.0 s of CPU in 29 passes, `CanonicalTelemetryService._record_batch` 3.8 s, `HistoryIndex.append_event` 2.1 s over 12,700 calls, `JsonlTailer._read_and_decode` 1.0 s, `PluginStore._run` 0.7 s over 12,700 calls, `Path.stat` 0.5 s over 17,200 calls.
+  - **What it changes:**
+    - The predicted order (process inspection, transcript tailing, telemetry, event persistence, screen classification, ...) was wrong at the top: screen classification on the loop is the largest consumer by a factor of four, and event persistence is negligible.
+    - Loop-busy time is not GIL share: the plugin dispatcher logged 19 s busy in the window and 0.2% of GIL samples, because its time is spent awaiting SQLite. Rank by the profile and `executor_work`, never by `costliest`.
+  - **Work order** for the mitigations, replacing numeric order: **7** (screen classification, 44%), **6** (per-tick waste, now including `_revalidate_unseen`'s fresh `Process` objects), **9** and **10** (hook payloads and reply path: lost events and timeouts rather than GIL), **8**, **11**, then **5** last, so the switch interval is chosen on the mix that remains rather than on one dominated by a consumer about to disappear.
+    For the worker: **20** (process inspection, 11.5% and the convoy holder in item 2's stalls) before **21** (telemetry, 2.5%); **22** stays gated on a re-measure after item 6's batched stats; **23** is removed (below).
+  - **Where:** this document.
 
 - [ ] **5. GIL switch interval.**
   - **Why:** each GIL release by the loop can cost up to the switch interval, 5 ms by default, to win the lock back while another thread is runnable.
@@ -163,6 +183,7 @@ Items are worked in order, and an item may reorder, split or remove later items 
     - Plugins: cache the plugin list and invalidate it on plugin-store writes instead of reading SQLite on every event (`plugins.py:1594-1617`).
     - Readiness watcher and auto-delivery: replace the per-second queue `summary()` GROUP BY and the per-second policy query with in-memory state invalidated on writes (`readiness_watch.py:144`; `prompt_queue.py:760-778`; `auto_delivery.py:838`).
     - Ghost-window sweep: construct `psutil.Process` only on a cache miss (`ghost_windows.py:171-173`).
+    - Process inspection: `_revalidate_unseen` builds a fresh `psutil.Process` per unseen pid and reads its `create_time` (`processes.py:1595`), 8.0% of all GIL samples in item 4; revalidate from the cached handles and the pass's own snapshot instead.
     - Git watch: raise `step` from 300 ms toward the 1,600 ms debounce, and drop `ALWAYS_NOISE` paths before they become Python objects wherever watchfiles allows (`git_watch.py:215-237,484-511`).
     - Bound the default executor (named `mux-default` and accounted per callable since item 2) to a measured size; it is `min(32, cpu + 4)` today, which lets 32 GIL-hungry workers contend with the loop.
     - Log writes off the loop: `access.log` takes a line per request and the incident's main-thread samples caught `flush` among the syscalls the convoy waited at. Measure a `QueueHandler` feeding a listener thread for `access.log` and `daemon.log` (which would also make gzip of rotated `access.log` free), against what an unflushed queue loses on a hard kill.
@@ -308,11 +329,9 @@ Items are worked in order, and an item may reorder, split or remove later items 
     The hourly `reconcile_transcripts` moves with it (`operational_telemetry.py:749-815`).
   - **Done when:** the status-detection golden tests pass unchanged and the harness shows the gain; otherwise this item is removed with its measurement recorded.
 
-- [ ] **23. Event persistence write-behind, if item 4 ranks it.**
-  - **Why:** every `emit` waits for its insert under the `mux.db` lock before any subscriber sees the event.
-  - **Settle first:** sequence numbers would come from an in-memory counter seeded at startup, `/events` catch-up would be served from memory for recent events, and inserts would be batched, so a crash loses at most one flush window.
-    That durability trade must be accepted explicitly before anything is built.
-  - **Done when:** the trade is decided, and the item is either built with tests for ordering and catch-up or removed with the reason recorded.
+- [x] **23. Event persistence write-behind, if item 4 ranks it.** Removed.
+  - **Why removed:** item 4 measured event persistence at 0.6% of GIL samples, so write-behind would trade durability (a crash losing up to one flush window, sequence numbers from memory) for almost nothing on the GIL.
+    The latency half of the original concern - a hook reply waiting behind its event's insert under the `mux.db` lock - is item 10's, which answers the reply before persisting rather than changing what is durable.
 
 - [ ] **24. Extract the terminal core, in process.**
   - **Why:** the gateway must run the same protocol implementation as the daemon's fallback, and today that implementation is spread across `routes/pty.py` and `Session`.
