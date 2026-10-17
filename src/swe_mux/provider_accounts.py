@@ -2206,7 +2206,7 @@ class ProviderAccountManager:
             # joined to the poll that produced it.
             with background.iteration(QUOTA_POLL_LOOP), bound_request_id(new_request_id()):
                 await self.refresh()
-            await asyncio.sleep(self.poll_seconds)
+            await background.pace(QUOTA_POLL_LOOP, self.poll_seconds, deferrable=True)
 
     async def _event_refresh_loop(self) -> None:
         assert self._event_queue is not None

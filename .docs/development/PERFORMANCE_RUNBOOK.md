@@ -187,6 +187,13 @@ No per-subsystem metric reports that; only the loop can.
 
 A stall count that climbs at a steady rate points at a periodic loop; correlate with `costliest`.
 
+While the loop is lagging, deferrable housekeeping waits for it: `governor` on the same endpoint
+says whether the daemon is `shedding` right now and, per name, how often and for how long work was
+held back. A large `deferred` count is the governor working, not a fault; what would be a fault is
+deferred work that stopped running, which the harness reports as `ran` beside each deferral. The
+loops a person is waiting on (readiness, auto-delivery, the state watchdog, the flushes, the lag
+probe, the lifecycle heartbeat) are never deferred.
+
 Then read `stall_watchdog.recent` on the same endpoint, or `grep loop_stall daemon.log`, for
 every stall of three seconds or more.
 The lag number says how long the loop was gone; the Python sampler may show where it was in `<data_dir>/loop-stalls.log`.

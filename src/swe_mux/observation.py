@@ -16,6 +16,7 @@ from typing import Any, NamedTuple, assert_never
 
 from .adapters.codex import codex_data_home
 from .approvals import ApprovalOutcome, decide, describe_request
+from .background_tasks import background
 from .batched_stat import batched_stat
 from .event_bus import EventBus
 from .executor_accounting import AccountedThreadPoolExecutor
@@ -56,6 +57,10 @@ from .text_safety import utf8_safe
 from .tool_evidence import tool_call_evidence
 
 log = logging.getLogger(__name__)
+
+#: Every session's transcript observer, timed per record under one name so the
+#: fleet's total ranks in `/api/diagnostics/background` beside the supervised loops.
+TRANSCRIPT_OBSERVER_COST = "session:transcript-observer"
 
 OBSERVATION_SCHEMA_VERSION = "2"
 PARSER_DEGRADE_MIN_EVENTS = 20
@@ -1150,62 +1155,63 @@ async def observe_transcript(
     last_historical_ts: float | None = None
     try:
         async for event, byte_historical in tailer.events(stop):
-            if event is None:
-                if byte_historical:
-                    replay_pending = True
+            with background.account(TRANSCRIPT_OBSERVER_COST):
+                if event is None:
+                    if byte_historical:
+                        replay_pending = True
+                        session.observation_replay = True
+                        historical_seen = 0
+                        last_historical_ts = None
+                        # Same pass-start reset as above: this is the tailer saying it
+                        # is reading the file from the beginning again, which is
+                        # exactly when the total must be rebuilt rather than extended.
+                        _reset_worked_for_replay(session)
+                        continue
+                    if replay_pending:
+                        replay_pending = False
+                        await _finish_transcript_catchup(
+                            session, events, attach_ts, last_historical_ts, historical_seen
+                        )
+                    continue
+                ts = _event_timestamp(event)
+                observed_at = time.time()
+                if (
+                    ts is not None
+                    and math.isfinite(ts)
+                    and 0.0 < ts <= observed_at + HISTORICAL_TIMESTAMP_SLACK_SECONDS
+                ):
+                    session.transcript_record_ts = max(
+                        float(getattr(session, "transcript_record_ts", 0.0)), ts
+                    )
+                historical = byte_historical or (
+                    ts is not None and ts < attach_ts - HISTORICAL_TIMESTAMP_SLACK_SECONDS
+                )
+                if historical:
+                    # Harvest telemetry (tokens/context/model/tool correlation) from
+                    # history without emitting events or driving state; the replay
+                    # flag suppresses transitions and update fanout even when an
+                    # old-stamped record straggles in after catch-up finished.
+                    historical_seen += 1
+                    if ts is not None:
+                        last_historical_ts = ts
                     session.observation_replay = True
-                    historical_seen = 0
-                    last_historical_ts = None
-                    # Same pass-start reset as above: this is the tailer saying it
-                    # is reading the file from the beginning again, which is
-                    # exactly when the total must be rebuilt rather than extended.
-                    _reset_worked_for_replay(session)
+                    try:
+                        await _dispatch_transcript_event(
+                            session.record.backend, session, event, _NULL_EVENTS
+                        )
+                    finally:
+                        session.observation_replay = replay_pending
                     continue
                 if replay_pending:
+                    # A live record can share the first read with the historical tail;
+                    # resolve catch-up before it may drive state.
                     replay_pending = False
                     await _finish_transcript_catchup(
                         session, events, attach_ts, last_historical_ts, historical_seen
                     )
-                continue
-            ts = _event_timestamp(event)
-            observed_at = time.time()
-            if (
-                ts is not None
-                and math.isfinite(ts)
-                and 0.0 < ts <= observed_at + HISTORICAL_TIMESTAMP_SLACK_SECONDS
-            ):
-                session.transcript_record_ts = max(
-                    float(getattr(session, "transcript_record_ts", 0.0)), ts
-                )
-            historical = byte_historical or (
-                ts is not None and ts < attach_ts - HISTORICAL_TIMESTAMP_SLACK_SECONDS
-            )
-            if historical:
-                # Harvest telemetry (tokens/context/model/tool correlation) from
-                # history without emitting events or driving state; the replay
-                # flag suppresses transitions and update fanout even when an
-                # old-stamped record straggles in after catch-up finished.
-                historical_seen += 1
-                if ts is not None:
-                    last_historical_ts = ts
-                session.observation_replay = True
-                try:
-                    await _dispatch_transcript_event(
-                        session.record.backend, session, event, _NULL_EVENTS
-                    )
-                finally:
-                    session.observation_replay = replay_pending
-                continue
-            if replay_pending:
-                # A live record can share the first read with the historical tail;
-                # resolve catch-up before it may drive state.
-                replay_pending = False
-                await _finish_transcript_catchup(
-                    session, events, attach_ts, last_historical_ts, historical_seen
-                )
-            recognized, signature = classify_transcript_event(session.record.backend, event)
-            await _dispatch_transcript_event(session.record.backend, session, event, events)
-            await _record_parser_observation(session, events, recognized, signature)
+                recognized, signature = classify_transcript_event(session.record.backend, event)
+                await _dispatch_transcript_event(session.record.backend, session, event, events)
+                await _record_parser_observation(session, events, recognized, signature)
     finally:
         session.observation_replay = False
         appended.close()

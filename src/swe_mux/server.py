@@ -2773,6 +2773,9 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
     stall_watchdog.attach_loop(asyncio.get_running_loop())
     stall_watchdog.start()
     publish(app, {keys.LOOP_LAG: loop_lag, keys.STALL_WATCHDOG: stall_watchdog})
+    # The load-shedding governor reads the same monitor: deferrable housekeeping
+    # waits, bounded, while the loop has recently lagged (`background.pace`).
+    background.attach_lag(loop_lag)
     background.start(LOOP_LAG_LOOP, lambda: _loop_lag_loop(loop_lag, stall_watchdog, telemetry))
     background.start(CONFIG_WATCH_LOOP, lambda: watch_config(app))
     background.start(MEDIA_CLEANUP_LOOP, lambda: _media_cleanup_loop(config.data_dir, projects))
@@ -3306,7 +3309,7 @@ async def _media_cleanup_loop(data_dir: Path, projects: ProjectManager) -> None:
             roots = [Path(project.root) for project in projects.projects.values()]
             roots.append(data_dir / "preview-shots")
             await asyncio.to_thread(cleanup_expired_preview_shots, roots, now)
-        await asyncio.sleep(60 * 60)
+        await background.pace(MEDIA_CLEANUP_LOOP, 60 * 60, deferrable=True)
 
 
 async def _retention_loop(
@@ -3332,4 +3335,4 @@ async def _retention_loop(
             await tier0.prune()
             await prompt_queue_store.prune(config.prompt_queue_retention_days)
             await schedule_store.prune(config.scheduled_run_retention_days)
-        await asyncio.sleep(60 * 60)
+        await background.pace(RETENTION_LOOP, 60 * 60, deferrable=True)

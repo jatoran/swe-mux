@@ -24,6 +24,11 @@ Health is surfaced at `GET /api/diagnostics/background`; a new loop that appears
 `tests/test_background_tasks.py` sweeps the source for unguarded `while True:` and fails on any new one.
 A loop that genuinely should not join the registry - scoped to a single connection or session, or already guarded in place - opts out with an inline `# unsupervised-loop-ok: <reason>` marker, so the exemption is reviewable where it lives instead of in a list that quietly grows.
 
+**Housekeeping waits for a drowning loop; nothing a person is waiting on does.**
+A new loop whose work can run late without anyone noticing (retention, rollups, sweeps, polls of things that change slowly) sleeps through `background.pace(name, cadence, deferrable=True)` instead of `asyncio.sleep`, so it stretches its cadence, bounded, while the event loop has recently lagged.
+A loop that ticks often and decides inside the tick what is due defers only the deferrable part, with `background.defer(...)`, as the Git monitor does for its safety sweeps but never for a change its watch reported.
+Do not mark a loop deferrable if its lateness is itself the harm; `NEVER_DEFERRABLE` names those, and `pace` ignores `deferrable=True` for them.
+
 The lifecycle heartbeat is supervised for a sharper reason than the rest: its death is indistinguishable from the daemon's.
 One failed write used to end it silently, after which the daemon kept running normally while every later start reported it as "died without a clean shutdown" - a false forensic that sends the next investigation after a crash that never happened.
 

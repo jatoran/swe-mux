@@ -285,7 +285,7 @@ class CanonicalTelemetryService:
                 if result["completed"]:
                     stream_index += 1
             if stream_index < len(importers):
-                await asyncio.sleep(0.25)
+                await background.pace(CANONICAL_TELEMETRY_BACKFILL_LOOP, 0.25, deferrable=True)
                 continue
             # Every stream is caught up. The legacy store keeps reconciling
             # transcripts, so come back later and import whatever it appended.
@@ -293,7 +293,9 @@ class CanonicalTelemetryService:
             self._backfill_passes += 1
             self._backfill_last_pass_at = time.time()
             stream_index = 0
-            await asyncio.sleep(_BACKFILL_RECHECK_SECONDS)
+            await background.pace(
+                CANONICAL_TELEMETRY_BACKFILL_LOOP, _BACKFILL_RECHECK_SECONDS, deferrable=True
+            )
 
     async def _reconcile(self) -> None:
         """Read each native store past its watermark straight into the reducer."""
@@ -302,7 +304,9 @@ class CanonicalTelemetryService:
         while True:
             with background.iteration(CANONICAL_TELEMETRY_RECONCILE_LOOP):
                 await self._reconcile_pass()
-            await asyncio.sleep(_RECONCILE_SECONDS)
+            await background.pace(
+                CANONICAL_TELEMETRY_RECONCILE_LOOP, _RECONCILE_SECONDS, deferrable=True
+            )
 
     async def _reconcile_pass(self) -> dict[str, Any]:
         rows = await self._history.telemetry_history_rows(_RECONCILE_INVENTORY)
@@ -362,12 +366,8 @@ class CanonicalTelemetryService:
                             self._last_sealed_period = str(sealed["period"])
                             self._last_sealed_at = float(sealed["sealed_at"])
                 await self._refresh_storage(force=sealed is not None)
-            if rebuilt is not None:
-                await asyncio.sleep(0.25)
-            elif not self._backfill_completed:
-                await asyncio.sleep(5)
-            else:
-                await asyncio.sleep(60)
+            cadence = 0.25 if rebuilt is not None else 5.0 if not self._backfill_completed else 60.0
+            await background.pace(CANONICAL_TELEMETRY_ROLLUP_LOOP, cadence, deferrable=True)
 
     async def stop(self) -> None:
         for name, attribute in (

@@ -83,6 +83,8 @@ class LoopLagMonitor:
         self._stall_threshold = stall_threshold
         self._monotonic = monotonic
         self._samples: deque[float] = deque(maxlen=window)
+        # The same samples with when each was taken, for `recent_max`.
+        self._timed: deque[tuple[float, float]] = deque(maxlen=window)
         self._worst = 0.0
         self._worst_at: float | None = None
         self._stalls = 0
@@ -98,11 +100,28 @@ class LoopLagMonitor:
         lag = max(0.0, lag_seconds)
         self._observed += 1
         self._samples.append(lag)
+        self._timed.append((self._monotonic(), lag))
         if lag > self._worst:
             self._worst = lag
             self._worst_at = time.time()
         if lag >= self._stall_threshold:
             self._stalls += 1
+
+    def recent_max(self, seconds: float) -> float:
+        """The worst lag sampled in the last ``seconds``; 0.0 when none was.
+
+        The load-shedding governor's reading (`background_tasks.TaskSupervisor.pace`),
+        called by every deferrable loop on every pass, so it walks only the samples
+        inside the window, newest first: about ten at the default cadence. A stall
+        is sampled when it ends, so this reports one the moment the loop is back.
+        """
+        horizon = self._monotonic() - seconds
+        worst = 0.0
+        for taken, lag in reversed(self._timed):
+            if taken < horizon:
+                break
+            worst = max(worst, lag)
+        return worst
 
     async def sample(self) -> float:
         """Sleep one interval and return how much later than that the loop woke us.

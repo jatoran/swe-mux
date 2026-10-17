@@ -2296,6 +2296,19 @@ that ticks rarely and costs a great deal per tick ranks last by frequency. Measu
 `process-inspector` ran 0.15 iterations/sec — second-least frequent of 27 loops — while
 consuming 45.2% of the daemon's CPU samples.
 
+Entries with `aggregate: true` are not loops: they are per-session work timed under one name
+across every session (`background.account`): `session:transcript-observer`,
+`session:transcript-switch`, `session:agent-discovery`, `session:agent-exit-check`. They rank in
+`costliest[]` like any loop, are never started or restarted by the supervisor, and never count a
+fault (the session task handles its own).
+
+`governor` is load shedding (`background.pace` / `background.defer`): `attached`, whether the
+loop's recent lag puts it in `shedding` (`recent_max_lag_seconds` over `window_seconds`, against
+`lag_threshold_seconds`), the bounds (`max_stretch` cadences, `max_extra_seconds`), `deferrals`
+since start, and `deferred` per name: `count`, `seconds` held back, `longest_seconds`, `waiting`
+(a deferred wait in progress) and `last_at`. Names are deferrable loops plus `git-sweep`, the Git
+monitor's safety sweeps; loops in `background_tasks.NEVER_DEFERRABLE` never appear.
+
 `loop_lag` reports scheduling delay for the event loop itself: `p50/p95/p99_seconds`,
 `max_seconds` over a bounded window, `worst_seconds` retained for the whole process lifetime,
 and `stalls` (samples at or beyond `stall_threshold_seconds`). Everything on that loop shares

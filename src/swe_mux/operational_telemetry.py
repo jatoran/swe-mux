@@ -763,7 +763,7 @@ class OperationalTelemetryStore(QuotaUsageMixin):
             with background.iteration(TELEMETRY_RETENTION_LOOP):
                 await self.prune(process_retention_days=self.process_retention_days)
                 await self.reconcile_transcripts()
-            await asyncio.sleep(60 * 60)
+            await background.pace(TELEMETRY_RETENTION_LOOP, 60 * 60, deferrable=True)
 
     async def reconcile_transcripts(self, *, limit: int = 2000) -> dict[str, int]:
         """Read each changed conversation's new records into `tool_events`.

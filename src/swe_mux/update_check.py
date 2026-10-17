@@ -554,7 +554,7 @@ class UpdateChecker:
         while True:
             with background.iteration(UPDATE_CHECK_LOOP):
                 await self.check()
-            await asyncio.sleep(self._wake)
+            await background.pace(UPDATE_CHECK_LOOP, self._wake, deferrable=True)
 
     # -- state ----------------------------------------------------------------
 

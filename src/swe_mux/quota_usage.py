@@ -513,7 +513,7 @@ class QuotaUsageMixin:
                 with background.iteration(QUOTA_USAGE_LOOP):
                     pairs = await self._run(partial(self._usage_pair_rows, chunk))
                     written += await self._attribute_pairs(pairs)
-                await asyncio.sleep(CATCH_UP_PAUSE_SECONDS)
+                await background.pace(QUOTA_USAGE_LOOP, CATCH_UP_PAUSE_SECONDS, deferrable=True)
         elapsed = time.perf_counter() - started
         log.info(
             "quota_usage_catch_up written=%d accounts=%d elapsed_s=%.2f",

@@ -51,6 +51,8 @@ Design and the keep-list's reasons: `design/features/factory-reset.md`.
 
 Supervision and health for the daemon's long-lived loops: the per-iteration fault guard, restart with capped backoff, and the per-loop health snapshot.
 The rules callers must follow are in `runtime-rules.md`.
+It also times per-session work under one name (`account`), and owns load shedding: `pace(name, cadence, deferrable=...)` replaces a deferrable loop's sleep and stretches it, bounded, while the loop lag monitor's recent maximum (`LoopLagMonitor.recent_max`) is over `SHED_LAG_SECONDS`, and `defer(name, overdue=, cadence=)` lets a loop that ticks for its work skip a pass inside the same allowance.
+Nothing is deferred past `min(3 x cadence, 120 s)`, and `NEVER_DEFERRABLE` names the loops whose lateness is itself harm.
 
 **Not:** PTY host processes (that is `supervisor.py`), or any domain logic.
 

@@ -26,6 +26,9 @@ from .session_patch import session_patch
 log = logging.getLogger(__name__)
 
 GIT_MONITOR_LOOP = "git-monitor"
+#: The load-shedding name for the monitor's safety sweeps, which wait while the loop
+#: drowns; the monitor's own tick, and the reads a change causes, never do.
+GIT_SWEEP_DEFERRAL = "git-sweep"
 GIT_TIMEOUT_SECONDS = 4.0
 GIT_CONCURRENCY = 4
 #: Git's ignored-path listing walks the working tree like `git status` does, once
@@ -1194,24 +1197,28 @@ class GitMonitor:
 
     def _due_cause(self, state: _TargetState, attached: bool, now: float) -> str | None:
         """Why `state` should be read now, or None. The rate limits live here."""
+        return self._due(state, attached, now)[0]
+
+    def _due(self, state: _TargetState, attached: bool, now: float) -> tuple[str | None, float]:
+        """`_due_cause`, with the interval that made the read due."""
         if state.last_read is None:
-            return "initial"
+            return "initial", 0.0
         age = now - state.last_read
         if state.dirty:
             limit = self.cadence if attached else self.DETACHED_CHANGE_SECONDS
-            return "change" if age >= limit else None
+            return ("change" if age >= limit else None), limit
         if not state.repository:
             limit = self.NON_REPOSITORY_SECONDS if attached else self.UNWATCHED_DETACHED_SECONDS
-            return "sweep" if age >= limit else None
+            return ("sweep" if age >= limit else None), limit
         if (
             self._watches is not None
             and state.root_key is not None
             and self._watches.watched(state.root_key)
         ):
             limit = self.ATTACHED_SWEEP_SECONDS if attached else self.DETACHED_SWEEP_SECONDS
-            return "sweep" if age >= limit else None
+            return ("sweep" if age >= limit else None), limit
         limit = self.cadence if attached else self.UNWATCHED_DETACHED_SECONDS
-        return "poll" if age >= limit else None
+        return ("poll" if age >= limit else None), limit
 
     def _override_for(self, session: Session) -> str | None:
         if self.compare_override is None:
@@ -1231,8 +1238,20 @@ class GitMonitor:
         due: dict[GitTarget, str] = {}
         for target, (_members, attached) in live.items():
             state = self._targets.setdefault(target, _TargetState())
-            cause = self._due_cause(state, attached, now)
+            cause, limit = self._due(state, attached, now)
             if cause is None:
+                continue
+            # A sweep is the safety net under a live watch or the slow re-check of a
+            # non-repository, so it can wait while the daemon sheds load, bounded.
+            # A change the watch reported, and polling where there is no watch, are
+            # how Git status stays current, and are never deferred.
+            if (
+                cause == "sweep"
+                and state.last_read is not None
+                and background.defer(
+                    GIT_SWEEP_DEFERRAL, overdue=now - state.last_read - limit, cadence=limit
+                )
+            ):
                 continue
             due[target] = cause
             # Cleared before the read rather than after: a change that lands while

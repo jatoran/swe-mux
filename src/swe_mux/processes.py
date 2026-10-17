@@ -501,7 +501,7 @@ class ProcessInspector:
 
     async def _run(self) -> None:
         while True:
-            await asyncio.sleep(self.cadence)
+            await background.pace(PROCESS_INSPECTOR_LOOP, self.cadence, deferrable=True)
             with background.iteration(PROCESS_INSPECTOR_LOOP):
                 await self.reconcile()
 
@@ -822,12 +822,27 @@ class ProcessInspector:
         paths (session snapshot, fleet view, preview candidates) can reuse that sample
         instead of forcing a full descendant re-walk plus socket enumeration on every
         poll. ``force`` is used by ownership-sensitive actions that require live state.
+
+        While the daemon sheds load the background pass waits (`background.pace`), and a
+        read must not quietly take its place: a stale sample stays good enough, inside
+        the same bounded allowance, unless ``force`` asks for live state.
         """
-        if force or time.monotonic() - self._last_collect >= self.cadence:
+        due = force or self._sample_due()
+        if due:
             await self._refresh_job_pids()
         async with self._sample_lock:
-            if force or time.monotonic() - self._last_collect >= self.cadence:
+            # Re-checked under the lock: a caller ahead of this one may just have
+            # collected.
+            if force or (due and time.monotonic() - self._last_collect >= self.cadence):
                 await asyncio.to_thread(self._collect_all)
+
+    def _sample_due(self) -> bool:
+        age = time.monotonic() - self._last_collect
+        if age < self.cadence:
+            return False
+        return not background.defer(
+            PROCESS_INSPECTOR_LOOP, overdue=age - self.cadence, cadence=self.cadence
+        )
 
     def _refresh_tree(self) -> None:
         """Rebuild the parent/child index from one system-wide snapshot.

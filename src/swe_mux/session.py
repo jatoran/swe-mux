@@ -214,6 +214,13 @@ def process_started_at(pid: int) -> float | None:
 
 STATE_WATCHDOG_LOOP = "state-watchdog"
 STATE_WATCHDOG_POLL_SECONDS = 5.0
+#: Per-session work timed under one name each (`background.account`), so what the
+#: whole fleet spends on it ranks in `/api/diagnostics/background` beside the
+#: supervised loops: the transcript-switch watcher's ticks, the shell's nested-agent
+#: discovery, and the exit checks under a promoted pane.
+SWITCH_WATCH_COST = "session:transcript-switch"
+AGENT_DISCOVERY_COST = "session:agent-discovery"
+AGENT_EXIT_CHECK_COST = "session:agent-exit-check"
 # When the transcript tail *proves* the turn ended, a residual "working" is a
 # stale hook or a missed close, not real work, so recover quickly. The longer
 # window only guarded against cutting a live turn short, which the tail check
@@ -5316,21 +5323,22 @@ class SessionManager:
             # behavior even after the echoed command scrolls out of the window.
             current = session.scrollback.position
             if current > scan_cursor:
-                haystack = (carry + session.scrollback.bytes_since(scan_cursor)).lower()
-                scan_cursor = current
-                before = len(seen_names)
-                for name in agent_names:
-                    if name.encode() in haystack:
-                        seen_names.add(name)
-                carry = haystack[-(max_name_len - 1) :] if max_name_len > 1 else b""
-                if len(seen_names) != before:
-                    # Publish the launch window. A pane still reading as `shell`
-                    # while an agent boots inside it applies shell input encoding
-                    # to an agent composer, and on the frozen app that window was
-                    # measured at ~10 s — long enough to cover the CLI's own
-                    # terminal capability probes and a user's first keystrokes.
-                    session.record.agent_launch_pending = sorted(seen_names)
-                    session.publish_update()
+                with background.account(AGENT_DISCOVERY_COST):
+                    haystack = (carry + session.scrollback.bytes_since(scan_cursor)).lower()
+                    scan_cursor = current
+                    before = len(seen_names)
+                    for name in agent_names:
+                        if name.encode() in haystack:
+                            seen_names.add(name)
+                    carry = haystack[-(max_name_len - 1) :] if max_name_len > 1 else b""
+                    if len(seen_names) != before:
+                        # Publish the launch window. A pane still reading as `shell`
+                        # while an agent boots inside it applies shell input encoding
+                        # to an agent composer, and on the frozen app that window was
+                        # measured at ~10 s — long enough to cover the CLI's own
+                        # terminal capability probes and a user's first keystrokes.
+                        session.record.agent_launch_pending = sorted(seen_names)
+                        session.publish_update()
             # Full-screen CLIs redraw the echoed command quickly and ANSI can split
             # prompt text, so exact ``> claude`` matching is not reliable. Only
             # output and native transcript activity created during this detection
@@ -5345,14 +5353,15 @@ class SessionManager:
                 continue
             try:
                 detection_cwd = Path(session.record.runtime_cwd or session.record.cwd)
-                candidates = [
-                    (modified, adapter.name, path, native_id)
-                    for adapter in launched
-                    for modified, path, native_id in await self._recent_transcripts(
-                        adapter, detection_cwd, detection_started_at
-                    )
-                    if (adapter.name, native_id) not in session.ignored_detection_runs
-                ]
+                with background.account(AGENT_DISCOVERY_COST):
+                    candidates = [
+                        (modified, adapter.name, path, native_id)
+                        for adapter in launched
+                        for modified, path, native_id in await self._recent_transcripts(
+                            adapter, detection_cwd, detection_started_at
+                        )
+                        if (adapter.name, native_id) not in session.ignored_detection_runs
+                    ]
             except OSError:
                 # The CLI's own startup cleanup deletes old transcripts under the
                 # glob. One unlucky stat must not kill the shim-less promotion
@@ -5960,100 +5969,101 @@ class SessionManager:
                 break
             if not has_observable_transcript(session.record.backend):
                 break
-            last_write = await self._transcript_last_write(session, current)
-            # An exact OS ownership proof precedes filesystem heuristics. Include
-            # the same path to upgrade a provisional binding without waiting for
-            # a first-turn completion hook.
-            if (
-                session.transcript_provisional
-                or time.time() - (last_write or 0) >= TRANSCRIPT_SWITCH_QUIET_SECONDS
-            ):
-                proven = await self._process_owned_transcript(session, current, last_write)
-                if proven is not None and (proven != current or session.transcript_provisional):
-                    session.observation_state["process_transcript_switch"] = True
-                    return proven
-            # The CLI's own word first. A hook names the file it is writing, which
-            # settles in one comparison what the readings below have to infer from
-            # a cwd the poller happened to catch and a path the daemon recomputes.
-            reported = await self._consume_staged_relocation(session, current)
-            if reported is not None:
-                await self.events.emit(
-                    "transcript_relocated",
-                    session_id=session.record.id,
-                    source="hook",
-                    backend=session.record.backend,
-                    previous=str(current),
-                    path=str(reported),
-                )
-                log.info(
-                    "session %s transcript relocated to %s (reported by the CLI)",
-                    session.record.id,
-                    reported,
-                )
-                return reported
-            pending_resolver = getattr(session.adapter, "pending_transcript_path", None)
-            # Only an adapter with a side channel can answer anything but None, and
-            # asking the rest cost a worker hop per session every tick for nothing.
-            # An adapter that does not say is asked.
-            if not getattr(session.adapter, "announces_pending_transcript", True):
-                pending_resolver = None
-            try:
-                # In a worker: omp answers this from a breadcrumb file on disk.
-                pending = (
-                    await asyncio.to_thread(pending_resolver, session.record.id, current)
-                    if callable(pending_resolver)
-                    else None
-                )
-            except (OSError, ValueError):
-                pending = None
-            if isinstance(pending, Path):
-                await self.events.emit(
-                    "transcript_retargeted",
-                    session_id=session.record.id,
-                    source="breadcrumb",
-                    backend=session.record.backend,
-                    previous=str(current),
-                    path=str(pending),
-                )
-                return pending
-            # Only a followed file that is gone can have been relocated, and the
-            # reading above already says whether it is: a live file costs nothing.
-            relocated = None
-            if last_write is None:
-                await self._prime_claim_keys(session, (current,))
-                relocated = await asyncio.to_thread(
-                    self._relocated_transcript_candidate, session, current
-                )
-            if relocated is not None:
-                await self.events.emit(
-                    "transcript_relocated",
-                    session_id=session.record.id,
-                    source="daemon",
-                    backend=session.record.backend,
-                    previous=str(current),
-                    path=str(relocated),
-                )
-                return relocated
-            candidate = None
-            if heuristic:
-                if self._switch_search_armed(session, last_write):
-                    self._count_observation_cost("heuristic_searches")
-                    candidate = await self._transcript_switch_candidate(
-                        session, current, known_last_write=last_write
+            with background.account(SWITCH_WATCH_COST):
+                last_write = await self._transcript_last_write(session, current)
+                # An exact OS ownership proof precedes filesystem heuristics. Include
+                # the same path to upgrade a provisional binding without waiting for
+                # a first-turn completion hook.
+                if (
+                    session.transcript_provisional
+                    or time.time() - (last_write or 0) >= TRANSCRIPT_SWITCH_QUIET_SECONDS
+                ):
+                    proven = await self._process_owned_transcript(session, current, last_write)
+                    if proven is not None and (proven != current or session.transcript_provisional):
+                        session.observation_state["process_transcript_switch"] = True
+                        return proven
+                # The CLI's own word first. A hook names the file it is writing, which
+                # settles in one comparison what the readings below have to infer from
+                # a cwd the poller happened to catch and a path the daemon recomputes.
+                reported = await self._consume_staged_relocation(session, current)
+                if reported is not None:
+                    await self.events.emit(
+                        "transcript_relocated",
+                        session_id=session.record.id,
+                        source="hook",
+                        backend=session.record.backend,
+                        previous=str(current),
+                        path=str(reported),
                     )
-                else:
-                    self._count_observation_cost("heuristic_searches_skipped")
-            if candidate is not None:
-                await self.events.emit(
-                    "transcript_retargeted",
-                    session_id=session.record.id,
-                    source="daemon",
-                    backend=session.record.backend,
-                    previous=str(current),
-                    path=str(candidate),
-                )
-                return candidate
-            await self._note_transcript_staleness(session, current, known_last_write=last_write)
+                    log.info(
+                        "session %s transcript relocated to %s (reported by the CLI)",
+                        session.record.id,
+                        reported,
+                    )
+                    return reported
+                pending_resolver = getattr(session.adapter, "pending_transcript_path", None)
+                # Only an adapter with a side channel can answer anything but None, and
+                # asking the rest cost a worker hop per session every tick for nothing.
+                # An adapter that does not say is asked.
+                if not getattr(session.adapter, "announces_pending_transcript", True):
+                    pending_resolver = None
+                try:
+                    # In a worker: omp answers this from a breadcrumb file on disk.
+                    pending = (
+                        await asyncio.to_thread(pending_resolver, session.record.id, current)
+                        if callable(pending_resolver)
+                        else None
+                    )
+                except (OSError, ValueError):
+                    pending = None
+                if isinstance(pending, Path):
+                    await self.events.emit(
+                        "transcript_retargeted",
+                        session_id=session.record.id,
+                        source="breadcrumb",
+                        backend=session.record.backend,
+                        previous=str(current),
+                        path=str(pending),
+                    )
+                    return pending
+                # Only a followed file that is gone can have been relocated, and the
+                # reading above already says whether it is: a live file costs nothing.
+                relocated = None
+                if last_write is None:
+                    await self._prime_claim_keys(session, (current,))
+                    relocated = await asyncio.to_thread(
+                        self._relocated_transcript_candidate, session, current
+                    )
+                if relocated is not None:
+                    await self.events.emit(
+                        "transcript_relocated",
+                        session_id=session.record.id,
+                        source="daemon",
+                        backend=session.record.backend,
+                        previous=str(current),
+                        path=str(relocated),
+                    )
+                    return relocated
+                candidate = None
+                if heuristic:
+                    if self._switch_search_armed(session, last_write):
+                        self._count_observation_cost("heuristic_searches")
+                        candidate = await self._transcript_switch_candidate(
+                            session, current, known_last_write=last_write
+                        )
+                    else:
+                        self._count_observation_cost("heuristic_searches_skipped")
+                if candidate is not None:
+                    await self.events.emit(
+                        "transcript_retargeted",
+                        session_id=session.record.id,
+                        source="daemon",
+                        backend=session.record.backend,
+                        previous=str(current),
+                        path=str(candidate),
+                    )
+                    return candidate
+                await self._note_transcript_staleness(session, current, known_last_write=last_write)
         return None
 
     @staticmethod
@@ -7846,21 +7856,22 @@ class SessionManager:
             backend = session.record.backend
             if backend not in AGENT_BACKENDS:
                 return
-            census = await asyncio.to_thread(
-                probe_console_participants,
-                session.record.pid if session.record.pid > 0 else None,
-                self._agent_process_pid(session),
-            )
-            verdict = classify_shell_prompt(
-                ConsoleEvidence(
-                    backend_is_agent=True,
-                    seconds_since_promotion=time.time() - (session.agent_promoted_at or 0.0),
-                    agent_pid=census.agent_pid,
-                    agent_alive=None if census.error else census.agent_alive,
-                    agent_in_pty_tree=None if census.error else census.agent_in_pty_tree,
-                    transcript_quiet=self._transcript_is_quiet(session),
+            with background.account(AGENT_EXIT_CHECK_COST):
+                census = await asyncio.to_thread(
+                    probe_console_participants,
+                    session.record.pid if session.record.pid > 0 else None,
+                    self._agent_process_pid(session),
                 )
-            )
+                verdict = classify_shell_prompt(
+                    ConsoleEvidence(
+                        backend_is_agent=True,
+                        seconds_since_promotion=time.time() - (session.agent_promoted_at or 0.0),
+                        agent_pid=census.agent_pid,
+                        agent_alive=None if census.error else census.agent_alive,
+                        agent_in_pty_tree=None if census.error else census.agent_in_pty_tree,
+                        transcript_quiet=self._transcript_is_quiet(session),
+                    )
+                )
             if verdict.contended:
                 await self._note_console_contention(session, census, verdict.reason)
                 return

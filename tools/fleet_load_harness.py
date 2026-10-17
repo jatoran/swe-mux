@@ -715,6 +715,12 @@ class Harness:
                 ("hits", "misses", "generation"),
             ),
             "event_journal": after.get("event_journal") or {},
+            "governor": _governor_window(
+                before.get("governor") or {},
+                after.get("governor") or {},
+                loops_before,
+                {row["name"]: row for row in after.get("loops", [])},
+            ),
             "profile": profile_result,
             "workdir": str(self.workdir),
         }
@@ -808,6 +814,18 @@ def render(report: dict[str, Any]) -> None:
             f"{journal.get('batches')} writes ({journal.get('events_per_batch')} each), "
             f"max pending {journal.get('max_pending')}, failures {journal.get('failures')}"
         )
+    governor = report.get("governor") or {}
+    if governor:
+        parts = ", ".join(
+            f"{name} {row['count']}x/{row['seconds']}s"
+            + (f" (ran {row['ran']})" if "ran" in row else "")
+            for name, row in sorted(governor.get("deferred", {}).items())
+        )
+        print(
+            f"  load shedding      {governor.get('deferrals')} deferrals"
+            + (f": {parts}" if parts else "")
+            + ("" if governor.get("attached") else " (governor not attached)")
+        )
     if report.get("executor_work"):
         print("  costliest executor work (CPU since start):")
         for row in report["executor_work"][:10]:
@@ -845,6 +863,43 @@ def render(report: dict[str, Any]) -> None:
     elif profile:
         print(f"  profile unavailable: {profile['error']}")
     print(f"  artifacts: {report['workdir']}")
+
+
+def _governor_window(
+    before: dict[str, Any],
+    after: dict[str, Any],
+    loops_before: dict[str, Any],
+    loops_after: dict[str, Any],
+) -> dict[str, Any]:
+    """What load shedding deferred in the window, and whether the deferred work still ran.
+
+    `ran` is the window's iterations for each deferred name that is a supervised loop:
+    deferral that starved a loop outright would show as zero there.
+    """
+    if not after:
+        return {}
+    prior = before.get("deferred") or {}
+    deferred: dict[str, Any] = {}
+    for name, row in (after.get("deferred") or {}).items():
+        was = prior.get(name) or {}
+        count = int(row.get("count") or 0) - int(was.get("count") or 0)
+        if not count:
+            continue
+        entry: dict[str, Any] = {
+            "count": count,
+            "seconds": round(float(row.get("seconds") or 0) - float(was.get("seconds") or 0), 2),
+            "longest_seconds": row.get("longest_seconds"),
+        }
+        if name in loops_after:
+            entry["ran"] = int(loops_after[name].get("iterations") or 0) - int(
+                (loops_before.get(name) or {}).get("iterations") or 0
+            )
+        deferred[name] = entry
+    return {
+        "attached": after.get("attached"),
+        "deferrals": sum(entry["count"] for entry in deferred.values()),
+        "deferred": deferred,
+    }
 
 
 def _counter_delta(

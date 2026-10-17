@@ -339,7 +339,7 @@ Items are worked in order, and an item may reorder, split or remove later items 
   - **Tests:** `tests/test_event_journal.py` (emit before write, order and batching, readers flush, shutdown writes what is queued, the restart gap, retry after a failed write, an unserializable field, a sink that is awaited), `tests/test_approval_decisions.py::test_a_decision_is_answered_before_its_records_are_written`, plus the event, approval and observation suites.
   - **Where:** `event_journal.py`, `history.py`, `event_bus.py`, `server.py`, `routes/diagnostics.py`, `tools/load_session_generator.py`, `tools/fleet_load_harness.py`, `design/interfaces.md`, `technical/backend/packages/history-and-observation.md`, `development/PERFORMANCE_RUNBOOK.md`.
 
-- [ ] **11. Lag-driven load shedding for deferrable loops.**
+- [x] **11. Lag-driven load shedding for deferrable loops.**
   - **Why:** housekeeping keeps its cadence while the loop is drowning, and nothing can defer it today (`background_tasks.py:167-327`).
   - **Change:**
     - `background.pace(name, cadence, *, deferrable)` replaces the `asyncio.sleep` in each loop.
@@ -349,6 +349,28 @@ Items are worked in order, and an item may reorder, split or remove later items 
     - Never deferrable: the lifecycle heartbeat (desktop recovery reads it), the state watchdog, the session-recovery flush, the status-timeline flush, the listener guard, the loop-lag probe, the readiness watcher and auto-delivery.
     - Per-session tasks (transcript observer, switch watcher, discovery and exit checks) register with the accounting, so their cost appears in `costliest`.
   - **Done when:** governor state appears on `/api/diagnostics/background`, and the harness shows less stall time with housekeeping still completing.
+  - **Built:**
+    - `LoopLagMonitor.recent_max(seconds)` walks only the samples inside the window, newest first, and the monitor is attached to `background` at start (`background.attach_lag`).
+    - `background.pace(name, cadence, deferrable=...)`: the cadence, then, for a deferrable loop while the worst lag of the last 5 s is at least 0.25 s, more waiting in 1 s steps until the lag clears or the allowance runs out. The allowance is three cadences and never more than 120 s, so under sustained lag a loop still runs at most that late, and it resumes within a step of recovery.
+    - `background.defer(name, overdue=, cadence=)` for loops that tick for their work and decide inside the tick what is due: the Git monitor's safety sweeps (`git-sweep`) wait, and a change its watch reported, and polling where there is no watch, never do; and a process read finding a stale sample keeps it inside the same allowance unless the caller forces live state, so a request cannot quietly run the pass the governor just deferred.
+    - Deferrable, as planned: the Git sweeps, the canonical telemetry rollup, reconcile and backfill, the operational telemetry retention and reconcile, the ghost-window sweep, usage refresh, provider quota polling, quota-usage catch-up, store retention, media cleanup, the update check, and process inspection. There is no plugin registry refresh to defer any more: item 6 made the registry an in-memory copy dropped on write.
+    - `NEVER_DEFERRABLE` names the loops whose lateness is itself harm, and `pace` and `defer` ignore `deferrable` for them; a test holds the names to the constants their modules define. The listener guard belongs on the list and is not under this supervisor at all.
+    - `background.account(name)` times per-session work under one name each, with faults left to the session's own handling: `session:transcript-observer` (per record), `session:transcript-switch` (per tick), `session:agent-discovery`, `session:agent-exit-check`. They rank in `costliest` as `aggregate` entries; the first saturated run below put the observer at 2.6 s busy over 6,542 records and, in the second, the switch watcher at 5.0 s over 2,088 ticks, figures nothing reported before.
+    - `governor` on `/api/diagnostics/background` (shedding now, the recent lag, the bounds, and per name how often, how long and the longest), and the harness reports the window's deferrals beside how many times each deferred loop still ran.
+  - **Measured** (36 `scroll` sessions, `--burn 32`, stalls counted from 1 s; the governor detached in the off runs and nothing else changed; run in the order shown):
+
+    | Run | Governor | Stalls >= 1 s | Lag samples >= 100 ms | Echo p50 / p99 | Decision p99 | Deferrals (deferred loops' runs) |
+    | --- | --- | --- | --- | --- | --- | --- |
+    | 1 | off | 0 | 14 / 235 | 75 / 597 ms | 463 ms | - |
+    | 2 | on | 3, 4.3 s in all | 23 / 227 | 53 / 1,467 ms | 3,100 ms | 8 (process inspection 21, ghost sweep 20) |
+    | 3 | on | 0 | 20 / 232 | 95 / 460 ms | 278 ms | 7 (21, 21; rollup 3) |
+    | 4 | off | 0 | 6 / 239 | 127 / 290 ms | 121 ms | - |
+
+    **The second half of the done-when is not shown.** The governor deferred seven or eight passes in two minutes, every deferred loop kept running, and the work it moved out of lagging windows (three process-inspection passes of 80-200 ms, a few ghost sweeps, one rollup) is far smaller than this host's run-to-run spread under saturation, which here ran from no stall to 4.3 s of them. Both governor runs counted more lag samples than both runs without it; with the spread this wide that is not attributable either way, and no mechanism found would make deferral add work.
+    What the runs did show is where saturated stall time comes from: all three stalls in run 2 were GIL convoys held by `ProcessInspector._collect_all` (41-77% of each window's CPU), whose pass cost 198 ms of CPU there against 68-87 ms in the other runs. The governor can only postpone that pass by its allowance; moving it out of the daemon's interpreter is item 20, and that is where the stall time is.
+    The governor stays: it is bounded, observable, cheap when idle, and the incident's sustained multi-second lag is the shape it is for, which this harness reproduces only intermittently.
+  - **Tests:** `tests/test_background_shedding.py` (the window, the allowance and its absolute cap, resuming within a step of recovery, a non-deferrable loop's cadence, every protected name refused whatever it asks, `defer` inside and past its allowance, a broken reading never sheds, the governor on the health report, accounting that keeps the caller's faults, the protected names against their modules, a Git sweep that waits while a reported change does not, and a process read that keeps a stale sample unless forced).
+  - **Where:** `background_tasks.py`, `loop_lag.py`, `server.py`, `git_monitor.py`, `processes.py`, `ghost_windows.py`, `telemetry_service.py`, `operational_telemetry.py`, `usage.py`, `update_check.py`, `provider_accounts.py`, `quota_usage.py`, `observation.py`, `session.py`, `tools/fleet_load_harness.py`, `design/interfaces.md`, `development/PERFORMANCE_RUNBOOK.md`, `technical/backend/packages/{daemon-runtime,runtime-rules}.md`.
 
 - [ ] **12. Supervisor: non-blocking per-connection fanout.**
   - **Why:** one slow subscriber stalls every other subscriber and eventually the child (`supervisor.py:881-920`; `pty_host.py:369-430`).

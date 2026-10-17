@@ -20,6 +20,12 @@ Two layers, both required:
 `/api/diagnostics/background`. Nothing here may raise into a caller: supervision
 that can fail is not supervision.
 
+It also owns load shedding (`pace`, `defer`): while the event loop has recently
+lagged, housekeeping that can wait does, by a bounded amount, so the loop's time
+goes to the terminals and requests a person is waiting on. Nothing is deferred
+forever, and loops whose lateness is itself harm are never deferred at all
+(`NEVER_DEFERRABLE`).
+
 This module owns *daemon background tasks*. It is unrelated to `supervisor.py`,
 which owns PTY host processes.
 """
@@ -34,9 +40,79 @@ import time
 from collections import deque
 from collections.abc import Awaitable, Callable, Generator
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Protocol
 
 log = logging.getLogger(__name__)
+
+#: Recent event-loop lag at or above which deferrable work waits. Two and a half
+#: times the lag monitor's stall threshold: one late keystroke is not a drowning loop.
+SHED_LAG_SECONDS = 0.25
+#: How far back "recent" reaches. A loop that stalled this recently is assumed to be
+#: still drowning; one that has run clean this long is not.
+SHED_WINDOW_SECONDS = 5.0
+#: A deferred wait re-reads the lag this often, so the work resumes soon after the
+#: loop recovers rather than at the end of its whole allowance.
+SHED_STEP_SECONDS = 1.0
+#: Deferred work waits at most this many of its own cadences past its due time...
+SHED_MAX_STRETCH = 3.0
+#: ...and never more than this, so a loop with an hourly cadence is not put off by
+#: hours: under sustained lag it runs at worst this late, every time.
+SHED_MAX_EXTRA_SECONDS = 120.0
+
+#: Loops whose lateness is itself the harm, which `pace` and `defer` never stretch
+#: whatever a caller asks: desktop recovery reads the lifecycle heartbeat's age as
+#: liveness, the state watchdog and the two flushes are how state and evidence
+#: survive, the lag probe is the governor's own reading, and readiness and
+#: auto-delivery are what a person waiting on a session sees. (The listener guard
+#: belongs here too and is not under this supervisor at all.)
+#: `tests/test_background_shedding.py` keeps the names in step with the constants
+#: their modules define.
+NEVER_DEFERRABLE = frozenset(
+    {
+        "lifecycle-heartbeat",
+        "state-watchdog",
+        "session-recovery-flush",
+        "status-timeline-flush",
+        "loop-lag",
+        "readiness-watch",
+        "auto-delivery",
+    }
+)
+
+
+class LagReading(Protocol):
+    """What the governor reads: the loop's worst recent lag (`LoopLagMonitor`)."""
+
+    def recent_max(self, seconds: float) -> float: ...
+
+
+def defer_allowance(cadence: float) -> float:
+    """The most a pass of work with this cadence may be put off past its due time."""
+    return max(0.0, min(cadence * SHED_MAX_STRETCH, SHED_MAX_EXTRA_SECONDS))
+
+
+@dataclass(slots=True)
+class Deferral:
+    """How often, and for how long, one name's work has waited for the loop."""
+
+    #: Passes that waited.
+    count: int = 0
+    #: Total time `pace` held passes back (`defer` skips a tick and adds nothing).
+    seconds: float = 0.0
+    #: The longest single wait, or the most overdue a `defer` skip let work become.
+    longest_seconds: float = 0.0
+    #: A `pace` wait is in progress right now.
+    waiting: bool = False
+    last_at: float | None = None
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "count": self.count,
+            "seconds": round(self.seconds, 3),
+            "longest_seconds": round(self.longest_seconds, 3),
+            "waiting": self.waiting,
+            "last_at": self.last_at,
+        }
 
 # A loop that survived this long before failing gets its backoff reset: a fault
 # after an hour of healthy running is a new incident, not an escalating one.
@@ -73,6 +149,9 @@ class TaskHealth:
     last_fault_ts: float | None = None
     last_progress_ts: float | None = None
     stopped: bool = False
+    #: Work timed by `account` across every session that runs it, rather than one
+    #: supervised loop: never started, restarted or stopped here.
+    aggregate: bool = False
     #: Total wall time inside `iteration()` bodies, awaits included. Not CPU, and not
     #: proof of blocking: see `iteration()` and `loop_lag`.
     busy_seconds: float = 0.0
@@ -91,6 +170,7 @@ class TaskHealth:
         samples = sorted(self.recent_seconds)
         return {
             "name": self.name,
+            "aggregate": self.aggregate,
             "running": self.running,
             "stopped": self.stopped,
             "restarts": self.restarts,
@@ -139,6 +219,8 @@ class TaskSupervisor:
         self._monotonic = monotonic
         self._health: dict[str, TaskHealth] = {}
         self._tasks: dict[str, asyncio.Task[None]] = {}
+        self._lag: LagReading | None = None
+        self._deferrals: dict[str, Deferral] = {}
 
     # -- health bookkeeping ---------------------------------------------------
 
@@ -193,6 +275,116 @@ class TaskSupervisor:
         else:
             self._entry(name).observe(self._monotonic() - started)
             self.note_progress(name)
+
+    @contextlib.contextmanager
+    def account(self, name: str) -> Generator[None]:
+        """Time work under ``name`` without supervising it.
+
+        For per-session tasks (the transcript observer, the switch watcher, discovery
+        and exit checks), which have their own lifecycles and error handling: their
+        cost lands beside the supervised loops in `costliest`, summed over every
+        session running one, which is the figure that ranks them. A fault
+        propagates untouched. As with `iteration`, keep waits outside the block.
+        """
+        started = self._monotonic()
+        try:
+            yield
+        finally:
+            entry = self._entry(name)
+            entry.aggregate = True
+            entry.observe(self._monotonic() - started)
+            entry.iterations += 1
+            entry.last_progress_ts = self._clock()
+
+    # -- load shedding --------------------------------------------------------
+
+    def attach_lag(self, reading: LagReading | None) -> None:
+        """Give the governor its reading; until then nothing is ever deferred."""
+        self._lag = reading
+
+    def recent_lag(self) -> float:
+        reading = self._lag
+        if reading is None:
+            return 0.0
+        try:
+            return float(reading.recent_max(SHED_WINDOW_SECONDS))
+        except Exception:  # noqa: BLE001 - a broken reading must not stop a loop
+            log.debug("loop lag reading failed; not shedding", exc_info=True)
+            return 0.0
+
+    def shedding(self) -> bool:
+        """Whether the event loop has lagged badly enough, recently enough, to shed."""
+        return self.recent_lag() >= SHED_LAG_SECONDS
+
+    def _deferrable(self, name: str, deferrable: bool) -> bool:
+        return deferrable and name not in NEVER_DEFERRABLE
+
+    async def pace(self, name: str, cadence: float, *, deferrable: bool = False) -> None:
+        """Wait out one cadence between a loop's passes, longer while the loop drowns.
+
+        The replacement for a loop's own `asyncio.sleep(cadence)`. A deferrable
+        loop that finds the event loop lagging past `SHED_LAG_SECONDS` keeps
+        waiting, re-reading every `SHED_STEP_SECONDS`, until the lag clears or its
+        allowance (`defer_allowance`) runs out - so under sustained lag it still
+        runs, at most that late, and it resumes within a step of recovery. A loop
+        that is not deferrable, or is in `NEVER_DEFERRABLE`, sleeps the cadence and
+        nothing more.
+        """
+        await asyncio.sleep(cadence)
+        if not self._deferrable(name, deferrable) or not self.shedding():
+            return
+        record = self._deferrals.setdefault(name, Deferral())
+        allowance = defer_allowance(cadence)
+        started = self._monotonic()
+        record.waiting = True
+        try:
+            while self.shedding():
+                remaining = allowance - (self._monotonic() - started)
+                if remaining <= 0:
+                    break
+                await asyncio.sleep(min(SHED_STEP_SECONDS, remaining))
+        finally:
+            waited = self._monotonic() - started
+            record.waiting = False
+            record.count += 1
+            record.seconds += waited
+            record.longest_seconds = max(record.longest_seconds, waited)
+            record.last_at = self._clock()
+
+    def defer(self, name: str, *, overdue: float, cadence: float) -> bool:
+        """Whether due work should skip this pass of a loop that ticks for it.
+
+        For loops that wake often and decide inside the tick what is due (the Git
+        sweep): ``overdue`` is how far past its due time the work already is. True
+        while the loop is shedding and the work is still inside its allowance; once
+        it has waited that long it runs, lag or not.
+        """
+        if not self._deferrable(name, True) or not self.shedding():
+            return False
+        if overdue >= defer_allowance(cadence):
+            return False
+        record = self._deferrals.setdefault(name, Deferral())
+        record.count += 1
+        record.longest_seconds = max(record.longest_seconds, overdue)
+        record.last_at = self._clock()
+        return True
+
+    def governor(self) -> dict[str, Any]:
+        """The shedding state for `/api/diagnostics/background`."""
+        lag = self.recent_lag()
+        return {
+            "attached": self._lag is not None,
+            "shedding": lag >= SHED_LAG_SECONDS,
+            "recent_max_lag_seconds": round(lag, 4),
+            "lag_threshold_seconds": SHED_LAG_SECONDS,
+            "window_seconds": SHED_WINDOW_SECONDS,
+            "max_stretch": SHED_MAX_STRETCH,
+            "max_extra_seconds": SHED_MAX_EXTRA_SECONDS,
+            "deferrals": sum(record.count for record in self._deferrals.values()),
+            "deferred": {
+                name: record.as_dict() for name, record in sorted(self._deferrals.items())
+            },
+        }
 
     # -- task supervision -----------------------------------------------------
 
@@ -313,12 +505,15 @@ class TaskSupervisor:
             "total_faults": sum(int(item["faults"]) for item in entries),
             "total_restarts": sum(int(item["restarts"]) for item in entries),
             "total_busy_seconds": round(sum(float(item["busy_seconds"]) for item in entries), 3),
+            "governor": self.governor(),
         }
 
     def reset(self) -> None:
         """Drop all registered state. For tests and daemon re-initialization."""
         self._health.clear()
         self._tasks.clear()
+        self._deferrals.clear()
+        self._lag = None
 
 
 # The daemon's single background-task registry. A module-level instance keeps

@@ -163,7 +163,7 @@ class GhostWindowSweeper:
 
     async def _run(self) -> None:
         while True:
-            await asyncio.sleep(self.cadence)
+            await background.pace(GHOST_WINDOW_SWEEP_LOOP, self.cadence, deferrable=True)
             if not self.enabled:
                 continue
             with background.iteration(GHOST_WINDOW_SWEEP_LOOP):

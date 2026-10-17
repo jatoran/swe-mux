@@ -529,7 +529,7 @@ class UsageManager:
             if not self.config.ccusage_enabled or minutes <= 0:
                 await asyncio.sleep(60)
                 continue
-            await asyncio.sleep(minutes * 60)
+            await background.pace(USAGE_REFRESH_LOOP, minutes * 60, deferrable=True)
             with background.iteration(USAGE_REFRESH_LOOP):
                 if self.config.ccusage_enabled and not self._lock.locked():
                     await self.refresh()
