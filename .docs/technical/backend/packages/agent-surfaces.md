@@ -174,6 +174,10 @@ The persistent prompt queue.
 - The arming floor, and the two forms of receiver authorization that pass it: the standing `accept_agent_messages` grant for an `agent` sender, and `solicited_by` naming the target's own request for anything else. Recorded on the row (schema version 6) rather than inferred, because a message that arrived armed from a non-human sender has to be able to name what asked for it.
 - Event-driven stranding plus startup reconcile, and the delivery audit.
 - Seed-prompt staging (`stage_seed_argv`).
+- **Reads answered from memory between writes**: the summary, the auto-delivery policies and pause row, each target's head-of-line item (`pending_head`) and the proving counters, which the readiness watcher and the auto-delivery tick ask for every second.
+  Every store operation compares the connection's `total_changes` before and after, so one that wrote anything retires every cached read on the worker before its caller resumes, and one that wrote nothing (a conditional transition that lost its race) retires none.
+  This process is the queue tables' only writer, which is what makes that count a complete invalidation signal; a write made on the connection outside an operation is noticed by the next operation.
+  `read_cache_snapshot()` is `queue_reads` on `/api/diagnostics/background`.
 - The **display projection** of a readiness verdict: `protected_reasons` (which reasons no per-send confirmation can override) and `delivery_summary` (the compact payload `GET /api/sessions`, the queue's target view, and the readiness watcher all publish).
   It lives here rather than in `delivery_readiness.py` because the protected set is a *queue* rule - it is exactly what `send_next` refuses with, and one implementation is what keeps a surface from promising an override the daemon will not honour - and because `delivery_readiness.py` stays a leaf module.
 

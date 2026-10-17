@@ -140,6 +140,7 @@ class OpenCodeAdapter(BackendAdapter):
     reports_conversation_rollover = True
     assigns_conversation_id = False
     resolves_transcript_by_cwd = False
+    announces_pending_transcript = False
 
     def __init__(
         self,

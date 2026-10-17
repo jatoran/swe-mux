@@ -344,7 +344,8 @@ Four properties make a one-second loop affordable and safe, and each is load-bea
   classification that is its real cost.
 - **Scoped.** Sessions with an attached terminal (somebody is looking) or a pending queue
   item (somebody is waiting on this exact verdict). Classification measured 2.1 ms on a
-  full 32 KiB tail, so following a fleet nobody is reading would spend real event-loop time
+  full 32 KiB tail (1.2 ms since the needle prefilter, `status-detection.md`, and 3.7 ms
+  mean under the 36-session harness), so following a fleet nobody is reading would spend real event-loop time
   on announcements with no recipient. Within that scope a still-repainting screen is
   re-classified at most every `DISPLAY_SCREEN_MAX_AGE_SECONDS`, below.
 

@@ -853,3 +853,22 @@ def test_the_nested_job_helper_tolerates_a_reaper_that_cannot_nest() -> None:
     assert outcome.owned is False
     assert outcome.suffix == ""
     assert outcome.error is None
+
+
+def test_a_meta_frame_from_serialized_json_is_the_frame_encode_frame_builds() -> None:
+    """`queue_meta` already serialized the meta to dedupe it; framing that string
+    directly must put exactly the bytes on the wire that parsing it back and
+    encoding the message would have."""
+    from swe_mux.supervisor import encode_frame
+    from swe_mux.supervisor_client import meta_frame
+
+    metas: list[dict[str, Any]] = [
+        {},
+        {"record": {"id": "s1", "name": "naïve ✓ 名前", "cols": 120, "ratio": 0.1 + 0.2}},
+        {"hook_secret": "s3", "nested": [1, None, True, {"k": [1.5e300, -0.0]}]},
+        {"transcript_path": Path("C:/Users/x/a b.jsonl"), "quote": 'say "hi"\n\t\\'},
+    ]
+    for meta in metas:
+        serialized = json.dumps(meta, separators=(",", ":"), default=str)
+        expected = encode_frame({"t": "set_meta", "sid": "sid-1", "meta": json.loads(serialized)})
+        assert meta_frame("sid-1", serialized) == expected

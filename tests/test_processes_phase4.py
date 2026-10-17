@@ -1180,6 +1180,71 @@ def test_uncorroborated_legacy_ownership_is_retired_without_stopping_the_process
     assert item.listeners == []
 
 
+def test_a_row_absent_from_the_passs_process_table_exits_without_asking_psutil(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """On Windows psutil confirms each "no such process" by enumerating every pid on
+    the host, so asking about a process the pass's own snapshot already lacks cost a
+    host-wide enumeration per exited child: 12.4% of the daemon's GIL samples at 36
+    sessions (`DAEMON_LOAD_ISOLATION.md` item 6)."""
+    from swe_mux import processes
+
+    constructed: list[int] = []
+
+    class CountingProcess:
+        def __init__(self, pid: int) -> None:
+            constructed.append(pid)
+            self.pid = pid
+
+        def create_time(self) -> float:
+            return 10.0
+
+        def oneshot(self) -> Any:
+            import contextlib
+
+            return contextlib.nullcontext()
+
+        def ppid(self) -> int:
+            return 1
+
+        def name(self) -> str:
+            return "python.exe"
+
+        def cmdline(self) -> list[str]:
+            return ["python.exe"]
+
+        def memory_info(self) -> Any:
+            return SimpleNamespace(rss=0)
+
+    monkeypatch.setattr(
+        processes,
+        "psutil",
+        SimpleNamespace(
+            Process=CountingProcess, NoSuchProcess=RuntimeError, AccessDenied=PermissionError
+        ),
+    )
+    inspector = ProcessInspector(cast(Any, SimpleNamespace(sessions={})), EventBus())
+    gone = OwnedProcess(77, 1, "session-a", "python.exe", "", 10.0, None, 0, 0, [], [])
+    alive = OwnedProcess(78, 1, "session-a", "python.exe", "", 10.0, None, 0, 0, [], [])
+    inspector.owned[(77, 10.0)] = gone
+    inspector.owned[(78, 10.0)] = alive
+    inspector._parents = {78: 1, 1: 0}  # this pass's table: 77 has exited
+
+    inspector._revalidate_unseen(set(), {}, 100.0, False)
+
+    assert (gone.exited_at, gone.exit_evidence) == (100.0, "no_such_process")
+    assert gone.evidence_reason == "process_no_longer_exists"
+    assert constructed == [78], "only the pid the table still lists is asked about"
+    assert alive.exited_at is None
+
+    # Without a table (the private snapshot API unavailable) psutil is still asked.
+    inspector._parents = {}
+    retry = OwnedProcess(79, 1, "session-a", "python.exe", "", 10.0, None, 0, 0, [], [])
+    inspector.owned[(79, 10.0)] = retry
+    inspector._revalidate_unseen({(78, 10.0)}, {}, 110.0, False)
+    assert constructed[-1] == 79
+
+
 def test_daemon_sampling_cannot_preserve_a_false_session_claim(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

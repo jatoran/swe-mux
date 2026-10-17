@@ -144,6 +144,26 @@ def host_process_count() -> int | None:
         return None
 
 
+def process_start_stamp(pid: int) -> int | None:
+    """An opaque stamp of when ``pid`` started; ``None`` when it cannot be read.
+
+    Equal stamps for one pid mean the same process, which is what a cache keyed on
+    a pid needs to refuse a recycled one. On Windows this is one `OpenProcess` and
+    one `GetProcessTimes` with the GIL released; `psutil.Process` costs the same
+    syscalls holding it, plus a host-wide pid enumeration when the pid is gone.
+    """
+    if pid <= 0:  # the idle process or the scheduler: never anything a caller tracks
+        return None
+    if sys.platform == "win32":
+        return _windows_process_start_stamp(pid)
+    try:
+        import psutil
+
+        return int(psutil.Process(pid).create_time() * 1_000_000)
+    except Exception:  # noqa: BLE001 - a process that is gone or hidden has no stamp
+        return None
+
+
 if sys.platform == "win32":
     import ctypes
     from ctypes import wintypes
@@ -203,6 +223,38 @@ if sys.platform == "win32":
 
         def seconds(self) -> float:
             return ((int(self.high) << 32) | int(self.low)) / 10_000_000
+
+        def ticks(self) -> int:
+            return (int(self.high) << 32) | int(self.low)
+
+    _PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+    _OpenProcess = _released.OpenProcess
+    _OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    _OpenProcess.restype = wintypes.HANDLE
+    _GetProcessTimes = _released.GetProcessTimes
+    _GetProcessTimes.argtypes = [wintypes.HANDLE] + [ctypes.POINTER(_FileTime)] * 4
+    _GetProcessTimes.restype = wintypes.BOOL
+    _CloseProcessHandle = _released.CloseHandle
+    _CloseProcessHandle.argtypes = [wintypes.HANDLE]
+    _CloseProcessHandle.restype = wintypes.BOOL
+
+    def _windows_process_start_stamp(pid: int) -> int | None:
+        handle = _OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+        if not handle:
+            return None
+        try:
+            creation, exited, kernel, user = _FileTime(), _FileTime(), _FileTime(), _FileTime()
+            if not _GetProcessTimes(
+                handle,
+                ctypes.byref(creation),
+                ctypes.byref(exited),
+                ctypes.byref(kernel),
+                ctypes.byref(user),
+            ):
+                return None
+            return creation.ticks() or None
+        finally:
+            _CloseProcessHandle(handle)
 
     class _WindowsThreadTimes:
         def __init__(self) -> None:

@@ -17,6 +17,11 @@ That answers two questions:
 - **over a run**, which work costs the daemon the most CPU off the loop (`snapshot`),
   which is the ranking the load-isolation plan orders its work by.
 
+Each pool also reports its occupancy: how many items ran at once at the peak, how
+many waited for a worker, and for how long. That is what sizes a pool - too many
+workers let CPU-bound Python contend with the loop for the GIL, too few turn one
+slow blocking call into a wait for every unrelated item queued behind it.
+
 The label is computed on the submitting thread (a few attribute reads), the CPU
 readings on the worker. Windows accounts thread CPU at clock-tick granularity, so a
 single short item reads as zero or one tick; sums over many items are what to read.
@@ -28,6 +33,7 @@ import contextvars
 import functools
 import threading
 import time
+import weakref
 from collections import deque
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -39,6 +45,8 @@ RECENT_WORK = 8192
 MAX_LABELS = 2000
 OVERFLOW_LABEL = "(other)"
 TOP_WORK = 15
+#: Queue waits kept per pool for the percentiles in `snapshot`.
+RECENT_WAITS = 2048
 #: Trailing name parts that say nothing: store closures are all `op`.
 _ANONYMOUS_PARTS = frozenset({"op", "fn", "<lambda>"})
 
@@ -109,6 +117,11 @@ class WorkLedger:
         self._totals: dict[str, list[float]] = {}
         #: thread ident -> (label, started)
         self._running: dict[int, tuple[str, float]] = {}
+        self._pools: weakref.WeakSet[AccountedThreadPoolExecutor] = weakref.WeakSet()
+
+    def register_pool(self, pool: AccountedThreadPoolExecutor) -> None:
+        with self._lock:
+            self._pools.add(pool)
 
     def begin(self, label: str) -> tuple[float, float]:
         started = self._clock()
@@ -164,6 +177,7 @@ class WorkLedger:
             totals = {label: list(values) for label, values in self._totals.items()}
             recent = [item for item in self._recent if item[0] >= now - recent_seconds]
             running = len(self._running)
+            pools = list(self._pools)
         recent_by_label: dict[str, list[float]] = {}
         for _ended, started, label, _ident, cpu in recent:
             entry = recent_by_label.setdefault(label, [0, 0.0, 0.0])
@@ -189,6 +203,9 @@ class WorkLedger:
             "since_start": top(totals),
             "recent_seconds": recent_seconds,
             "recent": top(recent_by_label),
+            "pools": sorted(
+                (pool.occupancy() for pool in pools), key=lambda item: str(item["name"])
+            ),
         }
 
 
@@ -196,18 +213,59 @@ class WorkLedger:
 LEDGER = WorkLedger()
 
 
+class _Occupancy:
+    """How full one pool is, now and at its peak, and how long work waited."""
+
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self.queued = 0
+        self.running = 0
+        self.peak_queued = 0
+        self.peak_running = 0
+        self.submitted = 0
+        self.max_wait = 0.0
+        self.waits: deque[float] = deque(maxlen=RECENT_WAITS)
+
+    def submitted_one(self) -> None:
+        with self.lock:
+            self.submitted += 1
+            self.queued += 1
+            self.peak_queued = max(self.peak_queued, self.queued)
+
+    def started(self, waited: float) -> None:
+        with self.lock:
+            self.queued -= 1
+            self.running += 1
+            self.peak_running = max(self.peak_running, self.running)
+            self.waits.append(waited)
+            self.max_wait = max(self.max_wait, waited)
+
+    def finished(self) -> None:
+        with self.lock:
+            self.running -= 1
+
+    def abandoned(self) -> None:
+        """A queued item was cancelled before any worker took it."""
+        with self.lock:
+            self.queued -= 1
+
+
 def _accounted(
     ledger: WorkLedger,
+    occupancy: _Occupancy,
+    submitted: float,
     label: str,
     fn: Callable[..., Any],
     args: tuple[Any, ...],
     kwargs: dict[str, Any],
 ) -> Any:
+    occupancy.started(time.perf_counter() - submitted)
     token = ledger.begin(label)
     try:
         return fn(*args, **kwargs)
     finally:
         ledger.end(label, *token)
+        occupancy.finished()
 
 
 class AccountedThreadPoolExecutor(ThreadPoolExecutor):
@@ -216,7 +274,56 @@ class AccountedThreadPoolExecutor(ThreadPoolExecutor):
     def __init__(self, *args: Any, ledger: WorkLedger | None = None, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self._ledger = ledger if ledger is not None else LEDGER
+        self._occupancy = _Occupancy()
+        self._ledger.register_pool(self)
 
     def submit[**P, T](self, fn: Callable[P, T], /, *args: P.args, **kwargs: P.kwargs) -> Future[T]:
         label = work_label(fn, args)
-        return super().submit(_accounted, self._ledger, label, fn, args, kwargs)
+        occupancy = self._occupancy
+        occupancy.submitted_one()
+        try:
+            future = super().submit(
+                _accounted,
+                self._ledger,
+                occupancy,
+                time.perf_counter(),
+                label,
+                fn,
+                args,
+                kwargs,
+            )
+        except BaseException:
+            occupancy.abandoned()
+            raise
+        future.add_done_callback(_count_if_abandoned(occupancy))
+        return future
+
+    def occupancy(self) -> dict[str, Any]:
+        stats = self._occupancy
+        with stats.lock:
+            waits = sorted(stats.waits)
+            reading = {
+                "name": self._thread_name_prefix or "(unnamed)",
+                "max_workers": self._max_workers,
+                "threads": len(self._threads),
+                "running": stats.running,
+                "queued": stats.queued,
+                "peak_running": stats.peak_running,
+                "peak_queued": stats.peak_queued,
+                "submitted": stats.submitted,
+                "max_wait_ms": round(stats.max_wait * 1000, 1),
+            }
+        if waits:
+            reading["wait_ms"] = {
+                "p50": round(waits[len(waits) // 2] * 1000, 2),
+                "p99": round(waits[min(len(waits) - 1, int(len(waits) * 0.99))] * 1000, 2),
+            }
+        return reading
+
+
+def _count_if_abandoned(occupancy: _Occupancy) -> Callable[[Future[Any]], None]:
+    def done(future: Future[Any]) -> None:
+        if future.cancelled():
+            occupancy.abandoned()
+
+    return done

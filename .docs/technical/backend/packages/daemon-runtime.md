@@ -70,15 +70,26 @@ Contracts: `../../../design/features/daemon-resilience.md`.
 CPU seconds per native thread of this process, host-wide busy and total CPU seconds, physical memory in use, and the host's process count, for the stall watchdog.
 Windows reads `GetThreadTimes` on cached handles with the GIL held (the reads are microseconds, and releasing the GIL around each one would cost a round trip apiece during a convoy); other hosts read `psutil.Process().threads()`.
 Memory and process count go the other way on Windows: `GlobalMemoryStatusEx` and `K32EnumProcesses` through ctypes, which releases the GIL, because `psutil.virtual_memory()` and `psutil.pids()` held it for 29 ms and 27 ms per call on a 1,200-process host.
+`process_start_stamp(pid)` is an opaque per-process identity for pid-keyed caches (the ghost-window sweep): `OpenProcess` plus `GetProcessTimes` with the GIL released on Windows, `psutil` elsewhere, `None` for a process that is gone or not inspectable.
 Typechecked under both platforms by the gate.
 
 **Not:** a profiler, or anything another subsystem should poll.
+
+### `batched_stat.py`
+
+One stat pass per tick for every transcript the daemon follows: `batched_stat(path)` answers at the next 250 ms boundary of the loop clock, from a single worker hop that stats every path requested during the tick, and returns `None` for a missing file.
+Boundaries are aligned, so tailers that started at different moments converge on the same passes, and awaiting a stat is what paces a tailer.
+A batch schedules its own flush, so nothing is left pending when a loop closes.
+`/api/diagnostics/background` reads its counters as `transcript_stats`.
+
+**Not:** a file watcher, or a cache: every answer is a fresh `stat`.
 
 ### `executor_accounting.py`
 
 `AccountedThreadPoolExecutor`, the only executor class the daemon constructs, and the process-wide `WorkLedger` it records into: each work item's thread CPU and wall time against a label naming the callable, unwrapped through `functools.partial`, `asyncio.to_thread`'s `Context.run`, and registered wrappers (`run_sqlite_operation` registers itself).
 `__main__.serve` installs one as the loop's default executor before anything reaches `asyncio.to_thread`.
 The stall watchdog reads a window of it to name what a CPU-burning worker ran; `/api/diagnostics/background` reads the totals as `executor_work`.
+Each pool also reports its occupancy (`executor_work.pools`): peak running and queued items and how long items waited for a worker, which is what sizing a pool needs.
 A bare `ThreadPoolExecutor(` anywhere in the package fails `tests/test_executor_accounting.py`.
 
 **Not:** a scheduler or a limit; it only measures.
@@ -153,6 +164,11 @@ A record is not treated as proof of a clean shutdown; it only says which of the 
 ### `logsetup.py`
 
 Rotating `daemon.log` and `access.log` handlers, the faulthandler `crash.log`, runtime root-logger level control, and the two things that make a line reconstructable rather than merely readable.
+
+- **No thread that logs ever writes.** Every daemon handler, the console included, formats on the emitting thread (where the correlation id is still bound) and queues the text for the one `log-writer` thread, which writes whatever has queued with one write and one flush per file and rotates by size between lines.
+  Measured beside four CPU-bound Python threads, a line written where it was emitted cost that thread p50 61 ms and p99 296 ms, because the rotating handler's stats, write and flush each gave up the GIL and had to win it back; beside sixteen, 185 ms and 1.06 s. Queued, it costs about 0.1 ms at any contention.
+  A per-line listener thread would have moved the cost rather than removed it: it fell 10 to 15 s behind at sixteen contenders. The batched writer stays within about 0.15 s (p50) and 0.7 s (max) there, which is also what a hard kill can lose.
+  `flush()` waits for everything queued before it, which `logging.shutdown`, `close()` and tests rely on. A rotation that loses its race for the file keeps appending and is retried at the next threshold, where the stdlib handler dropped the line.
 
 - **`StructuredFormatter` serializes `extra`.** The plain format string dropped every keyword a call site passed through `extra=`, so instrumentation that had been written years apart - `git_monitor`'s root and git exit code, `observation`'s session and elapsed seconds, `usage`'s source count - produced nothing at the sink.
   Fields are appended after the message as `key=value`, which is the shape the daemon already logs in by hand (`git_mutation_started operation_id=… cwd=…`), so one convention covers both and `daemon.log` stays greppable instead of becoming a file of JSON objects.

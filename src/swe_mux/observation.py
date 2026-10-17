@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import hashlib
 import json
 import logging
@@ -15,7 +16,9 @@ from typing import Any, NamedTuple, assert_never
 
 from .adapters.codex import codex_data_home
 from .approvals import ApprovalOutcome, decide, describe_request
+from .batched_stat import batched_stat
 from .event_bus import EventBus
+from .executor_accounting import AccountedThreadPoolExecutor
 from .harness import (
     Backend,
     descriptor,
@@ -851,6 +854,32 @@ _TAIL_IDENTITY_PROBE_SECONDS = 2.0
 # frozen at creation for hours on Windows while the file is being written.
 _TailIdentity = tuple[int, int, int, int]
 
+#: Workers that read and decode followed transcripts. Decoding is Python holding the
+#: GIL, and every tailer's tick resolves in the same loop iteration (`batched_stat`),
+#: so on the default executor a fleet whose transcripts all grew woke as many
+#: workers at once - 18 at 36 sessions - to contend with the event loop for the GIL.
+#: Two keep the file read overlapping a decode without letting decodes pile up.
+TRANSCRIPT_READ_WORKERS = 2
+_transcript_reader: AccountedThreadPoolExecutor | None = None
+
+
+def _transcript_read_pool() -> AccountedThreadPoolExecutor:
+    global _transcript_reader
+    if _transcript_reader is None:
+        _transcript_reader = AccountedThreadPoolExecutor(
+            max_workers=TRANSCRIPT_READ_WORKERS, thread_name_prefix="transcript-read"
+        )
+    return _transcript_reader
+
+
+async def _in_transcript_reader[**P, R](
+    fn: Callable[P, R], *args: P.args, **kwargs: P.kwargs
+) -> R:
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(
+        _transcript_read_pool(), functools.partial(fn, *args, **kwargs)
+    )
+
 
 def _read_transcript_window(
     path: Path, offset: int, length: int, prefix_len: int
@@ -948,33 +977,30 @@ class JsonlTailer:
         truncates or replaces the file (Claude cancel/revert does this), and
         ``(None, False)`` ends catch-up.  The end marker is also emitted after all
         bytes that existed at initial attach have been decoded.
+
+        A file that does not exist yet is waited for the same way a quiet one is
+        polled: each tick's stat answers both, and awaiting it is the pacing.
         """
-        while not stop.is_set() and not await asyncio.to_thread(self.path.exists):
-            self._note_stat(None)
-            try:
-                await asyncio.wait_for(stop.wait(), timeout=0.2)
-            except TimeoutError:
-                pass
         while not stop.is_set():
             try:
                 async for item in self._poll(stop):
                     yield item
             except FileNotFoundError:
                 pass
-            await asyncio.sleep(0.25)
 
     async def _poll(self, stop: asyncio.Event):  # type: ignore[no-untyped-def]
         """One tick: settle whether the file was replaced, then drain new bytes.
 
-        The `stat` runs in a worker thread. It happens every 250ms for every observed
-        session, and a stat on a busy disk is exactly the call that blocked the event
-        loop for seconds at a time; one in flight per observer is the whole cost.
+        The `stat` is answered at the next tick by one worker pass shared with every
+        other observed session (`batched_stat`). It happens every 250ms for every
+        observed session, and a stat on a busy disk is exactly the call that blocked
+        the event loop for seconds at a time, so it never runs on the loop; and one
+        thread hop per session per tick was itself the larger cost at fleet scale.
         """
-        try:
-            stat = await asyncio.to_thread(self.path.stat)
-        except FileNotFoundError:
+        stat = await batched_stat(self.path)
+        if stat is None:
             self._note_stat(None)
-            raise
+            raise FileNotFoundError(self.path)
         self._note_stat(stat)
         size = stat.st_size
         identity: _TailIdentity = (size, stat.st_ino, stat.st_dev, stat.st_mtime_ns)
@@ -993,7 +1019,7 @@ class JsonlTailer:
             # changed file unchanged.
             if probe_due:
                 self._prefix_checked_at = time.monotonic()
-                current_prefix, _chunk = await asyncio.to_thread(
+                current_prefix, _chunk = await _in_transcript_reader(
                     _read_transcript_window, self.path, 0, 0, _TAIL_PREFIX_BYTES
                 )
                 reset = self._prefix_differs(current_prefix)
@@ -1021,7 +1047,7 @@ class JsonlTailer:
             want_prefix = (
                 not verified or self.prefix is None or len(self.prefix) < _TAIL_PREFIX_BYTES
             )
-            prefix, chunk, records = await asyncio.to_thread(
+            prefix, chunk, records = await _in_transcript_reader(
                 self._read_and_decode,
                 self.offset,
                 min(_TAIL_CHUNK_BYTES, size - self.offset),

@@ -64,6 +64,13 @@ def test_new_output_invalidates_the_cached_explanation(monkeypatch: pytest.Monke
     assert len(calls) == 2, "a byte of new output is a new screen"
 
     # So is a change in any other input the explanation is derived from.
+    session.cli_state = {"status": "busy"}
+    SessionManager._pty_tail_explanation(session)
+    assert len(calls) == 3
+
+    # The OSC title is not one while no rule reads it, so the watchdog (which passes
+    # it) shares entries with every caller that does not.
+    assert session_module._RULES_READ_OSC is False
     session.osc_signals.title = "claude - working"
     SessionManager._pty_tail_explanation(session)
     assert len(calls) == 3

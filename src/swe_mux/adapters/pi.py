@@ -70,6 +70,7 @@ class PiAdapter(BackendAdapter):
     reports_conversation_rollover = True
     assigns_conversation_id = False
     resolves_transcript_by_cwd = True
+    announces_pending_transcript = False
 
     def __init__(
         self,

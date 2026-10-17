@@ -35,6 +35,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .background_tasks import background
+from .host_metrics import process_start_stamp
 
 try:
     import psutil
@@ -125,11 +126,15 @@ class GhostWindowSweeper:
         self.swept_total = 0
         self.recent: list[dict[str, Any]] = []
         self._task: asyncio.Task[None] | None = None
-        # (pid, create_time) -> is an automation browser. Reading another
+        # (pid, start stamp) -> is an automation browser. Reading another
         # process's command line is the expensive half of a sweep and a
-        # browser's command line never changes; the creation time keeps a
-        # recycled PID from inheriting a stale verdict.
-        self._headless_pids: dict[tuple[int, float], bool] = {}
+        # browser's command line never changes; the start stamp keeps a
+        # recycled PID from inheriting a stale verdict. The stamp is read with
+        # the GIL released (`host_metrics.process_start_stamp`), and a
+        # `psutil.Process` is built only to read the command line of a process
+        # this has not judged yet: every Electron app's hidden frames share the
+        # class this sweep looks for, so most windows it meets are known ones.
+        self._headless_pids: dict[tuple[int, int], bool] = {}
 
     @property
     def available(self) -> bool:
@@ -167,13 +172,18 @@ class GhostWindowSweeper:
     def _is_automation_browser(self, pid: int) -> bool:
         if psutil is None:
             return False
+        stamp = process_start_stamp(pid)
+        if stamp is None:
+            # Gone, or not ours to inspect: either way it is not swept.
+            return False
+        key = (pid, stamp)
+        cached = self._headless_pids.get(key)
+        if cached is not None:
+            return cached
         try:
-            process = psutil.Process(pid)
-            key = (pid, process.create_time())
-            cached = self._headless_pids.get(key)
-            if cached is not None:
-                return cached
-            verdict = any(HEADLESS_MARKER in argument for argument in process.cmdline())
+            verdict = any(
+                HEADLESS_MARKER in argument for argument in psutil.Process(pid).cmdline()
+            )
         except Exception:
             # A browser that exits mid-sweep, or one the daemon may not
             # inspect, is simply not swept. Retrying gains nothing.

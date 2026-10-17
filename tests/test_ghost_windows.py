@@ -139,15 +139,24 @@ def _fake_psutil(records: dict[int, dict[str, Any]]) -> Any:
     class _Process:
         def __init__(self, pid: int) -> None:
             self._record = records[pid]
-
-        def create_time(self) -> float:
-            return self._record["create_time"]
+            self._record["built"] = self._record.get("built", 0) + 1
 
         def cmdline(self) -> list[str]:
             self._record["calls"] += 1
             return self._record["cmdline"]
 
     return SimpleNamespace(Process=_Process)
+
+
+def _install(monkeypatch: pytest.MonkeyPatch, records: dict[int, dict[str, Any]]) -> None:
+    """Fake both halves: the GIL-free start stamp and psutil's command line."""
+    monkeypatch.setattr(ghost_windows, "psutil", _fake_psutil(records))
+
+    def stamp(pid: int) -> int | None:
+        record = records.get(pid)
+        return None if record is None else int(record["create_time"] * 1_000_000)
+
+    monkeypatch.setattr(ghost_windows, "process_start_stamp", stamp)
 
 
 def test_is_automation_browser_detects_the_headless_marker(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -159,7 +168,7 @@ def test_is_automation_browser_detects_the_headless_marker(monkeypatch: pytest.M
         },
         200: {"create_time": 1000.0, "cmdline": ["Electron.exe", "--type=renderer"], "calls": 0},
     }
-    monkeypatch.setattr(ghost_windows, "psutil", _fake_psutil(records))
+    _install(monkeypatch, records)
     sweeper = GhostWindowSweeper()
 
     assert sweeper._is_automation_browser(100) is True
@@ -177,7 +186,7 @@ def test_is_automation_browser_memoizes_per_pid_and_create_time(
         },
         200: {"create_time": 1000.0, "cmdline": ["Electron.exe", "--type=renderer"], "calls": 0},
     }
-    monkeypatch.setattr(ghost_windows, "psutil", _fake_psutil(records))
+    _install(monkeypatch, records)
     sweeper = GhostWindowSweeper()
 
     assert sweeper._is_automation_browser(100) is True
@@ -192,6 +201,9 @@ def test_is_automation_browser_memoizes_per_pid_and_create_time(
     assert records[200]["calls"] == 1
     assert sweeper._is_automation_browser(200) is False
     assert records[200]["calls"] == 1, "a cached False verdict must not re-read the command line"
+    # And a known process costs no `psutil.Process` at all: its identity is the
+    # GIL-free start stamp, and only an unjudged one needs its command line.
+    assert records[100]["built"] == records[200]["built"] == 1
 
 
 def test_is_automation_browser_reevaluates_a_recycled_pid(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -203,7 +215,7 @@ def test_is_automation_browser_reevaluates_a_recycled_pid(monkeypatch: pytest.Mo
             "calls": 0,
         }
     }
-    monkeypatch.setattr(ghost_windows, "psutil", _fake_psutil(records))
+    _install(monkeypatch, records)
     sweeper = GhostWindowSweeper()
 
     assert sweeper._is_automation_browser(100) is True

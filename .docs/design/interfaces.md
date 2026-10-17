@@ -2315,6 +2315,10 @@ Native GIL-held stalls can prevent sampling, and canary starvation reports that 
 Explained records persist to `mux.db` (`loop_stalls`, `design/features/operational-telemetry.md`) and are logged as `loop_stall` in `daemon.log`.
 Recovery contracts: `design/features/daemon-resilience.md`.
 `executor_work` reports CPU spent off the loop per callable across every accounted executor (`executor_accounting.py`): `labels`, `running`, `since_start[]` and `recent[]` over the last `recent_seconds` (60), each row `label`, `count`, `cpu_seconds`, `wall_seconds`, costliest first.
+Its `pools[]` reports each executor's occupancy since start: `name` (the thread name prefix), `max_workers`, `threads`, `running`, `queued`, `peak_running`, `peak_queued`, `submitted`, `max_wait_ms`, and `wait_ms` (`p50`, `p99`) over the last 2,048 items, where a wait is the time from submission until a worker took the item.
+`screen_classification` reports the shared screen-verdict cache (`entries`, `hits`, `classifications`, `classify_seconds`, `hit_rate`).
+`transcript_stats` reports the transcript tailers' shared stat passes (`batched_stat.py`): `passes` and `stats`, so `stats / passes` is how many followed files each worker hop served.
+`queue_reads` reports the prompt queue's per-tick reads answered from memory between writes (`entries`, `hits`, `misses`, `generation`, the count of operations that wrote), or `null` before the queue store exists.
 `process_priority` reports what the process inspector has lowered to keep the fleet
 below this process (`target`, `lowered_total`, `lowered_last_pass`, `denied_pids`).
 `listener_guard` reports closed listeners found and rebound, and carries

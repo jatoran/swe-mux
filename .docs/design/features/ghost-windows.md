@@ -71,7 +71,8 @@ That property is what makes a fixed-cadence loop safe to run against another pro
 
 The condition order is load-bearing for cost, not only for correctness.
 Visibility and class are checked first, so the cross-process command-line read happens only for windows that already look like ghosts.
-Verdicts are memoized per `(pid, create_time)` because a browser's command line never changes, and the creation time keeps a recycled PID from inheriting a stale verdict.
+Verdicts are memoized per `(pid, start stamp)` because a browser's command line never changes, and the start stamp keeps a recycled PID from inheriting a stale verdict.
+The stamp is read with the GIL released (`host_metrics.process_start_stamp`), and a `psutil.Process` is constructed only to read the command line of a process not judged yet: every Electron app's hidden frames share the class the sweep looks for, so most candidate windows belong to known processes.
 
 Measured against 580 live top-level windows: 3.99 ms cold, 2.76 ms median warm, with one memoized command-line lookup.
 This satisfies the periodic-loop rule in `../../technical/backend/packages.md`, which exists because an earlier unmemoized per-tick `cmdline()` scan in `processes.py` cost 930-1110 ms per pass.

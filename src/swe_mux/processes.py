@@ -1555,6 +1555,18 @@ class ProcessInspector:
         item.connections = []
         item.conditions = sorted(set([*item.conditions, "ownership_rejected"]))
 
+    @staticmethod
+    def _mark_exited(item: OwnedProcess, now: float) -> None:
+        """Record that a tracked process no longer exists."""
+        item.exited_at = now
+        item.evidence_state = "exited"
+        item.evidence_reason = "process_no_longer_exists"
+        item.exit_evidence = "no_such_process"
+        item.last_verified_at = now
+        item.cpu_pct = 0
+        item.listeners = []
+        item.connections = []
+
     def _revalidate_unseen(
         self,
         seen: set[tuple[int, float]],
@@ -1565,6 +1577,15 @@ class ProcessInspector:
         if psutil is None:
             return
         process_factory = getattr(psutil, "Process", None)
+        # This pass's system-wide process table (`_refresh_tree`), empty when the
+        # snapshot was unavailable. A row whose pid is absent from it has exited: the
+        # table is one atomic snapshot taken after that row was last seen, so it is
+        # answered here without asking psutil. Asking was the expensive way to learn
+        # it - on Windows psutil confirms every "no such process" by enumerating every
+        # pid on the host (27 ms on a 1,200-process host, GIL held), and a fleet whose
+        # tools start and finish short-lived children paid that once per exit: 12.4%
+        # of the daemon's GIL samples at 36 sessions (`DAEMON_LOAD_ISOLATION.md` item 6).
+        live_pids = self._parents
         for key, item in list(self.owned.items()):
             if key in seen or item.exited_at is not None:
                 continue
@@ -1591,18 +1612,14 @@ class ProcessInspector:
                 item.evidence_reason = "process_no_longer_in_descendant_walk"
                 item.exit_evidence = "not_observed"
                 continue
+            if live_pids and item.pid not in live_pids:
+                self._mark_exited(item, now)
+                continue
             try:
                 process = process_factory(item.pid)
                 created = float(process.create_time())
             except psutil.NoSuchProcess:
-                item.exited_at = now
-                item.evidence_state = "exited"
-                item.evidence_reason = "process_no_longer_exists"
-                item.exit_evidence = "no_such_process"
-                item.last_verified_at = now
-                item.cpu_pct = 0
-                item.listeners = []
-                item.connections = []
+                self._mark_exited(item, now)
                 continue
             except (psutil.AccessDenied, OSError):
                 item.evidence_state = "stale" if startup else "inaccessible"

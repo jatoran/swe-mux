@@ -165,6 +165,40 @@ async def test_an_idle_codex_pane_never_runs_the_switch_search(
     assert manager.observation_costs["heuristic_searches_skipped"] >= 5
 
 
+async def test_the_watcher_only_asks_an_adapter_that_can_announce_a_transcript(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """Asking Claude, Codex, pi, opencode or a shell cost a worker hop per session
+    every two seconds and could only ever answer None."""
+    monkeypatch.setattr("swe_mux.session.TRANSCRIPT_SWITCH_POLL_SECONDS", 0.01)
+    asked: list[str] = []
+    for announces in (False, True):
+        manager = fake_manager()
+        record = agent_record("codex-quiet", backend="codex", cwd=str(tmp_path))
+        session = real_session(record, tmp_path)
+        session.adapter.announces_pending_transcript = announces
+        session.adapter.pending_transcript_path = lambda sid, _current, a=announces: (
+            asked.append(f"{a}:{sid}")
+        )
+        current = tmp_path / "old.jsonl"
+        current.write_text("{}\n", encoding="utf-8")
+        manager._transcript_switch_candidate = AsyncMock(return_value=None)
+        manager._note_transcript_staleness = AsyncMock()
+        stop_event = asyncio.Event()
+
+        async def ticks(manager: Any = manager) -> None:
+            await until(lambda: manager._note_transcript_staleness.await_count >= 3)
+
+        observe_task = asyncio.create_task(ticks())
+        assert (
+            await SessionManager._watch_transcript_switch(
+                manager, session, current, stop_event, observe_task
+            )
+            is None
+        )
+    assert asked and all(entry.startswith("True:") for entry in asked)
+
+
 async def test_a_line_the_followed_file_recorded_does_not_arm_the_search(
     tmp_path: Path, monkeypatch: Any
 ) -> None:

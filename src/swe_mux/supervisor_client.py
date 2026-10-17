@@ -16,6 +16,7 @@ import asyncio
 import json
 import logging
 import os
+import struct
 import subprocess
 import sys
 import time
@@ -488,7 +489,8 @@ class SupervisorClient:
         self.desync_reason: str = ""
         self._next_id = 1
         self._pending: dict[int, asyncio.Future[tuple[dict[str, Any], bytes]]] = {}
-        self._meta_pending: dict[str, dict[str, Any]] = {}
+        #: sid -> the meta JSON `queue_meta` already serialized for the dedupe.
+        self._meta_pending: dict[str, str] = {}
         self._meta_sent: dict[str, str] = {}
         self._meta_task: asyncio.Task[None] | None = None
         self._read_task = asyncio.create_task(self._read_loop(), name="supervisor-read")
@@ -933,7 +935,7 @@ class SupervisorClient:
             return
         if self._meta_sent.get(sid) == serialized:
             return
-        self._meta_pending[sid] = json.loads(serialized)
+        self._meta_pending[sid] = serialized
         self._meta_sent[sid] = serialized
         if self._meta_task is None or self._meta_task.done():
             self._meta_task = self._loop.create_task(self._flush_meta_later())
@@ -944,8 +946,10 @@ class SupervisorClient:
 
     def _flush_meta_now(self) -> None:
         pending, self._meta_pending = self._meta_pending, {}
-        for sid, meta in pending.items():
-            self.notify({"t": "set_meta", "sid": sid, "meta": meta})
+        if not self.connected:
+            return
+        for sid, serialized in pending.items():
+            self._write_frame(meta_frame(sid, serialized))
 
     async def flush_meta(self) -> None:
         if self._meta_task is not None and not self._meta_task.done():
@@ -1143,3 +1147,18 @@ __all__ = [
     "liveness_of",
     "supervisor_command",
 ]
+
+
+def meta_frame(sid: str, serialized_meta: str) -> bytes:
+    """The `set_meta` frame for meta JSON that is already serialized.
+
+    Byte-identical to `encode_frame({"t": "set_meta", "sid": sid, "meta": meta})`
+    for the meta that JSON came from, without parsing it back and serializing it a
+    second time: `queue_meta` serializes every session's meta every second to
+    dedupe it, and a working session's meta changes every second, so the parse and
+    the re-encode were a third of the meta mirror's cost on the loop.
+    """
+    raw = (
+        '{"t":"set_meta","sid":' + json.dumps(sid) + ',"meta":' + serialized_meta + "}"
+    ).encode("utf-8")
+    return struct.pack(">I", len(raw)) + raw

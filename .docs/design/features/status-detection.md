@@ -727,6 +727,12 @@ The supported regions are `whole_tail`, `bottom_non_empty_lines(n)`, `after_last
 First match wins when two rules conflict.
 The named prompt-frame region centralizes the former `rfind` ordering arithmetic used separately by lifecycle and background-wait classification.
 
+A rule may also carry *needles*: lowercase ASCII text every match of its predicate contains (`ScreenRule.requires`; a `_contains` predicate's literal is its needle without declaring one).
+When the lowered tail lacks a needle, the rule cannot match and its predicate is not run - neither to find the last prompt marker nor to evaluate the rule.
+Proving those absences was most of a classification: each case-insensitive scan of a 32 KiB tail cost about 90 us and the background-task regex 430 us, so dropping them took a classification from 2.2 ms to 1.2 ms.
+It changes cost and never an answer: `re.IGNORECASE` and `str.lower` fold every character onto ASCII letters identically except U+0130, U+0131 and U+017F, so a tail containing one of those is classified with every predicate, and `tests/test_screen_needle_prefilter.py` compares the two paths over randomized tails built from every rule's phrases.
+A new needle must be text every possible match contains; the same test checks each one against the phrases its rule matches.
+
 `pty_tail_state` returns `working`, `approval`, `idle`, `uninformative`, or `unknown`.
 Agent-owned model pickers, transcript viewers, and resume lists are `uninformative` because their body text describes a selected item rather than the live agent state.
 All three consumers withhold lifecycle conclusions from that outcome: delivery vetoes sending, watchdog recovery does nothing, and the unwitnessed first-turn fallback does nothing.

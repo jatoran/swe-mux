@@ -275,6 +275,15 @@ one-second controller tick and this endpoint read it filtered to the sessions th
 (`auto_policies(session_ids)`); unfiltered it had grown to ~9x the live count on a real
 install, scanned every second.
 
+The tick's reads - the policy rows, the pause row, and each enabled session's head-of-line
+item (`pending_head`, one row, where the tick used to read the session's whole visible
+queue to find it) - are answered from memory while nothing has been written to the queue
+store since they were read (`PromptQueueStore`, `technical/backend/packages.md`). A write
+retires every cached read on the store's worker before its caller resumes, so a decision
+taken after a write never sees what the write replaced. An idle fleet's tick therefore
+costs no database trip at all; `queue_reads` on `/api/diagnostics/background` counts the
+hits.
+
 ## Configuration
 
 `auto_delivery_enabled`, `auto_delivery_stable_seconds`, `auto_delivery_max_consecutive`,

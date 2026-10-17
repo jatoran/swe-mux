@@ -12,6 +12,7 @@ class ShellAdapter(BackendAdapter):
     # A shell has no conversation of its own; promotion adopts the agent's id.
     assigns_conversation_id = False
     resolves_transcript_by_cwd = False
+    announces_pending_transcript = False
 
     def __init__(self, default_exe: str = "powershell.exe") -> None:
         self.default_exe = default_exe

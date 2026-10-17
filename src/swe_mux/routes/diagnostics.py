@@ -17,6 +17,7 @@ from .. import (
     app_keys as keys,
 )
 from ..background_tasks import background
+from ..batched_stat import ticker as batched_stat_ticker
 from ..config import Config
 from ..console_contention import ConsoleCensus, probe_console_participants
 from ..deterministic_consumers import DeterministicConsumerService
@@ -453,6 +454,18 @@ async def get_background_health(request: web.Request) -> web.Response:
             # classifications ran and how many asks were answered without one.
             # Classification was the daemon's largest GIL consumer before it.
             "screen_classification": SCREEN_VERDICTS.snapshot(),
+            # The transcript tailers' shared stat passes (`batched_stat.py`): one
+            # worker hop per tick for every followed file. `stats / passes` is how
+            # many tailers each hop served.
+            "transcript_stats": batched_stat_ticker().snapshot(),
+            # The prompt queue's per-tick reads answered from memory between writes
+            # (`PromptQueueStore`): a fleet whose queues are quiet reads as `hits`
+            # climbing by about the number of enabled sessions a second.
+            "queue_reads": (
+                queue_store.read_cache_snapshot()
+                if (queue_store := request.app.get(keys.PROMPT_QUEUE_STORE)) is not None
+                else None
+            ),
             # The shared off-loop transcript directory scans (`transcript_scan.py`).
             # A cache that stops sharing reads as misses climbing with the fleet
             # and `slow_scans` counting; the loop_lag above is where that lands.

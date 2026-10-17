@@ -138,6 +138,23 @@ def test_harness_declares_graceful_exit_keys(name: str, tmp_path: Path) -> None:
     assert adapter.graceful_exit_keys(), f"{name} declares no graceful exit keystrokes"
 
 
+@pytest.mark.parametrize("name", sorted(HARNESSES), ids=lambda n: n)
+def test_harness_declares_whether_it_announces_a_pending_transcript(
+    name: str, tmp_path: Path
+) -> None:
+    """The switch watcher only asks an adapter that says it can answer.
+
+    An adapter that declares nothing is asked every tick, which is safe and was
+    the per-session worker hop item 6 of `DAEMON_LOAD_ISOLATION.md` removed; an
+    adapter that declares False must really have nothing to say.
+    """
+    adapter = _adapter(HARNESSES[name], tmp_path / name)
+    announces = adapter.announces_pending_transcript
+    assert isinstance(announces, bool), f"{name} does not declare announces_pending_transcript"
+    if not announces:
+        assert adapter.pending_transcript_path(f"sid-{name}", tmp_path / "old.jsonl") is None
+
+
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows command-line quoting")
 @pytest.mark.parametrize("name", sorted(HARNESSES), ids=lambda n: n)
 def test_harness_argv_survives_windows_conpty_quoting(name: str, tmp_path: Path) -> None:

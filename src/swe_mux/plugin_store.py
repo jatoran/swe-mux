@@ -129,6 +129,15 @@ def _log(row: sqlite3.Row) -> dict[str, Any]:
 
 
 class PluginStore:
+    """The plugin registry, plus the ledger of what plugin commands did.
+
+    `list()` is read by the event dispatcher for every event the daemon emits, so
+    the registry is held in memory: this process is the table's only writer, and
+    every write here drops the copy. Reads and writes run on one worker thread, and
+    a write drops the copy on that thread right after it commits, so a reader can
+    never repopulate it from rows a later write has already replaced.
+    """
+
     def __init__(self, path: Path) -> None:
         self.path = path
         self._executor = AccountedThreadPoolExecutor(
@@ -136,6 +145,7 @@ class PluginStore:
         )
         self._lock = database_operation_lock(path)
         self._db = connect_or_quarantine(path, lambda: _connect(path))
+        self._registry: tuple[dict[str, Any], ...] | None = None
 
     async def _run[T](self, operation: Callable[[], T]) -> T:
         loop = asyncio.get_running_loop()
@@ -149,12 +159,21 @@ class PluginStore:
         self._executor.shutdown(wait=True)
 
     async def list(self) -> builtins.list[dict[str, Any]]:
-        return await self._run(
-            lambda: [
-                _plugin(row)
-                for row in self._db.execute("SELECT * FROM plugins ORDER BY name,id").fetchall()
-            ]
-        )
+        registry = self._registry
+        if registry is None:
+
+            def op() -> tuple[dict[str, Any], ...]:
+                rows = self._db.execute("SELECT * FROM plugins ORDER BY name,id").fetchall()
+                self._registry = tuple(_plugin(row) for row in rows)
+                return self._registry
+
+            registry = await self._run(op)
+        # Every value is immutable, so a shallow copy is a private one.
+        return [dict(record) for record in registry]
+
+    def _registry_changed(self) -> None:
+        """Called on the store's worker thread, after the write that changed it."""
+        self._registry = None
 
     async def get(self, plugin_id: str) -> dict[str, Any] | None:
         def op() -> dict[str, Any] | None:
@@ -208,6 +227,7 @@ class PluginStore:
                 ),
             )
             self._db.commit()
+            self._registry_changed()
             row = self._db.execute("SELECT * FROM plugins WHERE id=?", (record["id"],)).fetchone()
             assert row is not None
             return _plugin(row)
@@ -247,6 +267,7 @@ class PluginStore:
                 (*[value for _, value in fields], time.time(), plugin_id),
             )
             self._db.commit()
+            self._registry_changed()
             row = self._db.execute("SELECT * FROM plugins WHERE id=?", (plugin_id,)).fetchone()
             return _plugin(row) if row else None
 
@@ -258,6 +279,7 @@ class PluginStore:
             if row:
                 self._db.execute("DELETE FROM plugins WHERE id=?", (plugin_id,))
                 self._db.commit()
+                self._registry_changed()
             return _plugin(row) if row else None
 
         return await self._run(op)

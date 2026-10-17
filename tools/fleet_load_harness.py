@@ -533,6 +533,14 @@ class Harness:
                     await asyncio.to_thread(burner.wait)
             window_end = time.time()
             after = await self.diagnostics()
+            # The full process inventory at the end of the window, kept as an artifact:
+            # which rows the inspector is carrying, and in which evidence state, is the
+            # question behind its per-pass cost.
+            status, inventory = await self._json("GET", "/api/processes?include_ended=1")
+            if status == 200:
+                (self.workdir / "processes-at-end.json").write_text(
+                    json.dumps(inventory, indent=1), encoding="utf-8"
+                )
             profile_result = await profile_task if profile_task else None
             # Let every generator finish and write its stats.
             deadline = time.monotonic() + 90
@@ -648,6 +656,18 @@ class Harness:
                 after.get("screen_classification") or {},
                 ("hits", "classifications", "classify_seconds"),
             ),
+            # Each pool's occupancy over the daemon's life: what sizes a pool.
+            "executor_pools": (after.get("executor_work") or {}).get("pools", []),
+            "transcript_stats": _counter_delta(
+                before.get("transcript_stats") or {},
+                after.get("transcript_stats") or {},
+                ("passes", "stats"),
+            ),
+            "queue_reads": _counter_delta(
+                before.get("queue_reads") or {},
+                after.get("queue_reads") or {},
+                ("hits", "misses", "generation"),
+            ),
             "profile": profile_result,
             "workdir": str(self.workdir),
         }
@@ -701,10 +721,35 @@ def render(report: dict[str, Any]) -> None:
             f"{screens.get('hits', 0) / window:.1f} cached/s, "
             f"{screens.get('classify_seconds', 0.0):.2f}s classifying"
         )
+    stats = report.get("transcript_stats") or {}
+    if stats:
+        window = max(1.0, float(report["window_seconds"]))
+        passes = stats.get("passes", 0)
+        print(
+            f"  transcript stats   {passes / window:.1f} passes/s carrying "
+            f"{stats.get('stats', 0) / max(1.0, passes):.1f} files each"
+        )
+    reads = report.get("queue_reads") or {}
+    if reads:
+        window = max(1.0, float(report["window_seconds"]))
+        print(
+            f"  queue reads        {reads.get('hits', 0) / window:.1f} cached/s, "
+            f"{reads.get('misses', 0) / window:.1f} read/s, "
+            f"{reads.get('generation', 0):.0f} writes"
+        )
     if report.get("executor_work"):
         print("  costliest executor work (CPU since start):")
         for row in report["executor_work"][:10]:
             print(f"    {row['cpu_seconds']:9.2f}s {row['count']:7d} x  {row['label']}")
+    if report.get("executor_pools"):
+        print("  executor pools (peak running/queued of max, wait p50/p99/max ms):")
+        for row in report["executor_pools"]:
+            waits = row.get("wait_ms") or {}
+            print(
+                f"    {row['peak_running']:3d}/{row['peak_queued']:<4d} of {row['max_workers']:3d}"
+                f"  {waits.get('p50', 0):7.2f} {waits.get('p99', 0):8.2f} "
+                f"{row.get('max_wait_ms', 0):8.1f}  {row['submitted']:8d} x  {row['name']}"
+            )
     for record in report.get("stall_records") or []:
         diagnosis = record.get("diagnosis") or {}
         holder = diagnosis.get("gil_holder") or {}

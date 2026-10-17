@@ -135,6 +135,39 @@ def test_to_thread_on_the_accounted_default_executor_names_the_function() -> Non
     assert [row["label"] for row in ledger.snapshot()["since_start"]] == ["Store.method"]
 
 
+def test_a_pool_reports_its_peak_occupancy_and_how_long_work_waited() -> None:
+    """What sizing a pool needs: how many ran at once, how many queued, how long."""
+    ledger = WorkLedger()
+    pool = AccountedThreadPoolExecutor(
+        max_workers=2, thread_name_prefix="sizing", ledger=ledger
+    )
+    release = threading.Event()
+    try:
+        blocked = [pool.submit(release.wait, 10) for _ in range(2)]
+        queued = [pool.submit(plain_function) for _ in range(3)]
+        assert queued[-1].cancel(), "a queued item can still be cancelled"
+        reading = pool.occupancy()
+        assert reading["running"] == 2 and reading["queued"] == 2
+        time.sleep(0.05)
+        release.set()
+        for future in (*blocked, *queued[:-1]):
+            future.result(timeout=5)
+    finally:
+        release.set()
+        pool.shutdown(wait=True)
+
+    (reading,) = [row for row in ledger.snapshot()["pools"] if row["name"] == "sizing"]
+    assert reading["max_workers"] == 2
+    assert (reading["running"], reading["queued"]) == (0, 0), "the cancelled item is not queued"
+    assert reading["peak_running"] == 2
+    # The three behind the blocked pair, plus however many of that pair a worker
+    # had not picked up yet when the next was submitted.
+    assert 3 <= reading["peak_queued"] <= 5
+    assert reading["submitted"] == 5
+    assert reading["max_wait_ms"] >= 40, "the queued items waited for the blocked ones"
+    assert reading["wait_ms"]["p99"] >= reading["wait_ms"]["p50"]
+
+
 def test_every_daemon_executor_is_accounted() -> None:
     """A new bare executor would put its work back beyond the stall diagnosis's reach."""
     construction = re.compile(r"(?<![\w.])ThreadPoolExecutor\(")

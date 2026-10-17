@@ -41,12 +41,15 @@ import faulthandler
 import json
 import logging
 import logging.handlers
+import queue
 import re
+import sys
+import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from pathlib import Path
-from typing import IO
+from typing import IO, Protocol, TextIO
 from uuid import uuid4
 
 DAEMON_LOG_NAME = "daemon.log"
@@ -223,22 +226,222 @@ class StructuredFormatter(logging.Formatter):
             record.args = original_args
 
 
+#: Records the writer takes per pass; a pass is one write and one flush per file.
+LOG_WRITE_BATCH = 1024
+#: How long `flush()` waits for the writer to catch up before giving up.
+LOG_FLUSH_TIMEOUT_SECONDS = 5.0
+
+
+class _LogWriter:
+    """The one thread that writes every daemon log, in batches.
+
+    A log line written where it is emitted costs that thread its syscalls: the
+    rotating handler stats the file twice and writes and flushes once per record,
+    and each syscall gives up the GIL and has to win it back. Measured with four
+    CPU-bound Python threads beside it, that put a single line at a p50 of 61 ms
+    on the emitting thread (p99 296 ms), and with sixteen at 185 ms (p99 1.06 s);
+    on the event loop, every access line was one of those. The emitting thread now
+    formats the record (CPU only, and where the correlation id is still bound) and
+    queues the text; this thread writes whatever has queued with one write and one
+    flush per file, so its GIL needs are per batch rather than per line and it
+    keeps up under the same contention a per-line writer fell seconds behind in.
+
+    What a hard kill can lose is what is queued and unwritten at that moment,
+    which is one pass. `flush()` waits for everything queued before it, which is
+    what `logging.shutdown` and an orderly exit call.
+    """
+
+    def __init__(self) -> None:
+        self._queue: queue.SimpleQueue[tuple[_BatchedWrites, str] | threading.Event] = (
+            queue.SimpleQueue()
+        )
+        self._thread: threading.Thread | None = None
+        self._start_lock = threading.Lock()
+
+    def submit(self, target: _BatchedWrites, text: str) -> None:
+        if self._thread is None:
+            self._start()
+        self._queue.put((target, text))
+
+    def flush(self, timeout: float = LOG_FLUSH_TIMEOUT_SECONDS) -> bool:
+        """Wait until everything queued before this call is written."""
+        if self._thread is None or threading.current_thread() is self._thread:
+            return True
+        written = threading.Event()
+        self._queue.put(written)
+        return written.wait(timeout)
+
+    def _start(self) -> None:
+        with self._start_lock:
+            if self._thread is None:
+                thread = threading.Thread(target=self._run, name="log-writer", daemon=True)
+                thread.start()
+                self._thread = thread
+
+    def _run(self) -> None:
+        # unsupervised-loop-ok: the log writer's own OS thread, not an asyncio loop;
+        # `_write` contains every failure, so nothing can end it but the process.
+        while True:
+            batch = [self._queue.get()]
+            while len(batch) < LOG_WRITE_BATCH:
+                try:
+                    batch.append(self._queue.get_nowait())
+                except queue.Empty:
+                    break
+            pending: dict[_BatchedWrites, list[str]] = {}
+            for item in batch:
+                if isinstance(item, threading.Event):
+                    # Everything queued before the barrier is written before it opens.
+                    self._write(pending)
+                    pending = {}
+                    item.set()
+                    continue
+                target, text = item
+                pending.setdefault(target, []).append(text)
+            self._write(pending)
+
+    @staticmethod
+    def _write(pending: dict[_BatchedWrites, list[str]]) -> None:
+        for target, texts in pending.items():
+            try:
+                target.write_batch(texts)
+            except Exception as exc:  # noqa: BLE001 - the writer must outlive any one file
+                _report_log_failure(f"log write to {target.describe()} failed: {exc!r}")
+
+
+def _report_log_failure(message: str) -> None:
+    stream = sys.__stderr__
+    if stream is None:
+        return
+    try:
+        stream.write(f"swe-mux logging: {message}\n")
+        stream.flush()
+    except (OSError, ValueError):
+        pass
+
+
+_WRITER = _LogWriter()
+
+
+class _BatchedWrites(Protocol):
+    def write_batch(self, texts: list[str]) -> None: ...
+
+    def describe(self) -> str: ...
+
+
+class BatchedRotatingFileHandler(logging.handlers.RotatingFileHandler):
+    """`RotatingFileHandler` whose writes happen on the log writer thread.
+
+    ``emit`` formats and queues; ``write_batch`` writes a pass's lines, rotating
+    by size between them. A rotation that loses a race for the file (a predecessor
+    daemon still holding it during a session-preserving restart) keeps writing to
+    the current file and is retried at the next threshold, rather than dropping
+    the lines the way a failed stdlib rollover does.
+    """
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        super().__init__(*args, **kwargs)  # type: ignore[arg-type]
+        self._stream_lock = threading.Lock()
+        self._closed = False
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            text = self.format(record)
+        except Exception:  # noqa: BLE001 - the stdlib contract for a failing format
+            self.handleError(record)
+            return
+        _WRITER.submit(self, text)
+
+    def describe(self) -> str:
+        return self.baseFilename
+
+    def write_batch(self, texts: list[str]) -> None:
+        with self._stream_lock:
+            if self._closed:
+                return
+            if self.stream is None:
+                self.stream = self._open()
+            position = self.stream.tell() if self.maxBytes > 0 else 0
+            # One failed rotation per pass: retrying it for every remaining line
+            # would only repeat the same refusal.
+            may_rotate = self.maxBytes > 0
+            chunk: list[str] = []
+            for text in texts:
+                line = text + self.terminator
+                if may_rotate and position > 0 and position + len(line) >= self.maxBytes:
+                    if chunk:
+                        self.stream.write("".join(chunk))
+                        chunk = []
+                    may_rotate = self._rotate()
+                    position = self.stream.tell()
+                chunk.append(line)
+                position += len(line)
+            if chunk:
+                self.stream.write("".join(chunk))
+            self.stream.flush()
+
+    def _rotate(self) -> bool:
+        rotated = True
+        try:
+            self.doRollover()
+        except OSError as exc:
+            rotated = False
+            _report_log_failure(f"rotating {self.baseFilename} failed, still appending: {exc!r}")
+        if self.stream is None:
+            self.stream = self._open()
+        return rotated
+
+    def flush(self) -> None:
+        _WRITER.flush()
+
+    def close(self) -> None:
+        _WRITER.flush()
+        with self._stream_lock:
+            self._closed = True
+            super().close()
+
+
+class BatchedStreamHandler(logging.StreamHandler[TextIO]):
+    """`StreamHandler` (the console) whose writes happen on the log writer thread."""
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            text = self.format(record)
+        except Exception:  # noqa: BLE001 - the stdlib contract for a failing format
+            self.handleError(record)
+            return
+        _WRITER.submit(self, text)
+
+    def describe(self) -> str:
+        return getattr(self.stream, "name", "console")
+
+    def write_batch(self, texts: list[str]) -> None:
+        stream = self.stream
+        if stream is None:
+            return
+        stream.write("".join(text + self.terminator for text in texts))
+        stream.flush()
+
+    def flush(self) -> None:
+        _WRITER.flush()
+
+
 def rotating_handler(
     path: Path, *, max_bytes: int, backups: int, structured: bool = True
 ) -> logging.Handler:
-    """A size-rotated file handler that degrades gracefully.
+    """A size-rotated file handler that degrades gracefully and never blocks its caller.
 
-    ``delay=True`` defers opening until the first emit, and a rotation rename
-    that loses a race (a predecessor daemon briefly holding the old file during
-    a session-preserving restart) is swallowed by ``Handler.handleError`` and
-    retried on the next emit rather than breaking logging.
+    Writes happen on the log writer thread (`_LogWriter`), so logging costs the
+    emitting thread - the event loop, for every access line - a format and a queue
+    put, never a syscall. ``delay=True`` defers opening until the first write, and
+    a rotation rename that loses a race keeps appending to the current file.
 
     ``structured=False`` is for ``access.log``: aiohttp's `AccessLogger` passes
     its whole atom table through ``extra=``, so serializing extras there would
     repeat every access line's contents twice over. The request id reaches that
     file through the access format string instead.
     """
-    handler = logging.handlers.RotatingFileHandler(
+    handler = BatchedRotatingFileHandler(
         path, maxBytes=max_bytes, backupCount=backups, encoding="utf-8", delay=True
     )
     formatter = StructuredFormatter(LOG_FORMAT) if structured else logging.Formatter(LOG_FORMAT)
@@ -277,7 +480,7 @@ def setup_daemon_logging(data_dir: Path, level: str = "INFO") -> None:
     root = logging.getLogger()
     root.setLevel(normalize_level(level))
     quiet_library_loggers()
-    console = logging.StreamHandler()
+    console = BatchedStreamHandler()
     console.setFormatter(StructuredFormatter(LOG_FORMAT))
     console.addFilter(CorrelationFilter())
     root.addHandler(console)

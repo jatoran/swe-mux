@@ -195,6 +195,7 @@ class ClaudeAdapter(BackendAdapter):
     # existing file*. Entering a Claude native worktree is exactly that, and it is
     # why a live session's transcript path is never permanently true.
     resolves_transcript_by_cwd = descriptor(name).resolves_transcript_by_cwd
+    announces_pending_transcript = False
 
     def __init__(
         self,

@@ -33,20 +33,21 @@ Load-bearing rules, from `development/ROADMAP.md` Phase 4:
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import logging
 import re
 import sqlite3
 import time
 import uuid
-from collections.abc import Callable, Collection, Mapping, Sequence
+from collections.abc import Callable, Collection, Hashable, Mapping, Sequence
 from pathlib import Path
 from typing import Any, TypeVar
 
 from .background_tasks import background
 from .composer_input import composer_insertion, note_unsubmitted_delivery
 from .delivery_readiness import DISPLAY_SCREEN_MAX_AGE_SECONDS
-from .executor_accounting import AccountedThreadPoolExecutor
+from .executor_accounting import AccountedThreadPoolExecutor, register_wrapper
 from .harness import (
     MAX_PASTE_SUBMIT_SETTLE_SECONDS,
     composer_insertion_rules,
@@ -61,6 +62,11 @@ from .sqlite_store import (
 )
 
 T = TypeVar("T")
+
+#: Distinct read results kept between writes: the per-tick readers ask for one
+#: summary, one policy set, the pause row and one head per live session.
+READ_CACHE_LIMIT = 512
+_MISS = object()
 
 QUEUE_SCHEMA_VERSION = 7
 QUEUE_EVENT_LOOP = "prompt-queue-events"
@@ -443,12 +449,46 @@ def _dumps(value: Any) -> str | None:
     return json.dumps(value, separators=(",", ":")) if value is not None else None
 
 
+def _queue_operation[R](store: PromptQueueStore, fn: Callable[[], R]) -> R:
+    """Run one store operation on the store's worker, noting whether it wrote.
+
+    `total_changes` counts every row this connection inserted, updated or deleted,
+    so a write that changed nothing - a conditional transition that lost its
+    race, an expiry sweep with nothing due - leaves the cached reads standing,
+    and one that changed anything retires all of them. Writes made on the
+    connection outside an operation are noticed by the next operation.
+    """
+    before = store._db.total_changes
+    if before != store._changes:
+        store._generation += 1
+    try:
+        return run_sqlite_operation(store._db, store._operation_lock, fn)
+    finally:
+        after = store._db.total_changes
+        if after != before:
+            store._generation += 1
+        store._changes = after
+
+
+register_wrapper(_queue_operation, 1)
+
+
 class PromptQueueStore:
     """SQLite store on one dedicated worker thread (the `AutomationStore` pattern).
 
     Every method's statements run atomically in submission order on a single
     executor thread; state transitions are conditional UPDATEs so a stale
     caller loses the race instead of corrupting order or double-delivering.
+
+    The reads the once-a-second loops make - the queue summary, the auto-delivery
+    policies and pause row, and each live session's head item - are answered
+    from memory while nothing has been written since they were read, without a
+    trip to the worker. A write bumps `_generation` on the worker before its
+    caller resumes, so a read that follows a write in program order never sees
+    what the write replaced; a read racing a write in flight is answered as of
+    before it, exactly as a read queued ahead of it on the worker would be.
+    This process is the queue tables' only writer, which is what makes the
+    connection's own change count a complete invalidation signal.
     """
 
     _db: sqlite3.Connection
@@ -457,6 +497,11 @@ class PromptQueueStore:
         self._path = path
         self._operation_lock = database_operation_lock(path)
         self._closed = False
+        self._generation = 0
+        self._changes = 0
+        self._reads: dict[Hashable, tuple[int, Any]] = {}
+        self.read_hits = 0
+        self.read_misses = 0
         self._executor = AccountedThreadPoolExecutor(
             max_workers=1, thread_name_prefix="mux-queue-db"
         )
@@ -472,6 +517,7 @@ class PromptQueueStore:
             self._db.executescript(QUEUE_SCHEMA)
             write_schema_version(self._db, "prompt_queue", QUEUE_SCHEMA_VERSION)
             self._db.commit()
+            self._changes = self._db.total_changes
 
     def _migrate_schema(self) -> None:
         """Upgrade queue tables in place through the current schema version.
@@ -577,9 +623,38 @@ class PromptQueueStore:
 
     async def _run(self, fn: Callable[[], T]) -> T:
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(
-            self._executor, run_sqlite_operation, self._db, self._operation_lock, fn
-        )
+        return await loop.run_in_executor(self._executor, _queue_operation, self, fn)
+
+    def _cached(self, key: Hashable) -> Any:
+        """The value read for ``key`` since the last write, or `_MISS`."""
+        entry = self._reads.get(key)
+        if entry is not None and entry[0] == self._generation:
+            self.read_hits += 1
+            return entry[1]
+        self.read_misses += 1
+        return _MISS
+
+    def _remember(self, key: Hashable, value: T) -> T:
+        """Keep a read (worker thread only, inside the operation that made it)."""
+        generation = self._generation
+        reads = self._reads
+        if len(reads) >= READ_CACHE_LIMIT:
+            # Rebuilt rather than pruned in place: the loop reads this dict
+            # concurrently, and a rebinding is atomic where a deletion pass is not.
+            reads = {k: v for k, v in reads.items() if v[0] == generation}
+            if len(reads) >= READ_CACHE_LIMIT:
+                reads = {}
+        reads[key] = (generation, value)
+        self._reads = reads
+        return value
+
+    def read_cache_snapshot(self) -> dict[str, int]:
+        return {
+            "entries": len(self._reads),
+            "hits": self.read_hits,
+            "misses": self.read_misses,
+            "generation": self._generation,
+        }
 
     # -- ordering helpers (worker thread only) --------------------------------
 
@@ -764,22 +839,50 @@ class PromptQueueStore:
     async def summary(self) -> list[dict[str, Any]]:
         """Per-target aggregates for rail chips and stranded-queue discovery."""
 
-        def op() -> list[dict[str, Any]]:
-            rows = self._db.execute(
-                "SELECT target_session_id, MAX(target_label) label, MAX(project_id) project_id,"
-                " MAX(target_backend) backend,"
-                " SUM(CASE WHEN state IN ('draft','armed','blocked','delivering') THEN 1 ELSE 0"
-                " END) pending,"
-                " SUM(CASE WHEN state='blocked' THEN 1 ELSE 0 END) blocked,"
-                " SUM(CASE WHEN state='stranded' THEN 1 ELSE 0 END) stranded,"
-                " SUM(CASE WHEN state='failed' THEN 1 ELSE 0 END) failed,"
-                " COUNT(*) total, MAX(updated_at) updated_at"
-                " FROM queue_messages WHERE state!='deleted' GROUP BY target_session_id"
-                " ORDER BY updated_at DESC",
-            ).fetchall()
-            return [dict(row) for row in rows]
+        cached = self._cached("summary")
+        if cached is _MISS:
+            cached = await self._run(self._summary)
+        return [dict(row) for row in cached]
 
-        return await self._run(op)
+    def _summary(self) -> tuple[dict[str, Any], ...]:
+        """Worker thread only."""
+        rows = self._db.execute(
+            "SELECT target_session_id, MAX(target_label) label, MAX(project_id) project_id,"
+            " MAX(target_backend) backend,"
+            " SUM(CASE WHEN state IN ('draft','armed','blocked','delivering') THEN 1 ELSE 0"
+            " END) pending,"
+            " SUM(CASE WHEN state='blocked' THEN 1 ELSE 0 END) blocked,"
+            " SUM(CASE WHEN state='stranded' THEN 1 ELSE 0 END) stranded,"
+            " SUM(CASE WHEN state='failed' THEN 1 ELSE 0 END) failed,"
+            " COUNT(*) total, MAX(updated_at) updated_at"
+            " FROM queue_messages WHERE state!='deleted' GROUP BY target_session_id"
+            " ORDER BY updated_at DESC",
+        ).fetchall()
+        return self._remember("summary", tuple(dict(row) for row in rows))
+
+    async def pending_head(self, target_session_id: str) -> dict[str, Any] | None:
+        """The first draft, armed or blocked item in a target's queue order.
+
+        The head-of-line item is the only one auto-delivery may consider, and it
+        asks for it for every enabled session every second; it used to read the
+        session's whole visible queue to find it.
+        """
+        key = ("head", target_session_id)
+        cached = self._cached(key)
+        if cached is _MISS:
+
+            def op() -> dict[str, Any] | None:
+                row = self._db.execute(
+                    "SELECT * FROM queue_messages WHERE target_session_id=?"
+                    " AND state IN ('draft','armed','blocked') ORDER BY position LIMIT 1",
+                    (target_session_id,),
+                ).fetchone()
+                return self._remember(key, _row_to_message(row) if row else None)
+
+            cached = await self._run(op)
+        # One item, and its JSON fields are nested: a private copy is cheap here.
+        head: dict[str, Any] | None = copy.deepcopy(cached)
+        return head
 
     async def edit_body(self, message_id: str, revision: int, body: str) -> dict[str, Any]:
         """Edit a pending item's body; each edit increments revision.
@@ -1510,13 +1613,18 @@ class PromptQueueStore:
     # -- Phase 5: auto-delivery policy and proving-period counters ------------
 
     async def auto_policy(self, session_id: str) -> dict[str, Any] | None:
-        def op() -> dict[str, Any] | None:
-            row = self._db.execute(
-                "SELECT * FROM queue_auto_policy WHERE session_id=?", (session_id,)
-            ).fetchone()
-            return dict(row) if row else None
+        key = ("auto_policy", session_id)
+        cached = self._cached(key)
+        if cached is _MISS:
 
-        return await self._run(op)
+            def op() -> dict[str, Any] | None:
+                row = self._db.execute(
+                    "SELECT * FROM queue_auto_policy WHERE session_id=?", (session_id,)
+                ).fetchone()
+                return self._remember(key, dict(row) if row else None)
+
+            cached = await self._run(op)
+        return dict(cached) if cached is not None else None
 
     async def auto_policies(
         self, session_ids: Collection[str] | None = None
@@ -1531,19 +1639,30 @@ class PromptQueueStore:
         filter existed.
         """
 
-        def op() -> list[dict[str, Any]]:
-            query = "SELECT * FROM queue_auto_policy WHERE session_id!=?"
-            params: list[str] = [AUTO_POLICY_GLOBAL]
-            if session_ids is not None:
-                if not session_ids:
-                    return []
-                placeholders = ",".join("?" * len(session_ids))
-                query += f" AND session_id IN ({placeholders})"
-                params.extend(session_ids)
-            rows = self._db.execute(query + " ORDER BY updated_at DESC", params).fetchall()
-            return [dict(row) for row in rows]
+        if session_ids is not None and not session_ids:
+            return []
+        key = (
+            "auto_policies",
+            None if session_ids is None else frozenset(str(item) for item in session_ids),
+        )
+        cached = self._cached(key)
+        if cached is _MISS:
+            ids = None if session_ids is None else list(session_ids)
 
-        return await self._run(op)
+            def op() -> tuple[dict[str, Any], ...]:
+                query = "SELECT * FROM queue_auto_policy WHERE session_id!=?"
+                params: list[str] = [AUTO_POLICY_GLOBAL]
+                if ids is not None:
+                    placeholders = ",".join("?" * len(ids))
+                    query += f" AND session_id IN ({placeholders})"
+                    params.extend(ids)
+                rows = self._db.execute(
+                    query + " ORDER BY updated_at DESC", params
+                ).fetchall()
+                return self._remember(key, tuple(dict(row) for row in rows))
+
+            cached = await self._run(op)
+        return [dict(row) for row in cached]
 
     async def set_auto_policy(self, session_id: str, **fields: Any) -> dict[str, Any]:
         """Upsert one policy row; only the named columns change."""
@@ -1712,11 +1831,19 @@ class PromptQueueStore:
         await self._run(op)
 
     async def counters(self) -> dict[str, float]:
-        def op() -> dict[str, float]:
-            rows = self._db.execute("SELECT name, value FROM queue_auto_counters").fetchall()
-            return {str(row["name"]): float(row["value"]) for row in rows}
+        cached = self._cached("counters")
+        if cached is _MISS:
 
-        return await self._run(op)
+            def op() -> dict[str, float]:
+                rows = self._db.execute(
+                    "SELECT name, value FROM queue_auto_counters"
+                ).fetchall()
+                return self._remember(
+                    "counters", {str(row["name"]): float(row["value"]) for row in rows}
+                )
+
+            cached = await self._run(op)
+        return dict(cached)
 
     # -- stranding and reconciliation ----------------------------------------
 

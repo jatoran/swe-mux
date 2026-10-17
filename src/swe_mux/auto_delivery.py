@@ -956,11 +956,7 @@ class AutoDeliveryController:
                 return None
             self._backoff.pop(session_id, None)
 
-        view = await self.queue.store.messages_for_target(session_id)
-        head = next(
-            (item for item in view["messages"] if item["state"] in ("draft", "armed", "blocked")),
-            None,
-        )
+        head = await self.queue.store.pending_head(session_id)
         if head is None or head["state"] != "armed":
             # Only an armed head is authorized. A draft was never armed, and a
             # blocked one carries a refusal the user has not resolved: both

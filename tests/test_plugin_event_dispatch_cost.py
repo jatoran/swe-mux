@@ -15,6 +15,7 @@ from typing import Any
 import pytest
 
 from swe_mux.event_bus import EventBus
+from swe_mux.plugin_store import PluginStore
 from swe_mux.plugins import EVENT_DEDUPE_WINDOW, PluginManager
 
 
@@ -87,3 +88,62 @@ async def test_the_dedupe_window_is_bounded_by_count_and_refuses_a_redelivery(
     # The oldest keys were forgotten, in order.
     oldest = total - EVENT_DEDUPE_WINDOW
     assert host._event_order[0] == f"{oldest}:turn_ended:{1000.0 + oldest}"
+
+
+def _plugin_row(plugin_id: str, root: Path) -> dict[str, Any]:
+    return {
+        "id": plugin_id,
+        "name": plugin_id,
+        "version": "1.0.0",
+        "enabled": False,
+        "lifecycle": "inspected",
+        "source_kind": "link",
+        "root": str(root),
+        "manifest_path": str(root / "swe-mux-plugin.toml"),
+        "manifest_digest": "a",
+        "security_digest": "b",
+    }
+
+
+@pytest.mark.asyncio
+async def test_the_registry_is_read_from_sqlite_once_until_it_is_written(
+    tmp_path: Path,
+) -> None:
+    """The dispatcher reads the registry for every event (12.6k reads in one
+    two-minute harness run, `DAEMON_LOAD_ISOLATION.md` item 6) and it changes only
+    when an operator installs, enables or removes a plugin."""
+    store = PluginStore(tmp_path / "mux.db")
+    host = manager(tmp_path, [])
+    host.store = store
+    try:
+        await store.put(_plugin_row("tests.a", tmp_path))
+        selects: list[str] = []
+
+        def trace(sql: str) -> None:
+            if sql.startswith("SELECT * FROM plugins ORDER"):
+                selects.append(sql)
+
+        store._db.set_trace_callback(trace)
+        for seq in range(50):
+            await host._dispatch_event(FakeEvent(seq))
+        assert len(selects) == 1
+
+        # A caller mutating what it was handed must not reach the next reader.
+        (first,) = await store.list()
+        first["enabled"] = True
+        assert (await store.list())[0]["enabled"] is False
+        assert len(selects) == 1
+
+        for write in (
+            lambda: store.set_state("tests.a", enabled=True, lifecycle="enabled"),
+            lambda: store.put(_plugin_row("tests.b", tmp_path)),
+            lambda: store.remove("tests.a"),
+        ):
+            before = await store.list()
+            await write()
+            after = await store.list()
+            assert after != before, "every write is visible to the very next read"
+        assert [record["id"] for record in await store.list()] == ["tests.b"]
+        assert len(selects) == 4
+    finally:
+        await store.close()

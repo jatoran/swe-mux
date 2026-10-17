@@ -1346,6 +1346,11 @@ class ScreenRule:
     region: ScreenRegion
     predicate: re.Pattern[str]
     backends: frozenset[str] | None = None
+    #: ASCII text every match of `predicate` contains, case-insensitively. A tail
+    #: that lacks any of it cannot match, and is answered without running the
+    #: predicate (`_screen_needles`). A `_contains` predicate needs none declared:
+    #: its literal is its needle.
+    requires: tuple[str, ...] = ()
 
 
 WHOLE_TAIL = ScreenRegion("whole_tail")
@@ -1360,8 +1365,14 @@ def bottom_non_empty_lines(lines: int) -> ScreenRegion:
     return ScreenRegion("bottom_non_empty_lines", lines)
 
 
+#: The literal behind every `_contains` predicate, which is that rule's needle.
+_LITERAL_PREDICATES: dict[re.Pattern[str], str] = {}
+
+
 def _contains(value: str) -> re.Pattern[str]:
-    return re.compile(re.escape(value), re.IGNORECASE)
+    pattern = re.compile(re.escape(value), re.IGNORECASE)
+    _LITERAL_PREDICATES[pattern] = value
+    return pattern
 
 
 # Declared order is conflict precedence. The first matching rule wins.
@@ -1515,18 +1526,68 @@ PTY_RULES: tuple[ScreenRule, ...] = (
         "background_wait",
         AFTER_LAST_PROMPT_MARKER,
         re.compile(r"\d+\s+[a-z]+s?\s+still running", re.IGNORECASE),
+        requires=("still running",),
     ),
     ScreenRule(
         "background.waiting_count",
         "background_wait",
         AFTER_LAST_PROMPT_MARKER,
         re.compile(r"waiting for\s+\d+\s+background task", re.IGNORECASE),
+        requires=("waiting for", "background task"),
     ),
 )
+
+
+def _screen_needles(rule: ScreenRule) -> tuple[str, ...]:
+    """The lowercased text a match of ``rule`` must contain; empty when unknown.
+
+    Only ASCII needles qualify, because `_casefolded` proves its equivalence with
+    the regex engine's case folding for ASCII alone.
+    """
+    literal = _LITERAL_PREDICATES.get(rule.predicate)
+    needles = rule.requires or ((literal,) if literal is not None else ())
+    if not needles or not all(needle.isascii() for needle in needles):
+        return ()
+    return tuple(needle.lower() for needle in needles)
+
+
+#: Each rule's needles, in `PTY_RULES` order.
+_PTY_RULE_NEEDLES = tuple(_screen_needles(rule) for rule in PTY_RULES)
 
 _PROMPT_FRAME_RULES = tuple(
     rule for rule in PTY_RULES if rule.region.kind == "after_last_prompt_marker"
 )
+_PROMPT_FRAME_MARKERS = tuple(
+    (rule.predicate, _screen_needles(rule)) for rule in _PROMPT_FRAME_RULES
+)
+
+#: The only characters `re.IGNORECASE` folds onto an ASCII letter that `str.lower`
+#: does not: U+0130 and U+0131 onto i, U+017F onto s (measured over every code
+#: point; U+212A, the Kelvin sign, lowers to k under both). U+0130 is also the one
+#: character `str.lower` turns into two.
+_FOLD_EXCEPTIONS = ("\u0130", "\u0131", "\u017f")
+
+
+def _casefolded(normalized: str) -> str | None:
+    """``normalized.lower()``, when ``needle in`` it answers exactly what a
+    case-insensitive regex scan for that ASCII needle would; otherwise None.
+
+    Ten of the rules look for fixed phrases that most screens do not show, and
+    each scan of a 32 KiB tail cost about 90 us (one regex, 430 us), so on a
+    screen without them most of a classification was spent proving absences.
+    A substring test on the lowered tail proves the same absence in C, and the
+    predicate still runs, unchanged, wherever its needle is present. Within the
+    three exceptions above the two disagree, so a tail containing one is
+    classified the slow way.
+    """
+    if any(character in normalized for character in _FOLD_EXCEPTIONS):
+        return None
+    return normalized.lower()
+
+
+def _absent(needles: tuple[str, ...], folded: str | None) -> bool:
+    """True when a rule with these needles provably cannot match the tail."""
+    return folded is not None and any(needle not in folded for needle in needles)
 
 
 # Escape sequences ride the same byte stream as the text and break it two ways.
@@ -1561,7 +1622,13 @@ def screen_region_text(
     *,
     osc_title: str | None = None,
     osc_progress: str | None = None,
+    folded: str | None = None,
 ) -> str:
+    """The part of a normalized tail a rule reads.
+
+    ``folded`` is `_casefolded(normalized_tail)` when the caller already has it;
+    without it the marker search proves nothing absent and scans every marker.
+    """
     if region.kind == "whole_tail":
         return normalized_tail
     if region.kind == "bottom_non_empty_lines":
@@ -1573,8 +1640,9 @@ def screen_region_text(
         return osc_progress or ""
     starts = [
         match.start()
-        for rule in _PROMPT_FRAME_RULES
-        for match in rule.predicate.finditer(normalized_tail)
+        for predicate, needles in _PROMPT_FRAME_MARKERS
+        if not _absent(needles, folded)
+        for match in predicate.finditer(normalized_tail)
     ]
     return normalized_tail[max(starts, default=0) :]
 
@@ -1598,6 +1666,7 @@ def pty_tail_explain(
     input prompt after it finishes while a sibling tool is still running.
     """
     normalized = _normalize_tail_text(tail)
+    folded = _casefolded(normalized)
     # Most rules share one of only a few regions. Computing the region per rule
     # repeatedly rescanned the whole 32 KiB tail, including every prompt-frame
     # regular expression, for each readiness evaluation. Fleet snapshots evaluate
@@ -1605,7 +1674,7 @@ def pty_tail_explain(
     regions: dict[ScreenRegion, str] = {}
     evaluations: list[dict[str, Any]] = []
     outcome: PtyTailState = "unknown"
-    for rule in PTY_RULES:
+    for rule, needles in zip(PTY_RULES, _PTY_RULE_NEEDLES, strict=True):
         applicable = rule.backends is None or backend is None or backend in rule.backends
         text = regions.get(rule.region)
         if text is None:
@@ -1614,9 +1683,17 @@ def pty_tail_explain(
                 normalized,
                 osc_title=osc_title,
                 osc_progress=osc_progress,
+                folded=folded,
             )
             regions[rule.region] = text
-        matched = applicable and rule.predicate.search(text) is not None
+        # Every region is a part of the normalized tail (or an OSC string, which
+        # no needle-bearing rule reads), so a needle absent from the whole tail is
+        # absent from the region too.
+        matched = (
+            applicable
+            and not _absent(needles, folded)
+            and rule.predicate.search(text) is not None
+        )
         evaluations.append(
             {
                 "id": rule.id,
@@ -1705,6 +1782,13 @@ def pty_tail_appears_idle(tail: str, *, backend: str | None = None) -> bool:
 #: Distinct screens remembered: a few per session for a large fleet.
 SCREEN_VERDICT_CACHE_SIZE = 512
 
+#: Whether any rule reads the OSC title or progress. None does today, so those two
+#: inputs cannot change an explanation and are left out of the cache key: keying on
+#: them split the state watchdog's entries (it passes them) from every other
+#: caller's (which do not). Derived from the rules rather than asserted, so a rule
+#: that starts reading them puts them back on the key by itself.
+_RULES_READ_OSC = any(rule.region.kind in {"osc_title", "osc_progress"} for rule in PTY_RULES)
+
 
 class ScreenVerdictCache:
     """Screen explanations keyed on the exact tail bytes and every other input.
@@ -1748,6 +1832,8 @@ class ScreenVerdictCache:
         # neither read verdicts the real one cached nor leave its own behind for the
         # next test in the same process.
         classifier = pty_tail_explain
+        if not _RULES_READ_OSC:
+            osc_title = osc_progress = None
         key = (
             hashlib.blake2b(raw, digest_size=16).digest(),
             len(raw),
@@ -5906,6 +5992,11 @@ class SessionManager:
                 )
                 return reported
             pending_resolver = getattr(session.adapter, "pending_transcript_path", None)
+            # Only an adapter with a side channel can answer anything but None, and
+            # asking the rest cost a worker hop per session every tick for nothing.
+            # An adapter that does not say is asked.
+            if not getattr(session.adapter, "announces_pending_transcript", True):
+                pending_resolver = None
             try:
                 # In a worker: omp answers this from a breadcrumb file on disk.
                 pending = (

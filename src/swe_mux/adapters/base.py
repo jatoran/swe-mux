@@ -83,6 +83,10 @@ class BackendAdapter(Protocol):
     # path exist to follow. False for a backend that addresses a conversation by id
     # alone (Codex rollouts live in a date tree), where the path never moves.
     resolves_transcript_by_cwd: bool
+    # True when ``pending_transcript_path`` can name a replacement transcript before
+    # it exists (omp's terminal breadcrumb). False lets the switch watcher skip a
+    # worker-thread hop every two seconds per session that could only answer None.
+    announces_pending_transcript: bool
 
     def preflight_worktree(self, project_root: Path, worktree_path: Path) -> None:
         """Prepare harness-owned trust or permission state before a worktree spawn.
@@ -140,7 +144,8 @@ class BackendAdapter(Protocol):
 
         Most harnesses materialize the replacement transcript before mux can
         observe it and return ``None``. Harnesses with a stronger side channel,
-        such as omp's terminal breadcrumb, may name the next file earlier.
+        such as omp's terminal breadcrumb, may name the next file earlier, and
+        declare ``announces_pending_transcript``; the switch watcher only asks those.
         """
         ...
 

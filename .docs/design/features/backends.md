@@ -837,6 +837,12 @@ The guarded assertions themselves did not move: a real turn still has to produce
   is what re-binds a moved session at spawn-discovery time and across a daemon restart. Claude
   probes each project slug for `<native id>.jsonl`; Codex answers from the same id-keyed lookup
   its `transcript_path` already performs.
+- **`announces_pending_transcript` says whether `pending_transcript_path` can ever answer.**
+  True only for omp, whose terminal breadcrumb names a replacement transcript before the file
+  exists. The switch watcher asks only such adapters, because asking the others cost a worker
+  hop per session every two seconds for a constant `None`; an adapter that does not declare
+  the attribute is asked. `test_harness_adapter_matrix.py` requires every harness to declare
+  it, and an adapter declaring `False` to really answer `None`.
 - **"Dead" is measured by observed transcript evidence, never by the file's timestamp alone** (`_transcript_last_write_ts`).
   Windows does not keep a live file's last-write time current: measured 2026-08-06, every long-running Codex rollout on the machine reported an mtime frozen at the file's *creation*, 290 s to 3.5 h behind content that had grown to 5 MB, with every Win32 timestamp API returning that same frozen value.
   `st_size` stayed accurate, and Claude transcripts were unaffected in the same survey.

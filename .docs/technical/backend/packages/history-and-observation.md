@@ -142,6 +142,8 @@ Windowing may not move the replay boundary: a record's `(historical, live)` labe
 Size, file id and write time are read on every tick and a move in any of them triggers the 64-byte prefix read that proves whether the transcript was replaced; when all three hold still the read is skipped, and a 2 s backstop takes it anyway.
 The backstop is not belt-and-braces: on Windows a transcript held open by its writer reports its creation time as `st_mtime` for hours, so a same-length rewrite is entitled to leave every field this tailer may trust exactly as it found them.
 Before this the prefix read was unconditional - an open and a read per observed session per tick, forever, to catch that one case.
+**The tick's stat is shared** (`batched_stat.py`): every tailer's stat, including the one that waits for a file to appear, is answered by one worker pass per 250 ms boundary rather than one worker hop per tailer, and awaiting it is what paces the poll.
+At 36 sessions the per-tailer hops were about 150 a second, each a GIL round trip for a few microseconds of syscall.
 
 **Not:** HTTP routing, title policy, transcript rendering, opening a `background_tasks` annotation from the PTY footer (that tier may only refresh), deciding *what* is approvable (`approvals.py`), any filesystem or database read on the decision path, or writing to a PTY directly.
 Delivery goes through `Session.approval_input_sink`, so the input accounting delivery readiness depends on cannot be skipped.

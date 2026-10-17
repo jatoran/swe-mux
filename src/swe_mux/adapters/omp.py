@@ -130,6 +130,8 @@ class OmpAdapter(BackendAdapter):
     reports_conversation_rollover = True
     assigns_conversation_id = False
     resolves_transcript_by_cwd = True
+    # The terminal breadcrumb names a replacement transcript before it exists.
+    announces_pending_transcript = True
 
     def __init__(
         self,

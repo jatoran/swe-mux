@@ -208,6 +208,7 @@ class CodexAdapter(BackendAdapter):
     # Rollouts live in a date tree addressed by thread id, so a Codex conversation's
     # file never moves when the pane's working directory does.
     resolves_transcript_by_cwd = descriptor(name).resolves_transcript_by_cwd
+    announces_pending_transcript = False
 
     def __init__(
         self,

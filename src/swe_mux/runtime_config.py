@@ -64,11 +64,16 @@ async def watch_config(app: web.Application) -> None:
     path = config.config_path
     if path is None:
         return
-    modified = config_mtime(path)
+    # The once-a-second stat goes to a worker: a file on a slow or contended volume
+    # (antivirus scanning a just-saved file) would otherwise stall the loop, with
+    # every session's I/O behind it. The parse stays on the loop, where it runs
+    # only after a change: `load_config` may save a migrated file, and on the loop
+    # that save cannot interleave with a settings write landing at the same time.
+    modified = await asyncio.to_thread(config_mtime, path)
     while True:
         await asyncio.sleep(1)
         with background.iteration(CONFIG_WATCH_LOOP):
-            current = config_mtime(path)
+            current = await asyncio.to_thread(config_mtime, path)
             if current == modified:
                 continue
             modified = current
