@@ -244,7 +244,7 @@ Items are worked in order, and an item may reorder, split or remove later items 
   - **Change:** `metered_websocket` disables compression for loopback peers on `/pty` and `/events`, and keeps it for tailnet peers unless the harness shows it costs more than it saves there.
   - **Done when:** harness numbers are recorded for both peer kinds.
 
-- [ ] **9. Bounded hook payloads at the source.**
+- [x] **9. Bounded hook payloads at the source.**
   - **Why:** hook bodies average 50 KiB and are parsed on the loop, oversized ones are refused and their events lost (1,688 in 2.5 hours), and the client resends every refused body three times.
   - **Change:**
     - Before choosing caps, list every reader of full hook payloads (the `events` table, canonical telemetry, tier0, observation's `PostToolUse` handling at `observation.py:4756-4791`) and confirm what each one needs.
@@ -252,14 +252,66 @@ Items are worked in order, and an item may reorder, split or remove later items 
     - `hook_client._post` does not retry an HTTP 4xx.
   - **Where:** `hook_client.py`, `routes/agent_ingress.py`, `observation.py`, `design/features/status-detection.md`.
   - **Done when:** the harness and the live daemon show no hook 413s, mean hook body size is recorded before and after, and every reader still passes its tests.
+  - **Readers of a full hook body, and what each needs:**
+    - Canonical telemetry (`PostToolUse`, `PostToolUseFailure`): the output's character count, byte count and SHA-256, never the output.
+    - Tier 0 and the loop detector (`PreToolUse`): the call's normalized target, its content hash over the written content, and the digest of a target too long to store (`tool_call_evidence`).
+    - Approvals (`PermissionRequest` and the other approval requests): the tool input's subject fields whole, and every other string value of 4,096 characters or fewer for the floor.
+    - Conversation identity, cwd and transcript tracking: small identifying fields (`session_id`, `cwd`, `transcript_path`, `source`).
+    - The generic EventBus fan-out, persisted into `mux.db`'s `events` table: nothing reads a tool's output from it. Yet it carried `tool_response` whole, so every `PostToolUse` output was written to `mux.db` for 90 days, 53 KB a row on average in the harness and whatever secret a tool printed, despite a code comment saying the output never entered that table.
+  - **Built:**
+    - `hook_bounds.py`, standard library only, run by the shim on every body: a tool result is measured whole and travels as its first 2,048 characters with the measurement; a reported tool input (`PreToolUse`, `PostToolUse`, `PostToolUseFailure`) that is oversized is cut after its evidence is computed over the whole of it; other long text is cut only if the body still exceeds 192 KiB; the cap halves until the body fits. An approval request's input is never cut, because a rule matched against the head of a command could approve what its tail does.
+    - What was measured travels as `_mux_bounded` (`output`, `tool_evidence`, `fields`), and the daemon prefers it to anything it could compute from what arrived, so no recorded value changes; a body without it (an older shim, or a harness plugin that posts directly) is measured on the daemon as before.
+    - `tool_evidence.py`: `tool_call_evidence` moved out of `observation.py` so the shim can compute it without importing the daemon; the shim's marginal import cost is about 4 ms per hook.
+    - The generic fan-out omits `tool_response` and `_mux_bounded`.
+    - A 4xx is final: the shim neither resends nor spools a refused body.
+    - The ingress cap is one constant (`HOOK_BODY_LIMIT`) shared with the shim.
+    - The load generator posts through the same bounding (`--hook-client bounded`, the default) or unbounded (`raw`), with its body tail no longer clipped under the cap, and the harness reports the mean body size.
+  - **Measured** (36 `scroll` sessions, 3 `PostToolUse` hooks a second fleet-wide, bodies lognormal around 50 KiB):
 
-- [ ] **10. Hook replies off the persistence path.**
+    | Client | Mean hook body | Refused (413) |
+    | --- | --- | --- |
+    | Raw, as before | 53,925 bytes | 5 of 437 |
+    | Bounded to the 192 KiB budget only | 45,802 bytes | 0 of 437 |
+    | Bounded, output sent as its head | 2,469 bytes | 0 of 436 |
+
+    The live daemon before (read-only from `access.log`): 72 refused hook POSTs out of 4,931 in 71 minutes, 24 events each sent three times, all from one session whose tools printed large outputs. The after half needs the redeploy at the end of this work and is recorded there.
+    Hook round-trip latency did not move measurably at this load (p95 18-21 ms in all three runs); what the head buys is 22 times less JSON parsed on the loop per hook and 22 times less written per row.
+  - **Tests:** `tests/test_hook_bounds.py` (each reader against what it needs; an approval request's input survives a body over budget; the fan-out never carries an output; a 413 and a 404 are sent once and a 500 three times; a refused durable event is not spooled), plus the existing hook, approval and observation suites.
+  - **Where:** `hook_bounds.py`, `tool_evidence.py`, `hook_client.py`, `routes/agent_ingress.py`, `observation.py`, `tools/load_session_generator.py`, `tools/fleet_load_harness.py`, `design/interfaces.md`, `design/data-model.md`, `design/features/tier0-facts.md`, `technical/backend/packages/harnesses.md`.
+
+- [x] **10. Hook replies off the persistence path.**
   - **Why:** `emit` awaits its history insert before any subscriber sees the event (`event_bus.py:172-173`; `history.py:2922-2934`), so every hook reply waits behind at least two inserts under the `mux.db` operation lock.
     A `PermissionRequest` decision has a 3.0 s client timeout (`hook_client.py:35-45`), so during a stall auto-approval silently degrades to asking the user.
   - **Change:**
     - Answer `PermissionRequest` from in-memory approval state before persisting its records, and persist them afterwards in order.
     - Move the `PostToolUse` `json.dumps(..., sort_keys=True)` and SHA-256 off the loop, or hash the bounded field from item 9 directly (`observation.py:4756-4791`).
   - **Done when:** decision round-trip p99 under the harness sits far inside the client timeout, and the approval tests cover reply-before-persist ordering.
+  - **Built:**
+    - The change is not specific to `PermissionRequest`, because the wait was not: every emit awaited its own insert before any subscriber saw the event, so every hook reply, approval or not, queued behind the history worker once per event its handler emitted.
+      `event_journal.py` takes persistence off the emit: the `EventBus` sink is synchronous, numbers the event in memory and fans it out at once, and a writer task writes what has queued in one ordered transaction on the history worker.
+      Readers of the `events` table (`events`, `recent_events`, the workload telemetry) flush the journal first, so nothing that reads it can see a gap the fan-out already announced.
+    - Sequence numbers are assigned before they are written, so a restart starts `JOURNAL_LIMIT` (10,000) past the highest one on disk rather than reusing numbers a hard kill handed out unwritten; a write that collides anyway renumbers rather than dropping.
+      A failed write retries with backoff and is counted; past `JOURNAL_LIMIT` pending events the oldest are dropped and counted, which is what a database that stays unwritable for that long costs, in place of an emit that blocks forever.
+      Shutdown writes what is pending synchronously, after the batch in flight finishes (that one runs shielded, because cancelling it at loop shutdown lost it in a first version).
+    - The `PostToolUse` serialization and hash went off the loop in item 9: the shim measures the output and the daemon takes its measurement.
+    - `/api/diagnostics/background` reports the journal (`event_journal`: written, batches, events per batch, pending, max pending, failures, dropped), and so does the harness.
+    - The harness gained a decision probe (`--decision-rate`, default 1 a second fleet-wide): it turns auto-approval on in the scratch config, grants every session `allow_all` through the approval route, and times `PermissionRequest`s the daemon answers.
+      Its first version shared the `PostToolUse` thread's hook source and lost 111 of 146 requests to ingress's per-source sequence ordering (`duplicate_or_stale_sequence`); it now posts under its own source and reports an ingress refusal separately from an unanswered decision.
+  - **Measured** (36 `scroll` sessions, 3 hooks and 1 decision a second fleet-wide, bounded bodies; the same build both times except the sink, and neither with item 6's exit probe):
+
+    | | Insert awaited per emit | Event journal |
+    | --- | --- | --- |
+    | Decision round trip p50 / p95 / p99 / max | 10.3 / 23.4 / 36.0 / 89 ms | 3.9 / 18.4 / 159 / 827 ms |
+    | Decisions answered / at or past 3 s | 146 of 146 / 0 | 146 of 146 / 0 |
+    | Hook round trip p50 / p95 / p99 | 5.1 / 19.7 / 25.9 ms | 3.3 / 16.9 / 46.0 ms |
+    | Event writes | 13,121 single-row transactions, 2.19 s CPU | 13,168 events in 4,414 transactions, 1.08 s CPU |
+    | History pool queued peak / wait p99 | 33 / 11.9 ms | 3 / 1.7 ms |
+
+    The medians are the change: a decision no longer waits behind the inserts for the events its own handler emitted.
+    The journal run's tail is one host-wide stall rather than the sink: keystroke echo (1.79 s), the fleet read (1.19 s), hooks (1.02 s) and OTLP (1.42 s) all peaked in it together.
+    Neither run came near Claude's 3 s timeout, so the harness cannot show the failure this item exists for; the proof is `test_a_decision_is_answered_before_its_records_are_written`, which holds the history worker busy and requires the decision within a second and its records written afterwards, in emission order.
+  - **Tests:** `tests/test_event_journal.py` (emit before write, order and batching, readers flush, shutdown writes what is queued, the restart gap, retry after a failed write, an unserializable field, a sink that is awaited), `tests/test_approval_decisions.py::test_a_decision_is_answered_before_its_records_are_written`, plus the event, approval and observation suites.
+  - **Where:** `event_journal.py`, `history.py`, `event_bus.py`, `server.py`, `routes/diagnostics.py`, `tools/load_session_generator.py`, `tools/fleet_load_harness.py`, `design/interfaces.md`, `technical/backend/packages/history-and-observation.md`, `development/PERFORMANCE_RUNBOOK.md`.
 
 - [ ] **11. Lag-driven load shedding for deferrable loops.**
   - **Why:** housekeeping keeps its cadence while the loop is drowning, and nothing can defer it today (`background_tasks.py:167-327`).

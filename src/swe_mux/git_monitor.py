@@ -507,7 +507,7 @@ async def read_blob_digest(cwd: str, blob: str) -> str | None:
     """SHA-256 of one blob's exact bytes, or None when it is absent or too large.
 
     The same digest a write fact carries for whole-file content
-    (`observation.tool_call_evidence`), which is what makes an equality comparison
+    (`tool_evidence.tool_call_evidence`), which is what makes an equality comparison
     between "what the agent wrote" and "what the commit stored" meaningful. Git's
     own object id is not comparable: it is SHA-1 over a `blob <len>\\0` header.
     """

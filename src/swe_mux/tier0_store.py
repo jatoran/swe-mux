@@ -178,7 +178,7 @@ def _fact_from_event(event: MuxEvent) -> dict[str, Any] | None:
     Pure and side-effect free so it is trivially testable. Content hashing of
     files is deliberately not done here — reading file bytes on the event path is
     the one heavy operation flagged in the design; the adapter boundary hashes
-    what the agent actually wrote or read (`observation.tool_call_evidence` /
+    what the agent actually wrote or read (`tool_evidence.tool_call_evidence` /
     `observation.tool_result_evidence`). This records the fact and a source pointer.
     """
     if event.type not in _CAPTURED_EVENTS:
@@ -201,7 +201,7 @@ def _fact_from_event(event: MuxEvent) -> dict[str, Any] | None:
         kind = "git"
     elif event.type == "context_compacted":
         kind = "compaction"
-    # The adapter emits a normalized target/content hash (observation.tool_call_evidence);
+    # The adapter emits a normalized target/content hash (tool_evidence.tool_call_evidence);
     # fall back to scanning common keys for events that predate it.
     target: str | None = None
     explicit_target = payload.get("target")
@@ -226,7 +226,7 @@ def _fact_from_event(event: MuxEvent) -> dict[str, Any] | None:
     else:
         state = ""
     # What the bounded `target` cannot hold: the adapter digests the untruncated
-    # text when it had to cut it (`observation._target_digest`), and that digest is
+    # text when it had to cut it (`tool_evidence.target_digest`), and that digest is
     # the only thing keeping two long commands sharing a 512-character prefix from
     # fingerprinting as one repeated action.
     raw_digest = payload.get("target_digest")

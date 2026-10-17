@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import time
 from collections.abc import Awaitable, Callable
@@ -10,7 +11,10 @@ from .models import MuxEvent
 
 log = logging.getLogger(__name__)
 
-EventSink = Callable[[MuxEvent], Awaitable[int | None]]
+#: Persists an event and returns its sequence number. The daemon's is synchronous
+#: (`HistoryIndex.journal_event`, which numbers the event and writes it behind the
+#: emit); an awaitable sink is still accepted and awaited.
+EventSink = Callable[[MuxEvent], Awaitable[int | None] | int | None]
 
 
 class EventBus:
@@ -170,7 +174,10 @@ class EventBus:
                     key: value for key, value in self._semantic_events.items() if value.ts >= cutoff
                 }
         if self._sink:
-            event.seq = int(await self._sink(event) or 0)
+            sequence = self._sink(event)
+            if inspect.isawaitable(sequence):
+                sequence = await sequence
+            event.seq = int(sequence or 0)
         for queue in tuple(self._subscribers):
             try:
                 queue.put_nowait(event)

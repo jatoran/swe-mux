@@ -342,6 +342,12 @@ uv run python tools/fleet_load_harness.py --set gil_switch_interval_ms=1
   session the way the agent launcher does, appends a transcript, writes terminal output (`scroll` or
   `redraw`), posts `PostToolUse` hooks and OTLP batches through the session's own credentials, and
   starts child processes.
+- Hook bodies go through the shipped client's bounding by default; `--hook-client raw` posts them
+  unbounded, as clients did before 2026-10-17, which is how the 413 refusals are reproduced.
+- `--decision-rate` (1 a second fleet-wide by default, 0 to disable) turns auto-approval on in the
+  scratch config, gives every session an `allow_all` grant through the approval route, and posts
+  `PermissionRequest`s for a `Read` the daemon answers. The report times each decision and counts
+  those at or past Claude's 3 s hook timeout, after which the CLI stops waiting and asks the user.
 - One acknowledging client per session, one timed probe session, one `/events` client reporting
   desktop presence, and the open window's polls make it a daemon somebody has open; without the
   `/events` client the readiness watcher skips its pass and the run measures an empty room.
@@ -353,9 +359,10 @@ uv run python tools/fleet_load_harness.py --set gil_switch_interval_ms=1
 - `--stall-threshold SECONDS` lowers the scratch daemon's capture threshold through
   `MUX_STALL_THRESHOLD_SECONDS`. On this host the incident shape rarely crosses three seconds while
   echo p99 sits above two, so classifying the stalls a run actually produces needs about one.
-- The report carries keystroke echo, the window's request latencies, hook and OTLP round trips,
-  `loop_stall` records from the scratch `daemon.log`, loop-lag deltas, per-loop busy time in the
-  window, and, with `--profile`, a GIL-only profile attributed to threads and frames.
+- The report carries keystroke echo, the window's request latencies, hook, decision and OTLP round
+  trips, the mean hook body, `loop_stall` records from the scratch `daemon.log`, loop-lag deltas,
+  per-loop busy time in the window, each executor pool's occupancy and waits, the event journal's
+  batching, and, with `--profile`, a GIL-only profile attributed to threads and frames.
 - Artifacts stay in the printed work directory; the scratch daemon is quit through its
   authenticated shutdown route, and any scratch supervisor is reaped by the identity-checked
   `kill_server`.

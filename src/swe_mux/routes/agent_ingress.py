@@ -17,6 +17,7 @@ from .. import (
 )
 from ..harness import HARNESSES
 from ..harness_status import STATUS_EVENT
+from ..hook_bounds import BOUNDS_KEY, HOOK_BODY_LIMIT
 from ..http_support import json_response
 from ..mcp import McpAuthError, McpService
 from ..observation import (
@@ -53,6 +54,18 @@ MCP_BODY_BYTES = 256 * 1024
 OTLP_BODY_BYTES = 4 * 1024 * 1024
 
 
+#: Hook keys the generic EventBus fan-out never carries. The first four collide with
+#: EventBus metadata. `tool_response` is a tool's output: nothing that subscribes to a
+#: hook event reads it, canonical telemetry takes its size and digest on its own path
+#: (`observation.apply_hook_observation`), and carrying it wrote every `PostToolUse`
+#: output whole into `mux.db`'s `events` table for 90 days - 53 KB a row on average
+#: in the load harness, and secrets wherever a tool printed one. `BOUNDS_KEY` is the
+#: hook client's note to the daemon, not part of the event.
+_FAN_OUT_OMITTED_KEYS = frozenset(
+    {"session_id", "source", "event_type", "scope", "tool_response", BOUNDS_KEY}
+)
+
+
 def hook_event_payload(payload: dict[str, Any]) -> dict[str, Any]:
     """Remove hook-owned envelope keys that collide with EventBus metadata.
 
@@ -65,7 +78,7 @@ def hook_event_payload(payload: dict[str, Any]) -> dict[str, Any]:
     kept = {
         key: value
         for key, value in payload.items()
-        if key not in {"session_id", "source", "event_type", "scope"}
+        if key not in _FAN_OUT_OMITTED_KEYS
     }
     start_source = payload.get("source")
     if isinstance(start_source, str) and start_source:
@@ -203,8 +216,10 @@ async def mcp_endpoint(request: web.Request) -> web.Response:
 
 
 async def hook_ingress(request: web.Request) -> web.Response:
-    if request.content_length is not None and request.content_length > 256 * 1024:
-        raise web.HTTPRequestEntityTooLarge(max_size=256 * 1024, actual_size=request.content_length)
+    if request.content_length is not None and request.content_length > HOOK_BODY_LIMIT:
+        raise web.HTTPRequestEntityTooLarge(
+            max_size=HOOK_BODY_LIMIT, actual_size=request.content_length
+        )
     peer = request.transport.get_extra_info("peername") if request.transport else None
     host = peer[0] if peer else ""
     if host not in {"127.0.0.1", "::1"}:
@@ -249,8 +264,8 @@ async def hook_ingress(request: web.Request) -> web.Response:
         )
     window.append(now)
     raw = await request.read()
-    if len(raw) > 256 * 1024:
-        raise web.HTTPRequestEntityTooLarge(max_size=256 * 1024, actual_size=len(raw))
+    if len(raw) > HOOK_BODY_LIMIT:
+        raise web.HTTPRequestEntityTooLarge(max_size=HOOK_BODY_LIMIT, actual_size=len(raw))
     body = json.loads(raw)
     if not isinstance(body, dict):
         raise ValueError("hook body must be a JSON object")

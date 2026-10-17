@@ -1519,7 +1519,10 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
     # the loopback listener. Off the loop, the same wait is a 503 naming this
     # phase and a `startup_phase_running` line every 15s.
     history = await _open_store("HistoryIndex", lambda: HistoryIndex(config.database_path))
-    events = EventBus(history.append_event)
+    # Synchronous: an emit numbers its event and fans it out at once, and the
+    # journal writes it behind (`event_journal.py`). A hook reply no longer waits on
+    # SQLite for each event its handler emits.
+    events = EventBus(history.journal_event)
     telemetry = await _open_store(
         "OperationalTelemetryStore",
         lambda: OperationalTelemetryStore(

@@ -181,7 +181,7 @@ Fields and invariants: `features/daemon-resilience.md`.
   A run's messages are written in one transaction, so their row ids are contiguous and per-conversation lookups bound the FTS walk with `rowid BETWEEN`.
   `history_transcript_index` stores the source watermark (mtime/size, or a harness's own pair), parser version, message count, index time, and the parse's `abandoned_messages` and `tool_calls` counts, so empty/unchanged transcripts remain incremental, MCP hit watermarks can reject stale pointers, and the History reader can describe a conversation without parsing it.
   The two counts are `NULL` on a row indexed before they existed, which the reader treats as a reason to reindex once.
-- `events`: monotonically sequenced mux events.
+- `events`: monotonically sequenced mux events, numbered in memory at emit and written behind it in batches (`event_journal.py`); a start skips 10,000 numbers past the highest written, so a number a crashed daemon handed out unwritten is never reused. Gaps are normal. A hook's `tool_response` is never stored here.
 - `process_evidence`: bounded PID+creation-time fingerprints, owner/lineage/Job Object
   evidence, stable attribution version/source and confirmation times, mutable state/reason/confidence, and exit or ownership-rejection evidence; command text is never stored.
   Version 1 is legacy root-relative attribution; version 2 proves current per-edge causal validation or live Job Object membership.

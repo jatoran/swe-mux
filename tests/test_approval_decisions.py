@@ -124,6 +124,40 @@ async def test_allow_all_answers_an_ordinary_command() -> None:
     assert decision["decision"] == "allow"
 
 
+async def test_a_decision_is_answered_before_its_records_are_written(tmp_path: Any) -> None:
+    """The CLI waits 3 s for a decision and then asks the user. Every event the
+    handler emits used to await its own insert first, so a busy history worker
+    turned auto-approval into a prompt (`DAEMON_LOAD_ISOLATION.md` item 10). The
+    records still land afterwards, in the order they were emitted."""
+    import threading
+
+    from swe_mux.history import HistoryIndex
+
+    history = HistoryIndex(tmp_path / "mux.db")
+    release = threading.Event()
+    try:
+        history._executor.submit(release.wait, 10)  # the worker is busy elsewhere
+        session = _claude("allow_all")
+        events = EventBus(history.journal_event)
+        subscriber = events.subscribe()
+        started = time.perf_counter()
+        decision = await asyncio.wait_for(
+            _permission(session, events, "Bash", command="npm run build"), 2.0
+        )
+        assert time.perf_counter() - started < 1.0
+        assert decision is not None and decision["decision"] == "allow"
+        emitted = [event for event in drain(subscriber) if event.seq]
+        assert emitted, "the handler's events reached their subscribers already"
+        release.set()
+        rows = await history.events()
+        assert [(row["seq"], row["type"]) for row in rows] == [
+            (event.seq, event.type) for event in emitted
+        ]
+    finally:
+        release.set()
+        history.close()
+
+
 # -- the floor, live ---------------------------------------------------------
 
 

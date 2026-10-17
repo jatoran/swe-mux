@@ -14,13 +14,16 @@ another:
   lines into scrollback (`scroll`, how mux runs Codex);
 - `PostToolUse` hook POSTs, with body sizes drawn around the 2026-10-16 fleet's
   measured 50 KiB mean;
+- `PermissionRequest` hook POSTs against an `allow_all` grant this session makes
+  for itself, so each one is answered by the daemon's auto-approval decision path;
 - OTLP log batches carrying `tool_result` records, which the canonical telemetry
   ledger reduces;
 - short-lived child processes.
 
-Hook and OTLP round trips are timed from here, so the harness can report what a
-CLI waiting on the daemon would have felt. The summary is written to `--stats` as
-JSON when the run ends; nothing is printed to the terminal except the load itself.
+Hook, decision and OTLP round trips are timed from here, so the harness can report
+what a CLI waiting on the daemon would have felt. The summary is written to
+`--stats` as JSON when the run ends; nothing is printed to the terminal except the
+load itself.
 
 Stdlib only, so it runs under any Python the harness points at.
 """
@@ -47,7 +50,9 @@ from typing import Any
 # anything over 256 KiB. A lognormal around that mean gives the long tail the
 # incident had without a hand-picked histogram.
 HOOK_MEAN_BYTES = 50 * 1024
-HOOK_CAP_BYTES = 250 * 1024
+# The lognormal's tail is cut here. Past 256 KiB the daemon refuses a raw body,
+# which is what `--hook-client raw` reproduces; the shipped client bounds it.
+HOOK_CAP_BYTES = 1024 * 1024
 OUTPUT_TICK_SECONDS = 0.05
 
 
@@ -56,9 +61,9 @@ class Stats:
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        self.samples: dict[str, list[float]] = {"hook": [], "otlp": []}
-        self.statuses: dict[str, dict[str, int]] = {"hook": {}, "otlp": {}}
-        self.bytes_sent: dict[str, int] = {"hook": 0, "otlp": 0, "output": 0}
+        self.samples: dict[str, list[float]] = {"hook": [], "decision": [], "otlp": []}
+        self.statuses: dict[str, dict[str, int]] = {"hook": {}, "decision": {}, "otlp": {}}
+        self.bytes_sent: dict[str, int] = {"hook": 0, "decision": 0, "otlp": 0, "output": 0}
         self.children = 0
 
     def record(self, kind: str, seconds: float, status: str, size: int) -> None:
@@ -107,21 +112,26 @@ def _percentiles(values: list[float]) -> dict[str, Any]:
     }
 
 
-def _post(url: str, secret: str, body: bytes, timeout: float) -> str:
+def _send(
+    url: str, secret: str, body: bytes, timeout: float, method: str = "POST"
+) -> tuple[str, bytes]:
     request = urllib.request.Request(
         url,
         data=body,
-        method="POST",
+        method=method,
         headers={"Content-Type": "application/json", "X-Mux-Hook-Secret": secret},
     )
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
-            response.read()
-            return str(response.status)
+            return str(response.status), response.read()
     except urllib.error.HTTPError as error:
-        return str(error.code)
+        return str(error.code), b""
     except (OSError, TimeoutError):
-        return "timeout"
+        return "timeout", b""
+
+
+def _post(url: str, secret: str, body: bytes, timeout: float) -> str:
+    return _send(url, secret, body, timeout)[0]
 
 
 def _redraw_frame(cols: int, rows: int, tick: int) -> bytes:
@@ -172,7 +182,7 @@ def output_source(args: argparse.Namespace, stats: Stats, stop: threading.Event)
             out.flush()
 
 
-def _hook_body(rng: random.Random, sequence: int) -> bytes:
+def _hook_body(rng: random.Random, sequence: int, *, bounded: bool) -> bytes:
     size = int(min(HOOK_CAP_BYTES, rng.lognormvariate(0, 0.9) * HOOK_MEAN_BYTES / 1.5))
     payload = {
         "hook_event_name": "PostToolUse",
@@ -181,6 +191,11 @@ def _hook_body(rng: random.Random, sequence: int) -> bytes:
         "tool_input": {"command": "rg --files src | head -n 200", "description": "list files"},
         "tool_response": {"stdout": "x" * max(0, size - 400), "stderr": "", "interrupted": False},
     }
+    if bounded:
+        # What `hook_client` posts: measured, and cut to fit before it leaves.
+        from swe_mux.hook_bounds import bound_hook_payload
+
+        payload = bound_hook_payload("PostToolUse", payload, source="load", sequence=sequence)
     return json.dumps(
         {"event": "PostToolUse", "source": "load", "sequence": sequence, "payload": payload}
     ).encode()
@@ -200,6 +215,84 @@ def promote(base: str, session_id: str, secret: str, backend: str, native_id: st
     """
     body = json.dumps({"backend": backend, "native_id": native_id, "cwd": os.getcwd()}).encode()
     return _post(f"{base}/api/sessions/{session_id}/promote", secret, body, timeout=30)
+
+
+def grant_allow_all(base: str, session_id: str, secret: str) -> str:
+    """Give this conversation an `allow_all` grant, as the approval strip does.
+
+    The daemon refuses a grant until the promotion has given the session an agent
+    run, so a refusal right after promoting is retried briefly rather than taken
+    as the answer.
+    """
+    body = json.dumps({"mode": "allow_all", "set_by": "load"}).encode()
+    status = "unsent"
+    for _ in range(20):
+        status, _payload = _send(
+            f"{base}/api/sessions/{session_id}/approvals", secret, body, timeout=30, method="PUT"
+        )
+        if status == "200":
+            break
+        time.sleep(0.5)
+    return status
+
+
+def _decision_body(sequence: int, cwd: str) -> bytes:
+    payload = {
+        "hook_event_name": "PermissionRequest",
+        "tool_name": "Read",
+        "tool_use_id": f"toolu_decide_{sequence:08d}",
+        "tool_input": {"file_path": str(Path(cwd) / "README.md")},
+    }
+    # Its own source: ingress orders sequenced hooks per source and answers a number
+    # at or below the last one it saw with `duplicate_or_stale_sequence`, unprocessed.
+    # Sharing `load` with the PostToolUse thread's counter dropped most decisions.
+    return json.dumps(
+        {
+            "event": "PermissionRequest",
+            "source": "load-decision",
+            "sequence": sequence,
+            "payload": payload,
+        }
+    ).encode()
+
+
+def _decision_outcome(status: str, response: bytes) -> str:
+    """`allow` when the daemon answered; otherwise what it said instead."""
+    if status != "200":
+        return status
+    try:
+        body = json.loads(response or b"{}")
+    except ValueError:
+        return "unreadable"
+    output = body.get("hookSpecificOutput") or {}
+    if output.get("decision"):
+        return str(output["decision"])
+    # `ignored` names an ingress refusal (a stale sequence, chiefly), which never
+    # reached the decision path and so must not pass for an unanswered decision.
+    return f"ignored:{body['ignored']}" if body.get("ignored") else "unanswered"
+
+
+def decision_source(
+    args: argparse.Namespace, stats: Stats, stop: threading.Event, url: str, secret: str
+) -> None:
+    """Permission requests the daemon answers, timed as the CLI waiting on one feels them.
+
+    Claude gives the hook 3 s (`hook_client._DECISION_TIMEOUT`) and then asks the
+    user, so the distribution's tail against that bound is the measurement.
+    """
+    if args.decision_rate <= 0:
+        return
+    rng = random.Random(args.seed + 4)
+    cwd = os.getcwd()
+    sequence = 0
+    while not stop.wait(rng.expovariate(args.decision_rate)):
+        sequence += 1
+        body = _decision_body(sequence, cwd)
+        started = time.perf_counter()
+        status, response = _send(url, secret, body, timeout=args.post_timeout)
+        stats.record(
+            "decision", time.perf_counter() - started, _decision_outcome(status, response), len(body)
+        )
 
 
 def _transcript_record(native_id: str, parent: str | None, tick: int, size: int) -> dict[str, Any]:
@@ -248,7 +341,7 @@ def hook_source(
     sequence = 0
     while not stop.wait(rng.expovariate(args.hook_rate)):
         sequence += 1
-        body = _hook_body(rng, sequence)
+        body = _hook_body(rng, sequence, bounded=args.hook_client == "bounded")
         started = time.perf_counter()
         status = _post(url, secret, body, timeout=args.post_timeout)
         stats.record("hook", time.perf_counter() - started, status, len(body))
@@ -350,6 +443,18 @@ def main() -> int:
     parser.add_argument(
         "--transcript-rate", type=float, default=3000, help="transcript bytes per second"
     )
+    parser.add_argument(
+        "--hook-client",
+        choices=("bounded", "raw"),
+        default="bounded",
+        help="post hook bodies as the hook client does, or unbounded as before item 9",
+    )
+    parser.add_argument(
+        "--decision-rate",
+        type=float,
+        default=0.0,
+        help="auto-approved PermissionRequest POSTs per second",
+    )
     args = parser.parse_args()
 
     hook_url = os.environ.get("MUX_HOOK_URL", "")
@@ -361,6 +466,7 @@ def main() -> int:
     stats = Stats()
     stop = threading.Event()
     promoted = "skipped"
+    granted = "skipped"
     native_id = str(uuid.uuid4())
     if args.promote != "none" and base and session_id and secret:
         # The transcript exists before the promotion names it, as it does for a
@@ -376,6 +482,8 @@ def main() -> int:
             json.dumps(_transcript_record(native_id, None, 0, 300)) + "\n", encoding="utf-8"
         )
         promoted = promote(base, session_id, secret, args.promote, native_id)
+        if promoted == "200" and args.decision_rate > 0:
+            granted = grant_allow_all(base, session_id, secret)
     else:
         transcript = None
     threads = [
@@ -394,6 +502,14 @@ def main() -> int:
         threads.append(
             threading.Thread(
                 target=hook_source, args=(args, stats, stop, hook_url, secret), name="hooks"
+            )
+        )
+    if hook_url and secret and granted == "200":
+        threads.append(
+            threading.Thread(
+                target=decision_source,
+                args=(args, stats, stop, hook_url, secret),
+                name="decisions",
             )
         )
     if otlp_url and secret:
@@ -418,6 +534,7 @@ def main() -> int:
         "ended_at": time.time(),
         "hook_wired": bool(hook_url and secret),
         "promoted": promoted,
+        "granted": granted,
         **stats.summary(),
     }
     args.stats.write_text(json.dumps(report, indent=2), encoding="utf-8")

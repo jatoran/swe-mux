@@ -101,6 +101,8 @@ class Options:
     burn: int
     stall_profiler: str = ""
     stall_threshold: float = 0.0
+    hook_client: str = "bounded"
+    decision_rate: float = 0.0
 
 
 @dataclass
@@ -169,6 +171,9 @@ class Harness:
             "wsl_bridge_enabled = false",
             "reconcile_external_history = false",
         ]
+        if self.options.decision_rate > 0:
+            # Auto-approval is off by default; the decision probe needs it on.
+            lines.append("approval_auto_enabled = true")
         for key, value in self.options.settings.items():
             lines.append(f"{key} = {value}")
         self.config_path.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
@@ -349,6 +354,10 @@ class Harness:
             f"{options.spawn_interval:.2f}",
             "--seed",
             str(index),
+            "--hook-client",
+            options.hook_client,
+            "--decision-rate",
+            f"{options.decision_rate / per_session:.5f}",
         ]
         if sys.platform == "win32":
             quoted = " ".join(f'"{part}"' if " " in part or "\\" in part else part for part in args)
@@ -602,18 +611,25 @@ class Harness:
                 )
         loop_cost.sort(key=lambda row: -row["busy_seconds"])
         hooks: list[float] = []
+        decisions: list[float] = []
         otlp: list[float] = []
-        statuses: dict[str, dict[str, int]] = {"hook": {}, "otlp": {}}
+        statuses: dict[str, dict[str, int]] = {"hook": {}, "decision": {}, "otlp": {}}
+        granted: dict[str, int] = {}
         output_bytes = 0
+        hook_bytes = 0
         generators = 0
         for path in sorted(self.stats_dir.glob("*.json")):
             with contextlib.suppress(OSError, ValueError):
                 data = json.loads(path.read_text("utf-8"))
                 generators += 1
                 hooks.extend(data.get("samples", {}).get("hook", []))
+                decisions.extend(data.get("samples", {}).get("decision", []))
                 otlp.extend(data.get("samples", {}).get("otlp", []))
                 output_bytes += int(data.get("bytes_sent", {}).get("output", 0))
-                for kind in ("hook", "otlp"):
+                hook_bytes += int(data.get("bytes_sent", {}).get("hook", 0))
+                grant = str(data.get("granted", "skipped"))
+                granted[grant] = granted.get(grant, 0) + 1
+                for kind in statuses:
                     for code, count in data.get("statuses", {}).get(kind, {}).items():
                         statuses[kind][code] = statuses[kind].get(code, 0) + count
         return {
@@ -631,6 +647,11 @@ class Harness:
             "fleet_read_ms": percentiles(fleet_reads),
             "health_read_ms": percentiles(health_reads),
             "hook_round_trip_ms": percentiles(hooks),
+            "hook_body_mean_bytes": round(hook_bytes / len(hooks)) if hooks else None,
+            "decision_round_trip_ms": percentiles(decisions),
+            # Past this the CLI stops waiting and asks the user (`hook_client.py`).
+            "decisions_past_client_timeout": sum(1 for value in decisions if value >= 3.0),
+            "decision_grants": granted,
             "otlp_round_trip_ms": percentiles(otlp),
             "ingress_statuses": statuses,
             "loop_stalls": {
@@ -668,6 +689,7 @@ class Harness:
                 after.get("queue_reads") or {},
                 ("hits", "misses", "generation"),
             ),
+            "event_journal": after.get("event_journal") or {},
             "profile": profile_result,
             "workdir": str(self.workdir),
         }
@@ -700,6 +722,16 @@ def render(report: dict[str, Any]) -> None:
     line("GET /api/processes", report.get("process_read_ms") or {})
     print(f"  {'/events frames':<18} {report.get('events_frames')}")
     line("hook round trip", report["hook_round_trip_ms"])
+    print(
+        f"  {'hook body mean':<18} {report.get('hook_body_mean_bytes')} bytes "
+        f"({options.get('hook_client', 'bounded')} client)"
+    )
+    if options.get("decision_rate"):
+        line("decision round trip", report.get("decision_round_trip_ms") or {})
+        print(
+            f"  {'decisions >= 3s':<18} {report.get('decisions_past_client_timeout')}, "
+            f"grants {report.get('decision_grants')}"
+        )
     line("otlp round trip", report["otlp_round_trip_ms"])
     stalls = report["loop_stalls"]
     print(
@@ -736,6 +768,13 @@ def render(report: dict[str, Any]) -> None:
             f"  queue reads        {reads.get('hits', 0) / window:.1f} cached/s, "
             f"{reads.get('misses', 0) / window:.1f} read/s, "
             f"{reads.get('generation', 0):.0f} writes"
+        )
+    journal = report.get("event_journal") or {}
+    if journal:
+        print(
+            f"  event journal      {journal.get('events_written')} events in "
+            f"{journal.get('batches')} writes ({journal.get('events_per_batch')} each), "
+            f"max pending {journal.get('max_pending')}, failures {journal.get('failures')}"
         )
     if report.get("executor_work"):
         print("  costliest executor work (CPU since start):")
@@ -810,6 +849,18 @@ def main() -> int:
         "--hook-rate", type=float, default=3.0, help="hook POSTs/s across the fleet"
     )
     parser.add_argument(
+        "--hook-client",
+        choices=("bounded", "raw"),
+        default="bounded",
+        help="post hook bodies as the hook client does, or unbounded as before item 9",
+    )
+    parser.add_argument(
+        "--decision-rate",
+        type=float,
+        default=1.0,
+        help="auto-approved PermissionRequest POSTs/s across the fleet (0 disables)",
+    )
+    parser.add_argument(
         "--otlp-rate", type=float, default=1.5, help="OTLP posts/s across the fleet"
     )
     parser.add_argument(
@@ -861,6 +912,8 @@ def main() -> int:
         mode=args.mode,
         output_rate=args.output_rate,
         hook_rate=args.hook_rate,
+        hook_client=args.hook_client,
+        decision_rate=args.decision_rate,
         otlp_rate=args.otlp_rate,
         spawn_interval=args.spawn_interval,
         probe_interval=args.probe_interval,

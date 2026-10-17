@@ -102,7 +102,7 @@ opt-in and gated (`automation-enablement.md`). Vision: `../../development/CONTRO
   never silently swallowed: for a durable-evidence substrate, a silent drop is
   indistinguishable from "nothing happened".
 - The adapter emits a normalized `target` + parse-time `content_hash` on `tool_use`
-  (`observation.tool_call_evidence`) and correlates the same `target` onto the matching
+  (`tool_evidence.tool_call_evidence`) and correlates the same `target` onto the matching
   `tool_result` by call id; Tier 0 prefers those, falling back to key-scan.
 - A codex write is a special case: its path lives in an `*** Add/Update/Delete File:` patch
   header rather than a key, and it applies through an exec wrapper whose `patch_apply_end` result
@@ -143,8 +143,9 @@ opt-in and gated (`automation-enablement.md`). Vision: `../../development/CONTRO
 ## Key files
 
 - Store + extraction + gated consumer: `src/swe_mux/tier0_store.py`
-- Adapter-boundary evidence: `src/swe_mux/observation.py` (`tool_call_evidence`,
-  `tool_result_evidence`, `parse_test_outcome`, `bounded_detail`)
+- Adapter-boundary evidence: `src/swe_mux/tool_evidence.py` (`tool_call_evidence`, standard
+  library only so the hook client can compute it before bounding an oversized input) and
+  `src/swe_mux/observation.py` (`tool_result_evidence`, `parse_test_outcome`, `bounded_detail`)
 - Git commit/tree evidence: `src/swe_mux/git_monitor.py` (`GitEvidence`, `read_git_reading`)
 - Construction, prune, gate resolver, lifecycle: `src/swe_mux/server.py`
 

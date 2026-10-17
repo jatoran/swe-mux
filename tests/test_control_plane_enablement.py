@@ -506,7 +506,7 @@ async def test_one_tool_call_is_one_fact_however_many_observers_report_it(
 
 
 def test_tool_call_evidence_hashes_write_payload_race_free() -> None:
-    from swe_mux.observation import tool_call_evidence
+    from swe_mux.tool_evidence import tool_call_evidence
 
     target, content_hash, digest = tool_call_evidence(
         {"file_path": "a/b.py", "new_string": "hello"}
@@ -525,7 +525,7 @@ def test_a_truncated_target_carries_a_digest_of_the_whole_command() -> None:
     # agreed for 512 characters and differed only after it, so the truncated prefix
     # collapsed them onto one fingerprint and the loop detector reported a repeat
     # that never happened. 227 command facts in that day sat at exactly the bound.
-    from swe_mux.observation import TOOL_TARGET_LIMIT, tool_call_evidence
+    from swe_mux.tool_evidence import TOOL_TARGET_LIMIT, tool_call_evidence
 
     shared = "python probe.py " + ("x" * TOOL_TARGET_LIMIT)
     first, _, first_digest = tool_call_evidence({"command": shared + "one"})
@@ -540,7 +540,7 @@ def test_tool_call_evidence_extracts_the_apply_patch_target() -> None:
     # codex writes via apply_patch, whose raw-string input is not JSON and carries
     # the file path in a header rather than a key. Without mining it the write
     # records with no target and provenance is blind to codex file writes.
-    from swe_mux.observation import tool_call_evidence
+    from swe_mux.tool_evidence import tool_call_evidence
 
     patch = (
         "*** Begin Patch\n"

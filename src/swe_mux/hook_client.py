@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.request
 
 # Events whose loss leaves a session misrepresented until something else happens
@@ -99,17 +100,29 @@ def _post_for_decision(url: str, secret: str, body: bytes) -> tuple[bool, object
     return True, decision if isinstance(decision, dict) else None
 
 
-def _post(url: str, secret: str, body: bytes) -> bool:
+def _post(url: str, secret: str, body: bytes) -> bool | None:
+    """Deliver ``body``: True when delivered, False when not, None when refused.
+
+    A 4xx is the daemon's final answer about this exact body - too large, a session
+    that has ended, a secret that is wrong - so it is not resent: the 2026-10-16 fleet
+    resent each of 1,688 oversized bodies twice more, into the same refusal. A
+    refused event is not spooled either, because replaying it would be refused too.
+    """
     request = _request(url, secret, body)
     last_error: OSError | None = None
     for attempt in range(_ATTEMPTS):
         try:
             urllib.request.urlopen(request, timeout=_TIMEOUTS[attempt]).close()
             return True
+        except urllib.error.HTTPError as error:
+            if 400 <= error.code < 500:
+                sys.stderr.write(f"swe-mux hook POST refused: HTTP {error.code}\n")
+                return None
+            last_error = error
         except OSError as error:
             last_error = error
-            if attempt + 1 < _ATTEMPTS:
-                time.sleep(0.2 * (attempt + 1))
+        if attempt + 1 < _ATTEMPTS:
+            time.sleep(0.2 * (attempt + 1))
     if last_error is not None:
         sys.stderr.write(f"swe-mux hook POST failed after {_ATTEMPTS} attempts: {last_error}\n")
     return False
@@ -346,6 +359,10 @@ def main() -> None:
         process_identity = capture_codex_process()
         if process_identity is not None:
             payload[PROCESS_FIELD] = process_identity
+    if isinstance(payload, dict):
+        from .hook_bounds import bound_hook_payload
+
+        payload = bound_hook_payload(event, payload)
     body = json.dumps({"event": event, "payload": payload}).encode()
     if event in _DECISION_EVENTS:
         delivered, decision = _post_for_decision(url, secret, body)
@@ -362,7 +379,7 @@ def main() -> None:
         # a session-preserving restart has no second source. Fall through to the
         # ordinary retry-and-spool path with no decision, which leaves the prompt
         # with the user exactly as before this feature existed.
-    if not _post(url, secret, body) and event in _DURABLE_EVENTS:
+    if _post(url, secret, body) is False and event in _DURABLE_EVENTS:
         _spool(spool, event, payload)
 
 

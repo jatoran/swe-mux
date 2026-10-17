@@ -1893,6 +1893,10 @@ The response carries only server name, tool name, description, and safe metadata
 Loopback-only and authenticated with the session's own `X-Mux-Hook-Secret`, like hook ingress, but on its own route: it is not a lifecycle event and must never touch status detection, history, or the prompt queue.
 The body is whitelisted to `mcp__*` names and descriptions, bounded, and held only in memory for the session's current process generation.
 
+`POST /api/hooks/{sid}` refuses a body over 256 KiB with `413` (`hook_bounds.HOOK_BODY_LIMIT`), and the shim keeps every body under 192 KiB (`technical/backend/packages/harnesses.md`).
+A payload may carry `_mux_bounded`, what the shim measured before cutting: `output` (`chars`, `bytes`, `sha256` of the whole tool result, sent on every `PostToolUse` and `PostToolUseFailure`), `tool_evidence` (`[target, content_hash, target_digest]` of a reported tool input that was cut), and `fields` (the same three measurements per other text field that was cut).
+The daemon prefers these to anything it could compute from what arrived, and validates only their shape.
+The generic EventBus fan-out of a hook never carries `tool_response` or `_mux_bounded`, so a tool's output is never written to the `events` table.
 `POST /api/hooks/{sid}` additionally accepts `{"event": "Status", "payload": <Claude status-line snapshot + delegate>}` from the status-line tee (`features/harness-status.md`).
 It shares the hooks' route, secret, and foreign-conversation filter because it speaks for the same conversation, but it is a measurement rather than a lifecycle event: it never moves state and is kept off the generic EventBus fan-out.
 A real change surfaces as a compact `harness_status` event, and the session snapshot carries the result as `harness_status` (`data-model.md`).
@@ -2319,6 +2323,7 @@ Its `pools[]` reports each executor's occupancy since start: `name` (the thread 
 `screen_classification` reports the shared screen-verdict cache (`entries`, `hits`, `classifications`, `classify_seconds`, `hit_rate`).
 `transcript_stats` reports the transcript tailers' shared stat passes (`batched_stat.py`): `passes` and `stats`, so `stats / passes` is how many followed files each worker hop served.
 `queue_reads` reports the prompt queue's per-tick reads answered from memory between writes (`entries`, `hits`, `misses`, `generation`, the count of operations that wrote), or `null` before the queue store exists.
+`event_journal` reports event persistence behind the emit (`event_journal.py`): `next_seq`, `written_seq`, `pending` (what a hard kill would lose), `max_pending`, `batches`, `events_written`, `events_per_batch`, `dropped`, `failures` and `last_error`.
 `process_priority` reports what the process inspector has lowered to keep the fleet
 below this process (`target`, `lowered_total`, `lowered_last_pass`, `denied_pids`).
 `listener_guard` reports closed listeners found and rebound, and carries

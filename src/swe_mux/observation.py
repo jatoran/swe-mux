@@ -37,6 +37,7 @@ from .harness_status import (
     codex_context_fraction,
     status_summary,
 )
+from .hook_bounds import client_bounds, hook_output_text, text_metrics
 from .models import SessionState
 from .path_identity import same_path
 from .session import (
@@ -52,6 +53,7 @@ from .session import (
 )
 from .session_patch import session_patch
 from .text_safety import utf8_safe
+from .tool_evidence import tool_call_evidence
 
 log = logging.getLogger(__name__)
 
@@ -369,48 +371,6 @@ def _event_timestamp(event: dict[str, Any]) -> float | None:
     return None
 
 
-#: Bound on a normalized tool target. The same bound Tier 0's `target` column
-#: applies, kept here so the digest that survives truncation is computed against
-#: the exact limit that caused it.
-TOOL_TARGET_LIMIT = 512
-_TOOL_TARGET_FIELDS = (
-    "file_path",
-    "path",
-    "notebook_path",
-    "filename",
-    "command",
-    "cmd",
-    "pattern",
-    "url",
-)
-_TOOL_CONTENT_FIELDS = ("new_string", "content", "contents", "new_source", "text", "patch")
-# The file path in an apply_patch envelope, tolerant of how codex wraps it: the
-# patch may arrive as raw text with real newlines, or as a string literal inside a
-# JS `exec` call where the newlines are escaped (`\n`) and the marker sits mid-line.
-# The terminator therefore accepts an escaped or real newline, a closing quote, or
-# end of text.
-_APPLY_PATCH_FILE_RE = re.compile(
-    r"\*\*\*\s+(?:Add|Update|Delete)\s+File:\s*(.+?)\s*(?:\\n|[\r\n\"]|$)"
-)
-
-
-def _apply_patch_target(text: str) -> str | None:
-    """The first file path an apply_patch envelope names, if the text is one.
-
-    codex writes through apply_patch, whose tool input carries the file path in an
-    ``*** Add/Update/Delete File:`` header rather than a key. Without mining it the
-    write records with no target and provenance cannot trace that file across
-    sessions — the gap the codex live canary exposed (2026-08-16).
-    """
-    if "*** " not in text:
-        return None
-    match = _APPLY_PATCH_FILE_RE.search(text)
-    if not match:
-        return None
-    path = match.group(1).strip().strip('"').strip()
-    return path[:512] or None
-
-
 def _patch_apply_evidence(
     changes: Any, fallback_target: str | None
 ) -> tuple[str | None, str | None]:
@@ -439,85 +399,6 @@ def _patch_apply_evidence(
         else None
     )
     return target, content_hash
-
-
-def _target_digest(raw: str) -> str | None:
-    """A discriminator for a target the stored column cannot hold whole.
-
-    A `target` is bounded to `TOOL_TARGET_LIMIT` characters, and a long shell
-    command is exactly the case where the *prefix* is the shared part: three
-    iterations of the same heredoc-written probe script agree for 512 characters
-    and differ only after it. The truncated prefix therefore collapses distinct
-    actions onto one fingerprint (observed live, 2026-08-21: 227 command facts in
-    one day sat at exactly the bound). This digest of the untruncated text is
-    what keeps them apart, and it is computed here because this is the last place
-    the whole string exists — the event payload carries the bounded copy.
-
-    None when nothing was lost, so an untruncated target keeps a fingerprint that
-    depends on the target alone.
-    """
-    if len(raw) <= TOOL_TARGET_LIMIT:
-        return None
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
-
-
-def tool_call_evidence(tool_input: Any) -> tuple[str | None, str | None, str | None]:
-    """Normalized target, parse-time content hash, and full-target digest.
-
-    Runs at the adapter boundary while the native input is still in hand, so the
-    hash is of the exact bytes the agent wrote — race-free, unlike reading the
-    file back off disk after the event has queued. Native shapes never leave here.
-    The third element is the discriminator for a target too long to store whole
-    (`_target_digest`), and is None whenever the target survived intact.
-    """
-    if isinstance(tool_input, str):
-        raw_text = tool_input
-        try:
-            tool_input = json.loads(tool_input)
-        except (json.JSONDecodeError, ValueError):
-            # Not JSON: codex passes an apply_patch envelope as the raw tool input,
-            # whose file path lives in a `*** Add/Update/Delete File:` header rather
-            # than a key. Hash the exact patch bytes as the write's content.
-            patched = _apply_patch_target(raw_text)
-            content = (
-                hashlib.sha256(raw_text.encode("utf-8")).hexdigest() if raw_text else None
-            )
-            return patched, content, None
-    if not isinstance(tool_input, dict):
-        return None, None, None
-    target: str | None = None
-    digest: str | None = None
-    for key in _TOOL_TARGET_FIELDS:
-        value = tool_input.get(key)
-        if isinstance(value, str) and value.strip():
-            raw = value.strip()
-            target = raw[:TOOL_TARGET_LIMIT]
-            digest = _target_digest(raw)
-            break
-    # A patch may arrive wrapped in a dict (`{"input": "*** Begin Patch..."}`); mine
-    # its file path when no explicit target key carried one.
-    if target is None:
-        for key in ("input", "patch"):
-            value = tool_input.get(key)
-            if isinstance(value, str):
-                patched = _apply_patch_target(value)
-                if patched:
-                    target = patched
-                    break
-    parts: list[str] = []
-    for key in _TOOL_CONTENT_FIELDS:
-        value = tool_input.get(key)
-        if isinstance(value, str) and value:
-            parts.append(value)
-    edits = tool_input.get("edits")
-    if isinstance(edits, list):
-        for edit in edits:
-            if isinstance(edit, dict) and isinstance(edit.get("new_string"), str):
-                parts.append(edit["new_string"])
-    content_hash = (
-        hashlib.sha256("\x00".join(parts).encode("utf-8")).hexdigest() if parts else None
-    )
-    return target, content_hash, digest
 
 
 # Bound for the `detail` string carried on a normalized tool_result event.
@@ -4737,8 +4618,13 @@ async def apply_hook_observation(
         # fleet — and the loop detector read 25,362 unrelated shell calls as one
         # action repeating (measured 2026-08-21). The call id is what lets Tier 0
         # fold this shadow and the transcript's record of the same call into one
-        # fact instead of two.
-        target, content_hash, target_digest = tool_call_evidence(payload.get("tool_input"))
+        # fact instead of two. A client that had to cut an oversized input computed
+        # the evidence over the whole of it first (`hook_bounds`), and only that
+        # answer describes what the agent wrote.
+        measured = client_bounds(payload).get("tool_evidence")
+        target, content_hash, target_digest = (
+            measured if measured is not None else tool_call_evidence(payload.get("tool_input"))
+        )
         tool_use_id = str(payload.get("tool_use_id") or "") or None
         _remember_tool_call(session, tool_use_id or "", tool, target)
         await events.emit(
@@ -4765,24 +4651,20 @@ async def apply_hook_observation(
         # content-sensitive observation only to the canonical reducer: the output
         # itself never enters the generic EventBus log or the legacy event table.
         if "transcript" in descriptor(session.record.backend).state_sources:
-            response = (
-                payload.get("tool_response")
-                if event_type == "PostToolUse"
-                else payload.get("error")
-            )
-            if response is None:
-                output_text = ""
-            elif isinstance(response, str):
-                output_text = response
-            else:
-                output_text = json.dumps(
-                    response,
-                    ensure_ascii=False,
-                    sort_keys=True,
-                    separators=(",", ":"),
-                    default=str,
+            # The hook client measures the output before it posts (`hook_bounds`), so
+            # a tool's output is serialized and hashed in that process rather than on
+            # this loop, and is measured whole even when the body carries only its
+            # head. A hook that arrives without the measurement (an older client, or
+            # a harness plugin posting directly) is measured here.
+            metrics = client_bounds(payload).get("output")
+            if metrics is None:
+                metrics = text_metrics(
+                    hook_output_text(
+                        payload.get("tool_response")
+                        if event_type == "PostToolUse"
+                        else payload.get("error")
+                    )
                 )
-            output_bytes = output_text.encode("utf-8", "replace")
             _, result_target = _recall_tool_call(session, tool_use_id or "")
             events.emit_transient_to(
                 "canonical-telemetry",
@@ -4796,9 +4678,9 @@ async def apply_hook_observation(
                 success=event_type == "PostToolUse",
                 duration_ms=payload.get("duration_ms"),
                 error_type=payload.get("error_type"),
-                output_chars=len(output_text),
-                output_bytes=len(output_bytes),
-                output_sha256=hashlib.sha256(output_bytes).hexdigest() if output_bytes else None,
+                output_chars=metrics["chars"],
+                output_bytes=metrics["bytes"],
+                output_sha256=metrics["sha256"],
             )
         note_activity_evidence(
             session,

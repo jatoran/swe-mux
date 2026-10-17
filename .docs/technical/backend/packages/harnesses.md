@@ -34,14 +34,20 @@ Provider command, resume, and transcript normalization; additive Claude and Code
 That extension also publishes the running process's live MCP tool inventory to `MUX_RUNTIME_URL`, on its own route rather than through hook ingress, because it is not a lifecycle event.
 
 `hook_client.py` also carries the Claude status-line tee (`Status`): it runs the user's own status-line command, named in the identity file, under the shell Claude would use, writes that command's stdout back unchanged, and only then posts the CLI's snapshot in one short-budget attempt with no retry and no spool.
-The user's command is resolved once at spawn by `claude_status_line.py` (Claude's scope precedence, one implementation) and written into the identity file by the adapter; the shim itself keeps importing nothing from the package.
+The user's command is resolved once at spawn by `claude_status_line.py` (Claude's scope precedence, one implementation) and written into the identity file by the adapter; the shim itself keeps importing nothing from the package beyond two standard-library-only modules, below.
+
+Every hook body leaves the shim measured and bounded (`hook_bounds.py`, with `tool_evidence.py`): a tool result's size and digest are computed in the shim and only its first 2,048 characters travel.
+An oversized reported tool input is cut after its target and content hash are computed over the whole of it, and other long text is cut only if the body still exceeds 192 KiB, under the daemon's 256 KiB cap.
+The daemon prefers those measurements to anything it could compute from what arrived, so nothing it records changes, and a tool's output is never serialized or hashed on its event loop.
+An approval request's input is never cut, because a rule matched against the head of a command could approve what its tail does.
+A 4xx is final: the shim neither resends nor spools a body the daemon refused, where the 2026-10-16 fleet resent each of 1,688 refusals twice more.
 `harness_status.py` is where every such report - the snapshot, the `permission_mode` on every hook, the Codex rollout's effort, tier and rate limits - is parsed into `SessionRecord.harness_status` (`design/features/harness-status.md`).
 
 `agent_launcher.py` additionally owns the console the CLI is about to run in, because it is the one process in that chain that is neither the shell nor the agent.
 It holds `CTRL_C_EVENT`/`CTRL_BREAK_EVENT` so it can never be the link that stops waiting first, passes `CTRL_CLOSE_EVENT` and the logoff/shutdown events through (real terminations with a deadline), spawns through `Popen` rather than `subprocess.call` so the CLI's pid can be published while it runs, and adds the colour-forcing pair a shell's environment deliberately lacks.
 It reports its own lifecycle to `MUX_SHIM_URL` at three moments (`started`, `child_started`, `exited`) from the normal return, an `atexit`, and the console handler, because the interesting exits are the ones that never run a `finally`.
 
-**Not:** public HTTP shapes, mandatory success of best-effort provider trust preparation, composing the decision shape itself (the shim imports nothing from the package and must stay a relay), retrying a decision POST, or retrying a status snapshot (the next message supersedes it).
+**Not:** public HTTP shapes, mandatory success of best-effort provider trust preparation, composing the decision shape itself (the shim must stay a relay; what it imports from the package is limited to the standard-library-only `hook_bounds` and `tool_evidence`), retrying a decision POST, retrying a 4xx, or retrying a status snapshot (the next message supersedes it).
 Not deciding what its reports mean either - `console_contention.py` holds those rules - and never an argument *value* in a report, since an agent command line can carry a prompt.
 
 ## `shim_paths.py`

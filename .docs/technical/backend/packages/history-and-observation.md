@@ -11,6 +11,11 @@ Each entry lists what the module owns, then **Not:** what it deliberately does n
 
 The shared schema, Project and layout persistence, run history, bounded post-startup message-search repair with a literal fallback, and durable session and run-to-commit provenance with evidence promotion and lifecycle cleanup.
 
+It also owns the `events` table through `event_journal.py`. The daemon's `EventBus` sink is `journal_event`, which numbers an event in memory and returns at once, and one writer task writes whatever has accumulated in a single ordered transaction on the history worker; `append_event` is the same plus a wait, for callers that need the row written.
+Before this every emit awaited its own insert before any subscriber saw the event, so each hook reply (a `PermissionRequest` decision among them) queued behind single-row transactions on the one worker and the `mux.db` operation lock every store shares.
+Every read of `events` (`events`, `recent_events`, `workload_telemetry`) first waits for everything numbered before it, so a cursor never sees a hole a queued event will fill; `close` writes what is still queued.
+The journal's state is `event_journal` on `/api/diagnostics/background`.
+
 `history_naming_rows` is the chunked bulk read behind display names for ended sessions.
 It is keyed by both row id and owning session id, where an exact row id outranks the session fallback, so the first run of a rolled-over session is not redirected to its last.
 

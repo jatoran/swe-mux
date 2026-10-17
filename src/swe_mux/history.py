@@ -18,6 +18,8 @@ from typing import Any, TypeVar
 
 from .conversation_index import indexed_parse
 from .errors import NotFound
+from .event_journal import EventJournal, write_events
+from .event_journal import first_sequence as first_event_sequence
 from .executor_accounting import AccountedThreadPoolExecutor
 from .git_projects import ProjectIdentity
 from .harness import (
@@ -677,6 +679,11 @@ class HistoryIndex:
         # Create and initialise the connection on the worker thread so the
         # connection object keeps strict thread affinity for its whole lifetime.
         self._executor.submit(self._connect).result()
+        self.journal = EventJournal(
+            self._executor.submit(lambda: first_event_sequence(self._db)).result(),
+            self._write_event_batch,
+        )
+        self.journal.bind(self._executor)
 
     def _connect(self) -> None:
         # Confined to the single worker thread (queries via _run, close via the
@@ -2922,22 +2929,24 @@ class HistoryIndex:
 
         return await self._run(op)
 
-    async def append_event(self, event: MuxEvent) -> int:
-        def op() -> int:
-            cursor = self._db.execute(
-                "INSERT INTO events(ts,session_id,source,type,payload_json) VALUES(?,?,?,?,?)",
-                (event.ts, event.session_id, event.source, event.type, json.dumps(event.payload)),
-            )
-            sequence = int(cursor.lastrowid or 0)
-            if sequence % 100 == 0:
-                self._db.execute(
-                    "DELETE FROM events WHERE ts<? OR seq<=?",
-                    (event.ts - 90 * 86400, max(0, sequence - 100_000)),
-                )
-            self._db.commit()
-            return sequence
+    def journal_event(self, event: MuxEvent) -> int:
+        """Number ``event`` and queue it to be written: the daemon's `EventBus` sink.
 
-        return await self._run(op)
+        Synchronous, so an emit never waits for SQLite (`event_journal.py`).
+        """
+        return self.journal.assign(event)
+
+    async def append_event(self, event: MuxEvent) -> int:
+        """Number ``event`` and wait until it is written."""
+        return await self.journal.append(event)
+
+    async def flush_events(self) -> None:
+        """Wait until every event numbered so far is in the `events` table."""
+        await self.journal.flush()
+
+    def _write_event_batch(self, batch: list[MuxEvent]) -> None:
+        """The journal's writer (worker thread): one transaction per batch."""
+        run_sqlite_operation(self._db, self._operation_lock, lambda: write_events(self._db, batch))
 
     async def record_git_provenance(
         self,
@@ -4226,6 +4235,7 @@ class HistoryIndex:
 
     async def workload_telemetry(self, since: float = 0) -> dict[str, Any]:
         """Observational run aggregates; these are not causal benchmark claims."""
+        await self.journal.flush()
 
         def op() -> dict[str, Any]:
             rows = self._db.execute(
@@ -4876,6 +4886,9 @@ class HistoryIndex:
         limit: int = 500,
         after_seq: int = 0,
     ) -> list[dict[str, Any]]:
+        # Everything already numbered is written first, so a cursor read never sees a
+        # hole a queued event is about to fill (`event_journal.py`).
+        await self.journal.flush()
         sql = "SELECT seq,ts,session_id,source,type,payload_json FROM events WHERE ts>? AND seq>?"
         args: list[Any] = [since, after_seq]
         if session_id:
@@ -4900,6 +4913,7 @@ class HistoryIndex:
         oldest rows in a 90-day/100k-row table. A client reconnecting after a gap
         needs the tail, and needs to know when the tail does not cover the gap.
         """
+        await self.journal.flush()
         sql = "SELECT seq,ts,session_id,source,type,payload_json FROM events"
         args: list[Any] = []
         if session_id:
@@ -4934,5 +4948,10 @@ class HistoryIndex:
         # finishes its write rather than leaving a half-replaced message set.
         for pool in (self._reindex_pool, self._summary_pool):
             pool.shutdown(wait=True, cancel_futures=True)
+        # Events numbered and not yet written go to disk before the connection closes,
+        # on the worker as every other write does.
+        self.journal.close(
+            lambda batch: self._executor.submit(self._write_event_batch, batch).result()
+        )
         self._executor.submit(self._db.close).result()
         self._executor.shutdown(wait=True)

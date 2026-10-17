@@ -466,6 +466,14 @@ async def get_background_health(request: web.Request) -> web.Response:
                 if (queue_store := request.app.get(keys.PROMPT_QUEUE_STORE)) is not None
                 else None
             ),
+            # Event persistence behind the emit (`event_journal.py`): `pending` is
+            # what a hard kill would lose, and `events_per_batch` is how many single
+            # inserts each transaction replaced.
+            "event_journal": (
+                history.journal.snapshot()
+                if (history := request.app.get(keys.HISTORY)) is not None
+                else None
+            ),
             # The shared off-loop transcript directory scans (`transcript_scan.py`).
             # A cache that stops sharing reads as misses climbing with the fleet
             # and `slow_scans` counting; the loop_lag above is where that lands.
