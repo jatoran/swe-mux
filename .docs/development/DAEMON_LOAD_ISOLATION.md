@@ -131,11 +131,13 @@ Items are worked in order, and an item may reorder, split or remove later items 
     - Executor CPU over a run: `ProcessInspector._collect_all` 9.5-11.7 s in 20-28 passes (0.42-0.59 s each, GIL held), `CanonicalTelemetryService._record_batch` 5.4 s, `run_sqlite_operation:HistoryIndex.append_event` 2.4-2.8 s over 16,700 calls, `JsonlTailer._read_and_decode` 0.8-1.1 s, `Path.stat` 0.3-0.7 s over 9,700-16,100 calls, `PluginStore._run` 0.3-0.5 s over 12,000-17,000 calls.
   - **Where:** `stall_watchdog.py`, `host_metrics.py`, `parked_threads.py`, `executor_accounting.py`, `server.py` (`_loop_lag_loop`, `_explain_stalls`, `_loop_stall_line`), `__main__.py`, `operational_telemetry.py`, `sqlite_store.py`, `win_process_files.py`, `git_watch.py`, `doctor.py`, `routes/diagnostics.py`, `logsetup.py`, every store's executor, `tools/fleet_load_harness.py`, `design/features/daemon-resilience.md`, `design/interfaces.md`, `design/features/operational-telemetry.md`, `technical/backend/packages/daemon-runtime.md`, `technical/backend/packages/runtime-rules.md`, `development/PERFORMANCE_RUNBOOK.md`.
 
-- [ ] **3. Fix the abandoned name-worker race in `win_process_files`.**
+- [x] **3. Fix the abandoned name-worker race in `win_process_files`.**
   - **Why:** a worker that finishes just as its caller's 100 ms wait expires checks `retired` before `_abandon` sets it, returns to `inbox.get()` and blocks forever (`win_process_files.py:235-253,296-304,376-381`).
     It counts toward `MAX_STUCK_WORKERS` and quarantines its pid permanently; the live daemon reports `stuck_workers: 2`.
-  - **Change:** make the hand-off one state transition under `_workers_lock`, either by having the worker re-check retirement under the lock before it blocks again or by retiring it through a sentinel it receives, and add a regression test that forces the interleaving.
-  - **Done when:** the forced interleaving leaves no live retired worker.
+  - **Built:** retirement through a sentinel. `_abandon` posts `None` to the worker's inbox after setting `retired`, and the worker returns on receiving it; a worker still in the kernel returns to find `retired` set and never reads the sentinel.
+    A re-check under `_workers_lock` was rejected: it narrows the window without closing it, since the worker can still pass the check before the caller takes the lock.
+  - **Tests:** `tests/test_win_process_files.py` forces both orders, the worker already back in its inbox when abandoned (failed before the fix: the thread was still alive after 5 s) and the worker still in a blocked name query, and asserts the thread exits and the pid's quarantine lifts.
+  - **Where:** `win_process_files.py`, `technical/backend/packages/history-and-observation.md`.
 
 - [ ] **4. Rank the GIL consumers under load.**
   - **Why:** which work leaves the daemon, and in what order, should follow measurement rather than the code reading this plan started from.

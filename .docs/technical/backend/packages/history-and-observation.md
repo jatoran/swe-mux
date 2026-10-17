@@ -114,6 +114,8 @@ Which files one Windows process holds open, from that process's own handle table
 Measured 2026-10-12 on a host with ~450,000 open handles: 0.6-2 ms per process, against 234-340 ms for `psutil.Process.open_files()`, which enumerates every handle in the system and holds the GIL while it does (`development/PERFORMANCE_RUNBOOK.md` § Traps).
 Naming a handle can block in the kernel for as long as the target lives (a pipe with a read pending), so it runs on a worker thread that is abandoned after `NAME_QUERY_TIMEOUT_SECONDS`.
 An abandoned query marks the result incomplete and quarantines that one process until its stuck worker returns; `MAX_STUCK_WORKERS` is the global backstop.
+Abandonment both sets `retired` and posts a `None` sentinel to the worker's inbox, because the caller cannot know which state it timed out in: a worker still in the kernel sees `retired` when it returns, and one that answered just after the wait expired has already gone back to its inbox and is woken by the sentinel.
+Without the sentinel that second worker blocked forever and quarantined its pid for the life of the daemon (`tests/test_win_process_files.py` forces both orders).
 Access masks measured to hang (`HANG_PRONE_ACCESS`, which extends psutil's own list by two masks seen on node and python pipes) are skipped and counted rather than named.
 Counters are `transcript_observation.open_file_queries` on `/api/diagnostics/background`.
 

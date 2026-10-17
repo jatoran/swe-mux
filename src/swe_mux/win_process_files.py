@@ -224,10 +224,20 @@ class _Query:
 
 
 class _NameWorker:
-    """One thread naming handles in order; retired after it overruns once."""
+    """One thread naming handles in order; retired after it overruns once.
+
+    Retirement reaches the thread in two ways, because the caller abandons it on a
+    timeout without knowing which state it is in. A worker still inside the kernel
+    finds `retired` set when the query finally returns. A worker that answered a
+    moment after its caller's wait expired has already checked `retired`, found it
+    clear, and gone back to its inbox - so `_abandon` also posts `None` there.
+    Before that sentinel, such a worker blocked on an inbox nothing would ever fill,
+    counted toward `MAX_STUCK_WORKERS`, and quarantined its pid for the life of the
+    daemon.
+    """
 
     def __init__(self) -> None:
-        self.inbox: queue.SimpleQueue[_Query] = queue.SimpleQueue()
+        self.inbox: queue.SimpleQueue[_Query | None] = queue.SimpleQueue()
         self.retired = False
         #: The process whose handle this worker was abandoned on, if any.
         self.stuck_on: int | None = None
@@ -240,6 +250,8 @@ class _NameWorker:
         while True:
             with parked("open_file_names_inbox"):
                 item = self.inbox.get()
+            if item is None:  # retired while waiting for work (class docstring)
+                return
             try:
                 item.path = _final_path(item.handle)
             except OSError:
@@ -305,6 +317,9 @@ def _abandon(worker: _NameWorker, pid: int) -> None:
             _active_worker = None
         _stuck_workers.append(worker)
         _stats["abandoned_names"] += 1
+    # After `retired` is set: a worker back in its inbox wakes and exits, and one
+    # still in the kernel returns to find `retired` set and never reads this.
+    worker.inbox.put(None)
 
 
 @dataclass(frozen=True)
