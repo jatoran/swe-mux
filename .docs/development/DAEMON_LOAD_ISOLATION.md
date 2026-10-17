@@ -82,17 +82,30 @@ Items are worked in order, and an item may reorder, split or remove later items 
 
 ## Checklist
 
-- [ ] **1. Load harness and baseline.**
+- [x] **1. Load harness and baseline.**
   - **Why:** every later item needs a reproducible before and after, and the incident cannot be replayed on the live fleet.
-  - **Change:** `tools/fleet_load_harness.py` starts or targets an isolated daemon (explicit `data_dir`, port 8799, `tailnet_enabled = false`, `reconcile_external_history = false`, supervisor enabled) and drives configurable load:
-    - N shell sessions running an output generator that reproduces agent traffic shapes, alternate-screen redraw and Codex-style raw scrollback, at a set byte rate.
-    - Synthetic hook POSTs and OTLP posts at the incident rates and body sizes (mean 50 KiB, with a tail up to the 256 KiB cap).
-    - Child-process churn under the sessions, so process inspection has the incident's work.
-    - Attached terminal sockets per session in desktop and phone shapes, acknowledging output the way xterm does.
-  - It records loop-lag p50, p99 and worst, stall count, keystroke-echo latency (the method of `tools/pty_latency_bench.py`), `/api/sessions` latency, hook round-trip latency, and per-loop busy time from `/api/diagnostics/background`, as JSON.
-  - `tools/perf_snapshot.py --profile` gains `--gil --threads`, so a run can name the GIL holders.
-  - **Where:** `tools/fleet_load_harness.py`, `tools/perf_snapshot.py:98-118`, `development/PERFORMANCE_RUNBOOK.md`.
-  - **Done when:** a run on this host reproduces multi-second stalls with a fleet comparable to 2026-10-16, and the baseline numbers are recorded in this item.
+  - **Built:** `tools/fleet_load_harness.py` starts its own daemon from the checkout (`python -m swe_mux`) on an OS-allocated port, with the data dir and a re-homed `HOME` under a scratch directory, and scrubs `MUX_*`, `SWE_MUX_*`, `CLAUDE*` and `CODEX_*` from its environment, so it never reaches 8765, `~/.mux` or the operator's conversations.
+    It is safe to run from a worktree for the reason the `live_daemon` tier is.
+    - N shell sessions each run `tools/load_session_generator.py`, which promotes its pane to a Claude session the way the agent launcher does, appends a transcript, writes `scroll` or `redraw` terminal output at a set rate, posts `PostToolUse` hooks (lognormal around 50 KiB) and OTLP `tool_result` batches through the session's own credentials, and starts child processes.
+    - One xterm-like client per session acknowledges output; one quiet probe session is timed keystroke-to-echo continuously; one `/events` client reports desktop presence, without which the readiness watcher skips its pass; the window's own polls (`/api/sessions` 1 s, `/api/health` 2 s, `/api/processes?summary=1` 10 s) are timed.
+    - `--burn N` adds below-normal CPU-bound processes standing in for agent builds; `--set key=value` writes config lines; `--profile N` records `py-spy record --gil --threads`.
+    - `tools/perf_snapshot.py` gained `--gil` and `--threads` and reports per-thread GIL share.
+  - **Found on the way:** a hook into a plain shell pane raised `KeyError: 'shell'` and answered 500 with a traceback per POST; it is now a 409 `not_an_agent_session` (`routes/agent_ingress.py`, `tests/test_security_phase5.py`).
+  - **Baseline** (2026-10-17, this host with the live fleet running beside it; 120 s windows unless noted; 36 sessions, `scroll` 20 KB/s each, 3 hooks/s and 1.5 OTLP posts/s fleet-wide):
+
+    | Run | Echo p50 / p95 / p99 | `/api/sessions` p50 / p99 | Hook p95 / p99 | Stalls >= 3 s | Lag samples >= 100 ms |
+    | --- | --- | --- | --- | --- | --- |
+    | idle (1 session, no load) | 2.7 / 5.7 / 8.9 ms | 3.5 / 5.1 ms | - | 0 | 0 |
+    | 36 sessions, no browser | 11 / 178 / 292 ms | 161 / 417 ms | 159 / 326 ms | 0 | 17 / 236 |
+    | 36 sessions + `/events` browser | 134 / 346 / 400 ms | 135 / 388 ms | 156 / 399 ms | 0 | 20 / 234 |
+    | 48 `redraw` 40 KB/s, 6 hooks/s (90 s) | 173 / 524 / 905 ms | 184 / 567 ms | 222 / 597 ms | 0 | 24 / 170 |
+    | 36 sessions + browser + `--burn 32` (90 s) | 316 / 1,254 / 3,502 ms | 326 / 4,372 ms | 2,408 / 3,704 ms | 1 (3.88 s) | 50 / 134 |
+
+    The `--burn 32` run is the incident shape: a saturated host turns sub-second lag into multi-second stalls even though the daemon runs above normal priority and the burners below it.
+  - **GIL profile at 36 sessions with a browser** (`py-spy --gil --threads`, 45 s): the main thread held the GIL in 83% of samples.
+    Screen classification (`pty_tail_explain`, `screen_region_text`, `_normalize_tail_text`) was about 47% of all samples, and 32.5% came from `GET /api/sessions` alone: its one-second screen-verdict cache misses on a one-second poll, so every poll re-classified every session.
+    The readiness watcher was the costliest loop (15.3 s busy in 121 s), `_revalidate_unseen` building fresh `psutil.Process` objects was 8-10% (on an executor thread), and the plugin event dispatcher ran 10,865 iterations with SQLite reads.
+  - **Where:** `tools/fleet_load_harness.py`, `tools/load_session_generator.py`, `tools/perf_snapshot.py`, `development/PERFORMANCE_RUNBOOK.md`.
 
 - [ ] **2. Stall diagnostics that separate convoy from saturation and name the burner.**
   - **Why:** the incident's stall lines blamed parked threads and reported `cpu=0.0`, and nothing could say who held the GIL.

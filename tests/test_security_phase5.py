@@ -499,6 +499,36 @@ async def test_hook_ingress_is_unavailable_across_a_nonlocal_boundary(
 
 
 @pytest.mark.asyncio
+async def test_hook_ingress_refuses_a_pane_that_runs_no_agent() -> None:
+    """A hook into a plain shell pane is a 409, not a 500 with a traceback.
+
+    Shell panes carry hook credentials so an agent launched inside one can report
+    once it promotes the pane; before that there is no agent run to speak for.
+    The ingress used to look the backend up in the harness registry and raise
+    `KeyError: 'shell'`, which the error middleware answered as a 500 - and the
+    hook client resends a 5xx, so every such POST arrived three times.
+    """
+    record = SimpleNamespace(id="session-a", state="running", backend="shell")
+    session = SimpleNamespace(record=record, hook_secret="secret", observation_state={})
+    app = web.Application(middlewares=[error_middleware, security_middleware])
+    app[keys.SESSIONS] = SimpleNamespace(resolve=lambda _: session, sessions={})
+    app[keys.HOOK_INGRESS_WINDOWS] = {}
+    app.router.add_post("/api/hooks/{sid}", hook_ingress)
+
+    async with TestClient(TestServer(app)) as client:
+        response = await client.post(
+            "/api/hooks/session-a",
+            json={"event": "PostToolUse", "payload": {"tool_name": "Bash"}},
+            headers={"X-Mux-Hook-Secret": "secret"},
+        )
+        payload = await response.json()
+
+    assert response.status == 409
+    assert payload["code"] == "not_an_agent_session"
+    assert payload["backend"] == "shell"
+
+
+@pytest.mark.asyncio
 async def test_hook_ingress_requires_and_deduplicates_ordered_omp_sequences(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

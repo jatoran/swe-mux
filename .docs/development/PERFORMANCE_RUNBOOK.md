@@ -306,6 +306,42 @@ absent, and `processes.py` fell from 50.1% of samples to 9.0%.
 Process-level CPU is the weaker check, because fleet size and agent activity move between runs
 and are not controlled.
 Say so when reporting a before/after number taken that way.
+The controlled check is the load harness.
+
+## Load harness
+
+`tools/fleet_load_harness.py` is the controlled before/after for anything that should change how
+the daemon behaves under a fleet.
+It starts its own daemon from the checkout on an OS-allocated port, with its data directory and a
+re-homed `HOME` under a scratch directory, and scrubs `MUX_*`, `SWE_MUX_*`, `CLAUDE*` and `CODEX_*`
+from that daemon's environment, so it never touches 8765, `~/.mux` or the operator's conversations.
+That makes it safe from a worktree for the same reason the `live_daemon` test tier is.
+
+```
+uv run python tools/fleet_load_harness.py --sessions 36 --duration 120 --json before.json
+uv run python tools/fleet_load_harness.py --sessions 36 --burn 32 --profile 45
+uv run python tools/fleet_load_harness.py --set gil_switch_interval_ms=1
+```
+
+- Each scratch session runs `tools/load_session_generator.py`, which promotes its pane to a Claude
+  session the way the agent launcher does, appends a transcript, writes terminal output (`scroll` or
+  `redraw`), posts `PostToolUse` hooks and OTLP batches through the session's own credentials, and
+  starts child processes.
+- One acknowledging client per session, one timed probe session, one `/events` client reporting
+  desktop presence, and the open window's polls make it a daemon somebody has open; without the
+  `/events` client the readiness watcher skips its pass and the run measures an empty room.
+- `--burn N` adds below-normal CPU-bound processes for agents' builds. A saturated host is what turns
+  sub-second lag into multi-second stalls, and it is the only way this harness reproduces them.
+- The report carries keystroke echo, the window's request latencies, hook and OTLP round trips,
+  `loop_stall` records from the scratch `daemon.log`, loop-lag deltas, per-loop busy time in the
+  window, and, with `--profile`, a GIL-only profile attributed to threads and frames.
+- Artifacts stay in the printed work directory; the scratch daemon is quit through its
+  authenticated shutdown route, and any scratch supervisor is reaped by the identity-checked
+  `kill_server`.
+
+Read the baseline in `development/DAEMON_LOAD_ISOLATION.md` item 1 before comparing a number.
+The host is shared with the live fleet, so compare runs taken close together, and read p95, p99 and
+stall counts rather than p50, which a quiet minute on the host moves.
 
 ## Startup latency
 

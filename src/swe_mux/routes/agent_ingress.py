@@ -15,10 +15,7 @@ from aiohttp import web
 from .. import (
     app_keys as keys,
 )
-from ..harness import (
-    HARNESSES,
-    descriptor,
-)
+from ..harness import HARNESSES
 from ..harness_status import STATUS_EVENT
 from ..http_support import json_response
 from ..mcp import McpAuthError, McpService
@@ -263,6 +260,21 @@ async def hook_ingress(request: web.Request) -> web.Response:
     payload = body.get("payload") or {}
     if not isinstance(payload, dict):
         raise ValueError("hook payload must be a JSON object")
+    harness = HARNESSES.get(str(getattr(session.record, "backend", "") or ""))
+    if harness is None:
+        # A hook speaks for an agent run, and a plain shell pane has none until an
+        # agent launched inside it promotes the pane. This used to reach
+        # `descriptor()` and fail as a 500 with a traceback per POST; it is a
+        # deliberate refusal, and a 4xx is also what stops the hook client
+        # resending a request that can never succeed.
+        return json_response(
+            {
+                "error": "hook ingress serves agent sessions; this pane runs no agent",
+                "code": "not_an_agent_session",
+                "backend": str(getattr(session.record, "backend", "") or ""),
+            },
+            409,
+        )
     hook_source = str(body.get("source") or "")[:64]
     sequence_value = body.get("sequence")
     sequence: int | None = None
@@ -302,7 +314,7 @@ async def hook_ingress(request: web.Request) -> web.Response:
                     "sequence": sequence,
                 }
             )
-    elif descriptor(session.record.backend).hook_ordering_guarantee:
+    elif harness.hook_ordering_guarantee:
         raise ValueError("this harness requires sequenced hook events")
     event_payload = hook_event_payload(payload)
     # Session-aware: a harness that runs subagents as separate threads emits
@@ -322,7 +334,7 @@ async def hook_ingress(request: web.Request) -> web.Response:
     if decision.roll_to is not None:
         reported_transcript = (
             str(payload.get("transcript_path") or "")
-            if descriptor(session.record.backend).reports_transcript_path
+            if harness.reports_transcript_path
             else ""
         )
         try:

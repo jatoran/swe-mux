@@ -94,38 +94,61 @@ def process_costs(seconds: float) -> dict[str, Any]:
     }
 
 
-def profile(pid: int, seconds: float, rate: int, out_dir: Path) -> dict[str, Any]:
+def profile(
+    pid: int,
+    seconds: float,
+    rate: int,
+    out_dir: Path,
+    *,
+    gil: bool = False,
+    threads: bool = False,
+) -> dict[str, Any]:
     """Sample the daemon with py-spy and attribute the samples.
 
     `--nonblocking` is not optional against a live daemon: without it py-spy pauses the
     process to read its stacks, which is a stall inflicted on every attached terminal.
     It costs some dropped samples, which does not matter for proportions.
+
+    `gil=True` keeps only samples from the thread holding the GIL, which is the profile
+    that names what is starving the event loop: a loop waiting to reacquire the GIL
+    after a cheap syscall shows up as that syscall in an ordinary profile and as
+    nothing at all in a GIL-only one. `threads=True` roots every stack at its thread,
+    so the summary can say which thread held it.
     """
     runner = (
         ["uvx", "py-spy"] if shutil.which("uvx") else ["py-spy"] if shutil.which("py-spy") else None
     )
     if runner is None:
         return {"error": "py-spy not available (install uv, or pip install py-spy)"}
-    raw = out_dir / "perf-profile.txt"
+    raw = out_dir / ("perf-profile-gil.txt" if gil else "perf-profile.txt")
     command = [
         *runner, "record", "--pid", str(pid), "--duration", str(int(seconds)),
         "--rate", str(rate), "--nonblocking", "--format", "raw", "--output", str(raw),
     ]
+    if gil:
+        command.append("--gil")
+    if threads:
+        command.append("--threads")
     completed = subprocess.run(command, capture_output=True, text=True)
     if completed.returncode != 0 or not raw.is_file():
         return {"error": (completed.stderr or completed.stdout or "py-spy failed").strip()[:400]}
-    return {**summarize_profile(raw), "raw": str(raw)}
+    return {**summarize_profile(raw), "raw": str(raw), "gil_only": gil}
 
 
 def summarize_profile(raw: Path) -> dict[str, Any]:
-    """Collapse py-spy raw stacks into leaf and subsystem attributions.
+    """Collapse py-spy raw stacks into leaf, subsystem and thread attributions.
 
     A sampled profile shows where *threads* are, not only where CPU is: a thread parked
     in a blocking read attributes samples to that frame while burning nothing. Cross-check
     anything that looks expensive against the process CPU above before believing it.
+
+    With `--threads` py-spy roots each stack at a `thread (0x...)` frame, optionally
+    carrying the thread's name; that frame is attributed separately and dropped before
+    the leaf and module attribution, so both read the same with and without it.
     """
     leaves: Counter[str] = Counter()
     modules: Counter[str] = Counter()
+    threads: Counter[str] = Counter()
     total = 0
     idle = 0
     for line in raw.read_text(encoding="utf-8", errors="replace").splitlines():
@@ -135,6 +158,14 @@ def summarize_profile(raw: Path) -> dict[str, Any]:
         samples = int(count)
         total += samples
         frames = stack.split(";")
+        if frames and frames[0].startswith(("thread ", "process ")):
+            # `process` precedes `thread` when py-spy also labels the pid.
+            while frames and frames[0].startswith(("thread ", "process ")):
+                if frames[0].startswith("thread "):
+                    threads[frames[0]] += samples
+                frames = frames[1:]
+            if not frames:
+                continue
         leaves[frames[-1]] += samples
         if "_poll (windows_events" in stack or "select (windows_events" in stack:
             idle += samples
@@ -155,6 +186,9 @@ def summarize_profile(raw: Path) -> dict[str, Any]:
         "top_modules": [
             {"module": f"{name}.py", "share": round(n / total, 4)}
             for name, n in modules.most_common(10)
+        ],
+        "top_threads": [
+            {"thread": name, "share": round(n / total, 4)} for name, n in threads.most_common(12)
         ],
     }
 
@@ -229,6 +263,10 @@ def render(report: dict[str, Any]) -> None:
         print("  top frames:")
         for row in prof["top_leaves"][:8]:
             print(f"    {row['share']:7.2%}  {row['frame']}")
+        if prof.get("top_threads"):
+            print("  threads:")
+            for row in prof["top_threads"][:8]:
+                print(f"    {row['share']:7.2%}  {row['thread']}")
         print()
     elif prof:
         print(f"profile unavailable: {prof['error']}\n")
@@ -244,6 +282,14 @@ def main() -> int:
         "--profile", type=float, default=0, help="also record a py-spy profile for N seconds"
     )
     parser.add_argument("--rate", type=int, default=120, help="py-spy sampling rate")
+    parser.add_argument(
+        "--gil",
+        action="store_true",
+        help="profile only the GIL-holding thread (names what starves the event loop)",
+    )
+    parser.add_argument(
+        "--threads", action="store_true", help="attribute samples to the thread that took them"
+    )
     parser.add_argument("--json", type=Path, help="write the full report here")
     args = parser.parse_args()
 
@@ -269,7 +315,12 @@ def main() -> int:
             report["profile"] = {"error": "could not resolve the daemon pid from its port"}
         else:
             report["profile"] = profile(
-                pid, args.profile, args.rate, args.json.parent if args.json else Path.cwd()
+                pid,
+                args.profile,
+                args.rate,
+                args.json.parent if args.json else Path.cwd(),
+                gil=args.gil,
+                threads=args.threads,
             )
 
     render(report)
