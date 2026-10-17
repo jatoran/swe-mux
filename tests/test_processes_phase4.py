@@ -413,6 +413,7 @@ def test_process_action_cannot_target_another_session(
     from swe_mux import processes
 
     monkeypatch.setattr(processes, "psutil", SimpleNamespace())
+    monkeypatch.setattr(processes, "process_exited", lambda _pid: None)
     inspector = ProcessInspector(cast(Any, fake_sessions()), EventBus())
     inspector.owned[(55, 1.0)] = OwnedProcess(
         55, 10, "session-b", "server", "server", 1.0, None, 0, 1, [], []
@@ -456,6 +457,7 @@ def test_process_reconciliation_records_descendant_exit(
     from swe_mux import processes
 
     monkeypatch.setattr(processes, "psutil", SimpleNamespace(net_connections=lambda **_: []))
+    monkeypatch.setattr(processes, "process_exited", lambda _pid: None)
     inspector = ProcessInspector(cast(Any, fake_sessions()), EventBus())
     child = OwnedProcess(55, 10, "session-a", "server", "server", 1.0, None, 0, 1, [], [])
     samples = [[child], []]
@@ -487,6 +489,7 @@ def test_system_cpu_sample_is_normalized_across_all_logical_processors(
         "psutil",
         SimpleNamespace(cpu_times=lambda: next(samples)),
     )
+    monkeypatch.setattr(processes, "process_exited", lambda _pid: None)
     inspector = ProcessInspector(cast(Any, SimpleNamespace(sessions={})), EventBus())
 
     inspector._sample_system_cpu()
@@ -503,6 +506,7 @@ async def test_unified_process_snapshot_groups_sessions_and_aggregates_resources
     from swe_mux import processes
 
     monkeypatch.setattr(processes, "psutil", SimpleNamespace())
+    monkeypatch.setattr(processes, "process_exited", lambda _pid: None)
     # `trusted_scope_id` is a property on the real record, derived from whether
     # the session has an agent run: a spawn-side scope answers for a session
     # without one, a run-side scope for a session with one. Setting the inputs
@@ -586,6 +590,7 @@ def _fleet_inspector(monkeypatch: pytest.MonkeyPatch) -> Any:
     from swe_mux import processes
 
     monkeypatch.setattr(processes, "psutil", SimpleNamespace())
+    monkeypatch.setattr(processes, "process_exited", lambda _pid: None)
     record = session_record("session-a", "project-a")
     record.project_scope_id = "scope-a"
     record.spawn_repo_group_id = "repo-a"
@@ -761,6 +766,7 @@ def test_daemon_resource_sample_excludes_session_attributed_descendants(
             AccessDenied=PermissionError,
         ),
     )
+    monkeypatch.setattr(processes, "process_exited", lambda _pid: None)
     inspector = ProcessInspector(cast(Any, SimpleNamespace(sessions={})), EventBus())
     seen: set[tuple[int, float]] = set()
 
@@ -852,6 +858,7 @@ def test_orphan_grace_elapses_once_the_session_record_is_gone(
             AccessDenied=PermissionError,
         ),
     )
+    monkeypatch.setattr(processes, "process_exited", lambda _pid: None)
     inspector = ProcessInspector(
         cast(Any, SimpleNamespace(sessions={})), EventBus(), orphan_grace_seconds=15
     )
@@ -916,6 +923,7 @@ def test_a_session_that_comes_back_clears_its_orphan_stamp(
             AccessDenied=PermissionError,
         ),
     )
+    monkeypatch.setattr(processes, "process_exited", lambda _pid: None)
     record = SimpleNamespace(state="running", last_activity_ts=900.0)
     sessions = SimpleNamespace(sessions={})
     inspector = ProcessInspector(cast(Any, sessions), EventBus(), orphan_grace_seconds=15)
@@ -991,6 +999,7 @@ def test_sampling_reuses_process_handles_across_passes(
             _ppid_map=lambda: {100: 1, 101: 100},
         ),
     )
+    monkeypatch.setattr(processes, "process_exited", lambda _pid: None)
     record = SimpleNamespace(
         id="session-a",
         pid=100,
@@ -1081,6 +1090,7 @@ def test_a_recycled_parent_link_cannot_splice_another_tree_into_a_session(
             _ppid_map=lambda: {500: 1, 501: 500, 900: 501, 901: 900, 902: 900},
         ),
     )
+    monkeypatch.setattr(processes, "process_exited", lambda _pid: None)
     inspector = ProcessInspector(cast(Any, SimpleNamespace(sessions={})), EventBus())
     inspector._refresh_tree()
 
@@ -1125,6 +1135,7 @@ def test_a_foreign_child_that_postdates_the_root_but_predates_its_recycled_paren
             _ppid_map=lambda: {500: 1, 501: 500, 900: 501, 901: 900},
         ),
     )
+    monkeypatch.setattr(processes, "process_exited", lambda _pid: None)
     inspector = ProcessInspector(cast(Any, SimpleNamespace(sessions={})), EventBus())
     inspector._refresh_tree()
 
@@ -1153,6 +1164,7 @@ def test_uncorroborated_legacy_ownership_is_retired_without_stopping_the_process
             AccessDenied=PermissionError,
         ),
     )
+    monkeypatch.setattr(processes, "process_exited", lambda _pid: None)
     inspector = ProcessInspector(cast(Any, SimpleNamespace(sessions={})), EventBus())
     item = OwnedProcess(
         77,
@@ -1223,6 +1235,7 @@ def test_a_row_absent_from_the_passs_process_table_exits_without_asking_psutil(
             Process=CountingProcess, NoSuchProcess=RuntimeError, AccessDenied=PermissionError
         ),
     )
+    monkeypatch.setattr(processes, "process_exited", lambda _pid: None)
     inspector = ProcessInspector(cast(Any, SimpleNamespace(sessions={})), EventBus())
     gone = OwnedProcess(77, 1, "session-a", "python.exe", "", 10.0, None, 0, 0, [], [])
     alive = OwnedProcess(78, 1, "session-a", "python.exe", "", 10.0, None, 0, 0, [], [])
@@ -1243,6 +1256,50 @@ def test_a_row_absent_from_the_passs_process_table_exits_without_asking_psutil(
     inspector.owned[(79, 10.0)] = retry
     inspector._revalidate_unseen({(78, 10.0)}, {}, 110.0, False)
     assert constructed[-1] == 79
+
+
+def test_a_child_that_exits_after_the_table_was_taken_is_answered_by_the_probe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The table is one snapshot per pass, and a short-lived child can exit before the
+    pass reaches it. psutil would learn that by the same host-wide enumeration (27 ms
+    against 0.045 ms for a live pid), so the exit probe answers first, in both places
+    a pass would otherwise ask: revalidating a row, and building a handle."""
+    from swe_mux import processes
+
+    constructed: list[int] = []
+
+    class CountingProcess:
+        def __init__(self, pid: int) -> None:
+            constructed.append(pid)
+            self.pid = pid
+
+        def create_time(self) -> float:
+            return 10.0
+
+        def ppid(self) -> int:
+            return 1
+
+    monkeypatch.setattr(
+        processes,
+        "psutil",
+        SimpleNamespace(
+            Process=CountingProcess, NoSuchProcess=RuntimeError, AccessDenied=PermissionError
+        ),
+    )
+    monkeypatch.setattr(processes, "process_exited", lambda pid: pid == 77)
+    inspector = ProcessInspector(cast(Any, SimpleNamespace(sessions={})), EventBus())
+    gone = OwnedProcess(77, 1, "session-a", "python.exe", "", 10.0, None, 0, 0, [], [])
+    inspector.owned[(77, 10.0)] = gone
+    inspector._parents = {77: 1, 78: 1, 1: 0}  # both were alive when the table was taken
+
+    inspector._revalidate_unseen(set(), {}, 100.0, False)
+
+    assert (gone.exited_at, gone.exit_evidence) == (100.0, "no_such_process")
+    assert inspector._handle(77) is None
+    assert constructed == [], "nothing is built for a child that has already gone"
+    assert inspector._handle(78) is not None
+    assert constructed == [78]
 
 
 def test_daemon_sampling_cannot_preserve_a_false_session_claim(
@@ -1292,6 +1349,7 @@ def test_daemon_sampling_cannot_preserve_a_false_session_claim(
             net_connections=lambda **_: [],
         ),
     )
+    monkeypatch.setattr(processes, "process_exited", lambda _pid: None)
     inspector = ProcessInspector(cast(Any, SimpleNamespace(sessions={})), EventBus())
     false_claim = OwnedProcess(
         900,
@@ -1323,6 +1381,7 @@ def test_equal_strength_claims_from_two_sessions_are_quarantined(
     from swe_mux import processes
 
     monkeypatch.setattr(processes, "psutil", SimpleNamespace(net_connections=lambda **_: []))
+    monkeypatch.setattr(processes, "process_exited", lambda _pid: None)
     sessions = FakeSessionManager(
         {
             identity: FakeSession(session_record(identity, "project-a"))
@@ -1382,6 +1441,7 @@ def test_an_unreadable_identity_is_retried_rather_than_cached(
             Process=lambda _pid: Flaky(), NoSuchProcess=RuntimeError, AccessDenied=PermissionError
         ),
     )
+    monkeypatch.setattr(processes, "process_exited", lambda _pid: None)
     inspector = ProcessInspector(cast(Any, SimpleNamespace(sessions={})), EventBus())
     handle = Flaky()
 
@@ -1434,6 +1494,7 @@ def test_a_recycled_pid_rebuilds_its_cached_handle(
             Process=Fake, NoSuchProcess=RuntimeError, AccessDenied=PermissionError
         ),
     )
+    monkeypatch.setattr(processes, "process_exited", lambda _pid: None)
     inspector = ProcessInspector(cast(Any, SimpleNamespace(sessions={})), EventBus())
 
     inspector._parents = {55: 10}
@@ -1483,7 +1544,9 @@ def _recycling_psutil(create_time: float) -> Any:
         Process=Fake,
         NoSuchProcess=RuntimeError,
         AccessDenied=PermissionError,
-        _ppid_map=lambda: {100: 1},
+        # 777 is alive, so the host's table lists it, under the pid of a launching
+        # shell that has exited and is therefore listed nowhere.
+        _ppid_map=lambda: {100: 1, 777: 4242},
     )
 
 
@@ -1491,6 +1554,7 @@ def _inspector_for(record: Any, monkeypatch: pytest.MonkeyPatch, create_time: fl
     from swe_mux import processes
 
     monkeypatch.setattr(processes, "psutil", _recycling_psutil(create_time))
+    monkeypatch.setattr(processes, "process_exited", lambda _pid: None)
     sessions = SimpleNamespace(sessions={"session-a": SimpleNamespace(record=record)})
     inspector = ProcessInspector(cast(Any, sessions), EventBus())
     inspector._refresh_tree()
@@ -1581,6 +1645,26 @@ def test_a_detached_descendant_is_attributed_through_job_membership(
     assert detached.parent_lineage == []
 
 
+def test_a_job_member_the_passs_table_lacks_is_never_asked_about(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Membership is read from the supervisor before the pass takes its process table,
+    so a member the table lacks exited in between - the usual fate of a short-lived
+    tool child. Building a handle to find that out cost a host-wide enumeration per
+    child on Windows, and this list was where nearly all of them came from."""
+    record = _process_record(root_started_at=7.0)
+    inspector, sessions = _inspector_for(record, monkeypatch, 7.0)
+    inspector._job_pids = {"session-a": [100, 777, 778]}  # 778 finished before the table
+    asked: list[int] = []
+    real_handle = inspector._handle
+    monkeypatch.setattr(inspector, "_handle", lambda pid: asked.append(pid) or real_handle(pid))
+
+    collected = inspector._collect_session(cast(Any, sessions.sessions["session-a"]), {})
+
+    assert sorted(item.pid for item in collected) == [100, 777]
+    assert 778 not in asked
+
+
 def test_job_membership_is_ignored_when_the_root_pid_was_recycled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1623,6 +1707,7 @@ async def test_job_pid_refresh_keeps_the_previous_map_when_the_source_fails(
     from swe_mux import processes
 
     monkeypatch.setattr(processes, "psutil", SimpleNamespace())
+    monkeypatch.setattr(processes, "process_exited", lambda _pid: None)
 
     async def failing() -> dict[str, list[int]]:
         raise RuntimeError("supervisor went away")
@@ -1644,6 +1729,7 @@ async def test_job_pid_refresh_is_skipped_when_the_manager_cannot_supply_it(
     from swe_mux import processes
 
     monkeypatch.setattr(processes, "psutil", SimpleNamespace())
+    monkeypatch.setattr(processes, "process_exited", lambda _pid: None)
     inspector = ProcessInspector(cast(Any, SimpleNamespace(sessions={})), EventBus())
 
     await inspector._refresh_job_pids()
@@ -1789,6 +1875,7 @@ def test_revalidation_reads_the_parent_map_instead_of_snapshotting_per_process(
         "psutil",
         SimpleNamespace(Process=Fake, NoSuchProcess=RuntimeError, AccessDenied=PermissionError),
     )
+    monkeypatch.setattr(processes, "process_exited", lambda _pid: None)
     inspector = ProcessInspector(cast(Any, SimpleNamespace(sessions={})), EventBus())
     item = OwnedProcess(
         pid=55,

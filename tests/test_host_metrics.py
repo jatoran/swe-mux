@@ -6,7 +6,14 @@ import os
 import subprocess
 import sys
 
-from swe_mux.host_metrics import host_memory_percent, host_process_count, process_start_stamp
+import pytest
+
+from swe_mux.host_metrics import (
+    host_memory_percent,
+    host_process_count,
+    process_exited,
+    process_start_stamp,
+)
 
 
 def test_a_process_start_stamp_identifies_one_process() -> None:
@@ -29,6 +36,28 @@ def test_a_process_that_is_not_there_has_no_stamp() -> None:
     # Windows pids are multiples of four and Linux pid_max is at most 2**22, so
     # this one names no process on either.
     assert process_start_stamp(2**31 - 2) is None
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="the probe answers only on Windows")
+def test_the_exit_probe_tells_a_running_process_from_an_exited_one() -> None:
+    assert process_exited(os.getpid()) is False
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    try:
+        assert process_exited(child.pid) is False
+    finally:
+        child.kill()
+        child.wait()
+    # `child` still holds its process handle, so the pid still opens: this is the
+    # case psutil enumerates the host for, and the probe must call it exited.
+    assert process_exited(child.pid) is True
+    assert process_exited(2**31 - 2) is True, "no process object has this pid"
+
+
+def test_the_exit_probe_declines_what_it_cannot_answer() -> None:
+    assert process_exited(0) is None
+    assert process_exited(-1) is None
+    if sys.platform != "win32":
+        assert process_exited(os.getpid()) is None
 
 
 def test_host_readings_are_plausible() -> None:

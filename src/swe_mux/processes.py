@@ -22,6 +22,7 @@ from .background_tasks import background
 from .errors import NotFound
 from .event_bus import EventBus
 from .harness import is_agent_harness
+from .host_metrics import process_exited
 from .operational_telemetry import command_hash, process_identity
 from .preview_store import PreviewStore
 from .session import Session, SessionManager, clear_standing_activity
@@ -1001,6 +1002,12 @@ class ProcessInspector:
             if parent is None or parent == captured_parent:
                 return handle
             self._forget(pid)
+        if process_exited(pid):
+            # A child that exits between this pass's process table and its walk. Left
+            # to psutil, the construction below learns that by enumerating every pid
+            # on the host with the GIL held, once per such child: 4.8% of the daemon's
+            # GIL samples at 36 sessions (`DAEMON_LOAD_ISOLATION.md` item 6).
+            return None
         try:
             handle = psutil.Process(pid)
             captured_parent = parent if parent is not None else int(handle.ppid())
@@ -1612,7 +1619,9 @@ class ProcessInspector:
                 item.evidence_reason = "process_no_longer_in_descendant_walk"
                 item.exit_evidence = "not_observed"
                 continue
-            if live_pids and item.pid not in live_pids:
+            # In the table but exited since it was taken: the same answer, from one
+            # cheap probe rather than from psutil's enumeration.
+            if (live_pids and item.pid not in live_pids) or process_exited(item.pid):
                 self._mark_exited(item, now)
                 continue
             try:
@@ -1769,10 +1778,18 @@ class ProcessInspector:
             return []
         known = {int(handle.pid) for handle in walked}
         extra: list[Any] = []
+        # The membership list is read from the supervisor before the pass takes its
+        # process table, so a member the table lacks exited in between. Building a
+        # handle to learn that costs a host-wide enumeration on Windows; this list is
+        # where nearly all of them came from, because short-lived tool children are
+        # job members that finish between the two reads.
+        table = self._parents
         for pid in pids:
             if pid in known:
                 continue
             known.add(pid)
+            if table and pid not in table:
+                continue
             handle = self._handle(pid)
             if handle is None:
                 continue

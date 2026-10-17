@@ -348,8 +348,20 @@ per-tick work is restricted to attributes that actually change per tick.
 
 Identity safety does not depend on the cache. A pid whose parent changed between passes is
 proof of recycling and rebuilds its handle; `_revalidate_unseen` constructs fresh handles for
-everything that fell out of the walk; and every process action re-checks creation time against
-a freshly constructed handle before acting.
+everything that fell out of the walk and is still running; and every process action re-checks
+creation time against a freshly constructed handle before acting.
+
+What a pass never does is ask psutil about a process that has gone. On Windows psutil confirms
+"no such process" by enumerating every pid on the host with the GIL held (27 ms, against 0.045 ms
+for a live pid), and a fleet whose tools start and finish short-lived children would pay that
+once per exit. The pass's own process table answers first: a retained row whose pid it lacks
+is marked exited, and a job member it lacks is skipped, because the membership list is read
+from the supervisor before the table is taken and a member missing from the later read has
+exited in between - the usual fate of a short-lived tool child, and where nearly all of these
+lookups came from. A pid the table lists but that has exited since (a child that finished while
+the pass was walking) is answered by `host_metrics.process_exited`, one `OpenProcess` and a
+zero-timeout wait with the GIL released, before any handle is built
+(`development/DAEMON_LOAD_ISOLATION.md` item 6).
 
 ### Persisting evidence
 

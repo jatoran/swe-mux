@@ -1579,6 +1579,7 @@ def test_pid_reuse_marks_restored_fingerprint_stale(monkeypatch: pytest.MonkeyPa
         AccessDenied=type("AccessDenied", (Exception,), {}),
     )
     monkeypatch.setattr(processes, "psutil", fake_psutil)
+    monkeypatch.setattr(processes, "process_exited", lambda _pid: None)
     inspector = ProcessInspector(cast(Any, SimpleNamespace(sessions={})), EventBus())
     item = OwnedProcess(
         55,
@@ -1641,6 +1642,7 @@ def test_daemon_restart_revalidates_matching_escape_as_suspected_orphan(
         CONN_ESTABLISHED="ESTABLISHED",
     )
     monkeypatch.setattr(processes, "psutil", fake_psutil)
+    monkeypatch.setattr(processes, "process_exited", lambda _pid: None)
     inspector = ProcessInspector(
         cast(Any, SimpleNamespace(sessions={})), EventBus(), orphan_grace_seconds=10
     )
@@ -1678,6 +1680,7 @@ def test_inaccessible_startup_fingerprint_is_stale_not_reattached(
         AccessDenied=AccessDenied,
     )
     monkeypatch.setattr(processes, "psutil", fake_psutil)
+    monkeypatch.setattr(processes, "process_exited", lambda _pid: None)
     inspector = ProcessInspector(cast(Any, SimpleNamespace(sessions={})), EventBus())
     item = OwnedProcess(77, 1, "old", "x", "", 7.0, None, 0, 0, [], [])
     inspector.owned[(77, 7.0)] = item
@@ -1730,6 +1733,7 @@ def test_delayed_exit_moves_escape_through_grace_then_records_exit(
         CONN_ESTABLISHED="ESTABLISHED",
     )
     monkeypatch.setattr(processes, "psutil", fake_psutil)
+    monkeypatch.setattr(processes, "process_exited", lambda _pid: None)
     ended = SimpleNamespace(record=SimpleNamespace(state="exited", last_activity_ts=100.0))
     inspector = ProcessInspector(
         cast(Any, SimpleNamespace(sessions={"ended": ended})),

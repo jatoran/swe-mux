@@ -127,6 +127,7 @@ def install_table(
             pid: item.parent_pid for pid, item in table.items()
         }
     monkeypatch.setattr(processes, "psutil", SimpleNamespace(**namespace))
+    monkeypatch.setattr(processes, "process_exited", lambda _pid: None)
     monkeypatch.setattr(processes.os, "getpid", lambda: daemon_pid)
     monkeypatch.setattr(processes, "own_executable", lambda: APP_IMAGE)
 

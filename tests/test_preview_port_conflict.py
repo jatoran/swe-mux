@@ -72,6 +72,7 @@ def test_a_listener_row_names_the_other_processes_on_its_port(
         "psutil",
         SimpleNamespace(CONN_LISTEN="LISTEN", CONN_ESTABLISHED="ESTABLISHED"),
     )
+    monkeypatch.setattr(processes, "process_exited", lambda _pid: None)
     inspector = ProcessInspector(cast(Any, FakeSessionManager({})), EventBus())
     conn_map = {
         10: [_listening(10, "127.0.0.1")],

@@ -71,6 +71,9 @@ CPU seconds per native thread of this process, host-wide busy and total CPU seco
 Windows reads `GetThreadTimes` on cached handles with the GIL held (the reads are microseconds, and releasing the GIL around each one would cost a round trip apiece during a convoy); other hosts read `psutil.Process().threads()`.
 Memory and process count go the other way on Windows: `GlobalMemoryStatusEx` and `K32EnumProcesses` through ctypes, which releases the GIL, because `psutil.virtual_memory()` and `psutil.pids()` held it for 29 ms and 27 ms per call on a 1,200-process host.
 `process_start_stamp(pid)` is an opaque per-process identity for pid-keyed caches (the ghost-window sweep): `OpenProcess` plus `GetProcessTimes` with the GIL released on Windows, `psutil` elsewhere, `None` for a process that is gone or not inspectable.
+`process_exited(pid)` answers whether a pid names a running process before a caller builds a `psutil.Process` for it (the process inspector): `OpenProcess` plus a zero-timeout `WaitForSingleObject` with the GIL released.
+psutil learns that a pid is gone by enumerating every pid on the host with the GIL held (27 ms against 0.045 ms for a live pid on a 630-process host), including for an exited process whose parent still holds a handle to it.
+It returns `None` for a process this one may not open and on every other host, where psutil's own answer is cheap; a caller treats `None` as "ask psutil".
 Typechecked under both platforms by the gate.
 
 **Not:** a profiler, or anything another subsystem should poll.

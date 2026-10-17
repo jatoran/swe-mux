@@ -102,6 +102,7 @@ def test_session_descendants_are_lowered_and_the_daemon_successor_is_not(
             net_connections=lambda **_: [],
         ),
     )
+    monkeypatch.setattr(processes, "process_exited", lambda _pid: None)
     sessions = SimpleNamespace(
         sessions={"session-a": SimpleNamespace(record=_record(500))},
         resolve=lambda _identity: None,

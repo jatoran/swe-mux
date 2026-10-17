@@ -164,6 +164,24 @@ def process_start_stamp(pid: int) -> int | None:
         return None
 
 
+def process_exited(pid: int) -> bool | None:
+    """Whether ``pid`` names no running process: ``True``, ``False``, or ``None`` for unknown.
+
+    For a caller about to build a `psutil.Process`. On Windows psutil learns that a
+    pid is gone by enumerating every pid on the host with the GIL held - measured
+    27 ms against 0.045 ms for a live pid on a 630-process host - and a process
+    whose parent still holds a handle to it is still openable, so psutil enumerates
+    for those too. Here it is one `OpenProcess` and one zero-timeout wait, with the
+    GIL released. A process this one may not open is ``None``, as is every other
+    host, where psutil's own answer for a missing pid is already cheap.
+    """
+    if pid <= 0:
+        return None
+    if sys.platform == "win32":
+        return _windows_process_exited(pid)
+    return None
+
+
 if sys.platform == "win32":
     import ctypes
     from ctypes import wintypes
@@ -255,6 +273,33 @@ if sys.platform == "win32":
             return creation.ticks() or None
         finally:
             _CloseProcessHandle(handle)
+
+    _SYNCHRONIZE = 0x00100000
+    _ERROR_INVALID_PARAMETER = 87
+    _WAIT_OBJECT_0 = 0
+    _WAIT_TIMEOUT = 0x102
+    _WaitForSingleObject = _released.WaitForSingleObject
+    _WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    _WaitForSingleObject.restype = wintypes.DWORD
+
+    def _windows_process_exited(pid: int) -> bool | None:
+        handle = _OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION | _SYNCHRONIZE, False, pid)
+        if not handle:
+            # No process object has this pid. Anything else (access denied, chiefly)
+            # is a process that exists and is not ours to ask about.
+            return True if ctypes.get_last_error() == _ERROR_INVALID_PARAMETER else None
+        try:
+            # A process object is signalled when it exits, and outlives that while
+            # anyone holds a handle to it - so this, not openability, is the answer.
+            # Not the exit code either: STILL_ACTIVE is also a legal exit code.
+            state = _WaitForSingleObject(handle, 0)
+        finally:
+            _CloseProcessHandle(handle)
+        if state == _WAIT_OBJECT_0:
+            return True
+        if state == _WAIT_TIMEOUT:
+            return False
+        return None
 
     class _WindowsThreadTimes:
         def __init__(self) -> None:
