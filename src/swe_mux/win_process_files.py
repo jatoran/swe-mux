@@ -38,6 +38,8 @@ import time
 from ctypes import wintypes
 from dataclasses import dataclass, field
 
+from .parked_threads import parked
+
 log = logging.getLogger(__name__)
 
 _PROCESS_HANDLE_INFORMATION = 51
@@ -236,7 +238,8 @@ class _NameWorker:
         # unsupervised-loop-ok: an OS thread serving one query at a time, which
         # cannot raise out of the loop and exits once retired; not asyncio.
         while True:
-            item = self.inbox.get()
+            with parked("open_file_names_inbox"):
+                item = self.inbox.get()
             try:
                 item.path = _final_path(item.handle)
             except OSError:

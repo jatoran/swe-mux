@@ -79,6 +79,7 @@ jobs:
           src/swe_mux/pty_backend_posix.py
           src/swe_mux/posix_process_group.py
           src/swe_mux/posix_guardian.py
+          src/swe_mux/host_metrics.py
 
       - name: mypy (Windows implementations)
         run: >-

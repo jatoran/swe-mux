@@ -27,10 +27,10 @@ import sqlite3
 import time
 import uuid
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
+from .executor_accounting import AccountedThreadPoolExecutor
 from .schedules import FollowUp, ScheduleSpec
 from .sqlite_store import (
     connect_or_quarantine,
@@ -203,7 +203,7 @@ class ScheduleStore:
         self._path = path
         self._operation_lock = database_operation_lock(path)
         self._closed = False
-        self._executor = ThreadPoolExecutor(
+        self._executor = AccountedThreadPoolExecutor(
             max_workers=1, thread_name_prefix="mux-schedule-db"
         )
         self._executor.submit(self._connect).result()

@@ -60,9 +60,36 @@ Bounded sampling through owned Python frame references, canary starvation measur
 The event loop only publishes a timestamp; sampling and file IO happen elsewhere.
 Native GIL-held stalls can prevent sampling, and the diagnostic snapshot reports that coverage limit explicitly.
 `server._loop_lag_loop` owns the lag measurement, explanation log, and telemetry write.
+Each explanation also differences per-thread, process and host CPU across the stall's window, reads the loop's ready-queue depth and the parked marks, optionally waits for one `py-spy dump` taken at the stall's onset, and states a verdict (`diagnose`).
 Contracts: `../../../design/features/daemon-resilience.md`.
 
 **Not:** automatic native frame traversal or process recovery.
+
+### `host_metrics.py`
+
+CPU seconds per native thread of this process, host-wide busy and total CPU seconds, physical memory in use, and the host's process count, for the stall watchdog.
+Windows reads `GetThreadTimes` on cached handles with the GIL held (the reads are microseconds, and releasing the GIL around each one would cost a round trip apiece during a convoy); other hosts read `psutil.Process().threads()`.
+Memory and process count go the other way on Windows: `GlobalMemoryStatusEx` and `K32EnumProcesses` through ctypes, which releases the GIL, because `psutil.virtual_memory()` and `psutil.pids()` held it for 29 ms and 27 ms per call on a 1,200-process host.
+Typechecked under both platforms by the gate.
+
+**Not:** a profiler, or anything another subsystem should poll.
+
+### `executor_accounting.py`
+
+`AccountedThreadPoolExecutor`, the only executor class the daemon constructs, and the process-wide `WorkLedger` it records into: each work item's thread CPU and wall time against a label naming the callable, unwrapped through `functools.partial`, `asyncio.to_thread`'s `Context.run`, and registered wrappers (`run_sqlite_operation` registers itself).
+`__main__.serve` installs one as the loop's default executor before anything reaches `asyncio.to_thread`.
+The stall watchdog reads a window of it to name what a CPU-burning worker ran; `/api/diagnostics/background` reads the totals as `executor_work`.
+A bare `ThreadPoolExecutor(` anywhere in the package fails `tests/test_executor_accounting.py`.
+
+**Not:** a scheduler or a limit; it only measures.
+
+### `parked_threads.py`
+
+The registry a thread marks itself in while it blocks waiting for work (`parked(reason)`), read by the stall watchdog beside each stack.
+`DB_LOCK_WAIT` marks a wait for the shared `mux.db` operation lock and is counted rather than treated as idle.
+A mark is two dict operations, so it is safe on paths taken thousands of times a second.
+
+**Not:** a lock, or a record of what a thread is doing when it is not waiting.
 
 ### `daemon_recovery.py`
 

@@ -28,7 +28,6 @@ import uuid
 import wave
 from collections import deque
 from collections.abc import Callable, Sequence
-from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
@@ -40,6 +39,7 @@ from .background_tasks import background
 from .config import Config
 from .edge_tts_provider import EdgeTtsError, EdgeTtsProvider
 from .event_bus import EventBus
+from .executor_accounting import AccountedThreadPoolExecutor
 from .harness import has_observable_transcript
 from .install_location import extra_install_command
 from .kokoro_tts import KokoroEngine, KokoroError, KokoroPaths, SpelledWordLog
@@ -790,7 +790,9 @@ class VoiceStore:
         self._path = path
         self._operation_lock = database_operation_lock(path)
         self._closed = False
-        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="mux-voice-db")
+        self._executor = AccountedThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="mux-voice-db"
+        )
         self._executor.submit(self._connect).result()
 
     def _open(self) -> sqlite3.Connection:

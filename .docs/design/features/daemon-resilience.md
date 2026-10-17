@@ -11,6 +11,7 @@ This is bounded recovery, not an independent terminal transport.
 
 The event loop publishes only a monotonic heartbeat timestamp.
 A Python sampler checks it every 250 ms and captures bounded stacks after three seconds without progress, at most once per threshold interval.
+`MUX_STALL_THRESHOLD_SECONDS` (0.5-60) overrides the three seconds for diagnosis, chiefly for the load harness, whose stalls are real but often shorter; an invalid value is logged and ignored.
 `sys._current_frames()` supplies owned frame references; automatic `faulthandler.dump_traceback_later()` traversal is forbidden because its asynchronous native frame reads can crash the interpreter.
 The ordinary fatal-crash handler remains enabled.
 The sampler writes at most 100 threads and 40 frames per thread to `loop-stalls.log`, with one predecessor and rotation at 4 MiB, including during a persistent stall.
@@ -21,6 +22,49 @@ A native call holding the GIL prevents Python sampling too.
 Canary starvation records the inability to run; missing stack samples never claim to identify the blocking frame.
 After the loop resumes, its measured duration and available samples become the existing durable `loop_stalls` record.
 A hard crash before explanation can leave only the trace file, OS crash evidence, and desktop recovery ledger.
+
+### What kind of stall it was
+
+A stack sample shows where every thread is, not who ran.
+In the 2026-10-16 incident every main-thread sample sat at a different GIL-releasing syscall and every executor thread looked busy, so no record could say whether the loop had too much work or was waiting for the GIL behind another thread.
+Every explanation now carries a `diagnosis` that answers that from CPU time, not stacks.
+
+- **Per-thread CPU.** The canary records every thread's CPU time once a second (`host_metrics.py`), plus one sample at the stall's first capture and one at explanation.
+  The explanation differences the last sample before the stall against the one at its end, so the window is the stall's own.
+  On Windows the reads are `GetThreadTimes` on cached handles through a ctypes library that keeps the GIL, because releasing it around each of ~90 microsecond-long calls would cost a GIL round trip apiece during the very convoy being measured.
+  Elsewhere `psutil.Process().threads()` reads the process's own task list; `time.pthread_getcpuclockid` is not used because an expired thread id is undefined behaviour.
+- **Executor work.** A thread name such as `asyncio_21` is not actionable, and in the first harness run with verdicts the top CPU thread of both convoys was a default-executor worker that had finished its burst before the stack capture looked at it.
+  Every executor the daemon owns, the default one included, is an `AccountedThreadPoolExecutor` (`executor_accounting.py`) that charges each work item's thread CPU to a label naming the callable, with store operations named through `run_sqlite_operation` (`run_sqlite_operation:HistoryIndex.recent_runs`).
+  Each top CPU thread in a diagnosis carries the `work` it spent the window on, and `top_work` ranks the window's work by CPU.
+  `tests/test_executor_accounting.py` fails on any bare `ThreadPoolExecutor(` in the package.
+- **Process and host CPU** over the same window (`time.process_time`, `psutil.cpu_times`).
+  The previous `psutil.cpu_percent(interval=None)` reading measured whatever interval preceded the call on the calling thread, which is how the incident's lines reported `cpu=0.0` on a saturated host.
+- **Ready-queue depth.** While the loop is overdue, the canary reads `len(loop._ready)`, a racy hint, and each capture writes it as `# ready_queue=N`.
+- **Parked marks.** A thread that blocks waiting for work marks itself for the duration (`parked_threads.py`), and each capture writes the mark into the thread's header as `[parked:reason]`.
+  The marked waits are the `win_process_files` name worker's inbox, each git watch's wait inside watchfiles, and the shared `mux.db` operation lock, whose waiters are counted as `db_lock_waiters` rather than hidden or blamed.
+  Leaf guessing (`IDLE_LEAVES`) remains for waits that cannot mark themselves.
+- **An optional external dump.** At a stall's first capture the watchdog runs `py-spy dump --nonblocking` against its own process, at most once per two minutes, on its own thread, when `py-spy` is on `PATH` or named by `MUX_STALL_PROFILER` (`off` disables it).
+  Its `active+gil` marker names the GIL holder even inside a native call, which no in-process sampler can see; the explanation waits up to five seconds for a dump still running.
+  `swemux doctor` reports whether it is available (`background.stall_profiler`).
+
+From those, `diagnose` states one verdict per stall:
+
+| Verdict | Evidence | Meaning |
+| --- | --- | --- |
+| `loop_blocking_call` | loop thread ran at least 60% of the window, ready queue under 64 | one long synchronous call on the loop |
+| `loop_saturated` | loop thread ran at least 60%, ready queue 64 or deeper | more callbacks than the loop can run |
+| `gil_convoy` | other threads burned at least 0.5 cores, or at least 0.25 and more than the loop | the loop was waiting for the GIL behind them |
+| `host_starved` | nothing in the process ran much, host at least 90% busy | the OS did not schedule the daemon |
+| `blocked_wait` | nothing ran much, host had headroom | the loop was blocked in I/O, a lock, paging, or a native call holding the GIL |
+| `unsampled` | no CPU sample covered the window | not classified |
+
+The GIL holder is the external dump's `active+gil` thread when one caught the stall, otherwise the top CPU thread other than the loop for a convoy, the loop itself for a busy loop, and nobody when nothing ran.
+A thread that was not parked but used under 5% of the window is reported as blocked rather than busy, so the busy list holds only threads that ran.
+The `loop_stall` line in `daemon.log` leads with the verdict, the loop's and other threads' CPU, host CPU, the ready-queue maximum, the GIL holder and the top CPU threads; the full diagnosis is in the `loop_stalls` row (`diagnosis_json`) and on `/api/diagnostics/background`.
+
+Explanations run beside the lag probe, never inside it: stalls that end are queued (newest eight kept) and explained in order by one task.
+A probe that waited on its explanation stopped beating, so the canary captured a running loop as stalled and the lag window went unsampled for as long as the explanation took, which with the external dump's wait is seconds.
+The explanation itself must not add to the stall: its host reading uses GIL-releasing calls on Windows (`host_metrics.py`), where psutil's held the GIL for 55 ms per explanation, and it parses stacks only from the stall's first dump.
 
 ## Desktop recovery
 
@@ -98,7 +142,10 @@ The desktop tray's `Restart daemon (keep sessions)` remains the operator recover
 
 ## Key files
 
-- `src/swe_mux/stall_watchdog.py`: bounded Python sampling, canary, trace retention, explanations.
+- `src/swe_mux/stall_watchdog.py`: bounded Python sampling, canary, trace retention, explanations, verdicts, the external dump.
+- `src/swe_mux/host_metrics.py`: per-thread and host CPU time.
+- `src/swe_mux/executor_accounting.py`: per-callable CPU for every daemon executor.
+- `src/swe_mux/parked_threads.py`: the parked-wait registry.
 - `src/swe_mux/daemon_recovery.py`: durable authority, process fence, protection checks, recovery state machine.
 - `src/swe_mux/desktop.py`: monitor lifetime, replacement launch, manual restart/quit coordination.
 - `src/swe_mux/lifecycle.py`: planned-handoff integration and lifecycle ledger.

@@ -17,13 +17,13 @@ import asyncio
 import logging
 import time
 from collections.abc import Mapping
-from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from pathlib import Path
 from typing import Any
 
 from .background_tasks import background
 from .event_bus import EventBus
+from .executor_accounting import AccountedThreadPoolExecutor
 from .models import MuxEvent
 from .telemetry_ledger import CanonicalTelemetryLedger, LedgerShared
 from .telemetry_queries import Filters
@@ -64,11 +64,13 @@ class CanonicalTelemetryService:
         self.ledger = CanonicalTelemetryLedger(root, shared=shared)
         self._maintenance = CanonicalTelemetryLedger(root, shared=shared)
         self._queries = CanonicalTelemetryLedger(root, shared=shared)
-        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="telemetry-ledger")
-        self._maintenance_executor = ThreadPoolExecutor(
+        self._executor = AccountedThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="telemetry-ledger"
+        )
+        self._maintenance_executor = AccountedThreadPoolExecutor(
             max_workers=1, thread_name_prefix="telemetry-maintenance"
         )
-        self._query_executor = ThreadPoolExecutor(
+        self._query_executor = AccountedThreadPoolExecutor(
             max_workers=1, thread_name_prefix="telemetry-query"
         )
         self._events: EventBus | None = None

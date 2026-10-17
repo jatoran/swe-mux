@@ -2301,15 +2301,20 @@ response behind it, and no per-subsystem metric reports that. Investigation proc
 
 `stall_watchdog` answers *where* the loop was for each stall of `threshold_seconds` (3 s) or
 more: `recent[]` carries one record per explained stall with `duration_seconds`, the main
-thread's frames leaf first (`main_thread`, `main_leaf`), every worker thread that was not parked
-(`busy_threads[]`), a host reading at explanation time (`host.cpu_percent`,
+thread's frames leaf first (`main_thread`, `main_leaf`), every worker thread that was busy
+(`busy_threads[]`), a host reading (`host.cpu_percent`,
 `host.memory_percent`, `host.process_count`), how many dumps fired (`dumps`), and
 `canary_starved`.
+Each record also carries `diagnosis`: `verdict` (one of `loop_blocking_call`, `loop_saturated`, `gil_convoy`, `host_starved`, `blocked_wait`, `unsampled`), `reason`, `window_seconds`, `loop_cpu_share`, `others_cpu_cores`, `process_cpu_cores`, `host_cpu_share`, `ready_queue_max`, `top_threads[]` (`name`, `ident`, `cpu_seconds`, `share`, and `work`, the executor work label an accounted worker spent the window on), `top_work[]` (`label`, `count`, `cpu_seconds`), `gil_holder` (`source` is `py-spy` or `cpu`), `blocked_threads[]`, `blocked_count`, `parked_threads`, `db_lock_waiters`, and `external_dump` when a `py-spy` dump ran.
+`busy_threads[]` lists only threads that were not parked and, where CPU was measured, used it, each with `cpu_seconds`; `host.cpu_percent` is measured across the stall's window.
+The snapshot adds `verdicts` (count per verdict this boot) and `profiler` (`thread_cpu`, and `external_dump` with `available`, `source`, `executable`, `runs`, `failures`).
+Verdict definitions: `design/features/daemon-resilience.md` § What kind of stall it was.
 The snapshot reports `capture_mode=python_gil_required` and `gil_held_stacks_available=false`.
 Frames come from owned Python frame references, sampled off the event loop and retained in `<data_dir>/loop-stalls.log`.
 Native GIL-held stalls can prevent sampling, and canary starvation reports that coverage limit without inventing a blocking frame.
 Explained records persist to `mux.db` (`loop_stalls`, `design/features/operational-telemetry.md`) and are logged as `loop_stall` in `daemon.log`.
 Recovery contracts: `design/features/daemon-resilience.md`.
+`executor_work` reports CPU spent off the loop per callable across every accounted executor (`executor_accounting.py`): `labels`, `running`, `since_start[]` and `recent[]` over the last `recent_seconds` (60), each row `label`, `count`, `cpu_seconds`, `wall_seconds`, costliest first.
 `process_priority` reports what the process inspector has lowered to keep the fleet
 below this process (`target`, `lowered_total`, `lowered_last_pass`, `denied_pids`).
 `listener_guard` reports closed listeners found and rebound, and carries

@@ -22,6 +22,7 @@ from ..console_contention import ConsoleCensus, probe_console_participants
 from ..deterministic_consumers import DeterministicConsumerService
 from ..errors import NotFound
 from ..event_bus import EventBus
+from ..executor_accounting import LEDGER as EXECUTOR_LEDGER
 from ..harness import (
     detect_installations_with_versions,
     public_harness_registry,
@@ -443,6 +444,10 @@ async def get_background_health(request: web.Request) -> web.Response:
             # GIL-free dump the loop arms itself. `loop_lag` says how long; this says
             # what, and whether a starved canary thread makes it a native-code stall.
             "stall_watchdog": request.app[keys.STALL_WATCHDOG].snapshot(),
+            # CPU spent off the loop, per callable, across every accounted executor
+            # (`executor_accounting.py`): which background work costs the most, since
+            # start and over the last minute. Built off the loop; it scans the ring.
+            "executor_work": await asyncio.to_thread(EXECUTOR_LEDGER.snapshot),
             # The shared off-loop transcript directory scans (`transcript_scan.py`).
             # A cache that stops sharing reads as misses climbing with the fleet
             # and `slow_scans` counting; the loop_lag above is where that lands.
@@ -764,6 +769,11 @@ async def _doctor_report(app: web.Application) -> dict[str, Any]:
             {"backend": warning.backend, "code": warning.code, "message": warning.message}
             for warning in agent_surfaces.coherence_warnings(config)
         ],
+        stall_profiler=(
+            watchdog.profiler_status()
+            if (watchdog := app.get(keys.STALL_WATCHDOG)) is not None
+            else None
+        ),
     )
     return report
 

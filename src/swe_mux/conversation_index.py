@@ -63,6 +63,7 @@ from typing import Any
 
 from . import codex_history
 from . import transcript_view as tv
+from .executor_accounting import AccountedThreadPoolExecutor
 from .harness import conversation_store_path, transcript_dialect
 from .opencode_store import conversation_records
 from .opencode_store import conversation_watermark as store_watermark
@@ -1210,7 +1211,7 @@ class ConversationIndexRegistry:
     def _executor_for(self) -> ThreadPoolExecutor:
         with self._lock:
             if self._executor is None:
-                self._executor = ThreadPoolExecutor(
+                self._executor = AccountedThreadPoolExecutor(
                     max_workers=2, thread_name_prefix="transcript-index"
                 )
             return self._executor

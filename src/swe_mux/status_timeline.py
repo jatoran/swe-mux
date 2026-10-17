@@ -35,12 +35,12 @@ import sqlite3
 import time
 from collections import deque
 from collections.abc import Callable, Iterator
-from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from pathlib import Path
 from typing import Any, TypeVar
 
 from .background_tasks import background
+from .executor_accounting import AccountedThreadPoolExecutor
 from .sqlite_store import (
     connect_or_quarantine,
     database_operation_lock,
@@ -205,7 +205,7 @@ class StatusTimelineStore:
         self.retention_days = retention_days
         self._operation_lock = database_operation_lock(path)
         self._closed = False
-        self._executor = ThreadPoolExecutor(
+        self._executor = AccountedThreadPoolExecutor(
             max_workers=1, thread_name_prefix="mux-status-timeline-db"
         )
         self._executor.submit(self._connect).result()

@@ -107,19 +107,29 @@ Items are worked in order, and an item may reorder, split or remove later items 
     The readiness watcher was the costliest loop (15.3 s busy in 121 s), `_revalidate_unseen` building fresh `psutil.Process` objects was 8-10% (on an executor thread), and the plugin event dispatcher ran 10,865 iterations with SQLite reads.
   - **Where:** `tools/fleet_load_harness.py`, `tools/load_session_generator.py`, `tools/perf_snapshot.py`, `development/PERFORMANCE_RUNBOOK.md`.
 
-- [ ] **2. Stall diagnostics that separate convoy from saturation and name the burner.**
+- [x] **2. Stall diagnostics that separate convoy from saturation and name the burner.**
   - **Why:** the incident's stall lines blamed parked threads and reported `cpu=0.0`, and nothing could say who held the GIL.
-  - **Change:**
-    - An explicit parked-state registry: threads mark themselves parked around blocking waits (the `win_process_files` name worker's inbox, git-watch's `watcher.watch`), and the SQLite operation-lock wait is reported separately as `db_lock_wait`.
-      `describe_dump` consults the registry and thread names before `IDLE_LEAVES`, and the `loop_stall` line prints only genuinely busy threads.
-    - Per-thread CPU deltas across the stall window (`GetThreadTimes` per native thread id on Windows, `time.pthread_getcpuclockid` on POSIX), captured by the canary at stall onset and again at explanation.
-      The thread that burned CPU during the stall is recorded as the GIL-holder candidate.
-    - Host CPU from `cpu_times()` deltas over the stall window, replacing `psutil.cpu_percent(interval=None)`, whose baseline is kept per calling thread and so never measures the stall (`stall_watchdog.py:188-201`).
-    - Ready-queue depth sampled by the canary while the loop is stalled (`len(loop._ready)`, a racy hint): a deep queue means saturation, and a shallow one with syscall frames means convoy.
-    - An optional external `py-spy dump --nonblocking` at stall onset, rate-limited, when `py-spy` is on `PATH` or configured; its `active+gil` marker names the holder, and `swemux doctor` reports whether it is available.
-    - Retention: `access.log` and `daemon.log` keep at least 48 hours at the incident rate; `access.log` is 10 MB x 3 today, about 22 hours (`logsetup.py:57-60,268-295`).
-  - **Where:** `stall_watchdog.py`, `server.py:3173-3225`, `win_process_files.py`, `git_watch.py`, `sqlite_store.py:703-767`, `logsetup.py`, `doctor_local.py`, `design/features/daemon-resilience.md`, `development/PERFORMANCE_RUNBOOK.md`.
-  - **Done when:** under the harness every `loop_stall` record states convoy or saturation, lists only busy threads and names the top CPU thread, and `tests/test_stall_watchdog.py` covers the registry and the CPU deltas.
+  - **Built** (`design/features/daemon-resilience.md` § What kind of stall it was):
+    - `parked_threads.py`: threads mark their own blocking waits, written into each capture as `[parked:reason]`; marked are the `win_process_files` name worker's inbox, each git watch's wait inside watchfiles, and the `mux.db` operation lock, whose waiters are counted as `db_lock_waiters`.
+    - `host_metrics.py`: per-thread CPU (`GetThreadTimes` on cached handles with the GIL held on Windows, `psutil.Process().threads()` elsewhere; `pthread_getcpuclockid` rejected because an expired id is undefined behaviour), host CPU from `cpu_times()` deltas, and memory and process count through GIL-releasing ctypes on Windows.
+    - The canary samples thread, process and host CPU once a second and at each capture, and the loop's ready-queue depth while it is overdue; the explanation differences the last sample before the stall against the first after it.
+    - `diagnose` states one verdict per stall: `loop_blocking_call`, `loop_saturated`, `gil_convoy`, `host_starved`, `blocked_wait` or `unsampled`, with the GIL holder from an external dump or the CPU ranking.
+    - `executor_accounting.py`: every daemon executor, the default one included, charges each work item's thread CPU to a label naming the callable, so a CPU-burning worker is named by what it ran; `/api/diagnostics/background` gains `executor_work`, and a guard test refuses a bare `ThreadPoolExecutor(`.
+    - An optional `py-spy dump --nonblocking` at a stall's first capture (`MUX_STALL_PROFILER`, or `py-spy` on `PATH`), at most every two minutes; `swemux doctor` reports it as `background.stall_profiler`.
+    - The diagnosis persists as `loop_stalls.diagnosis_json` (telemetry schema 10), and the `loop_stall` line leads with the verdict.
+    - `MUX_STALL_THRESHOLD_SECONDS` (0.5-60) lowers the capture threshold for the harness; `--stall-threshold` and `--stall-profiler` pass it and a `py-spy` path through the harness's environment scrub.
+    - Retention: `access.log` keeps 20 backups of 10 MB, about 64 hours at the 2026-10-16/17 average of 3.3 MB an hour and 33 at the incident's 6.4; `daemon.log` already spans weeks.
+  - **Found on the way:**
+    - The first harness run with verdicts named `asyncio_21` and `asyncio_1` as the GIL holders of two convoys, both default-executor workers that had finished their burst before the stack capture; hence the executor accounting above.
+    - The explanation itself held the GIL for about 55 ms: `psutil.virtual_memory()` and `psutil.pids()` cost 29 ms and 27 ms per call on a 1,200-process host. Now ctypes calls that release it.
+    - The lag probe waited on each explanation, and the canary captured a loop that was merely slow: one run wrote 35 dumps for four stalls, and each stray dump was later read as the first dump of the next stall. The explanation now runs beside the probe, a capture fires only once the loop is a threshold *late* (the probe interval counted), and each capture is stamped so an explanation reads only its own.
+    - `host_starved` is real: with the scratch daemon at above-normal priority and its sessions below normal, the loop got only 33-56% of a core in those stalls while the host sat at 100%. Priority alone does not shield the daemon, so per-keystroke work has to shrink, not only move.
+    - A plain shell pane's hook POST no longer 500s (item 1), and the race in item 3 reproduces deterministically (`tests/test_win_process_files.py`).
+  - **Measured** (48 `redraw` sessions at 40 KB/s, 6 hooks/s, `--burn 32`, capture threshold 0.75 s; runs on this host vary several-fold with the live fleet beside them):
+    - Every stall got a verdict. Across the runs: `gil_convoy` with the holder `ProcessInspector._collect_all` at 38-47% of the window (once a worker at 80%), `host_starved` with the loop at 33-56%, and `loop_saturated` with the loop at 74% and 257 callbacks queued.
+    - Ready queues were 99-320 deep in every stall, so at this load the loop is never short of work; `READY_DEEP` (64) separates a saturated loop from one long call only when the loop itself was busy.
+    - Executor CPU over a run: `ProcessInspector._collect_all` 9.5-11.7 s in 20-28 passes (0.42-0.59 s each, GIL held), `CanonicalTelemetryService._record_batch` 5.4 s, `run_sqlite_operation:HistoryIndex.append_event` 2.4-2.8 s over 16,700 calls, `JsonlTailer._read_and_decode` 0.8-1.1 s, `Path.stat` 0.3-0.7 s over 9,700-16,100 calls, `PluginStore._run` 0.3-0.5 s over 12,000-17,000 calls.
+  - **Where:** `stall_watchdog.py`, `host_metrics.py`, `parked_threads.py`, `executor_accounting.py`, `server.py` (`_loop_lag_loop`, `_explain_stalls`, `_loop_stall_line`), `__main__.py`, `operational_telemetry.py`, `sqlite_store.py`, `win_process_files.py`, `git_watch.py`, `doctor.py`, `routes/diagnostics.py`, `logsetup.py`, every store's executor, `tools/fleet_load_harness.py`, `design/features/daemon-resilience.md`, `design/interfaces.md`, `design/features/operational-telemetry.md`, `technical/backend/packages/daemon-runtime.md`, `technical/backend/packages/runtime-rules.md`, `development/PERFORMANCE_RUNBOOK.md`.
 
 - [ ] **3. Fix the abandoned name-worker race in `win_process_files`.**
   - **Why:** a worker that finishes just as its caller's 100 ms wait expires checks `retired` before `_abandon` sets it, returns to `inbox.get()` and blocks forever (`win_process_files.py:235-253,296-304,376-381`).
@@ -131,6 +141,7 @@ Items are worked in order, and an item may reorder, split or remove later items 
   - **Why:** which work leaves the daemon, and in what order, should follow measurement rather than the code reading this plan started from.
   - **Change:** with items 1 and 2 in place, record a `py-spy record --gil --threads` profile and the per-thread CPU ranking at incident scale, and write the ranking into this item.
     The code reading predicts, in order: process inspection, transcript tailing, canonical telemetry, event persistence and fanout, screen classification, the ghost-window sweep, SQLite operation-lock contention, and git-watch storms.
+    Item 1's profile already put screen classification on the loop first (47% of samples) and item 2's executor accounting puts process inspection first off the loop (`_collect_all`, about half a second of GIL per pass); `executor_work` on `/api/diagnostics/background` is now the off-loop half of the ranking, and the profile's main-thread share the on-loop half.
   - **Done when:** the ranking is recorded and items 5-11 and 18-23 are reordered or trimmed to match it.
 
 - [ ] **5. GIL switch interval.**
@@ -151,7 +162,8 @@ Items are worked in order, and an item may reorder, split or remove later items 
     - Readiness watcher and auto-delivery: replace the per-second queue `summary()` GROUP BY and the per-second policy query with in-memory state invalidated on writes (`readiness_watch.py:144`; `prompt_queue.py:760-778`; `auto_delivery.py:838`).
     - Ghost-window sweep: construct `psutil.Process` only on a cache miss (`ghost_windows.py:171-173`).
     - Git watch: raise `step` from 300 ms toward the 1,600 ms debounce, and drop `ALWAYS_NOISE` paths before they become Python objects wherever watchfiles allows (`git_watch.py:215-237,484-511`).
-    - Name the default executor with a `thread_name_prefix` and bound it to a measured size, so stall dumps attribute its threads.
+    - Bound the default executor (named `mux-default` and accounted per callable since item 2) to a measured size; it is `min(32, cpu + 4)` today, which lets 32 GIL-hungry workers contend with the loop.
+    - Log writes off the loop: `access.log` takes a line per request and the incident's main-thread samples caught `flush` among the syscalls the convoy waited at. Measure a `QueueHandler` feeding a listener thread for `access.log` and `daemon.log` (which would also make gzip of rotated `access.log` free), against what an unflushed queue loses on a hard kill.
   - **Done when:** each change shows its own before and after on the harness and the gate is green.
 
 - [ ] **7. Screen classification keyed on the bytes it reads.**

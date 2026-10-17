@@ -11,13 +11,14 @@ import threading
 import time
 import uuid
 from collections.abc import Callable, Collection, Iterator, Sequence
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import Future
 from datetime import datetime
 from pathlib import Path
 from typing import Any, TypeVar
 
 from .conversation_index import indexed_parse
 from .errors import NotFound
+from .executor_accounting import AccountedThreadPoolExecutor
 from .git_projects import ProjectIdentity
 from .harness import (
     AGENT_BACKENDS,
@@ -650,7 +651,9 @@ class HistoryIndex:
         self._path = path
         self._operation_lock = database_operation_lock(path)
         self._closed = False
-        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="mux-history-db")
+        self._executor = AccountedThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="mux-history-db"
+        )
         # Work an open or a listing starts and does not wait for. Plain threads rather
         # than asyncio tasks on purpose: the job outlives the request that started it,
         # and a task parked on an executor future when its loop closes reports into a
@@ -660,10 +663,10 @@ class HistoryIndex:
         # One reindex at a time: a parse holds the GIL for most of its length (measured
         # 2 s for a 283 MB rollout), and two at once would only halve each other's speed
         # while doubling the time the event loop competes for the interpreter.
-        self._reindex_pool = ThreadPoolExecutor(
+        self._reindex_pool = AccountedThreadPoolExecutor(
             max_workers=1, thread_name_prefix="mux-history-reindex"
         )
-        self._summary_pool = ThreadPoolExecutor(
+        self._summary_pool = AccountedThreadPoolExecutor(
             max_workers=4, thread_name_prefix="mux-history-summary"
         )
         self._background_lock = threading.Lock()

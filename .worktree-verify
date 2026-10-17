@@ -90,7 +90,8 @@ step "mypy (per-platform implementations)"
 uv run mypy --config-file mypy-platform.toml --platform linux \
   src/swe_mux/pty_backend_posix.py \
   src/swe_mux/posix_process_group.py \
-  src/swe_mux/posix_guardian.py
+  src/swe_mux/posix_guardian.py \
+  src/swe_mux/host_metrics.py
 uv run mypy --config-file mypy-platform.toml --platform win32 \
   src/swe_mux/pty_backend_windows.py \
   src/swe_mux/win_jobobj.py \

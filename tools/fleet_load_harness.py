@@ -99,6 +99,8 @@ class Options:
     settings: dict[str, str]
     git: bool
     burn: int
+    stall_profiler: str = ""
+    stall_threshold: float = 0.0
 
 
 @dataclass
@@ -202,6 +204,10 @@ class Harness:
                 "SWE_MUX_DESKTOP_CONTROL_TOKEN"
             ):
                 env.pop(key)
+        if self.options.stall_profiler:
+            env["MUX_STALL_PROFILER"] = self.options.stall_profiler
+        if self.options.stall_threshold:
+            env["MUX_STALL_THRESHOLD_SECONDS"] = str(self.options.stall_threshold)
         log = (self.workdir / "daemon-console.log").open("wb")
         self.process = subprocess.Popen(
             [
@@ -634,6 +640,9 @@ class Harness:
             },
             "loop_cost": loop_cost[:15],
             "stall_records": (after.get("stall_watchdog") or {}).get("recent", [])[:8],
+            # Off-loop CPU by callable over the scratch daemon's life, which the window
+            # dominates (`executor_accounting.py`).
+            "executor_work": (after.get("executor_work") or {}).get("since_start", []),
             "profile": profile_result,
             "workdir": str(self.workdir),
         }
@@ -669,7 +678,8 @@ def render(report: dict[str, Any]) -> None:
     line("otlp round trip", report["otlp_round_trip_ms"])
     stalls = report["loop_stalls"]
     print(
-        f"  loop stalls >=3s   {stalls['count']} totalling {stalls['total_seconds']}s, "
+        f"  loop stalls >={options.get('stall_threshold') or 3.0:g}s   "
+        f"{stalls['count']} totalling {stalls['total_seconds']}s, "
         f"worst {stalls['worst_seconds']}s"
     )
     lag = report["loop_lag"]
@@ -678,6 +688,24 @@ def render(report: dict[str, Any]) -> None:
     print("  costliest loops in the window:")
     for row in report["loop_cost"][:8]:
         print(f"    {row['busy_seconds']:9.2f}s {row['iterations']:7d} it  {row['name']}")
+    if report.get("executor_work"):
+        print("  costliest executor work (CPU since start):")
+        for row in report["executor_work"][:10]:
+            print(f"    {row['cpu_seconds']:9.2f}s {row['count']:7d} x  {row['label']}")
+    for record in report.get("stall_records") or []:
+        diagnosis = record.get("diagnosis") or {}
+        holder = diagnosis.get("gil_holder") or {}
+        top = ", ".join(
+            f"{item['name']} {item['share']:.0%}"
+            + (f" [{item['work']}]" if item.get("work") else "")
+            for item in diagnosis.get("top_threads", [])[:3]
+        )
+        print(
+            f"  stall {record.get('duration_seconds')}s {diagnosis.get('verdict')}: "
+            f"loop {diagnosis.get('loop_cpu_share')}, others {diagnosis.get('others_cpu_cores')}, "
+            f"host {diagnosis.get('host_cpu_share')}, ready {diagnosis.get('ready_queue_max')}, "
+            f"gil {holder.get('name')} ({holder.get('source')}); top: {top or '-'}"
+        )
     profile = report.get("profile")
     if profile and "error" not in profile:
         print(f"  profile: {profile.get('samples')} samples")
@@ -732,6 +760,19 @@ def main() -> int:
         "--burn", type=int, default=0, help="CPU-bound below-normal processes during the window"
     )
     parser.add_argument(
+        "--stall-profiler",
+        default="",
+        metavar="PATH",
+        help="py-spy executable the scratch daemon dumps itself with at a stall's onset",
+    )
+    parser.add_argument(
+        "--stall-threshold",
+        type=float,
+        default=0.0,
+        metavar="SECONDS",
+        help="explain stalls from this long (MUX_STALL_THRESHOLD_SECONDS; default 3)",
+    )
+    parser.add_argument(
         "--workdir", type=Path, help="artifacts directory (default: a new temp dir, always kept)"
     )
     parser.add_argument("--json", type=Path, help="write the report here")
@@ -759,6 +800,8 @@ def main() -> int:
         settings=parse_settings(args.set),
         git=not args.no_git,
         burn=args.burn,
+        stall_profiler=args.stall_profiler,
+        stall_threshold=args.stall_threshold,
     )
     report = asyncio.run(Harness(options).run())
     render(report)

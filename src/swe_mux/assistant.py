@@ -36,7 +36,6 @@ import sqlite3
 import time
 import uuid
 from collections.abc import Awaitable, Callable
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypeVar
@@ -44,6 +43,7 @@ from typing import TYPE_CHECKING, Any, TypeVar
 from . import budget
 from .config import Config
 from .event_bus import EventBus
+from .executor_accounting import AccountedThreadPoolExecutor
 from .history import HistorySearchBudgetExceeded
 from .leaf_names import suggest_folder_name, validate_leaf_name
 from .openrouter import OpenRouterClient, OpenRouterError, cache_stable_message
@@ -1033,7 +1033,9 @@ class AssistantStore:
         self._path = path
         self._operation_lock = database_operation_lock(path)
         self._closed = False
-        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="mux-assistant-db")
+        self._executor = AccountedThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="mux-assistant-db"
+        )
         self._executor.submit(self._connect).result()
 
     def _open(self) -> sqlite3.Connection:

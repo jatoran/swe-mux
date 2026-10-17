@@ -88,6 +88,11 @@ class LoopLagMonitor:
         self._stalls = 0
         self._observed = 0
 
+    @property
+    def interval(self) -> float:
+        """How long each probe sleeps; the gap between beats when nothing is late."""
+        return self._interval
+
     def observe(self, lag_seconds: float) -> None:
         """Record one measured lag. Separated from the loop so it can be tested."""
         lag = max(0.0, lag_seconds)

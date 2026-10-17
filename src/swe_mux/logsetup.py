@@ -57,7 +57,13 @@ LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR")
 DAEMON_LOG_BYTES = 10 * 1024 * 1024
 DAEMON_LOG_BACKUPS = 5
 ACCESS_LOG_BYTES = 10 * 1024 * 1024
-ACCESS_LOG_BACKUPS = 3
+#: Sized so the request log outlives the day after an incident. Measured on the
+#: operator's host 2026-10-16/17: about 3.3 MB an hour of ordinary fleet traffic
+#: (hook POSTs, OTLP posts and the window's polls at ~260 bytes a line) and 6.4 MB an
+#: hour inside the 2026-10-16 incident. Three backups held about 22 hours, so the
+#: requests behind an evening's stalls were gone by the next afternoon; twenty hold
+#: about 64 hours of ordinary traffic and 33 at the incident rate, in at most 210 MB.
+ACCESS_LOG_BACKUPS = 20
 
 #: A single rendered `extra` value is truncated here. Bounded because one
 #: oversized field must not be able to push a whole rotation's worth of real

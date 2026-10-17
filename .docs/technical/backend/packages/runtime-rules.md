@@ -85,6 +85,13 @@ The sampler rotates its bounded trace even during a persistent stall; explanatio
 Automatic `faulthandler.dump_traceback_later()` is forbidden; the ordinary fatal-crash handler remains enabled.
 Recovery, process identity, and session-protection contracts: `../../../design/features/daemon-resilience.md`.
 
+### Every executor is an `AccountedThreadPoolExecutor`, and every blocking wait for work says so
+
+A stall's CPU is attributed to the callable that used it only for work run on an accounted executor (`executor_accounting.py`); work on a bare `ThreadPoolExecutor` reads as an anonymous thread burning CPU.
+Construct `AccountedThreadPoolExecutor`; `tests/test_executor_accounting.py` fails on a bare one.
+A submission wrapper whose real work is an argument registers itself with `register_wrapper`, as `run_sqlite_operation` does, or every call through it shares one label.
+A long-lived thread that blocks waiting for work wraps the wait in `parked_threads.parked(reason)`, so a stall report counts it as parked instead of listing it as busy.
+
 ### A subprocess is spawned on the spawn loop, never on the daemon's
 
 asyncio spawns a child synchronously on the loop that asks: the Windows proactor transport calls `CreateProcess` inside its constructor, and the POSIX fork-and-exec is the same shape.

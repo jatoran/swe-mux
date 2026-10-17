@@ -13,6 +13,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .executor_accounting import register_wrapper
+from .parked_threads import DB_LOCK_WAIT, parked
+
 log = logging.getLogger(__name__)
 
 _LOCKS_GUARD = threading.Lock()
@@ -733,7 +736,11 @@ def run_sqlite_operation[T](
     `daemon.log` naming the loss as a loss.
     """
 
-    with operation_lock:
+    # The wait is marked so the stall watchdog counts queued store threads as lock
+    # contention instead of blaming them as busy (`parked_threads`).
+    with parked(DB_LOCK_WAIT):
+        operation_lock.acquire()
+    try:
         drain_ms = drain_remaining_ms()
         if drain_ms > 0:
             # On the store's own worker thread, inside the lock: legal, cheap,
@@ -765,3 +772,10 @@ def run_sqlite_operation[T](
                     },
                 )
             raise
+    finally:
+        operation_lock.release()
+
+
+# Every store submits `run_sqlite_operation(db, lock, op)`, so its executor work is
+# accounted under the operation rather than under this wrapper.
+register_wrapper(run_sqlite_operation, 2)

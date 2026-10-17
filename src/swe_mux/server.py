@@ -14,6 +14,7 @@ import logging
 import mimetypes
 import os
 import time
+from collections import deque
 from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
 from typing import Any
@@ -215,7 +216,13 @@ from .sqlite_store import (
     run_full_verification,
     verification_record_path,
 )
-from .stall_watchdog import STALL_TRACE_FILENAME, StallWatchdog
+from .stall_watchdog import (
+    STALL_TRACE_FILENAME,
+    ExternalStackDumper,
+    StallRecord,
+    StallWatchdog,
+)
+from .stall_watchdog import threshold_from_environment as stall_threshold_from_environment
 from .startup_phases import StartupTimeline
 from .status_timeline import StatusTimelineStore
 from .storage_usage import ProjectFootprintTarget, StorageUsage
@@ -2752,9 +2759,15 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
     timeline.mark("background-loops")
     loop_lag = LoopLagMonitor()
     # The lag monitor says how long the loop was gone; the watchdog says where it
-    # was, from a C thread that needs no GIL (stall_watchdog.py). Armed by the same
-    # probe, so a loop that stops probing is exactly a loop that gets dumped.
-    stall_watchdog = StallWatchdog(config.data_dir / STALL_TRACE_FILENAME)
+    # was and who ran instead (stall_watchdog.py). Armed by the same probe, so a
+    # loop that stops probing is exactly a loop that gets dumped.
+    stall_watchdog = StallWatchdog(
+        config.data_dir / STALL_TRACE_FILENAME,
+        threshold=stall_threshold_from_environment(),
+        beat_interval=loop_lag.interval,
+        resolve_external_dumper=ExternalStackDumper.from_environment,
+    )
+    stall_watchdog.attach_loop(asyncio.get_running_loop())
     stall_watchdog.start()
     publish(app, {keys.LOOP_LAG: loop_lag, keys.STALL_WATCHDOG: stall_watchdog})
     background.start(LOOP_LAG_LOOP, lambda: _loop_lag_loop(loop_lag, stall_watchdog, telemetry))
@@ -3170,6 +3183,45 @@ def _close_handle(app: web.Application, key: web.AppKey[Any]) -> None:
         log.exception("could not close %s at shutdown", key)
 
 
+def _loop_stall_line(record: StallRecord) -> str:
+    """The one `daemon.log` line a stall gets, verdict first.
+
+    `busy` lists only threads that used CPU during the stall (with their seconds),
+    `top` is the CPU ranking over the stall's window whatever the stacks showed, with
+    `@label` naming the executor work an accounted worker spent it on, and
+    `gil` names the holder - from an external dump when one caught it, otherwise the
+    inferred candidate. Parked threads are never listed; `db_lock_waiters` counts the
+    threads queued for the `mux.db` operation lock.
+    """
+    diagnosis = record.diagnosis
+    busy = "; ".join(
+        f"{item['name']}"
+        f"{'' if item.get('cpu_seconds') is None else '(' + str(item['cpu_seconds']) + 's)'}"
+        f":{item['frames'][0] if item['frames'] else '-'}"
+        for item in record.busy_threads[:4]
+    )
+    top = " ".join(
+        f"{item['name']}:{item['share']}" + (f"@{item['work']}" if item.get("work") else "")
+        for item in (diagnosis.get("top_threads") or [])[:4]
+    )
+    holder = diagnosis.get("gil_holder") or {}
+    gil = f"{holder.get('name')}({holder.get('source')})" if holder else "-"
+    return (
+        f"loop_stall duration_s={record.duration_seconds:.2f} "
+        f"verdict={diagnosis.get('verdict', 'unsampled')} "
+        f"loop_cpu={diagnosis.get('loop_cpu_share')} "
+        f"others_cpu={diagnosis.get('others_cpu_cores')} "
+        f"host_cpu={diagnosis.get('host_cpu_share')} "
+        f"ready_max={diagnosis.get('ready_queue_max')} gil={gil} top=[{top or '-'}] "
+        f"canary_starved={record.canary_starved} dumps={record.dumps} "
+        f"main={' <- '.join(record.main_thread[:4]) or '-'} busy=[{busy or '-'}] "
+        f"blocked={diagnosis.get('blocked_count', 0)} "
+        f"db_lock_waiters={diagnosis.get('db_lock_waiters', 0)} "
+        f"mem={record.host.get('memory_percent')} procs={record.host.get('process_count')} "
+        f"trace={record.trace_path}"
+    )
+
+
 async def _loop_lag_loop(
     monitor: LoopLagMonitor,
     watchdog: StallWatchdog,
@@ -3187,37 +3239,55 @@ async def _loop_lag_loop(
     frames the dump caught, whether the canary thread was starved too, what the host
     looked like) is gathered off the loop, logged once, and kept durably so the
     incident is answerable from `daemon.log` and `mux.db` after the fact.
+
+    The explanation runs beside the probe, never inside it. It can wait seconds for
+    an external stack dump, and a probe parked on it stopped beating: the canary then
+    captured spurious dumps of a loop that was running fine (a 1.02 s stall recorded
+    five) and the lag window went unsampled for exactly as long. Stalls that end
+    while one is being explained queue behind it, in order.
     """
-    # unsupervised-loop-ok: supervised by `background.start(LOOP_LAG_LOOP, ...)`.
-    while True:
-        lag = await monitor.sample()
-        with background.iteration(LOOP_LAG_LOOP):
-            monitor.observe(lag)
-            watchdog.beat()
-        if lag < watchdog.threshold:
-            continue
+    backlog: deque[tuple[float, float]] = deque(maxlen=STALL_EXPLANATION_BACKLOG)
+    explaining: asyncio.Task[None] | None = None
+    try:
+        # unsupervised-loop-ok: supervised by `background.start(LOOP_LAG_LOOP, ...)`.
+        while True:
+            lag = await monitor.sample()
+            with background.iteration(LOOP_LAG_LOOP):
+                monitor.observe(lag)
+                watchdog.beat()
+            if lag < watchdog.threshold:
+                continue
+            backlog.append((lag, watchdog.clock()))
+            if explaining is None or explaining.done():
+                explaining = asyncio.create_task(
+                    _explain_stalls(backlog, watchdog, telemetry), name="loop-stall-explain"
+                )
+    finally:
+        if explaining is not None and not explaining.done():
+            explaining.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await explaining
+
+
+#: Stalls waiting for an explanation. A daemon stalling faster than its stalls can
+#: be explained keeps the newest, which describe the state it is in now.
+STALL_EXPLANATION_BACKLOG = 8
+
+
+async def _explain_stalls(
+    backlog: deque[tuple[float, float]],
+    watchdog: StallWatchdog,
+    telemetry: OperationalTelemetryStore | None,
+) -> None:
+    """Explain, log and keep every queued stall, oldest first, then return."""
+    while backlog:
+        lag, ended = backlog.popleft()
         try:
-            record = await asyncio.to_thread(watchdog.explain, lag)
-        except Exception:  # noqa: BLE001 - the probe must outlive its own reporting
+            record = await asyncio.to_thread(watchdog.explain, lag, ended=ended)
+        except Exception:  # noqa: BLE001 - one bad explanation must not lose the rest
             log.exception("loop_stall duration_s=%.2f explanation failed", lag)
             continue
-        busy = "; ".join(
-            f"{item['name']}:{item['frames'][0] if item['frames'] else '-'}"
-            for item in record.busy_threads[:4]
-        )
-        log.warning(
-            "loop_stall duration_s=%.2f canary_starved=%s dumps=%d main=%s busy=[%s] "
-            "cpu=%s mem=%s procs=%s trace=%s",
-            record.duration_seconds,
-            record.canary_starved,
-            record.dumps,
-            " <- ".join(record.main_thread[:4]) or "-",
-            busy or "-",
-            record.host.get("cpu_percent"),
-            record.host.get("memory_percent"),
-            record.host.get("process_count"),
-            record.trace_path,
-        )
+        log.warning("%s", _loop_stall_line(record))
         if telemetry is not None:
             try:
                 await telemetry.record_loop_stall(record.as_dict())

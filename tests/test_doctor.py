@@ -161,6 +161,34 @@ def test_degraded_background_loop_fails() -> None:
     assert "process-inspector" in loops["detail"]
 
 
+def test_the_stall_profiler_row_says_whether_a_gil_holder_can_be_named() -> None:
+    sources = _healthy_sources()
+    report = doctor.build_doctor_report(**sources)
+    assert all(c["id"] != "background.stall_profiler" for c in report["checks"]), (
+        "no watchdog payload, no row"
+    )
+    sources["stall_profiler"] = {
+        "thread_cpu": True,
+        "external_dump": {"available": True, "executable": "C:/bin/py-spy.exe", "source": "path"},
+    }
+    row = next(
+        c
+        for c in doctor.build_doctor_report(**sources)["checks"]
+        if c["id"] == "background.stall_profiler"
+    )
+    assert row["status"] == "ok" and "C:/bin/py-spy.exe" in row["detail"]
+    sources["stall_profiler"] = {
+        "thread_cpu": True,
+        "external_dump": {"available": False, "source": "not_found", "env": "MUX_STALL_PROFILER"},
+    }
+    report = doctor.build_doctor_report(**sources)
+    row = next(c for c in report["checks"] if c["id"] == "background.stall_profiler")
+    assert row["status"] == "unavailable" and row["severity"] == "info"
+    assert "py-spy is not on PATH" in row["detail"]
+    assert "MUX_STALL_PROFILER" in (row["remedy"] or "")
+    assert report["ok"] is True, "a missing optional profiler is advice, never a failure"
+
+
 def test_observation_freshness_lists_only_stale_agent_sessions() -> None:
     sessions = [
         _session(sid="s1", name="fresh", backend=_AGENT),

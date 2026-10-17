@@ -8,12 +8,12 @@ import sqlite3
 import time
 import uuid
 from collections.abc import Awaitable, Callable
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TypeVar
 
 from .event_bus import EventBus
+from .executor_accounting import AccountedThreadPoolExecutor
 from .models import MuxEvent
 from .sqlite_store import (
     connect_or_quarantine,
@@ -362,7 +362,9 @@ class Tier0Store:
         self.retention_days = retention_days
         self._operation_lock = database_operation_lock(path)
         self._closed = False
-        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="mux-tier0-db")
+        self._executor = AccountedThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="mux-tier0-db"
+        )
         self._executor.submit(self._connect).result()
         self._event_task: asyncio.Task[None] | None = None
         self._event_queue: asyncio.Queue[MuxEvent] | None = None

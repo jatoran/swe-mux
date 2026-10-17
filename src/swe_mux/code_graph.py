@@ -36,12 +36,12 @@ import re
 import sqlite3
 import time
 from collections.abc import Callable, Iterable, Iterator, Sequence
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TypeVar
 
 from .deterministic_consumers import normalize_target
+from .executor_accounting import AccountedThreadPoolExecutor
 from .sqlite_store import (
     connect_or_quarantine,
     database_operation_lock,
@@ -702,7 +702,9 @@ class CodeGraphStore:
         path.parent.mkdir(parents=True, exist_ok=True)
         self.path = path
         self._operation_lock = database_operation_lock(path)
-        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="mux-codegraph-db")
+        self._executor = AccountedThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="mux-codegraph-db"
+        )
         self._executor.submit(self._connect).result()
 
     def _open(self) -> sqlite3.Connection:

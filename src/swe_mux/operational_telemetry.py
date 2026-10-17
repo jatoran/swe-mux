@@ -10,7 +10,6 @@ import time
 import uuid
 from bisect import bisect_left
 from collections.abc import Callable, Mapping
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TypeVar, assert_never
@@ -18,6 +17,7 @@ from typing import Any, TypeVar, assert_never
 from .background_tasks import background
 from .errors import NotFound
 from .event_bus import EventBus
+from .executor_accounting import AccountedThreadPoolExecutor
 from .harness import (
     HARNESSES,
     Backend,
@@ -45,7 +45,7 @@ log = logging.getLogger(__name__)
 TELEMETRY_EVENT_LOOP = "operational-telemetry"
 TELEMETRY_RETENTION_LOOP = "telemetry-retention"
 
-TELEMETRY_SCHEMA_VERSION = 9
+TELEMETRY_SCHEMA_VERSION = 10
 TOOL_PARSER_VERSION = "phase2-v1"
 #: A reconciliation pass at or above this is logged at WARNING. Incremental passes
 #: over a fleet's appended records take well under a second; this is the shape of
@@ -392,7 +392,8 @@ CREATE TABLE IF NOT EXISTS loop_stalls (
   main_frames_json TEXT NOT NULL,
   busy_threads_json TEXT NOT NULL,
   host_json TEXT NOT NULL,
-  trace_path TEXT
+  trace_path TEXT,
+  diagnosis_json TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_loop_stalls_started ON loop_stalls(started_at);
 """
@@ -491,7 +492,9 @@ class OperationalTelemetryStore(QuotaUsageMixin):
         self.retention_days = retention_days
         self.process_retention_days = process_retention_days
         self._closed = False
-        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="mux-telemetry-db")
+        self._executor = AccountedThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="mux-telemetry-db"
+        )
         self._executor.submit(self._connect).result()
         self._event_task: asyncio.Task[None] | None = None
         self._reconcile_task: asyncio.Task[None] | None = None
@@ -613,6 +616,14 @@ class OperationalTelemetryStore(QuotaUsageMixin):
                 "PRAGMA table_info(transcript_telemetry_coverage)"
             ).fetchall()
         }
+        # Schema 10: what kind of stall it was and who ran during it
+        # (`stall_watchdog.StallDiagnosis`). Older rows have none and read back as {}.
+        stall_columns = {
+            str(row["name"])
+            for row in self._db.execute("PRAGMA table_info(loop_stalls)").fetchall()
+        }
+        if "diagnosis_json" not in stall_columns:
+            self._db.execute("ALTER TABLE loop_stalls ADD COLUMN diagnosis_json TEXT")
         for column, kind in (
             ("cursor_offset", "INTEGER"),
             ("cursor_line", "INTEGER"),
@@ -2424,6 +2435,7 @@ class OperationalTelemetryStore(QuotaUsageMixin):
                 "name": str(item.get("name", "?"))[:64],
                 "ident": int(item.get("ident") or 0),
                 "frames": [str(frame) for frame in list(item.get("frames") or [])[:40]],
+                "cpu_seconds": _finite(item.get("cpu_seconds")),
             }
             for item in list(record.get("busy_threads") or [])[:12]
             if isinstance(item, Mapping)
@@ -2439,13 +2451,14 @@ class OperationalTelemetryStore(QuotaUsageMixin):
             json.dumps(busy)[:32_000],
             json.dumps(dict(record.get("host") or {}), default=str)[:2_000],
             str(record.get("trace_path") or "")[:512] or None,
+            _bounded_json(dict(record.get("diagnosis") or {}), 8_000),
         )
 
         def op() -> None:
             self._db.execute(
                 "INSERT INTO loop_stalls(started_at,duration_seconds,canary_starved,dumps,"
-                "main_leaf,main_frames_json,busy_threads_json,host_json,trace_path) "
-                "VALUES(?,?,?,?,?,?,?,?,?)",
+                "main_leaf,main_frames_json,busy_threads_json,host_json,trace_path,"
+                "diagnosis_json) VALUES(?,?,?,?,?,?,?,?,?,?)",
                 row,
             )
             self._db.commit()
@@ -2459,7 +2472,8 @@ class OperationalTelemetryStore(QuotaUsageMixin):
         def op() -> list[dict[str, Any]]:
             rows = self._db.execute(
                 "SELECT started_at,duration_seconds,canary_starved,dumps,main_leaf,"
-                "main_frames_json,busy_threads_json,host_json,trace_path FROM loop_stalls "
+                "main_frames_json,busy_threads_json,host_json,trace_path,diagnosis_json "
+                "FROM loop_stalls "
                 "ORDER BY started_at DESC LIMIT ?",
                 (bounded,),
             ).fetchall()
@@ -2476,6 +2490,7 @@ class OperationalTelemetryStore(QuotaUsageMixin):
                         "busy_threads": _json_list(row["busy_threads_json"]),
                         "host": _json_dict(row["host_json"]),
                         "trace_path": row["trace_path"],
+                        "diagnosis": _json_dict(row["diagnosis_json"]),
                     }
                 )
             return result
@@ -2897,6 +2912,30 @@ def _json_list(text: object) -> list[Any]:
     except (TypeError, ValueError):
         return []
     return value if isinstance(value, list) else []
+
+
+def _bounded_json(value: dict[str, Any], limit: int) -> str:
+    """``value`` as JSON within ``limit`` characters, and always valid JSON.
+
+    Slicing a serialised object can cut it mid-token, which reads back as an empty
+    dict and loses the whole record. Over budget, the largest list fields are
+    halved until it fits, and a value that still does not fit keeps its scalars.
+    """
+    text = json.dumps(value, default=str)
+    trimmed = dict(value)
+    while len(text) > limit:
+        lists = [key for key, item in trimmed.items() if isinstance(item, list) and item]
+        if not lists:
+            scalars = {
+                key: item
+                for key, item in trimmed.items()
+                if isinstance(item, (str, int, float, bool)) or item is None
+            }
+            return json.dumps(scalars, default=str)[:limit]
+        key = max(lists, key=lambda name: len(json.dumps(trimmed[name], default=str)))
+        trimmed[key] = trimmed[key][: len(trimmed[key]) // 2]
+        text = json.dumps(trimmed, default=str)
+    return text
 
 
 def _json_dict(text: object) -> dict[str, Any]:

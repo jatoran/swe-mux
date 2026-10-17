@@ -34,12 +34,12 @@ import sqlite3
 import time
 import uuid
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TypeVar
 
 from .errors import NotFound
+from .executor_accounting import AccountedThreadPoolExecutor
 from .sqlite_store import database_operation_lock, run_sqlite_operation
 
 log = logging.getLogger(__name__)
@@ -207,7 +207,9 @@ class ClipboardStore:
         self._closed = False
         self._resync: asyncio.Task[None] | None = None
         self._operation_lock = database_operation_lock(path)
-        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="mux-clipboard-db")
+        self._executor = AccountedThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="mux-clipboard-db"
+        )
         self._executor.submit(self._connect).result()
 
     # ---------------------------------------------------------------- plumbing

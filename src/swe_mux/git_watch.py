@@ -48,6 +48,8 @@ from typing import Literal
 
 from watchfiles import watch as watch_changes
 
+from .parked_threads import parked
+
 log = logging.getLogger(__name__)
 
 #: Directories that are never tracked content in practice. Applied before Git's own
@@ -491,17 +493,29 @@ class CheckoutWatches:
             # live while reporting nothing would take its checkout off polling.
             if not os.path.isdir(watch.path):
                 raise FileNotFoundError(f"watch root is not a directory: {watch.path}")
-            for changes in watch_changes(
-                watch.path,
-                watch_filter=None,
-                debounce=self._debounce_ms,
-                step=self._step_ms,
-                stop_event=watch.stop,
-                rust_timeout=self._rust_timeout_ms,
-                raise_interrupt=False,
-                recursive=True,
-                ignore_permission_denied=True,
-            ):
+            batches = iter(
+                watch_changes(
+                    watch.path,
+                    watch_filter=None,
+                    debounce=self._debounce_ms,
+                    step=self._step_ms,
+                    stop_event=watch.stop,
+                    rust_timeout=self._rust_timeout_ms,
+                    raise_interrupt=False,
+                    recursive=True,
+                    ignore_permission_denied=True,
+                )
+            )
+            # unsupervised-loop-ok: the watch thread's own body, an OS thread rather
+            # than asyncio; the enclosing `except` ends the watch and `_record_end`
+            # degrades its checkout to polling.
+            while True:
+                # The wait inside watchfiles is Rust with a Python generator frame on
+                # top, which a stall dump cannot tell from work; the thread says so.
+                with parked("git_watch"):
+                    changes = next(batches, None)
+                if changes is None:
+                    break
                 paths = [path for _change, path in changes]
                 verdicts = classify_batch(paths, watch.candidates)
                 if not _post(loop, self._record_batch, len(paths), verdicts):

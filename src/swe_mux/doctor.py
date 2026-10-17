@@ -655,6 +655,58 @@ def _background_checks(background: dict[str, Any]) -> list[dict[str, Any]]:
     ]
 
 
+def _stall_profiler_checks(profiler: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """Whether a stall's explanation can name the thread holding the GIL.
+
+    Per-thread CPU attribution is built in; the external `py-spy` dump is optional
+    and is the only thing that sees a GIL holder inside a native call. Absent, a
+    stall is still classified, so this is advice rather than a fault.
+    """
+    if profiler is None:
+        return []
+    external = profiler.get("external_dump") or {}
+    thread_cpu = profiler.get("thread_cpu")
+    if thread_cpu:
+        cpu_text = "Per-thread CPU attribution is on."
+    elif thread_cpu is None:
+        cpu_text = "Per-thread CPU attribution has not started sampling yet."
+    else:
+        cpu_text = "Per-thread CPU attribution is unavailable on this host."
+    env = str(external.get("env") or "MUX_STALL_PROFILER")
+    if external.get("available"):
+        return [
+            _check(
+                id="background.stall_profiler",
+                category="background",
+                title="Loop-stall profiler",
+                status="ok",
+                severity="info",
+                detail=f"{cpu_text} Stalls also get one py-spy dump at onset "
+                f"({external.get('executable')}, from {external.get('source')}).",
+            )
+        ]
+    source = str(external.get("source") or "")
+    reason = {
+        "off": f"disabled by {env}=off",
+        "env_not_found": f"{env} names an executable that does not exist",
+        "not_found": "py-spy is not on PATH",
+    }.get(source, "not configured")
+    return [
+        _check(
+            id="background.stall_profiler",
+            category="background",
+            title="Loop-stall profiler",
+            status="unavailable",
+            severity="info",
+            detail=f"{cpu_text} No external stack dump at stall onset: {reason}. "
+            "Stalls are still classified from CPU; only a GIL holder inside a native "
+            "call goes unnamed.",
+            remedy=f"`uv tool install py-spy` (or set {env} to its path), then restart "
+            "the daemon.",
+        )
+    ]
+
+
 def _freshness_checks(freshness: list[dict[str, Any]]) -> list[dict[str, Any]]:
     if not freshness:
         return [
@@ -1006,6 +1058,7 @@ def build_doctor_report(
     optional_assets: list[dict[str, Any]] | None = None,
     hook_silence: list[dict[str, Any]] | None = None,
     surface_warnings: list[dict[str, Any]] | None = None,
+    stall_profiler: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Assemble the consolidated doctor report from already-fetched diagnostics.
 
@@ -1022,6 +1075,7 @@ def build_doctor_report(
     checks += _prerequisite_checks(prerequisites)
     checks += _status_checks(status_health)
     checks += _background_checks(background)
+    checks += _stall_profiler_checks(stall_profiler)
     checks += _freshness_checks(freshness)
     checks += _wsl_bridge_checks(wsl_bridges or [])
     checks += _optional_asset_checks(optional_assets or [])

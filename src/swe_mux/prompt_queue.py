@@ -40,12 +40,12 @@ import sqlite3
 import time
 import uuid
 from collections.abc import Callable, Collection, Mapping, Sequence
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, TypeVar
 
 from .background_tasks import background
 from .composer_input import composer_insertion, note_unsubmitted_delivery
+from .executor_accounting import AccountedThreadPoolExecutor
 from .harness import (
     MAX_PASTE_SUBMIT_SETTLE_SECONDS,
     composer_insertion_rules,
@@ -456,7 +456,9 @@ class PromptQueueStore:
         self._path = path
         self._operation_lock = database_operation_lock(path)
         self._closed = False
-        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="mux-queue-db")
+        self._executor = AccountedThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="mux-queue-db"
+        )
         self._executor.submit(self._connect).result()
 
     def _connect(self) -> None:

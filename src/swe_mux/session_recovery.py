@@ -73,13 +73,13 @@ import sqlite3
 import struct
 import time
 from collections.abc import Callable, Collection
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
 from typing import Any, TypeVar
 
 from .background_tasks import background
+from .executor_accounting import AccountedThreadPoolExecutor
 from .sqlite_store import (
     connect_or_quarantine,
     database_operation_lock,
@@ -379,7 +379,7 @@ class SessionRecoveryStore:
         self._closed = False
         path.parent.mkdir(parents=True, exist_ok=True)
         self._operation_lock = database_operation_lock(path)
-        self._executor = ThreadPoolExecutor(
+        self._executor = AccountedThreadPoolExecutor(
             max_workers=1, thread_name_prefix="mux-session-recovery-db"
         )
         self._executor.submit(self._connect).result()

@@ -190,6 +190,21 @@ A stall count that climbs at a steady rate points at a periodic loop; correlate 
 Then read `stall_watchdog.recent` on the same endpoint, or `grep loop_stall daemon.log`, for
 every stall of three seconds or more.
 The lag number says how long the loop was gone; the Python sampler may show where it was in `<data_dir>/loop-stalls.log`.
+
+Read the `verdict` first, because it decides what the frames mean (`design/features/daemon-resilience.md` § What kind of stall it was):
+
+- `loop_blocking_call`: the loop thread itself ran; its frames (`main=`) are the culprit, as in the 2026-09-01 cases below.
+- `loop_saturated`: the loop ran and its ready queue was deep; look at what floods it (`costliest`, request mix in `access.log`) rather than at one frame.
+- `gil_convoy`: the loop barely ran while `top=` threads burned CPU; `gil=` names the holder, and the loop's own frames are innocent syscalls.
+  Move the top thread's work out of the process or make it yield, not the loop's.
+- `host_starved`: nothing in the daemon ran and the host was saturated; the fix is outside the daemon (priority, fleet size), and its frames say nothing.
+- `blocked_wait`: nothing ran and the host had headroom; the loop waited on I/O, a lock, paging, or a native call that held the GIL, so check `db_lock_waiters`, memory, and the main frames together.
+- `unsampled`: no CPU samples covered the window (a watchdog younger than the stall, or a host without per-thread CPU); fall back to the frames below.
+
+`gil=name(py-spy)` is a measurement; `gil=name(cpu)` is the top CPU thread, an inference.
+For `py-spy` to run, it must be on `PATH` or named by `MUX_STALL_PROFILER`; `swemux doctor` says whether it is (`background.stall_profiler`).
+`busy=[...]` lists only threads that ran during the stall, each with its CPU seconds; `blocked=` counts unparked threads that did not, and parked threads are never listed.
+
 Read `capture_mode` and `canary_starved` before interpreting frames.
 `capture_mode=python_gil_required` means a native GIL-held stall can prevent sampling altogether.
 `canary_starved=false` means another Python thread ran during the stall; available main-thread frames can identify synchronous work on the event loop.
@@ -332,6 +347,12 @@ uv run python tools/fleet_load_harness.py --set gil_switch_interval_ms=1
   `/events` client the readiness watcher skips its pass and the run measures an empty room.
 - `--burn N` adds below-normal CPU-bound processes for agents' builds. A saturated host is what turns
   sub-second lag into multi-second stalls, and it is the only way this harness reproduces them.
+- `--stall-profiler PATH` hands the scratch daemon a `py-spy` executable through
+  `MUX_STALL_PROFILER` (which the environment scrub would otherwise remove), so its stalls carry a
+  measured GIL holder; the report prints each stall's verdict, CPU split and holder.
+- `--stall-threshold SECONDS` lowers the scratch daemon's capture threshold through
+  `MUX_STALL_THRESHOLD_SECONDS`. On this host the incident shape rarely crosses three seconds while
+  echo p99 sits above two, so classifying the stalls a run actually produces needs about one.
 - The report carries keystroke echo, the window's request latencies, hook and OTLP round trips,
   `loop_stall` records from the scratch `daemon.log`, loop-lag deltas, per-loop busy time in the
   window, and, with `--profile`, a GIL-only profile attributed to threads and frames.

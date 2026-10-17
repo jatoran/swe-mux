@@ -8,10 +8,10 @@ import json
 import sqlite3
 import time
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
+from .executor_accounting import AccountedThreadPoolExecutor
 from .sqlite_store import (
     connect_or_quarantine,
     database_operation_lock,
@@ -131,7 +131,9 @@ def _log(row: sqlite3.Row) -> dict[str, Any]:
 class PluginStore:
     def __init__(self, path: Path) -> None:
         self.path = path
-        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="plugin-store")
+        self._executor = AccountedThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="plugin-store"
+        )
         self._lock = database_operation_lock(path)
         self._db = connect_or_quarantine(path, lambda: _connect(path))
 

@@ -49,9 +49,12 @@ SQLite connection:
   unknown counts, extracted event counts, coverage status, and bounded diagnostics.
 - `loop_stalls`: one row per explained event-loop stall (`stall_watchdog.py`): start, duration,
   whether the canary thread was starved too, how many stack dumps fired, the main thread's frames
-  leaf first, the worker threads that were not parked, a host reading at explanation time, and
-  the trace file the full dumps live in.
+  leaf first, the worker threads that were busy (with their CPU seconds), a host reading, the
+  trace file the full dumps live in, and since telemetry schema 10 the stall's `diagnosis`
+  (`diagnosis_json`: verdict, CPU over the window, GIL holder; `daemon-resilience.md`).
   Frames are capped at 40 per thread and 12 threads per row; the trace file holds the rest.
+  The diagnosis is kept under 8,000 characters by halving its longest lists, so it always reads
+  back as valid JSON; rows written before schema 10 read back with an empty diagnosis.
   Pruned on `operational_telemetry_retention_days` with the other evidence.
 
 Creating the store on an existing mux database is additive. History migrations add the
