@@ -24,6 +24,7 @@ from ..deterministic_consumers import DeterministicConsumerService
 from ..errors import NotFound
 from ..event_bus import EventBus
 from ..executor_accounting import LEDGER as EXECUTOR_LEDGER
+from ..gil_switch import gil_switch_interval_ms
 from ..harness import (
     detect_installations_with_versions,
     public_harness_registry,
@@ -442,6 +443,9 @@ async def get_background_health(request: web.Request) -> web.Response:
             # tells you whether anything is blocking the thread every request, frame
             # and keystroke shares.
             "loop_lag": loop_lag.snapshot(),
+            # The switch interval in force (`gil_switch.py`): what each GIL hand-back
+            # to the loop can cost while a worker is runnable.
+            "gil_switch_interval_ms": gil_switch_interval_ms(),
             # Where the loop was during each stall the monitor counted, from the
             # GIL-free dump the loop arms itself. `loop_lag` says how long; this says
             # what, and whether a starved canary thread makes it a native-code stall.

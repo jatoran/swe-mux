@@ -122,6 +122,10 @@ The spawn path lowers a new root so its tree inherits the class; the process ins
 It never raises a session process, so an agent that put its own gate at idle keeps it there.
 The supervisor stays at normal on purpose: a session root inherits the supervisor's class at spawn, and at normal the supervisor already beats a below-normal fleet.
 I/O priority is untouched, because Windows' background I/O class is far harsher than one CPU step.
+
+Inside the daemon the same contest is for the GIL rather than a core: every time the event loop releases it around a system call it can wait up to the switch interval to win it back while a worker thread is runnable.
+`gil_switch_interval_ms` sets that interval for the daemon (`gil_switch.py`), at start and live on change, and `/api/diagnostics/background` reports the value in force.
+It lives outside `timer_resolution.py` on purpose: that module is in the supervisor's hash-gated source closure, so a change there would force the session-reaping supervisor update, and the supervisor keeps CPython's default.
 Both knobs are no-ops on an idle host; they decide who waits when the host is saturated, which is the condition under which the person at the keyboard was losing.
 
 ### `Process.ppid()` is that same snapshot, and `oneshot()` does not cache it

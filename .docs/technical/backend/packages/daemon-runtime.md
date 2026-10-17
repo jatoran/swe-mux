@@ -56,6 +56,13 @@ Nothing is deferred past `min(3 x cadence, 120 s)`, and `NEVER_DEFERRABLE` names
 
 **Not:** PTY host processes (that is `supervisor.py`), or any domain logic.
 
+### `gil_switch.py`
+
+The daemon's GIL switch interval (`sys.setswitchinterval`): applied from `gil_switch_interval_ms` in `__main__` after the timer period is raised, again by `runtime_config` on a change, and read back for `/api/diagnostics/background`.
+Its own module because `timer_resolution.py`, the natural neighbour, is in the supervisor's hash-gated source closure.
+
+**Not:** the supervisor's interval, which stays at CPython's default.
+
 ### `stall_watchdog.py`
 
 Bounded sampling through owned Python frame references, canary starvation measurements, and rotating `loop-stalls.log` output.

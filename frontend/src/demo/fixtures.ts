@@ -386,6 +386,7 @@ export function demoConfig(): Record<string, unknown> {
     process_orphan_grace_seconds: 15.0,
     session_process_priority: 'below_normal',
     daemon_process_priority: 'above_normal',
+    gil_switch_interval_ms: 5.0,
     ghost_window_sweep_enabled: false,
     ghost_window_poll_seconds: 5.0,
     process_evidence_retention_days: 30,
@@ -697,7 +698,7 @@ function demoDeviceSettings(): Record<string, Record<string, unknown>> {
 export const DEMO_DIALOG_ID = 'dlg-demo'
 
 /** Bump when the seed shape changes so persisted visitor state is discarded. */
-export const DEMO_STATE_VERSION = 19
+export const DEMO_STATE_VERSION = 20
 
 export function initialDemoState(): DemoState {
   return {

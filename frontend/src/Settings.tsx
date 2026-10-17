@@ -112,7 +112,7 @@ type Config = {
   drawer_tab_display:'icon'|'title'
   utility_rail_display:'icon'|'title'
   process_poll_seconds:number;process_orphan_grace_seconds:number;process_evidence_retention_days:number
-  session_process_priority:'normal'|'below_normal';daemon_process_priority:'normal'|'above_normal'
+  session_process_priority:'normal'|'below_normal';daemon_process_priority:'normal'|'above_normal';gil_switch_interval_ms:number
   ghost_window_sweep_enabled:boolean;ghost_window_poll_seconds:number
   status_timeline_retention_days:number
   operational_telemetry_retention_days:number;canonical_telemetry_native_otel_enabled:boolean
@@ -1991,7 +1991,8 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <section><h3>Process evidence</h3><label>Process inspector poll seconds<input type="number" min=".5" max="60" step=".5" value={draft.process_poll_seconds} onInput={e=>change('process_poll_seconds',Number(e.currentTarget.value))}/></label><label>Suspected-orphan grace seconds<input type="number" min="1" max="3600" value={draft.process_orphan_grace_seconds} onInput={e=>change('process_orphan_grace_seconds',Number(e.currentTarget.value))}/></label><label>Process evidence retention days<input type="number" min="1" max="3650" value={draft.process_evidence_retention_days} onInput={e=>change('process_evidence_retention_days',Number(e.currentTarget.value))}/></label><p>Surviving descendants are flagged after the grace period and never killed automatically. What is running right now is the drawer's <strong>Processes</strong> tab.</p>
             <label>Session process priority<Dropdown value={draft.session_process_priority} onChange={value=>change('session_process_priority',value as Config['session_process_priority'])} options={[{value:'below_normal',label:'Below normal (fleet yields to the daemon)'},{value:'normal',label:'Normal (leave as spawned)'}]}/></label>
             <label>Daemon process priority<Dropdown value={draft.daemon_process_priority} onChange={value=>change('daemon_process_priority',value as Config['daemon_process_priority'])} options={[{value:'above_normal',label:'Above normal'},{value:'normal',label:'Normal'}]}/></label>
-            <p>Scheduling classes only, and no-ops on an idle host: they decide who waits when every core is busy, so a wave of concurrent builds slows the builds rather than this UI. Session trees are only ever lowered, never raised. Both apply at the next daemon start.</p></section>
+            <p>Scheduling classes only, and no-ops on an idle host: they decide who waits when every core is busy, so a wave of concurrent builds slows the builds rather than this UI. Session trees are only ever lowered, never raised. Both apply at the next daemon start.</p>
+            <label data-setting="gil_switch_interval_ms">GIL switch interval (ms)<input type="number" min="1" max="20" step=".5" value={draft.gil_switch_interval_ms} onInput={e=>change('gil_switch_interval_ms',Number(e.currentTarget.value))}/><small>How long a thread waiting for the daemon's Python interpreter lock lets the holder keep it. Each time the event loop hands the lock to background work it can wait this long to get it back, so this bounds what busy background work adds to a keystroke. 5 is Python's default and measured as good as anything lower; it is here for measuring a fleet unlike the one it was chosen on. Applies immediately.</small></label></section>
 
           {/* Its own section rather than another row under process evidence: the sweep
               moves something on screen, which is the one thing here that changes what

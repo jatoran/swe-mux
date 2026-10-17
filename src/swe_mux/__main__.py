@@ -15,6 +15,7 @@ from . import app_keys as keys
 from .cli import invoked_as
 from .config import LOOPBACK_HOSTS, Config, load_config
 from .executor_accounting import AccountedThreadPoolExecutor
+from .gil_switch import apply_gil_switch_interval
 from .host_platform import IS_WINDOWS
 from .http_support import ACCESS_LOG_FORMAT
 from .lifecycle import ledger
@@ -437,6 +438,8 @@ def main(argv: Sequence[str] | None = None) -> None:
     # round trip between a keystroke and its echo, is quantized to the Windows timer
     # tick without this: a 0.5 ms sleep measured 15.6 ms. See `timer_resolution`.
     raise_timer_resolution()
+    # After the period is raised, because the GIL's wait is a timed wait it governs.
+    apply_gil_switch_interval(config.gil_switch_interval_ms)
     _warn_if_inside_job(config)
     _print_path_hint(config)
     if args.relaunch_wait:

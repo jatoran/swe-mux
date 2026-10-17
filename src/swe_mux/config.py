@@ -855,6 +855,14 @@ class Config:
     # start. Both are no-ops on an idle host and apply at the next daemon start.
     session_process_priority: str = "below_normal"
     daemon_process_priority: str = "above_normal"
+    # How long a thread waiting for the GIL lets the holder keep it, in ms
+    # (`sys.setswitchinterval`). Every time the event loop releases the GIL around a
+    # system call it can wait up to this long to win it back while a worker thread
+    # is runnable, so it bounds the cost of each such round trip under load.
+    # Applied at start and live on change. CPython's own 5 ms: 1, 2 and 5 ms could
+    # not be told apart at 36 sessions and 0.5 ms was worse (`DAEMON_LOAD_ISOLATION.md`
+    # item 5), so the knob is for measuring a fleet that differs, not a tuned value.
+    gil_switch_interval_ms: float = 5.0
     # Windows-only sweep for headless-browser windows that DWM composites even
     # though Win32 reports them hidden (ghost_windows.py). Off by config only
     # when an operator deliberately wants such a window left on screen.
@@ -1885,6 +1893,9 @@ _RANGE_RULES: tuple[_Range, ...] = (
     _Range("git_poll_seconds", 0.25, 3600, "must be between 0.25 and 3600 seconds"),
     _Range("process_poll_seconds", 0.5, 60, "must be between 0.5 and 60 seconds"),
     _Range("process_orphan_grace_seconds", 1, 3600, "must be between 1 and 3600 seconds"),
+    # 1 ms is the measured floor: 0.5 ms was worse on every latency at 36 sessions,
+    # and below the process's 1 ms timer period a shorter wait is not a finer one.
+    _Range("gil_switch_interval_ms", 1, 20, "must be between 1 and 20 milliseconds"),
     _Range("ghost_window_poll_seconds", 0.5, 60, "must be between 0.5 and 60 seconds"),
     _Range("process_evidence_retention_days", 1, 3650, "must be between 1 and 3650"),
     _Range("operational_telemetry_retention_days", 1, 3650, "must be between 1 and 3650"),

@@ -2302,6 +2302,9 @@ across every session (`background.account`): `session:transcript-observer`,
 `costliest[]` like any loop, are never started or restarted by the supervisor, and never count a
 fault (the session task handles its own).
 
+`gil_switch_interval_ms` is the interpreter's GIL switch interval in force (`gil_switch_interval_ms`
+in the config, applied at start and live on change).
+
 `governor` is load shedding (`background.pace` / `background.defer`): `attached`, whether the
 loop's recent lag puts it in `shedding` (`recent_max_lag_seconds` over `window_seconds`, against
 `lag_threshold_seconds`), the bounds (`max_stretch` cadences, `max_extra_seconds`), `deferrals`

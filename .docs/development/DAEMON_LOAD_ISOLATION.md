@@ -166,13 +166,32 @@ Items are worked in order, and an item may reorder, split or remove later items 
     For the worker: **20** (process inspection, 11.5% and the convoy holder in item 2's stalls) before **21** (telemetry, 2.5%); **22** stays gated on a re-measure after item 6's batched stats; **23** is removed (below).
   - **Where:** this document.
 
-- [ ] **5. GIL switch interval.**
+- [x] **5. GIL switch interval.**
   - **Why:** each GIL release by the loop can cost up to the switch interval, 5 ms by default, to win the lock back while another thread is runnable.
   - **Change:** a validated `gil_switch_interval_ms` config key, applied with `sys.setswitchinterval` in `__main__.main()` after `raise_timer_resolution()` (`__main__.py:428-444`) and in every new process entry point, and reported on `/api/diagnostics/background`.
     The supervisor is left alone.
   - **Settle first:** measure 5, 2, 1 and 0.5 ms on the harness (loop-lag p99, echo latency, background throughput).
     Windows GIL waits are millisecond-granular, so a sub-millisecond value may truncate.
   - **Done when:** the default is the measured best and the measurements are recorded here.
+  - **Built:**
+    - `gil_switch_interval_ms` (1-20 ms, default 5), applied in `__main__` after the timer period is raised, again live by `runtime_config` on a change because the interval is process-wide and immediate, and reported as `gil_switch_interval_ms` on `/api/diagnostics/background`; a Settings control under Processes.
+    - In `gil_switch.py`, not `timer_resolution.py` where it would naturally sit: that file is in the supervisor's hash-gated source closure (`packaging/build_desktop.py`), so editing it would have made the next update the session-reaping supervisor rebuild for a daemon-only knob. A test holds the new module out of the closure, and no closure file differs from master anywhere on this branch.
+    - "Every new process entry point" is the daemon today; the worker process (item 18) applies the same key when it exists.
+  - **Measured** (36 `scroll` sessions at 20 KB/s, 3 hooks and 1 decision a second, no burners; the scratch daemon's log confirmed each value in force; the last two runs repeat the first and third in reverse order):
+
+    | Interval | Echo p50 / p95 / p99 | `GET /api/sessions` p99 | Hook p99 | Decision p99 | OTLP p99 | Lag samples >= 100 ms |
+    | --- | --- | --- | --- | --- | --- | --- |
+    | 5 ms | 3.6 / 13.1 / 47.0 ms | 90 ms | 21.8 ms | 25.4 ms | 18.5 ms | 0 / 241 |
+    | 2 ms | 3.7 / 22.4 / 42.8 ms | 62 ms | 31.1 ms | 33.0 ms | 38.5 ms | 0 / 242 |
+    | 1 ms | 3.2 / 7.1 / 13.3 ms | 56 ms | 33.7 ms | 23.0 ms | 19.2 ms | 0 / 241 |
+    | 0.5 ms | 6.1 / 52.8 / 132 ms | 162 ms | 85.1 ms | 109 ms | 48.0 ms | 0 / 242 |
+    | 1 ms, again | 4.4 / 14.2 / 32.9 ms | 80 ms | 33.8 ms | 33.8 ms | 31.1 ms | 0 / 241 |
+    | 5 ms, again | 3.5 / 7.8 / 37.2 ms | 55 ms | 18.0 ms | 17.9 ms | 39.0 ms | 0 / 241 |
+
+    1, 2 and 5 ms cannot be told apart: the first 1 ms run looked best for echo, and its repeat lost to the repeat at 5 ms on echo p95 and on hooks. 0.5 ms was worse on every latency, by two to four times at p99, and is below the 1 ms timer period the GIL's timed wait runs on, so the range starts at 1 ms. Background throughput did not move with the interval: the event journal wrote 13,127-13,188 events in every run, and the transcript-read pool's p99 wait ranged 41-77 ms from run to run with no relation to the value (41 and 43 ms in the two repeats, at 5 and 1 ms).
+    **The default stays at CPython's 5 ms**, the best measured by being no worse than anything else, and the knob remains for a fleet unlike this one. The items before this one removed most of what competed with the loop (classification, per-tick hops, inserts, compression), which is consistent with the interval no longer mattering at this load; under saturation (item 11's runs) the stalls were long GIL holds by process inspection, which a switch interval cannot shorten because the holder releases on its own schedule inside C calls.
+  - **Tests:** `tests/test_gil_switch.py` (applying sets and reports the interval, the range refuses 0.5 ms and above 20, a change applies live without a restart, the module stays out of the supervisor closure), `frontend/test/settingsCoverage.test.ts` (the control).
+  - **Where:** `gil_switch.py`, `config.py`, `__main__.py`, `runtime_config.py`, `routes/diagnostics.py`, `frontend/src/Settings.tsx`, `frontend/src/demo/fixtures.ts`, `frontend/test/renderer/settingsConfigFixture.ts`, `design/interfaces.md`, `technical/backend/packages/{daemon-runtime,runtime-rules}.md`.
 
 - [x] **6. Remove per-session no-op hops and per-tick waste.**
   - **Why:** each hop or poll is a GIL round trip multiplied by the fleet.

@@ -18,6 +18,7 @@ from .background_tasks import background
 from .clipboard_store import ClipboardStore
 from .config import Config, load_config
 from .ghost_windows import GhostWindowSweeper
+from .gil_switch import apply_gil_switch_interval
 from .git_monitor import GitMonitor
 from .harness import (
     HARNESSES,
@@ -152,6 +153,8 @@ def apply_runtime_config(app: web.Application, changed: set[str]) -> None:
     if "log_level" in changed:
         with suppress(ValueError):  # _validate already constrains the value
             set_log_level(config.log_level)
+    if "gil_switch_interval_ms" in changed:
+        apply_gil_switch_interval(config.gil_switch_interval_ms)
     sessions: SessionManager | None = app.get(keys.SESSIONS)
     if sessions:
         if "canonical_telemetry_native_otel_enabled" in changed:
