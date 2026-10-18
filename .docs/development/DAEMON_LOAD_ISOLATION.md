@@ -1078,10 +1078,19 @@ Items are worked in order, and an item may reorder, split or remove later items 
     The reconnect was a whole replay (about 540 KB), as it must be from the desktop window: the redeploy relaunches it, and a new page has no cursor to offer.
   - **CI green on every leg is not verified here:** this session holds no push authority, so the batch reaches CI when the operator's next push carries it.
 
-- [ ] **34. Default the gateway on.**
+- [x] **34. Default the gateway on.**
   - **Why:** `terminal_gateway_enabled` stays off until the gateway has proven itself on the live fleet.
   - **Change:** flip the default after a sustained live period with no terminal regressions, and keep the switch as the fallback.
   - **Done when:** the default is on and the changelog says so.
+  - **Done (2026-10-18), reordered after item 35's measurements**, so the default moved on evidence from incident scale as well as from the live fleet: the harness matrix and the frozen-daemon comparison in item 35's record were run first.
+  - **The live period was short, and this says so.** The gateway carried the operator's terminals from 04:48 that day - through a session-preserving restart, two staged redeploys and the live latency bench, with the operator's own typing going through it - and by the flip had not restarted, missed a ping, been ended as hung or taken a terminal back except the bench's ended session.
+    Every defect that period found (items 32 and 33's records: the startup order twice, the swap's unheard `quit`, the `stopped` report) was fixed and is now tested.
+    An hour is not the "sustained" period the plan imagined; what makes flipping now reasonable is that the off switch is one setting and a gateway that cannot run already falls back on its own - and the changelog names the switch.
+  - **One rule had to change with the default.** Item 29 refused a config whose derived gateway port does not exist (a daemon on 65535) whenever the gateway was on; with the gateway on by default that would have stopped a daemon that started the day before.
+    Such a daemon now starts, its gateway is `unavailable` with the reason (`Config.terminal_gateway_port_problem`), nothing tries to admit or route the missing port, and terminals stay on the daemon; an explicit `terminal_gateway_port` is the fix the reason names.
+  - **Changed:** `Config.terminal_gateway_enabled` defaults to true; the Settings text drops "experimental"; the changelog's Unreleased section says what a user sees (the gateway, its port, the Serve `/gateway` path, the firewall check covering both ports, and the switch).
+    The live tier now runs its subprocess daemons at the new default with an OS-allocated gateway port, and the entry-point test asserts the default daemon's gateway is among the children a `quit` must take; the supervised-restart test pins the gateway off, because its subject is the daemon's own path - which every install keeps as the fallback - and the gateway's version of the same claim has its own test.
+  - **Tests:** `test_gateway_host.py`'s default assertion and its port tests (a daemon on 65535 starts and its gateway says why), `test_startup_gate.py`'s default transport (on, and `unavailable` without a supervisor), and the live tier above.
 
 - [ ] **35. Verify at incident scale and close out.**
   - **Why:** the plan is done only when the original failure no longer reproduces.

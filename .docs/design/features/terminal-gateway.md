@@ -5,9 +5,9 @@ Every daemon stall - a GIL-heavy reconcile, a slow scan, a restart - therefore f
 The terminal gateway is a process of its own that carries terminals instead: browser -> gateway -> supervisor and back, with the daemon told about each keystroke afterwards.
 The daemon can stall, or restart, and typing keeps echoing.
 
-Status (2026-10-18): with `terminal_gateway_enabled` on, the daemon finds or starts the gateway and owns its lifecycle (items 28 and 29), browsers open terminals on it whenever the daemon reports it (item 30, reached through Tailscale Serve from an `https:` page, item 31), and every supervised session's terminal is handed to it and taken back when it goes (item 32).
+Status (2026-10-18): on by default (item 34), with `terminal_gateway_enabled` as the switch that puts every terminal back on the daemon.
+The daemon finds or starts the gateway and owns its lifecycle (items 28 and 29), browsers open terminals on it whenever the daemon reports it (item 30, reached through Tailscale Serve from an `https:` page, item 31), and every supervised session's terminal is handed to it and taken back when it goes (item 32).
 A redeploy, an update and a daemon restart each treat it as below (item 33).
-The switch stays off until item 34.
 
 ## What runs where
 

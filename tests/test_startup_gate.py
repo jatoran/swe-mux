@@ -642,11 +642,13 @@ async def test_the_daemon_answers_its_phase_while_the_runtime_is_still_building(
         ready_payload = await ready.json()
         assert ready_payload["ok"] is True
         assert ready_payload["status"] == "ready"
-        # The gateway is off by default, so this daemon serves every terminal.
+        # The gateway is on by default, but it carries terminals from the PTY supervisor
+        # and this daemon runs without one, so it serves every terminal itself and says why.
         assert ready_payload["terminal_transport"] == {
             "transport": "daemon",
-            "state": "disabled",
+            "state": "unavailable",
             "port": None,
+            "reason": "no PTY supervisor is attached",
         }
         # The phases that made up the start are readable from the answer itself.
         assert {item["name"] for item in ready_payload["phases"]} >= {

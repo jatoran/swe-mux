@@ -785,7 +785,11 @@ def gateway_discovery_record(data_dir: Path) -> dict[str, Any] | None:
 
 
 def _daemon_config_toml(
-    port: int, *, supervisor: bool | None, gateway_port: int | None = None
+    port: int,
+    *,
+    supervisor: bool | None,
+    gateway: bool | None = None,
+    gateway_port: int | None = None,
 ) -> str:
     """The smallest config that keeps this daemon off every shared resource.
 
@@ -801,8 +805,10 @@ def _daemon_config_toml(
     was silently exercising a configuration no install has. A test that wants the
     unsupervised fallback asks for it explicitly.
 
-    `gateway_port` turns the terminal gateway on, on that port rather than on the
-    derived one (the daemon's plus one), which nothing has checked is free.
+    `terminal_gateway_enabled` follows the same rule (`gateway` None writes nothing,
+    and the gateway is on by default since item 34), while `gateway_port` is written
+    whenever there is one: an OS-allocated port rather than the derived one (the
+    daemon's plus one), which nothing has checked is free.
     """
     lines = [
         f"port = {port}",
@@ -813,8 +819,9 @@ def _daemon_config_toml(
     ]
     if supervisor is not None:
         lines.append(f"pty_supervisor_enabled = {str(supervisor).lower()}")
+    if gateway is not None:
+        lines.append(f"terminal_gateway_enabled = {str(gateway).lower()}")
     if gateway_port is not None:
-        lines.append("terminal_gateway_enabled = true")
         lines.append(f"terminal_gateway_port = {gateway_port}")
     return "\n".join(lines) + "\n"
 
@@ -839,23 +846,26 @@ class DaemonSpec:
 
 
 def daemon_spec(
-    tmp_path: Path, *, supervisor: bool | None = None, gateway: bool = False
+    tmp_path: Path, *, supervisor: bool | None = None, gateway: bool | None = None
 ) -> DaemonSpec:
     """Prepare an isolated data directory and config file for `daemon_process`.
 
     `supervisor=None` writes no `pty_supervisor_enabled` key, so the daemon runs
-    the shipped default; `True`/`False` pin it. `gateway` turns the terminal
-    gateway on, on an OS-allocated port of its own.
+    the shipped default; `True`/`False` pin it. `gateway` is the same for the
+    terminal gateway, which is on by default; unless it is pinned off, it gets an
+    OS-allocated port of its own.
     """
     data_dir = tmp_path / "muxd-data"
     data_dir.mkdir(parents=True, exist_ok=True)
     port = free_port()
-    gateway_port = free_port() if gateway else None
+    gateway_port = None if gateway is False else free_port()
     while gateway_port == port:
         gateway_port = free_port()
     config_path = data_dir / "config.toml"
     config_path.write_text(
-        _daemon_config_toml(port, supervisor=supervisor, gateway_port=gateway_port),
+        _daemon_config_toml(
+            port, supervisor=supervisor, gateway=gateway, gateway_port=gateway_port
+        ),
         encoding="utf-8",
         newline="\n",
     )

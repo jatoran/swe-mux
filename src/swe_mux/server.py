@@ -1434,6 +1434,10 @@ def _build_terminal_gateway(
     if supervisor_client is None:
         gateway_host.mark_unavailable("no PTY supervisor is attached")
         return gateway_host
+    port_problem = config.terminal_gateway_port_problem()
+    if port_problem is not None:
+        gateway_host.mark_unavailable(port_problem)
+        return gateway_host
     placement = TerminalPlacement(
         gateway_host.hub,
         sessions=lambda: sessions.sessions,

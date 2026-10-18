@@ -23,6 +23,11 @@ The release procedure that maintains this file is [`RELEASING.md`](RELEASING.md)
 
 ### Changed
 
+- **Typing keeps working while swe-mux is busy, restarting, or updating.**
+  Terminals now run through a terminal gateway, a separate swe-mux process that writes your keystrokes to the terminal itself, so a busy or restarting swe-mux no longer freezes them; "Reload daemon (keep sessions)" no longer interrupts typing at all, and an update or redeploy reconnects each terminal to the new gateway on its own.
+  It is on by default and listens on the swe-mux port plus one (Settings → Processes).
+  For a phone, Tailscale Serve gains a `/gateway` path beside swe-mux's own when mobile access is set up, and on Windows the firewall check now covers both ports - a rule that admits only the swe-mux port will ask to be repaired.
+  Turning it off in Settings → Processes serves terminals from swe-mux itself, as before, which is also what happens whenever the gateway cannot run.
 - **Quota history opens on the weekly window over the last 7 days, and says when each percentage was true.**
   The chart's time axis is labelled with days, and a readout under it lists every account's percent used at the moment you point at, tap, or step to with the arrow keys, with the reading's own time and the window's next reset.
   Daily points are labelled as UTC days, a line no longer bridges a stretch with no readings, and the readings list is a table of time, account, and percent used per window.

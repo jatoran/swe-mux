@@ -604,14 +604,14 @@ def test_the_gateway_port_defaults_to_the_daemons_plus_one(tmp_path: Path) -> No
     assert Config(data_dir=tmp_path, port=8765).terminal_gateway_listen_port() == 8766
     explicit = Config(data_dir=tmp_path, port=8765, terminal_gateway_port=9100)
     assert explicit.terminal_gateway_listen_port() == 9100
-    assert Config(data_dir=tmp_path).terminal_gateway_enabled is False
+    # On by default since item 34; the switch remains, and off serves from the daemon.
+    assert Config(data_dir=tmp_path).terminal_gateway_enabled is True
 
 
 @pytest.mark.parametrize(
     ("port", "gateway_port", "message"),
     [
         (8765, 8765, "must differ"),
-        (65535, 0, "set explicitly"),
         (8765, 70000, "between 1 and 65535"),
     ],
 )
@@ -632,11 +632,43 @@ def test_an_impossible_gateway_port_is_refused(
         )
 
 
-def test_a_daemon_on_the_last_port_is_valid_while_its_gateway_is_off(tmp_path: Path) -> None:
-    """The derived port only has to exist for a daemon that will start a gateway."""
-    from swe_mux.config import _validate
+def test_a_daemon_on_the_last_port_starts_and_its_gateway_says_why_it_cannot(
+    tmp_path: Path,
+) -> None:
+    """The derived port does not exist above 65534, and that is the gateway's problem.
 
-    _validate(Config(data_dir=tmp_path, port=65535))
+    Refused as a config error until the gateway became the default; refusing then would
+    have stopped a daemon on 65535 that started fine the day before. So the config is
+    valid, nothing tries to admit or route a port that does not exist, and the daemon's
+    gateway is unavailable with the reason while terminals stay on the daemon.
+    """
+    from aiohttp import web
+
+    from swe_mux import app_keys as keys
+    from swe_mux.config import _validate
+    from swe_mux.server import _build_terminal_gateway
+
+    on_last_port = Config(data_dir=tmp_path, port=65535)
+    assert on_last_port.terminal_gateway_enabled is True
+    _validate(on_last_port)
+    assert on_last_port.active_terminal_gateway_port() is None
+    problem = on_last_port.terminal_gateway_port_problem()
+    assert problem is not None and "terminal_gateway_port" in problem
+    app = web.Application()
+    app[keys.DAEMON_GENERATION] = "gen-1"
+    sessions = types.SimpleNamespace(sessions={}, terminal_placement=None)
+    host = _build_terminal_gateway(app, on_last_port, cast(Any, object()), cast(Any, sessions))
+    assert host.placement is None and sessions.terminal_placement is None
+    assert host.transport() == {
+        "transport": TRANSPORT_DAEMON,
+        "state": STATE_UNAVAILABLE,
+        "port": None,
+        "reason": problem,
+    }
+    # An explicit port is the fix the reason names.
+    explicit = Config(data_dir=tmp_path, port=65535, terminal_gateway_port=65534)
+    assert explicit.active_terminal_gateway_port() == 65534
+    _validate(Config(data_dir=tmp_path, port=65535, terminal_gateway_enabled=False))
     _validate(
         Config(
             data_dir=tmp_path,

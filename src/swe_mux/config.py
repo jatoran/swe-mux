@@ -878,9 +878,9 @@ class Config:
     # Browser terminals carried by a process of their own (`gateway_host.py`,
     # `terminal_gateway.py`, `DAEMON_LOAD_ISOLATION.md` items 28-34), so a daemon
     # stall or restart does not freeze typing. The daemon finds or starts it and it
-    # outlives a daemon restart. Off until it has proven itself on the live fleet
-    # (item 34); applies at the next daemon start.
-    terminal_gateway_enabled: bool = False
+    # outlives a daemon restart. On by default since item 34; off - or a gateway that
+    # cannot run - serves every terminal from the daemon. Applies at the next start.
+    terminal_gateway_enabled: bool = True
     # The gateway's browser port. 0 is the daemon's port plus one.
     terminal_gateway_port: int = 0
     # Windows-only sweep for headless-browser windows that DWM composites even
@@ -1675,10 +1675,25 @@ class Config:
         """The port the terminal gateway is started on: the set one, or the daemon's plus one."""
         return self.terminal_gateway_port or self.port + 1
 
+    def terminal_gateway_port_problem(self) -> str | None:
+        """Why the gateway has no port to listen on, or None.
+
+        Only the derived default can lack one: the daemon's port plus one does not exist
+        above 65534. That is a reason the gateway cannot run, not a reason the daemon
+        cannot - with the gateway on by default, refusing the config would stop a
+        daemon on 65535 that started fine before the default changed.
+        """
+        if not self.terminal_gateway_port and self.port + 1 > 65535:
+            return "the daemon's port plus one is not a port; set terminal_gateway_port"
+        return None
+
     def active_terminal_gateway_port(self) -> int | None:
-        """The gateway's port while it is enabled, for what must also admit or route
-        it (the firewall rule, the Tailscale Serve mount); None while it is off."""
-        return self.terminal_gateway_listen_port() if self.terminal_gateway_enabled else None
+        """The gateway's port while it can run, for what must also admit or route it
+        (the firewall rule, the Tailscale Serve mount); None while it is off or has no
+        port (`terminal_gateway_port_problem`)."""
+        if not self.terminal_gateway_enabled or self.terminal_gateway_port_problem():
+            return None
+        return self.terminal_gateway_listen_port()
 
     def public_dict(self) -> dict[str, object]:
         result = asdict(self)
@@ -2257,18 +2272,16 @@ def _automation_policy_errors(config: Config) -> dict[str, str]:
 def _validate_terminal_gateway_port(config: Config, errors: dict[str, str]) -> None:
     """The gateway's port against the daemon's, once each is valid on its own.
 
-    Its range is a `_Range`; what that cannot say is that the two must differ, and
-    that the derived default (the daemon's plus one) does not exist above 65534 -
-    which matters only to a daemon that will start a gateway, so a daemon on 65535
-    with the gateway off stays a valid config.
+    Its range is a `_Range`; what that cannot say is that the two must differ. A
+    derived default that does not exist (a daemon on 65535) is not refused here: it
+    makes the gateway unavailable, with the reason, and leaves terminals on the
+    daemon (`Config.terminal_gateway_port_problem`). It was refused until the gateway
+    became the default, when refusing would have stopped a daemon that used to start.
     """
     if "terminal_gateway_port" in errors or "port" in errors:
         return
-    gateway_port = config.terminal_gateway_listen_port()
-    if gateway_port == config.port:
+    if config.terminal_gateway_listen_port() == config.port:
         errors["terminal_gateway_port"] = "must differ from the daemon's port"
-    elif gateway_port > 65535 and config.terminal_gateway_enabled:
-        errors["terminal_gateway_port"] = "must be set explicitly when the daemon's port is 65535"
 
 
 def _validate(config: Config) -> None:

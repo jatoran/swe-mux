@@ -337,8 +337,12 @@ async def test_the_muxd_entry_point_starts_serves_and_stops_without_orphans(
     always exists and its emptiness is the signal. A faulthandler dump in it is
     a native crash that an exit code of zero would not have shown.
     """
-    spec = daemon_spec(tmp_path)  # no `pty_supervisor_enabled` key: the shipped default
-    async with supervisor_reaped(spec.data_dir), daemon_process(spec) as daemon:
+    spec = daemon_spec(tmp_path)  # no supervisor or gateway switch: the shipped default
+    async with (
+        supervisor_reaped(spec.data_dir),
+        gateway_reaped(spec.data_dir),
+        daemon_process(spec) as daemon,
+    ):
         health = await daemon.wait_ready()
         assert_startup_is_complete(health)
 
@@ -373,8 +377,15 @@ async def test_the_muxd_entry_point_starts_serves_and_stops_without_orphans(
         # orphan its kill-on-close reaper exists to prevent.
         worker_pids = await daemon.worker_pids()
         assert worker_pids and all(alive(pid) for pid in worker_pids), worker_pids
+        # And the terminal gateway, on by default since item 34: waited for, so the
+        # survivor check covers the one swe-mux process spawned outside every Job.
+        await daemon.wait_gateway()
+        gateway = gateway_discovery_record(daemon.data_dir)
+        assert gateway is not None, "the default daemon's gateway wrote no record"
+        gateway_pid = int(gateway["pid"])
 
         descendants = [child.pid for child in daemon.descendants()]
+        assert gateway_pid in descendants, (gateway_pid, descendants)
         assert supervisor_pid in descendants, (
             f"the supervisor pid {supervisor_pid} is not among this daemon's children "
             f"{descendants}, so the survivor check below would never have seen it"
@@ -391,7 +402,11 @@ async def test_the_muxd_entry_point_starts_serves_and_stops_without_orphans(
         await _assert_reaped(
             descendants,
             supervisor_pid=supervisor_pid,
-            what="a `quit` shutdown must take every child of muxd with it, supervisor included",
+            gateway_pid=gateway_pid,
+            what=(
+                "a `quit` shutdown must take every child of muxd with it, supervisor and "
+                "terminal gateway included"
+            ),
         )
 
         crash_log = daemon.data_dir / "crash.log"
@@ -439,7 +454,10 @@ async def test_a_supervised_shell_outlives_its_daemon_and_the_successor_adopts_i
     root = tmp_path / "repo"
     root.mkdir(parents=True, exist_ok=True)
     await asyncio.to_thread(subprocess.run, ["git", "init", "-q"], cwd=root, check=True)
-    spec = daemon_spec(tmp_path)
+    # The gateway pinned off: this is the daemon's own terminal path across a restart -
+    # the fallback every install keeps - and the gateway's version of the same claim
+    # is `test_typing_through_the_gateway_goes_on_while_the_daemon_restarts`.
+    spec = daemon_spec(tmp_path, gateway=False)
 
     async with supervisor_reaped(spec.data_dir):
         async with daemon_process(spec) as daemon:
