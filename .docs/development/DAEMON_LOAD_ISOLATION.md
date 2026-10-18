@@ -519,7 +519,7 @@ Items are worked in order, and an item may reorder, split or remove later items 
     `tests/test_update_install.py`: the plan offers a newer supervisor and stays swap with no consent word; no offer for an equal revision, a downgrade, or two builds that both predate revisions; a running supervisor without a revision is offered the first one; consent alone swaps and the instruction replaces, with or without consent; asking for a supervisor the release does not improve swaps; the instruction is accepted as consent for a required protocol replacement; and the metadata revision is optional but never guessed.
     `tests/test_doctor.py` (the warning, and silence for an equal, newer or unreported revision), `tests/test_cli.py` (the body carries both words as typed; the plan prints the optional command last), `frontend/test/updateCheck.test.ts` (`planSupervisorOfferLine`: offered with both revisions and the session count, revision 0 for a running supervisor that predates them, and nothing for an older daemon, a declined offer, or a release that reaps anyway).
 
-- [ ] **17. Run the supervisor update.**
+- [x] **17. Run the supervisor update.**
   - **Why:** items 12-14 do nothing until the running supervisor is replaced, and its bundle has been stale since 2026-08-27.
   - **Change:** none in code.
     The operator schedules the reap and runs the documented sequence from a terminal outside swe-mux: `swemuxd --shutdown`, confirm no `swe-mux` or `swe-mux-supervisor` process remains, `packaging/build_desktop.py --supervisor-only`, relaunch.
@@ -538,6 +538,15 @@ Items are worked in order, and an item may reorder, split or remove later items 
     - `curl -s http://127.0.0.1:8765/api/diagnostics/background` shows `supervisor_link` with `output_gap`, `subscribe_since`, `terminal_scope` and `notices` among its capabilities and `supervisor_revision` 1.
     - `swemux doctor` has no `daemon.supervisor_revision` warning.
     Until it runs, items 12-14 are inert on this machine and harmless: the daemon logs the older supervisor once and works as it did, and the doctor warns.
+  - **Done (2026-10-17), at the operator's go-ahead, with every other session closed first (0 live).**
+    Items 1-17 landed on `master` as a fast-forward (`8f1615c6`), and the sequence ran from a session outside swe-mux.
+    - `swemuxd --shutdown` stopped the supervisor, but the frozen daemon and the tray stayed up; `bundle_apply.stop_everything` (quit intent, then the stragglers) ended them, and nothing named `swe-mux` was left.
+    - **The first supervisor build failed on a lock no swe-mux process held.**
+      `dist\swe-mux-supervisor\_internal\VCRUNTIME140.dll` was mapped by a vaultspaces `postgres.exe` started from a swe-mux session weeks earlier, whose PATH names no supervisor directory - so a program a session starts can inherit the supervisor bundle's DLL search directory and lock the bundle against an in-place rebuild.
+      The database was left alone; the half-deleted old bundle was moved into `.trash` (a rename works on a mapped DLL) and the rebuild succeeded.
+      It is a supervisor bug, and minor: the staged swap renames rather than deletes and is unaffected, and only `build_desktop.py --supervisor-only` is blocked. Resetting the DLL directory around the PTY spawn would fix it, and that needs its own supervisor revision.
+    - The split form ran: `--supervisor-only`, a relaunch of the old app (old daemon on the new supervisor), then `redeploy_desktop.py`, which staged, swapped and came up healthy.
+    Checked afterwards: `supervisor_bundle_current()` is `True` from the primary venv; `supervisor_link` reports revision 1 with `notices`, `output_gap`, `subscribe_since` and `terminal_scope`; and `swemux doctor` is 26 ok, 0 warn, 0 fail, with no `daemon.supervisor_revision` check.
 
 - [ ] **18. Shared framed IPC module.**
   - **Why:** the worker and the gateway need the supervisor's framing without importing `supervisor.py`, which drags in the PTY stack.
