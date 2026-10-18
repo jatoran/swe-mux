@@ -96,6 +96,7 @@ A daemon that starts while the record names a live generation with no planned ha
 Manual tray restart pauses and fences the monitor; tray Quit stops it before requesting shutdown.
 Recovery never invokes supervisor shutdown, kills a process tree, or rebuilds a bundle.
 It never signals the terminal gateway either (`terminal-gateway.md`): the record names it, `terminate_generation` refuses a record whose daemon pid is the gateway's or the supervisor's, and the replacement daemon finds the same gateway and connects to it, so terminals keep echoing through the recovery.
+The one thing that ends a running gateway outside a quit or a replacement is the daemon's own hung-gateway rule (`terminal-gateway.md`, "A hung gateway"), and it is built the other way round from this monitor's: it acts only after the gateway has stayed silent to pings timed on a daemon loop that was running, *and* to its own `/health` asked from a thread, so a stalled daemon can never end a healthy gateway.
 Every recovery state transition and failure goes to the rotating `lifecycle.log`.
 
 ## Listener guard

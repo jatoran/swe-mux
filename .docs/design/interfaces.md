@@ -101,7 +101,8 @@ It also reports `session_recovery: bool`, `cold_sessions`, and `inactive_session
 `cold_sessions` counts sessions rebuilt because their processes died with a daemon that never recorded how they ended (`features/session-recovery.md`).
 A non-zero cold count is the signal that something took the whole app down, which no other field says.
 `inactive_sessions` counts intentional Stand down rows with no process.
-`terminal_transport` says which process a browser opens terminals on (`features/terminal-gateway.md`): `{transport: "gateway", state: "running", port}` while the daemon is connected to a terminal gateway, and otherwise `{transport: "daemon", state, port: null, reason?}`, where `state` is `disabled` (`terminal_gateway_enabled` off), `unavailable` (no PTY supervisor, so nothing for a gateway to carry), `stopped`, `starting` or `backoff`, and `reason` is why when there is one.
+`terminal_transport` says which process a browser opens terminals on (`features/terminal-gateway.md`): `{transport: "gateway", state, port}` while a terminal gateway carries this daemon's supervised terminals - whenever the daemon is connected to one, and also through a lost control connection to one still running that holds them, when `state` reads `backoff` - and otherwise `{transport: "daemon", state, port: null, reason?}`, where `state` is `disabled` (`terminal_gateway_enabled` off), `unavailable` (no PTY supervisor, so nothing for a gateway to carry), `stopped`, `starting` or `backoff`, and `reason` is why when there is one.
+In-process and cold sessions stay on the daemon whatever this says; the gateway sends their browsers back with 4010.
 Shutdown exists only when the daemon
 was launched with desktop control, accepts IP-loopback peers only, compares the generated token
 in constant time, and returns `202 {status: "shutting_down", mode}`. An optional JSON body
@@ -435,7 +436,9 @@ does nothing" failure being retired: `version_mismatch`, `api_mismatch`,
 
 `api_mismatch` is the one worth explaining, because both sides report the same
 version and disagree anyway. The pin has two halves: `requires_backend` is
-`__version__`, and `requires_api` is a digest over the daemon's whole route table.
+`__version__`, and `requires_api` is a digest over the daemon's whole route table,
+with the terminal gateway's browser routes and its control protocol version beside
+it (`frontend_overlay.daemon_api_digest`), because a page talks to both processes.
 The second exists because the first structurally cannot catch a frontend calling
 an endpoint this daemon does not serve - the frozen app is rebuilt from a checkout
 that moves per commit while the version moves per release. Package an overlay from
@@ -672,11 +675,12 @@ to keep the old behaviour.
 ## Terminal gateway control protocol (local only)
 
 The daemon drives the terminal cores the gateway hosts over `framed_ipc` (`DAEMON_LOAD_ISOLATION.md` item 27; `terminal_core/protocol.py` is the vocabulary).
-The gateway listens on loopback and the daemon connects with the gateway's token; `hello` carries `protocol` (`GATEWAY_PROTOCOL_VERSION`, 1), the daemon's `generation` and the `capabilities` it wants (`diagnostics`), and the reply adds the gateway's random `gateway_id`.
+The gateway listens on loopback and the daemon connects with the gateway's token; `hello` carries `protocol` (`GATEWAY_PROTOCOL_VERSION`, 1), the daemon's `generation` and the `capabilities` it wants (`diagnostics`, `ping`), and the reply adds the gateway's random `gateway_id`.
+A capability the other side did not agree is never used: a daemon does not ping a gateway that did not agree `ping`, and reads nothing into its silence.
 A mismatched protocol is refused at `hello`; a second daemon connection supersedes the first.
 Process-local plumbing, not a public API, exactly like the supervisor's.
 
-Everything except one request is a notice, so it applies in the order it was sent; no notice carries `id` or `ok`, which `framed_ipc` reserves for requests and replies.
+Everything except two requests is a notice, so it applies in the order it was sent; no notice carries `id` or `ok`, which `framed_ipc` reserves for requests and replies.
 
 Daemon to gateway:
 
@@ -691,7 +695,10 @@ Daemon to gateway:
 - `repaint {sid, rid}` - the one-column pulse.
 - `state_ack {sid, upto}` - every keystroke write numbered below `upto` is applied.
 - `quit {}` - the daemon is stopping for good rather than restarting, so the gateway exits too.
-- `diagnostics {sid?}` - the one request; the reply carries each session's ownership, geometry, attachments, claims, accounting and pending writes.
+- `diagnostics {sid?}` - a request; the reply carries each session's ownership, geometry, attachments, claims, accounting and pending writes.
+- `ping {}` - a request answered at once with nothing, which is how the daemon tells a busy gateway from a hung one (`features/terminal-gateway.md`, "Which process holds a terminal").
+
+On connecting, the daemon sends an `upsert` for every session whose terminal it is handing over and then `sessions` naming the complete set, with nothing able to run in between; a restarted daemon's first connection is therefore the moment its gateway learns which of the sessions it kept are still wanted.
 
 Gateway to daemon:
 
@@ -705,6 +712,7 @@ Gateway to daemon:
   A refused write names the part of its condition that moved (`input_revision_moved`, `operator_recently_typed`, `unsubmitted_delivery_in_composer`); `not_hosted` and `write_failed:*` mean the gateway could not write at all.
 - `broadcast {sid, data}` - typed text the daemon delivers to the rest of the broadcast set (`routes/terminal.deliver_broadcast`).
 - `metering {gateway_id, usage}` - the browser traffic the gateway carried, as a `NetworkUsage` snapshot cumulative since the gateway started, so a report the daemon misses costs nothing; sent every five seconds when it changed.
+  The daemon folds it into its own measurement window (`diagnostics/network`).
 
 Ages are seconds since the event, never clock readings.
 Browser close codes: 4010 reconnect to the daemon, 4011 the gateway is restarting, 4012 (from the daemon's `/pty`) reconnect to the gateway, which holds this terminal.
@@ -2438,7 +2446,13 @@ token, or `null`), `spawned_here` (this daemon started it rather than finding it
 `build_id` (this daemon's own build of the gateway), `spawns`, `adoptions` (gateways a previous
 daemon left running), `replacements` and `last_replacement` (gateways replaced for another build,
 protocol or port, and why the last one was), `restarts`, `last_exit_code`, `last_error`,
-`uptime_seconds`, and `connection` (`RemoteHub.stats()`).
+`uptime_seconds`, `connection` (`RemoteHub.stats()`), `carrying` (whether the gateway serves this
+daemon's supervised terminals now - the same answer `terminal_transport` gives), `settled` (this
+daemon's first gateway connection has come to something), `placement` (`remote` - terminals the
+gateway holds now - `handovers`, `takebacks` and `last_takeback_reason`), `unreachable_seconds` (how
+long a gateway still running has refused this daemon's control connection, or `null`),
+`probe_misses` (pings that went unanswered while this daemon's own loop ran on time), `hung_ends`
+and `last_hung_reason` (gateways ended as hung, and why the last one was).
 
 `governor` is load shedding (`background.pace` / `background.defer`): `attached`, whether the
 loop's recent lag puts it in `shedding` (`recent_max_lag_seconds` over `window_seconds`, against
@@ -2501,6 +2515,12 @@ Each classified row contains `frames` and `bytes`; PTY kinds are `attach_replay`
 These rows are a non-additive breakdown of already-counted sent WebSocket binary frames.
 HTTP byte counts are encoded response and request bodies, excluding headers and transport
 overhead.
+Traffic the terminal gateway carried for the same browsers is folded in from its `metering`
+reports: it counts in the totals and under each peer, and its routes and channels carry the suffix
+` (gateway)` (`pty (gateway)`), so the window says which process moved which bytes.
+A report is cumulative over the gateway process's life, so a window counts only what a gateway
+carried inside it: a reset starts every gateway from its latest report, and a gateway that was
+already running when the window opened is counted from its first report in it.
 WebSocket byte counts are application text/binary frame payloads before per-message compression.
 The DELETE form records the prior totals in the rotating daemon log and resets the in-memory
 window without disrupting live sessions.

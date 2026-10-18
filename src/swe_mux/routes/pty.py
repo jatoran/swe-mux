@@ -121,10 +121,15 @@ async def pty_ws(request: web.Request) -> web.WebSocketResponse:
     session = request.app[keys.SESSIONS].resolve(request.match_info["sid"])
     generation = request.app.get(keys.DAEMON_GENERATION) or "legacy"
     connection_id = secrets.token_urlsafe(12)
+    gateway_host = request.app.get(keys.TERMINAL_GATEWAY)
+    if gateway_host is not None:
+        # Before the upgrade: until this daemon's first gateway connection settles,
+        # nobody can say whether a gateway left running still carries this terminal.
+        await gateway_host.settle(session)
     ws = metered_websocket(request, "pty", heartbeat=20, max_msg_size=2 * 1024 * 1024)
     await ws.prepare(request)
     core = session.terminal
-    if not isinstance(core, TerminalCore):
+    if not isinstance(core, TerminalCore) or core.retired is not None:
         # The terminal gateway holds this session's core, and a terminal served from
         # two processes would split its ownership and its accounting between them.
         await ws.close(code=CLOSE_USE_GATEWAY, message=b"served by the terminal gateway")

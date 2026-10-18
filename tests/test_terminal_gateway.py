@@ -26,6 +26,7 @@ import aiohttp
 import pytest
 
 from swe_mux import supervisor as supervisor_module
+from swe_mux.network_usage import NetworkUsage
 from swe_mux.scrollback import ScrollbackBuffer
 from swe_mux.supervisor import SupervisedSession, SupervisorServer
 from swe_mux.terminal_core import RemoteHub, TerminalStream
@@ -482,18 +483,34 @@ async def test_the_traffic_it_carries_reaches_the_daemons_counters(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr("swe_mux.terminal_gateway.METERING_INTERVAL_SECONDS", 0.05)
+    # The daemon's window opens before the gateway starts, so all it carries is in it.
+    daemon_usage = NetworkUsage()
     async with open_supervisor(tmp_path, monkeypatch) as running:
         echo_session(running.server)
         async with running_gateway(tmp_path) as gateway:
             hub = await attach_daemon(gateway)
             reports: list[dict[str, Any]] = []
-            hub.on_metering = reports.append
+
+            def collect(header: dict[str, Any]) -> None:
+                reports.append(header)
+                daemon_usage.merge_remote(header)
+
+            hub.on_metering = collect
             browser = await Browser.open(gateway.port)
             try:
                 await browser.attach()
                 await until(lambda: bool(reports), what="a metering report")
                 assert reports[-1]["gateway_id"] == gateway.hub.gateway_id
                 assert reports[-1]["usage"]
+                # Counted in the daemon's own window, under the gateway's name.
+                await until(
+                    lambda: any(
+                        row["channel"] == "pty (gateway)" and row["sent_bytes"] > 0
+                        for row in daemon_usage.snapshot()["websocket_channels"]
+                    ),
+                    what="the terminal's traffic in the daemon's counters",
+                )
+                assert daemon_usage.snapshot()["totals"]["websocket"]["sent_bytes"] > 0
             finally:
                 await browser.close()
                 await hub.close()

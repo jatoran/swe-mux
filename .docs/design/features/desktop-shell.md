@@ -254,7 +254,9 @@ Three independent layers now hold, each covering what the others cannot:
   before anything is hashed.
   `requires_backend` is `swe_mux.__version__`, which gives one rule an operator can hold in
   their head: *an app update always supersedes an overlay.*
-  `requires_api` is a digest over the daemon's whole route table, and it is the half that
+  `requires_api` is a digest over the daemon's whole route table - with the terminal
+  gateway's browser routes and protocol version beside it, since a page talks to both
+  processes (`terminal-gateway.md`) - and it is the half that
   actually catches the failure, because **`__version__` alone cannot**: this project's frozen
   app is rebuilt from a checkout that moves per commit while the version string moves per
   release, so a frontend built from master today and an app built from master last week both

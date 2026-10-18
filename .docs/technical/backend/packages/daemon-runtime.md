@@ -95,6 +95,7 @@ Frozen it runs as `swe-mux.exe --worker-child`; from source as `python -m swe_mu
 The terminal gateway process (`../../../design/features/terminal-gateway.md`): a `GatewayHub` for the cores, a `SupervisorLink` that feeds them from the PTY supervisor at the `terminal` scope with `output_gap` and `subscribe_since`, and an aiohttp listener for `/pty/{sid}` and `/health` under `http_origin_policy.gateway_middleware`.
 `SupervisorLink` subscribes by policy (`eager`, the measured default, or `on_attach`, which releases a session's ring a linger after its last browser), applies a subscribe reply inside its read loop, resubscribes as a delta after a `gap` or a lost connection, and writes and resizes as notices.
 `TerminalGateway.run` holds the instance lock (`InstanceLock`, an exclusive file lock on `terminal-gateway.lock`, on every platform), writes `terminal-gateway.json` once both listeners are bound, meters browser traffic to the daemon, and exits on the daemon's `quit` or after `--idle-exit-seconds` with no daemon and nothing live.
+`BROWSER_ROUTES` is its whole browser surface, which `build_app` registers from and the frontend overlay's API digest covers.
 `GATEWAY_MODULES` is the exact `swe_mux` closure the process loads and `gateway_build_id` the digest over its compiled code; `tests/test_terminal_gateway.py` checks the list in a fresh interpreter.
 `gateway_command` is the one place its argv is built: `swe-mux.exe --gateway-child` frozen, `python -m swe_mux.terminal_gateway` from source.
 
@@ -105,9 +106,24 @@ The terminal gateway process (`../../../design/features/terminal-gateway.md`): a
 The daemon's side of the terminal gateway (`../../../design/features/terminal-gateway.md`, item 29): one supervised `terminal-gateway-host` loop that finds a running gateway through its discovery record or spawns one.
 It replaces one whose build id, protocol or ports differ (asking it to `quit` first, terminating it by identity if it stays), connects the `RemoteHub` it owns, and goes round again with backoff when the connection closes.
 `stop(quit=...)` is the teardown's choice between ending the gateway and leaving it for the next daemon.
-`transport()` and the module-level `terminal_transport(host)` are the `/api/health` block; `health()` is the `/api/diagnostics/background` one.
+Per incarnation it hands every eligible terminal over inside `RemoteHub.connect` (`placement.adopt_all`) and runs `_watch`.
+`_watch` reconciles and sends `ping` every five seconds, counting a miss only when the gateway sent nothing and this daemon's own timer fired on time.
+A lost connection is read by what the gateway is now: one that is gone gives its terminals back at once, and one still running keeps them.
+One silent to its pings, or refusing the control port for thirty seconds, is ended as hung only after its own `/health` has also gone unanswered (`_suspect_hung`).
+`settle(session)` is the bounded wait the daemon's `/pty` takes during the first connection.
+`transport()` and the module-level `terminal_transport(host)` are the `/api/health` block (`carrying` decides it); `health()` is the `/api/diagnostics/background` one.
 
-**Not:** the gateway's process (`terminal_gateway.py`), and not ownership in the worker's sense: the gateway is spawned outside every Job and its own process group, and is never put under the daemon's reaper.
+**Not:** the gateway's process (`terminal_gateway.py`); which session moves and how (`terminal_placement.py`); and not ownership in the worker's sense: the gateway is spawned outside every Job and its own process group, and is never put under the daemon's reaper.
+
+### `terminal_placement.py`
+
+`TerminalPlacement` (item 32): which process holds each session's terminal, and the one place that moves it.
+`eligible` is the rule: a live session under the PTY supervisor, never in-process, cold or ended.
+`adopt_all` hands every eligible session to a gateway that has just connected, and `place` puts one session where it belongs when it starts or ends (installed as `SessionManager.terminal_placement`).
+`reconcile` releases what no hook reported, and `take_back_all` brings every terminal home when the gateway holding them is gone.
+Moving a terminal out retires the daemon's core in the same instant (`TerminalCore.retire`, closing its browsers with 4012); moving one back builds a fresh core over the session's own stream (`Session.new_terminal_core`) seeded by `RemoteTerminal.hand_back`, which moves the input revision on once.
+
+**Not:** when the gateway is gone or hung, which `gateway_host.py` decides; nothing here awaits, because `adopt_all` runs inside `RemoteHub.connect` between the handshake and the first notice.
 
 ### `stall_watchdog.py`
 

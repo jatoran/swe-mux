@@ -346,6 +346,46 @@ async def test_natural_exit_releases_conpty_but_retains_scrollback() -> None:
     assert exit_frame["snapshot"]["state"] == "crashed"
 
 
+async def test_an_ended_sessions_terminal_is_placed_after_its_exit_frame() -> None:
+    """A terminal the gateway held comes back only once its browsers saw the end
+    (`terminal_placement.TerminalPlacement.place`, DAEMON_LOAD_ISOLATION item 32)."""
+
+    class EndedPty:
+        def exit_status(self) -> int:
+            return 0
+
+    class History:
+        async def session_ended(self, record: SessionRecord, reason: str) -> None:
+            pass
+
+    class Events:
+        async def emit(self, event_type: str, **payload: Any) -> None:
+            pass
+
+    adapter = ShellAdapter()
+    manager = SessionManager(
+        {"shell": adapter},
+        cast(Any, SimpleNamespace()),
+        cast(Any, History()),
+        cast(Any, Events()),
+        1024,
+        "http://127.0.0.1:1",
+    )
+    record = SessionRecord(
+        "ended-2", "ended", "project", "shell", "native", ".", "cmd.exe", [], state="running"
+    )
+    session = Session(record, cast(Any, EndedPty()), adapter, 1024, "secret")
+    subscriber = session.subscribe()
+    placed: list[tuple[str, bool]] = []
+    manager.terminal_placement = lambda ended: placed.append(
+        (ended.record.state, not subscriber.queue.empty())
+    )
+
+    await manager._mark_ended(session, "process_exit")
+
+    assert placed == [("exited", True)], "placed once, ended, with its exit frame already out"
+
+
 def test_scrollback_cursor_excludes_retained_output_and_tracks_new_tail() -> None:
     buffer = ScrollbackBuffer(8)
     buffer.append(b"old")

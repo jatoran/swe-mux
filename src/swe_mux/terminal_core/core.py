@@ -8,6 +8,7 @@ import json
 import time
 from collections import deque
 from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import dataclass
 from typing import Any
 
@@ -21,7 +22,7 @@ from .diagnostics import (
     CLIENT_PASTE_TRACE_PHASE,
     CLIENT_REPAIR_PHASES,
 )
-from .host import PtySink, TerminalDescriptor, TerminalHost
+from .host import PtySink, TerminalDescriptor, TerminalHost, TerminalSocket
 from .stream import TerminalStream
 
 # Terminal-input claims, for diagnosing which device ended up owning a session and
@@ -175,6 +176,14 @@ class TerminalCore:
         # a gateway can send it (`gateway.GatewaySession.mark_dirty`). None in
         # process, where the daemon reads this object directly.
         self.on_change: Callable[[], None] | None = None
+        # The browser sockets being served from this core, so a core that stops
+        # serving its session can close every one of them (`retire`).
+        self.sockets: set[TerminalSocket] = set()
+        # Set when this core no longer serves its session - another process now holds
+        # the terminal (`DAEMON_LOAD_ISOLATION.md` item 32) - to the close code and
+        # reason its browsers are sent. A retired core touches the PTY no more: a
+        # terminal written and resized from two processes has two owners.
+        self.retired: tuple[int, bytes] | None = None
 
     @property
     def pty(self) -> PtySink:
@@ -221,6 +230,8 @@ class TerminalCore:
         with nothing able to run between the check and the write. A guard test fails
         on any other `pty.write` or `pty.resize`.
         """
+        if self.retired is not None:
+            raise WriteRefused("moved")
         if condition is not None:
             reason = self.refusal(condition)
             if reason is not None:
@@ -367,6 +378,8 @@ class TerminalCore:
         gated on a real change because each one is a SIGWINCH that makes an agent TUI
         repaint its whole screen.
         """
+        if self.retired is not None:
+            return False
         size = effective_geometry(self.viewports, self.input_owner)
         if size is None or size == self.geometry:
             return False
@@ -409,16 +422,42 @@ class TerminalCore:
         geometry has already won, so never restore the stale size over it.
         """
         size = self.geometry
-        if size is None or self.descriptor.ended:
+        if size is None or self.descriptor.ended or self.retired is not None:
             return False
         cols, rows = size
         pulse_cols = cols - 1 if cols > 2 else cols + 1
         self.pty.resize(pulse_cols, rows)
         await asyncio.sleep(0.02)
-        if self.geometry != size:
+        if self.geometry != size or self.retired is not None:
             return False
         self.pty.resize(cols, rows)
         return True
+
+    # --- the browsers it serves ---------------------------------------------------
+
+    async def close_sockets(self, code: int, message: bytes) -> None:
+        """Close every browser socket this core serves, telling each where to go."""
+        for socket in tuple(self.sockets):
+            close = getattr(socket, "close", None)
+            if close is not None:
+                with suppress(Exception):
+                    await close(code=code, message=message)
+
+    def retire(self, code: int, message: bytes) -> None:
+        """Stop serving this session: another process holds its terminal now.
+
+        Synchronous, so the caller that moved the terminal can retire the old core
+        in the same instant: from here on it writes and resizes nothing, a socket
+        mid-handshake is refused, and every attached one is closed with ``code``.
+        """
+        if self.retired is not None:
+            return
+        self.retired = (code, message)
+        if self.sockets:
+            self._start(
+                self.close_sockets(code, message),
+                name=f"terminal-retire-{self.descriptor.session_id}",
+            )
 
     def _start(self, coroutine: Any, name: str) -> asyncio.Task[None]:
         task: asyncio.Task[None] = asyncio.create_task(coroutine, name=name)

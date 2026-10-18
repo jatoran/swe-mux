@@ -40,13 +40,15 @@ import logging
 import os
 import subprocess
 import time
+import urllib.error
+import urllib.request
 from collections.abc import Awaitable, Callable, Sequence
 from pathlib import Path
 from typing import Any
 
 from .background_tasks import background
 from .daemon_recovery import process_state, update_daemon
-from .framed_ipc import HandshakeRefused, PeerClosed, connect
+from .framed_ipc import HandshakeRefused, PeerClosed, RemoteError, connect
 from .lifecycle import ledger
 from .spawn_contract import scrub_claude_session_markers
 from .subprocess_flags import background_creation_flags, popen_outside_job
@@ -59,6 +61,7 @@ from .terminal_gateway import (
     gateway_command,
     read_discovery,
 )
+from .terminal_placement import TerminalPlacement
 
 log = logging.getLogger(__name__)
 
@@ -85,6 +88,26 @@ POLL_SECONDS = 0.1
 LOCKED_RECORD_SECONDS = 15.0
 #: Environment the gateway must not inherit: it needs no credential of the daemon's.
 WITHHELD_ENVIRONMENT = ("SWE_MUX_DESKTOP_CONTROL_TOKEN",)
+
+#: How often a connected gateway is pinged, and its sessions reconciled.
+PROBE_INTERVAL_SECONDS = 5.0
+#: How long one ping waits for its answer.
+PROBE_TIMEOUT_SECONDS = 10.0
+#: Consecutive unanswered pings - each a full timeout, with this daemon's own loop
+#: running on time throughout - before the gateway is suspected hung.
+HUNG_PROBES = 3
+#: A ping whose timer fired this much later than it was set for measured this
+#: daemon's stall, not the gateway's silence, and is not counted against it.
+LATE_TIMER_FACTOR = 1.5
+#: How long a live gateway may refuse its control connection before it is suspected
+#: hung (it keeps its sessions until then: it is still serving their browsers).
+UNREACHABLE_HUNG_SECONDS = 30.0
+#: How long the gateway's own `/health` gets to answer a suspicion. Any answer at
+#: all clears it: a gateway serving its browsers is not hung, whatever this daemon saw.
+HEALTH_CONFIRM_SECONDS = 5.0
+#: How long a terminal socket opened during this daemon's first gateway connection
+#: waits to learn which process serves its session (`settle`).
+SETTLE_WAIT_SECONDS = 3.0
 
 #: `terminal_gateway.main`'s exit codes for the two refusals worth naming.
 EXIT_LOCKED = 3
@@ -136,6 +159,10 @@ class GatewayHost:
         restart_max: float = RESTART_MAX_SECONDS,
         stable_seconds: float = STABLE_SECONDS,
         quit_grace: float = QUIT_GRACE_SECONDS,
+        probe_interval: float = PROBE_INTERVAL_SECONDS,
+        probe_timeout: float = PROBE_TIMEOUT_SECONDS,
+        hung_probes: int = HUNG_PROBES,
+        unreachable_hung: float = UNREACHABLE_HUNG_SECONDS,
     ) -> None:
         self.enabled = bool(getattr(config, "terminal_gateway_enabled", False))
         self.data_dir = Path(config.data_dir)
@@ -152,7 +179,27 @@ class GatewayHost:
         self._restart_max = restart_max
         self._stable_seconds = stable_seconds
         self._quit_grace = quit_grace
+        self._probe_interval = probe_interval
+        self._probe_timeout = probe_timeout
+        self._hung_probes = hung_probes
+        self._unreachable_hung = unreachable_hung
+        #: Which process holds each session's terminal (`terminal_placement.py`);
+        #: installed by the composition root, None in a host that moves nothing.
+        self.placement: TerminalPlacement | None = None
+        #: Set once this daemon's first gateway connection has succeeded or failed,
+        #: or when there will be none: until then nobody can say which process serves
+        #: a supervised session's terminal (`settle`).
+        self.settled = asyncio.Event()
+        #: `(pid, created_at)` of the gateway this daemon's sessions were handed to.
+        self.holder: tuple[int, float | None] | None = None
+        #: When this daemon lost its control connection to a gateway still alive.
+        self.unreachable_since: float | None = None
+        self.probe_misses = 0
+        self.hung_ends = 0
+        self.last_hung_reason = ""
         self.state = STATE_DISABLED if not self.enabled else STATE_STOPPED
+        if not self.enabled:
+            self.settled.set()
         self.unavailable_reason = ""
         #: This daemon's own build of the gateway, computed off the loop at start.
         self.build_id: str | None = None
@@ -185,13 +232,29 @@ class GatewayHost:
         gateway = self.gateway
         return int(gateway["pid"]) if gateway is not None else None
 
+    @property
+    def carrying(self) -> bool:
+        """Whether the gateway serves this daemon's supervised terminals now: while it
+        is connected, and while it still holds sessions through a lost connection."""
+        if self.gateway is None or self.state in {
+            STATE_DISABLED,
+            STATE_UNAVAILABLE,
+            STATE_STOPPED,
+        }:
+            return False
+        if self.hub.connected:
+            return True
+        placement = self.placement
+        return placement is not None and placement.remote_count > 0
+
     def transport(self) -> dict[str, Any]:
         """Which process a browser should open terminals on, for `/api/health`.
 
-        `gateway` only while a gateway is connected; every other state - off, no
-        supervisor, starting, between restarts - is the daemon, with the reason.
+        `gateway` while it carries terminals (`carrying`); every other state - off, no
+        supervisor, starting, between restarts with nothing held - is the daemon, with
+        the reason.
         """
-        if self.ready and self.gateway is not None:
+        if self.carrying and self.gateway is not None:
             return {
                 "transport": TRANSPORT_GATEWAY,
                 "state": self.state,
@@ -230,7 +293,33 @@ class GatewayHost:
                 round(time.monotonic() - connected_at, 3) if connected_at is not None else None
             ),
             "connection": self.hub.stats(),
+            "carrying": self.carrying,
+            "settled": self.settled.is_set(),
+            "placement": self.placement.stats() if self.placement is not None else None,
+            "unreachable_seconds": (
+                round(time.monotonic() - self.unreachable_since, 3)
+                if self.unreachable_since is not None
+                else None
+            ),
+            "probe_misses": self.probe_misses,
+            "hung_ends": self.hung_ends,
+            "last_hung_reason": self.last_hung_reason or None,
         }
+
+    async def settle(self, session: Any) -> None:
+        """Wait, briefly, until it is known which process serves ``session``'s terminal.
+
+        Only during this daemon's first gateway connection, and only for a session
+        the gateway may hold. A daemon that has just restarted cannot yet tell whether
+        the gateway it left running is still carrying that terminal for other
+        browsers; serving it here in that window would put a second writer on the
+        PTY. Bounded, because a page waiting on it is waiting on a handshake.
+        """
+        placement = self.placement
+        if self.settled.is_set() or placement is None or not placement.eligible(session):
+            return
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(self.settled.wait(), SETTLE_WAIT_SECONDS)
 
     # -- lifecycle -----------------------------------------------------------------------
 
@@ -240,6 +329,7 @@ class GatewayHost:
             return
         self.state = STATE_UNAVAILABLE
         self.unavailable_reason = reason
+        self.settled.set()
         log.warning("terminal gateway not started: %s; terminals stay on the daemon", reason)
 
     async def start(self) -> None:
@@ -266,6 +356,9 @@ class GatewayHost:
                 await _ask_to_quit(gateway, await asyncio.to_thread(read_discovery, self.data_dir))
         await background.stop(GATEWAY_HOST_LOOP)
         self._task = None
+        self.settled.set()
+        # No terminal is taken back: a quitting daemon takes the gateway and its
+        # sessions down together, and a restarting one leaves both to its successor.
         await self.hub.close()
         if quit:
             identity = _identity(gateway) if gateway is not None else None
@@ -304,6 +397,8 @@ class GatewayHost:
                     self.last_error,
                     extra={"gateway_pid": self.pid, "gateway_exit_code": self.last_exit_code},
                 )
+            # Whatever the first incarnation came to, it has come to it.
+            self.settled.set()
             if self._stopping:
                 return
             if time.monotonic() - began >= self._stable_seconds:
@@ -321,16 +416,34 @@ class GatewayHost:
 
     async def _run_incarnation(self) -> None:
         self.state = STATE_STARTING
+        holder = self.holder
+        if holder is not None and await asyncio.to_thread(_holder_state, holder) == "gone":
+            self._take_back_all(f"terminal gateway pid {holder[0]} exited")
         record, how = await self._find_or_start()
+        if self.holder is not None and _holder(record) != self.holder:
+            # The gateway this daemon's sessions were handed to is not the one found:
+            # it exited, or was replaced, and nothing carries those terminals now.
+            self._take_back_all(f"terminal gateway pid {self.holder[0]} is gone")
         self.gateway = {key: value for key, value in record.items() if key != "token"}
-        await self.hub.connect("127.0.0.1", int(record["control_port"]), token=str(record["token"]))
+        try:
+            await self.hub.connect(
+                "127.0.0.1",
+                int(record["control_port"]),
+                token=str(record["token"]),
+                before_sync=lambda: self._hand_over(record),
+            )
+        except Exception:
+            await self._unreachable(record)
+            raise
         peer = self.hub.peer
         assert peer is not None
         if how == HOW_ADOPTED:
             self.adoptions += 1
         self.connected_at = time.monotonic()
+        self.unreachable_since = None
         self.state = STATE_RUNNING
         self.last_error = ""
+        self.settled.set()
         identity = _identity(record)
         log.info(
             "terminal gateway pid %s %s: browsers on port %s, build %s",
@@ -341,12 +454,160 @@ class GatewayHost:
             extra={"gateway_pid": record["pid"], "gateway_port": record["port"]},
         )
         await asyncio.to_thread(self._record_identity, identity, how)
-        await peer.wait_closed()
+        watch = asyncio.create_task(self._watch(peer, record), name="terminal-gateway-watch")
+        try:
+            await peer.wait_closed()
+        finally:
+            if not watch.done():
+                watch.cancel()
+            await asyncio.gather(watch, return_exceptions=True)
         if not self._stopping:
             self.last_error = f"connection closed: {peer.close_reason}"
             process = self._process
             if process is not None:
                 self.last_exit_code = process.poll()
+            await self._connection_lost(record)
+
+    # -- which process holds the terminals -----------------------------------------------
+
+    def _hand_over(self, record: dict[str, Any]) -> None:
+        """Every eligible session to the gateway just connected. Inside `connect`."""
+        self.holder = _holder(record)
+        if self.placement is not None:
+            self.placement.adopt_all()
+
+    def _take_back_all(self, reason: str) -> None:
+        self.holder = None
+        self.unreachable_since = None
+        if self.placement is not None:
+            self.placement.take_back_all(reason)
+
+    async def _connection_lost(self, record: dict[str, Any]) -> None:
+        """The control connection closed. A gateway that is gone gives its terminals
+        back now; one still alive keeps them, because it is still serving them."""
+        state = await asyncio.to_thread(
+            process_state, {"pid": record["pid"], "created_at": record.get("created_at")}
+        )
+        if state == "gone":
+            self._take_back_all(f"terminal gateway pid {record['pid']} exited")
+            return
+        if self.unreachable_since is None:
+            self.unreachable_since = time.monotonic()
+        log.warning(
+            "lost the control connection to terminal gateway pid %s, which is still running "
+            "and keeps its %d session(s); reconnecting",
+            record["pid"],
+            self.placement.remote_count if self.placement is not None else 0,
+            extra={"gateway_pid": record["pid"]},
+        )
+
+    async def _unreachable(self, record: dict[str, Any]) -> None:
+        """A connect that failed. Past `UNREACHABLE_HUNG_SECONDS` of a live gateway
+        holding this daemon's sessions and refusing it, ask the gateway's own listener
+        whether it is serving; silence there too means hung."""
+        if self.holder is None or _holder(record) != self.holder:
+            return
+        now = time.monotonic()
+        if self.unreachable_since is None:
+            self.unreachable_since = now
+            return
+        if now - self.unreachable_since < self._unreachable_hung:
+            return
+        await self._suspect_hung(
+            record, f"its control port refused this daemon for {now - self.unreachable_since:.0f}s"
+        )
+
+    async def _watch(self, peer: Any, record: dict[str, Any]) -> None:
+        """One connection's liveness and housekeeping: reconcile, then ping.
+
+        A miss counts only when it is the gateway's: a ping that the gateway answered
+        late, or that this daemon's own stall made look late, is not one, and nothing
+        is done on a suspicion until the gateway's `/health` has also gone unanswered.
+        """
+        misses = 0
+        # unsupervised-loop-ok: one connection's watch, inside the supervised host loop.
+        while not peer.closed and not self._stopping:
+            await asyncio.sleep(self._probe_interval)
+            if peer.closed or self._stopping:
+                return
+            if self.placement is not None:
+                self.placement.reconcile()
+            began = time.monotonic()
+            heard = self.hub.last_heard
+            try:
+                answered = await self.hub.ping(self._probe_timeout)
+            except PeerClosed:
+                return
+            except RemoteError:
+                answered = True  # a refusal is an answer
+            if answered is None:
+                continue  # a gateway without `ping`: the connection is all there is
+            if answered or self.hub.last_heard > heard:
+                misses = 0
+                continue
+            if time.monotonic() - began > self._probe_timeout * LATE_TIMER_FACTOR:
+                # The timer fired late: this daemon was not running, so the silence
+                # it measured is its own.
+                continue
+            misses += 1
+            self.probe_misses += 1
+            log.warning(
+                "terminal gateway pid %s did not answer a ping in %.0fs (%d of %d)",
+                record["pid"],
+                self._probe_timeout,
+                misses,
+                self._hung_probes,
+                extra={"gateway_pid": record["pid"]},
+            )
+            if misses < self._hung_probes:
+                continue
+            await self._suspect_hung(record, f"{misses} pings unanswered")
+            return
+
+    async def _suspect_hung(self, record: dict[str, Any], why: str) -> None:
+        """End a gateway that answers neither this daemon nor its own browsers, and
+        take its terminals back; reconnect to one that still serves its browsers."""
+        port = int(record["port"])
+        if await asyncio.to_thread(_answers_health, port, HEALTH_CONFIRM_SECONDS):
+            log.warning(
+                "terminal gateway pid %s answers its browsers but not this daemon (%s); "
+                "it keeps its sessions and the control connection is renewed",
+                record["pid"],
+                why,
+                extra={"gateway_pid": record["pid"]},
+            )
+            peer = self.hub.peer
+            if peer is not None:
+                await peer.close("control connection unresponsive")
+            return
+        identity = _identity(record)
+        self.hung_ends += 1
+        self.last_hung_reason = why
+        log.error(
+            "terminal gateway pid %s is hung (%s, and its /health is silent): ending it and "
+            "taking its terminals back",
+            record["pid"],
+            why,
+            extra={"gateway_pid": record["pid"]},
+        )
+        await asyncio.to_thread(
+            ledger, self.data_dir, f"terminal_gateway hung pid={record['pid']}: {why}"
+        )
+        if identity is None:
+            log.error("terminal gateway pid %s has no process identity to end", record["pid"])
+            return
+        await asyncio.to_thread(_terminate, identity)
+        if not await _wait_gone(identity, TERMINATE_GRACE_SECONDS):
+            # A stopped process holds a termination request until it runs again.
+            await asyncio.to_thread(_terminate, identity, kill=True)
+        if not await _wait_gone(identity, TERMINATE_GRACE_SECONDS):
+            # Still there: its terminals stay with it rather than gain a second writer.
+            log.error("terminal gateway pid %s could not be ended", record["pid"])
+            return
+        self._take_back_all(f"terminal gateway pid {record['pid']} was hung ({why})")
+        peer = self.hub.peer
+        if peer is not None:
+            await peer.close("gateway hung")
 
     def _record_identity(self, identity: tuple[int, float] | None, how: str) -> None:
         """The recovery record and the lifecycle ledger name the gateway. In a thread."""
@@ -419,6 +680,8 @@ class GatewayHost:
         if identity is None:
             raise RuntimeError(f"terminal gateway pid {record['pid']} has no process identity")
         await self._end(identity, reason=reason)
+        if self.holder is not None and _holder(record) == self.holder:
+            self._take_back_all(f"terminal gateway pid {record['pid']} was replaced: {reason}")
 
     async def _end(self, identity: tuple[int, float], *, reason: str) -> None:
         """Wait for a gateway to leave, terminate it if it does not, and confirm it went."""
@@ -569,6 +832,34 @@ def _identity(record: dict[str, Any]) -> tuple[int, float] | None:
     return int(record["pid"]), float(created)
 
 
+def _holder(record: dict[str, Any]) -> tuple[int, float | None]:
+    """Which gateway process a record names, for "is it still the one holding them"."""
+    created = record.get("created_at")
+    if isinstance(created, (int, float)) and not isinstance(created, bool):
+        return int(record["pid"]), float(created)
+    return int(record["pid"]), None
+
+
+def _holder_state(holder: tuple[int, float | None]) -> str:
+    """`process_state` of a holder. In a thread."""
+    return process_state({"pid": holder[0], "created_at": holder[1]})
+
+
+def _answers_health(port: int, timeout: float) -> bool:
+    """Whether the gateway's browser listener answers `/health` at all. In a thread.
+
+    Any HTTP answer counts, a 503 included: the question is whether its loop is
+    running, and only a silent one is hung.
+    """
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=timeout):
+            return True
+    except urllib.error.HTTPError:
+        return True
+    except (OSError, ValueError):
+        return False
+
+
 def _live_record(data_dir: Path) -> dict[str, Any] | None:
     """The discovery record of a gateway that is running, or None. In a thread.
 
@@ -655,15 +946,18 @@ async def _wait_gone(identity: tuple[int, float], seconds: float) -> bool:
         await asyncio.sleep(POLL_SECONDS)
 
 
-def _terminate(identity: tuple[int, float]) -> None:
-    """Terminate exactly that process, never a recycled pid. In a thread."""
+def _terminate(identity: tuple[int, float], *, kill: bool = False) -> None:
+    """Terminate - or ``kill`` - exactly that process, never a recycled pid. In a thread."""
     try:
         import psutil
 
         process = psutil.Process(identity[0])
         if abs(process.create_time() - identity[1]) >= 0.001:
             return
-        process.terminate()
+        if kill:
+            process.kill()
+        else:
+            process.terminate()
     except Exception:  # noqa: BLE001 - gone, or not ours to signal; the wait decides
         return
 

@@ -315,12 +315,48 @@ def test_the_api_digest_ignores_registration_order_and_duplicates() -> None:
 def test_this_daemons_api_digest_describes_its_real_route_table() -> None:
     # The two sides of the pin have to be the same computation, so the producer's
     # helper and the daemon's own answer are checked against each other rather
-    # than each against a constant.
+    # than each against a constant. The terminal gateway's browser surface and its
+    # protocol version are part of it: a page talks to both processes.
     from swe_mux import routes
+    from swe_mux.terminal_core.protocol import GATEWAY_PROTOCOL_VERSION
+    from swe_mux.terminal_gateway import BROWSER_ROUTES
 
-    expected = route_table_digest((route.method, route.path) for route in routes.all_routes())
+    table = [(route.method, route.path) for route in routes.all_routes()]
+    table += [(f"GATEWAY-{method}", path) for method, path in BROWSER_ROUTES]
+    table.append(("GATEWAY-PROTOCOL", str(GATEWAY_PROTOCOL_VERSION)))
+    expected = route_table_digest(table)
     assert daemon_api_digest() == expected
     assert len(expected) == 64
+
+
+def test_the_gateway_surface_moves_the_api_digest(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An overlay pinned against one gateway is refused beside another (item 32)."""
+    from swe_mux import terminal_gateway
+    from swe_mux.terminal_core import protocol
+
+    before = daemon_api_digest()
+    monkeypatch.setattr(protocol, "GATEWAY_PROTOCOL_VERSION", protocol.GATEWAY_PROTOCOL_VERSION + 1)
+    after_protocol = daemon_api_digest()
+    assert after_protocol != before
+    monkeypatch.undo()
+    monkeypatch.setattr(
+        terminal_gateway, "BROWSER_ROUTES", (*terminal_gateway.BROWSER_ROUTES, ("GET", "/new"))
+    )
+    assert daemon_api_digest() not in {before, after_protocol}
+
+
+def test_the_gateway_registers_exactly_its_declared_routes() -> None:
+    """The digest's copy of the gateway's surface is the one the gateway serves."""
+    from swe_mux.terminal_gateway import BROWSER_ROUTES, GatewayOptions, TerminalGateway
+
+    gateway = TerminalGateway(GatewayOptions(data_dir=Path("."), daemon_port=1, port=0))
+    app = gateway.build_app()
+    served = {
+        (route.method, route.resource.canonical)
+        for route in app.router.routes()
+        if route.method != "HEAD" and route.resource is not None
+    }
+    assert served == set(BROWSER_ROUTES)
 
 
 def test_the_pin_is_checked_before_anything_is_hashed(tmp_path: Path) -> None:

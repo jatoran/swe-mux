@@ -54,6 +54,8 @@ async def serve_connection(
     connection_id: str,
 ) -> None:
     """Run one prepared browser socket against a terminal core until it closes."""
+    if await _refused_by_retired_core(ws, core):
+        return
     descriptor = core.descriptor
     allow_terminal_responses = (
         core.attachments_seen == 0
@@ -70,6 +72,7 @@ async def serve_connection(
     # fleet absence reporting for that session's whole lifetime.
     sender_task: asyncio.Task[None] | None = None
     subscriber: PtySubscriber | None = None
+    core.sockets.add(ws)
     try:
         pending_messages: list[Any] = []
         attach_deadline = asyncio.get_running_loop().time() + PTY_ATTACH_READY_TIMEOUT_SECONDS
@@ -123,7 +126,7 @@ async def serve_connection(
             else:
                 pending_messages.append(initial_message)
 
-        if attach_closed:
+        if attach_closed or await _refused_by_retired_core(ws, core):
             return
 
         snapshot, revision, replay_kind, replay, ring_position, subscriber = stream.attach(
@@ -199,10 +202,18 @@ async def serve_connection(
         if replay_kind == "attach":
             core.schedule_attach_repaint(host)
         for pending in pending_messages:
+            if await _refused_by_retired_core(ws, core):
+                return
             await _handle_client_message(ws, core, host, connection_id, pending, output_flow)
         async for message in ws:
+            # Checked per message, with no await between this and the handler's own
+            # write: a keystroke that arrives after the terminal moved is refused here
+            # rather than written by a process that no longer owns the PTY.
+            if await _refused_by_retired_core(ws, core):
+                return
             await _handle_client_message(ws, core, host, connection_id, message, output_flow)
     finally:
+        core.sockets.discard(ws)
         # Every synchronous cleanup runs before the sender task is awaited. A handler
         # cancelled on peer disconnect re-raises at the first await inside its own
         # finally, which used to skip the unsubscribe and the ownership release
@@ -229,6 +240,18 @@ async def serve_connection(
         if sender_task is not None:
             sender_task.cancel()
             await asyncio.gather(sender_task, return_exceptions=True)
+
+
+async def _refused_by_retired_core(ws: TerminalSocket, core: TerminalCore) -> bool:
+    """Close ``ws`` with the retired core's code, and say so; False for a live core."""
+    if core.retired is None:
+        return False
+    code, message = core.retired
+    close = getattr(ws, "close", None)
+    if close is not None:
+        with suppress(Exception):
+            await close(code=code, message=message)
+    return True
 
 
 async def pty_sender(

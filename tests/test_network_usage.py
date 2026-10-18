@@ -180,3 +180,128 @@ async def test_snapshot_request_does_not_measure_itself() -> None:
         assert (await response.json())["totals"]["http"]["requests"] == 0
 
     assert app[keys.NETWORK_USAGE].snapshot()["totals"]["http"]["requests"] == 0
+
+
+# --- traffic another process carried (the terminal gateway, item 32) -----------------
+
+
+def _gateway_report(
+    *, sent: int, received: int = 0, frames: int = 1, active: int = 1, started_at: float = 0.0
+) -> dict[str, object]:
+    """A terminal gateway's cumulative `NetworkUsage.snapshot()`, as it sends it."""
+    websocket = {
+        "connections": 1,
+        "active_connections": active,
+        "received_frames": frames,
+        "received_bytes": received,
+        "sent_frames": frames,
+        "sent_bytes": sent,
+    }
+    return {
+        "started_at": started_at,
+        "peers": [{"peer": "100.64.0.7", "http": {"requests": 0}, "websocket": websocket}],
+        "http_routes": [],
+        "websocket_channels": [{"channel": "pty", **websocket}],
+        "websocket_sent_payloads": [
+            {
+                "peer": "100.64.0.7",
+                "channel": "pty",
+                "kind": "live_output",
+                "frames": frames,
+                "bytes": sent,
+            }
+        ],
+    }
+
+
+def test_the_gateways_traffic_is_counted_under_its_own_name() -> None:
+    usage = NetworkUsage()
+    usage.websocket_opened("127.0.0.1", "pty")
+    usage.websocket_frame("127.0.0.1", "pty", "sent", 100)
+    usage.merge_remote(
+        {"gateway_id": "g1", "usage": _gateway_report(sent=500, started_at=usage.started_at + 1)}
+    )
+    snapshot = usage.snapshot()
+    channels = {row["channel"]: row for row in snapshot["websocket_channels"]}
+    assert channels["pty"]["sent_bytes"] == 100
+    assert channels["pty (gateway)"]["sent_bytes"] == 500
+    assert snapshot["totals"]["websocket"]["sent_bytes"] == 600
+    peers = {row["peer"]: row for row in snapshot["peers"]}
+    assert peers["100.64.0.7"]["websocket"]["sent_bytes"] == 500
+    payloads = {(row["channel"], row["kind"]): row for row in snapshot["websocket_sent_payloads"]}
+    assert payloads[("pty (gateway)", "live_output")]["bytes"] == 500
+    # Folded into the answer, never into this process's own counters.
+    assert usage.snapshot()["totals"]["websocket"]["sent_bytes"] == 600
+
+
+def test_a_report_replaces_the_last_one_from_the_same_process() -> None:
+    usage = NetworkUsage()
+    later = usage.started_at + 1
+    usage.merge_remote({"gateway_id": "g1", "usage": _gateway_report(sent=500, started_at=later)})
+    usage.merge_remote({"gateway_id": "g1", "usage": _gateway_report(sent=800, started_at=later)})
+    # Cumulative: the second report is the total, not an increment.
+    assert usage.snapshot()["totals"]["websocket"]["sent_bytes"] == 800
+    # A restarted gateway is a new process, and both count.
+    usage.merge_remote({"gateway_id": "g2", "usage": _gateway_report(sent=50, started_at=later)})
+    assert usage.snapshot()["totals"]["websocket"]["sent_bytes"] == 850
+
+
+def test_a_fresh_window_counts_only_what_comes_after_it() -> None:
+    usage = NetworkUsage()
+    later = usage.started_at + 1
+    usage.merge_remote({"gateway_id": "g1", "usage": _gateway_report(sent=500, started_at=later)})
+    usage.reset()
+    assert usage.snapshot()["totals"]["websocket"]["sent_bytes"] == 0
+    usage.merge_remote(
+        {"gateway_id": "g1", "usage": _gateway_report(sent=700, active=2, started_at=later)}
+    )
+    totals = usage.snapshot()["totals"]["websocket"]
+    assert totals["sent_bytes"] == 200
+    # A gauge is the latest reading, not a difference.
+    assert totals["active_connections"] == 2
+
+
+def test_a_process_older_than_the_window_starts_counting_at_its_first_report() -> None:
+    """A gateway that outlived the previous daemon carried some traffic before this
+    daemon's window began; none of that is this window's."""
+    usage = NetworkUsage()
+    earlier = usage.started_at - 60
+    usage.merge_remote(
+        {"gateway_id": "g1", "usage": _gateway_report(sent=9000, started_at=earlier)}
+    )
+    assert usage.snapshot()["totals"]["websocket"]["sent_bytes"] == 0
+    usage.merge_remote(
+        {"gateway_id": "g1", "usage": _gateway_report(sent=9400, started_at=earlier)}
+    )
+    assert usage.snapshot()["totals"]["websocket"]["sent_bytes"] == 400
+
+
+def test_a_malformed_report_counts_nothing_and_breaks_nothing() -> None:
+    usage = NetworkUsage()
+    usage.merge_remote({"gateway_id": "", "usage": {}})
+    usage.merge_remote({"gateway_id": "g1", "usage": "nonsense"})
+    usage.merge_remote(
+        {
+            "gateway_id": "g2",
+            "usage": {
+                "started_at": usage.started_at + 1,
+                "peers": ["not a row", {"peer": "x", "websocket": {"sent_bytes": "many"}}],
+                "websocket_channels": [{"channel": "pty", "sent_bytes": -5, "sent_frames": True}],
+            },
+        }
+    )
+    snapshot = usage.snapshot()
+    assert snapshot["totals"]["websocket"]["sent_bytes"] == 0
+    assert snapshot["totals"]["websocket"]["sent_frames"] == 0
+
+
+def test_the_processes_remembered_are_bounded() -> None:
+    from swe_mux.network_usage import MAX_REMOTE_SOURCES
+
+    usage = NetworkUsage()
+    later = usage.started_at + 1
+    for index in range(MAX_REMOTE_SOURCES + 3):
+        usage.merge_remote(
+            {"gateway_id": f"g{index}", "usage": _gateway_report(sent=1, started_at=later)}
+        )
+    assert usage.snapshot()["totals"]["websocket"]["sent_bytes"] == MAX_REMOTE_SOURCES

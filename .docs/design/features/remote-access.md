@@ -178,6 +178,7 @@ listener, with optional Tailscale Serve for browser-recognized HTTPS.
   `DELETE /api/diagnostics/network` logs the previous totals and begins a fresh window without
   restarting the daemon or any session.
   Reads and resets of this endpoint are excluded from their own counters.
+  Terminal traffic the terminal gateway carried is folded in from its cumulative reports (`terminal-gateway.md`), in the totals and per peer, with its channels named `pty (gateway)`.
   The app menu's `Bandwidth usage…` modal refreshes these counters while open, presents totals, routes, WebSocket channels, PTY download phases, and peers, and can reset the measurement window in place.
 - HTTP response counts are encoded body bytes after negotiated compression.
   They exclude headers, TLS, Tailscale, and packet overhead.

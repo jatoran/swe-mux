@@ -2492,8 +2492,9 @@ class Session:
         # respawned id, a cold or inactive session rebuilt from disk, and an
         # in-process pane after a restart can never share one (`stream_id`).
         # A `RemoteTerminal` takes its place when the terminal gateway runs the
-        # core; it keeps this stream and answers the same names from a mirror.
-        self.terminal: TerminalCore | RemoteTerminal = TerminalCore(
+        # core; it keeps this stream and answers the same names from a mirror
+        # (`terminal_placement.py`).
+        self.terminal: TerminalCore | RemoteTerminal = self._terminal_core(
             TerminalStream(
                 max_scrollback,
                 attach_replay_bytes=attach_replay_bytes,
@@ -2502,10 +2503,7 @@ class Session:
                 rebuilt=lambda: bool(
                     self.record.cold or getattr(self.record, "inactive", False)
                 ),
-            ),
-            pty=lambda: self.pty,
-            descriptor=_SessionTerminalDescriptor(self),
-            tasks=self.tasks,
+            )
         )
         # The last screen explanation and every input it was derived from, so the
         # several readers that ask per status pass share one regex pass over the
@@ -2746,6 +2744,19 @@ class Session:
         # proven, so the manager can confirm or discard a provisional transcript
         # binding. Sync: it schedules its own task rather than blocking the hook.
         self.provisional_binding_sink: Callable[[], None] | None = None
+
+    def _terminal_core(self, stream: TerminalStream) -> TerminalCore:
+        return TerminalCore(
+            stream,
+            pty=lambda: self.pty,
+            descriptor=_SessionTerminalDescriptor(self),
+            tasks=self.tasks,
+        )
+
+    def new_terminal_core(self) -> TerminalCore:
+        """A fresh in-process core over this session's own stream, for a terminal
+        coming back from the gateway: the stream never moved, only the core did."""
+        return self._terminal_core(self.terminal.stream)
 
     def terminal_snapshot(self) -> tuple[dict[str, Any], int]:
         """The record snapshot and revision a terminal frame carries."""
@@ -3042,6 +3053,11 @@ class SessionManager:
         self.operator_input_sink_factory: Callable[[Session], Callable[[str, str], None]] | None = (
             None
         )
+        # Puts a session's terminal where it belongs - this daemon or the terminal
+        # gateway (`terminal_placement.TerminalPlacement.place`) - when the session
+        # starts and when it ends. Installed by the composition root; None keeps
+        # every terminal here.
+        self.terminal_placement: Callable[[Session], None] | None = None
         # Which provider account a session started now would authenticate as.
         # Installed by the composition root, which owns the account manager;
         # asking it here rather than importing keeps the dependency one-way,
@@ -3587,7 +3603,21 @@ class SessionManager:
         startup_timing_ms["server_ready"] = round(
             (time.perf_counter() - startup_started_at) * 1000, 1
         )
+        # Before the session is returned, so the browser that opens it finds its
+        # terminal already where it will be served.
+        self._place_terminal(session)
         return session
+
+    def _place_terminal(self, session: Session) -> None:
+        # getattr-guarded for managers built without `__init__` by tests.
+        placement = getattr(self, "terminal_placement", None)
+        if placement is None:
+            return
+        try:
+            placement(session)
+        except Exception:
+            # The terminal stays where it was, which still serves it.
+            log.exception("could not place the terminal of session %s", session.record.id)
 
     async def _persist_spawn_registration(
         self,
@@ -8286,6 +8316,9 @@ class SessionManager:
             session.ownership_job = None
         await self.history.session_ended(session.record, final_reason)
         session.publish_exit(final_reason)
+        # After the exit frame, so a terminal the gateway held comes back only once
+        # its browsers there have seen the session end.
+        self._place_terminal(session)
         await self.events.emit(
             "session_exited" if session.record.state == "exited" else "session_crashed",
             session_id=session.record.id,

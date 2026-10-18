@@ -107,17 +107,53 @@ Enabled with no supervisor it starts nothing and says why (`unavailable`), becau
   A spawn that loses the instance lock (exit 3) waits for the winner's record and uses it; one that cannot bind its port (exit 4) is reported as that.
 - **Stopped by intent**, before the sessions in teardown: a quitting daemon sends `quit` and terminates a gateway that has not left within ten seconds; a restarting daemon only closes its connection, and the gateway carries every terminal until the successor finds it.
 - **Named as swe-mux's own.** The recovery record carries its identity and desktop recovery never signals it (`daemon-resilience.md`); the process inspector reserves its pid the way it reserves the supervisor's, so it is never a session's process and its ports are never a Preview's.
-- **Reported** as `terminal_transport` on `/api/health`, which is what the frontend will read to choose a transport (item 30), as `terminal_gateway` on `/api/diagnostics/background`, and as the `daemon.terminal_transport` row of `swemux doctor`, which warns when the gateway is enabled and not carrying terminals.
+- **Reported** as `terminal_transport` on `/api/health`, which is what the frontend reads to choose a transport (item 30), as `terminal_gateway` on `/api/diagnostics/background`, and as the `daemon.terminal_transport` row of `swemux doctor`, which warns when the gateway is enabled and not carrying terminals.
+  It says `gateway` while the gateway carries terminals: whenever the daemon is connected to it, and through a lost control connection to one still running that holds them, because that gateway is still serving their browsers.
+- **Metered into the daemon's counters.** The gateway's cumulative `metering` reports are folded into `/api/diagnostics/network` (`NetworkUsage.merge_remote`), counted in the totals and per peer, with the gateway's channels named `pty (gateway)`.
+- **Covered by the frontend overlay's pin.** The gateway's browser routes (`terminal_gateway.BROWSER_ROUTES`, which `build_app` registers from) and its protocol version join the API digest an overlay is checked against, so an overlay built against one gateway is refused beside another.
 
 The build id this daemon computes and the one a freshly started gateway computes are asserted equal by a test, because the replacement rule compares them and a digest that depended on what else a process had loaded would replace every gateway on every daemon start.
 
+## Which process holds a terminal
+
+A session's terminal core - input ownership, geometry, the keystroke accounting - lives in exactly one process at a time (item 32, `terminal_placement.TerminalPlacement`).
+A terminal written and resized from two processes has two owners and two sets of books, so this is the rule the rest of this section exists to keep.
+
+- **The gateway may hold** a live session whose pseudoconsole the PTY supervisor owns, because it reaches the bytes through the supervisor and nothing else.
+  An in-process session, a cold one and an ended one stay on the daemon.
+- **To the gateway** when the daemon connects to it - every eligible session at once, inside `RemoteHub.connect` between the handshake and the first notice, so the `sessions` notice names the complete set and no other task sees a terminal moved and not yet announced - and when an eligible session starts while it is connected, before the spawn returns, so the browser that opens it finds it already there.
+  The session's terminal becomes a `RemoteTerminal` mirror over the same `TerminalStream`, and the daemon's own core is **retired** in the same instant (`TerminalCore.retire`): from then on it writes and resizes nothing, a socket mid-handshake is refused, each message on an attached socket is checked before it is handled, and every attached browser is closed with 4012 and reconnects to the gateway with its ring position, for a delta.
+- **Back to the daemon** when the session ends, after its `exit` frame has gone to the gateway's browsers (`RemoteTerminal.exit_sent`), and, for every session, when the gateway holding them is gone: exited, replaced, or ended as hung.
+  The new in-process core is seeded from the mirror's last reading with the input revision moved on once (`RemoteTerminal.hand_back`), so a delivery judged against the gateway's count fails safe rather than landing on input the gateway accepted and never reported.
+  Ownership and viewports do not carry: they belong to browser connections, and every one reconnects.
+- **A restart moves nothing.** A restarting daemon leaves its gateway carrying every terminal; the successor's first connection adopts every eligible session again, the gateway keeps the cores and browsers it already has (`upsert` refreshes, never replaces), and the successor applies the keystroke writes typed while nobody listened.
+  Until that first connection has succeeded or failed, the daemon's `/pty` waits for it - at most three seconds, before the upgrade - for a session the gateway may hold (`GatewayHost.settle`), because a daemon that has just started cannot tell whether the gateway it left running still carries that terminal for other browsers.
+- **A lost control connection is not a lost gateway.** A gateway still running keeps its sessions: it is still serving their browsers, and taking them back would put two writers on each PTY.
+  The daemon reconnects; `terminal_transport` keeps saying `gateway`.
+- **A periodic reconcile** (every five seconds while connected) releases what no hook reported: a session removed from the registry, a new session object under an old id, a session ended through a path that sent no hook.
+
+### A hung gateway
+
+A gateway that is alive but not running its loop answers nobody, and its terminals answer nobody either.
+The daemon decides that one is hung, ends it, and takes its terminals back - and is built so that a stalled *daemon* can never end a healthy gateway, which is the incident shape this plan exists to end.
+
+- **Pinged every five seconds** over the control connection (`ping`, a capability; a gateway that did not agree it is not pinged), with ten seconds to answer.
+  A miss counts only when the gateway sent nothing at all meanwhile, and only when the daemon's own timer fired on time: a timeout that fired half again later than it was set measured the daemon's stall, not the gateway's silence, and is not counted.
+- **Three counted misses make a suspicion, not a verdict.** The daemon then asks the gateway's own browser listener for `/health`, from a thread, with five seconds to answer; any answer at all, a 503 included, means its loop is running and it is serving its browsers, so it keeps its sessions and only the control connection is renewed.
+  The same check guards a gateway that has refused the control connection for thirty seconds while still running.
+- **Silence there too is hung.** The daemon terminates it by its identity, kills it if a termination does not take (a stopped process holds a termination request until it runs again), and takes every terminal back only once it is gone - if it cannot be ended, its terminals stay with it rather than gain a second writer.
+  The next incarnation starts a fresh gateway and hands them over again.
+  `hung_ends` and `last_hung_reason` on `terminal_gateway` say it happened, and the lifecycle ledger records it.
+
 ## Key files
 
-- `src/swe_mux/gateway_host.py` - the daemon's side: find or start, replace, restart, stop by intent, `terminal_transport`.
+- `src/swe_mux/gateway_host.py` - the daemon's side: find or start, replace, restart, stop by intent, the liveness ping and the hung-gateway rule, `settle`, `terminal_transport`.
+- `src/swe_mux/terminal_placement.py` - which process holds each session's terminal, and the one place that moves it.
 - `src/swe_mux/terminal_gateway.py` - the process: `SupervisorLink`, `TerminalGateway`, `InstanceLock`, discovery, `gateway_command`, `main`.
 - `src/swe_mux/terminal_core/gateway.py` - `GatewayHub`, the cores it hosts and the daemon connection.
 - `src/swe_mux/terminal_core/remote.py` - the daemon's mirror.
 - `src/swe_mux/terminal_core/protocol.py` - the control protocol.
 - `src/swe_mux/desktop.py` - the frozen `--gateway-child` dispatch.
 - `tests/test_terminal_gateway.py` - against a real in-process `SupervisorServer` (`tests/support/supervisor_wire.py`), ending with the gateway as a process and the daemon's loop blocked under it.
-- `tests/test_gateway_host.py` - the real gateway as a process, driven by the real host: start, adopt, replace, restart, quit.
+- `tests/test_gateway_host.py` - the real gateway as a process, driven by the real host: start, adopt, replace, restart, quit, terminals taken back from a dead gateway and from a suspended one.
+- `tests/test_terminal_handoff.py` - both directions of the move with browsers attached, against a real `Session`, `TerminalPlacement`, `RemoteHub` and `GatewayHub`.

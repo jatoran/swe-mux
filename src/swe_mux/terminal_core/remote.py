@@ -49,6 +49,7 @@ from .host import TerminalDescriptor, TerminalHost
 from .protocol import (
     BROADCAST,
     CAP_DIAGNOSTICS,
+    CAP_PING,
     DIAGNOSTICS,
     EVENT,
     EXIT,
@@ -56,6 +57,7 @@ from .protocol import (
     GATEWAY_PROTOCOL_VERSION,
     METERING,
     PENDING_SUBMIT,
+    PING,
     PRESENCE,
     QUIT,
     REMOVE,
@@ -134,6 +136,9 @@ class RemoteTerminal:
         # None until the gateway has said anything, so a new daemon applies all.
         self.next_write_seq: int | None = None
         self.writes_lost = 0
+        # Whether the session's `exit` frame has gone to the gateway's browsers, so the
+        # terminal is not taken back before they have seen the session end.
+        self.exit_sent = False
         if seed is not None:
             self._take_state(seed)
 
@@ -150,6 +155,28 @@ class RemoteTerminal:
         self.input_owner_device = core.input_owner_device
         self.input_owner_epoch = core.input_owner_epoch
         self.attachments_seen = core.attachments_seen
+
+    def hand_back(self, core: Any) -> None:
+        """Seed the in-process core that takes this terminal back from the gateway.
+
+        Everything the mirror last heard carries over, and the input revision moves
+        on once: a delivery that judged the session against the gateway's revision
+        and has not written yet must find that judgement stale, because what the
+        gateway accepted after its last report is unknowable from here.
+        Ownership and viewports do not carry: they belong to browser connections, and
+        every one of those reconnects.
+        """
+        core.input_revision = self.input_revision + 1
+        core.last_input_event_ts = self.last_input_event_ts
+        core.last_input_report_ts = self.last_input_report_ts
+        core.composer = self.composer
+        core.pending_submit = self._pending_submit
+        core.terminal_mode = self.terminal_mode
+        core.terminal_mode_updated_at = self.terminal_mode_updated_at
+        core.geometry = self.geometry
+        core.input_owner_device = self.input_owner_device
+        core.input_owner_epoch = self.input_owner_epoch
+        core.attachments_seen = self.attachments_seen
 
     # -- the daemon-owned half -------------------------------------------------------
 
@@ -232,6 +259,7 @@ class RemoteTerminal:
     def publish_exit(self, frame: dict[str, Any]) -> None:
         self.stream.publish_exit(frame)
         self.hub.send_frame(self, EXIT, frame)
+        self.exit_sent = True
 
     # -- what the gateway reports -----------------------------------------------------
 
@@ -332,6 +360,9 @@ class RemoteHub:
         self._answers: dict[int, asyncio.Future[dict[str, Any]]] = {}
         self._tasks: set[asyncio.Task[Any]] = set()
         self.write_failures = 0
+        # Monotonic time the gateway last sent anything: a liveness reading that a
+        # stalled daemon cannot fake, because only the gateway can move it.
+        self.last_heard = 0.0
         # Where the browser traffic the gateway carried is counted (the daemon's
         # network usage); None drops it.
         self.on_metering: Callable[[dict[str, Any]], None] | None = None
@@ -340,8 +371,22 @@ class RemoteHub:
     def connected(self) -> bool:
         return self.peer is not None and not self.peer.closed
 
-    async def connect(self, host: str, port: int, *, token: str) -> None:
-        """Connect, then tell the gateway everything it should be serving."""
+    async def connect(
+        self,
+        host: str,
+        port: int,
+        *,
+        token: str,
+        before_sync: Callable[[], None] | None = None,
+    ) -> None:
+        """Connect, then tell the gateway everything it should be serving.
+
+        ``before_sync`` runs once the gateway has accepted the connection and before
+        anything is sent - the moment to `adopt` every session the gateway is to hold,
+        so the first `sessions` notice names the complete set. Nothing between the
+        handshake and that notice awaits, so no other task can see a terminal moved and
+        not yet announced, and the gateway's first reports are read only afterwards.
+        """
         peer = await connect(
             host,
             port,
@@ -365,6 +410,9 @@ class RemoteHub:
             for terminal in self.terminals.values():
                 terminal.next_write_seq = None
         self.gateway_id = gateway_id
+        if before_sync is not None:
+            before_sync()
+        self.last_heard = time.monotonic()
         self.peer = peer
         for terminal in self.terminals.values():
             self._upsert(peer, terminal)
@@ -523,6 +571,26 @@ class RemoteHub:
             self._answers.pop(rid, None)
         return bool(result.get("applied"))
 
+    async def ping(self, timeout_seconds: float) -> bool | None:
+        """Whether the gateway answered a `ping` within ``timeout_seconds``.
+
+        None when it cannot be asked - not connected, or a gateway that did not agree
+        the capability - which is not an answer either way. Raises `PeerClosed` when
+        the connection closes while waiting, which is the connection's news, not this.
+        """
+        peer = self.peer
+        if peer is None or peer.closed or CAP_PING not in peer.capabilities:
+            return None
+
+        def heard(_reply: dict[str, Any], _payload: bytes) -> None:
+            self.last_heard = time.monotonic()
+
+        try:
+            await peer.request({"t": PING}, timeout_seconds=timeout_seconds, on_reply=heard)
+        except TimeoutError:
+            return False
+        return True
+
     async def diagnostics(self, session_id: str | None = None) -> dict[str, Any] | None:
         peer = self.peer
         if peer is None or peer.closed or CAP_DIAGNOSTICS not in peer.capabilities:
@@ -552,6 +620,7 @@ class RemoteHub:
     # -- receiving -----------------------------------------------------------------------
 
     def _on_notice(self, peer: FramedPeer, header: dict[str, Any], payload: bytes) -> None:
+        self.last_heard = time.monotonic()
         kind = header.get("t")
         if kind == STATE:
             self._apply_state(peer, header)

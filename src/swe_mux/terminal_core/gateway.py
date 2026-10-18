@@ -22,7 +22,6 @@ lifecycle - is `terminal_gateway.py` (item 28).
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import logging
 import secrets
 import time
@@ -49,6 +48,7 @@ from .protocol import (
     MAX_PENDING_WRITES,
     METERING,
     PENDING_SUBMIT,
+    PING,
     PRESENCE,
     QUIT,
     REMOVE,
@@ -208,7 +208,6 @@ class GatewaySession:
         self.core.pending_submit = pending_submit
         self.core.on_change = self.mark_dirty
         self.host = GatewayTerminalHost(self)
-        self.sockets: set[TerminalSocket] = set()
         # The keystroke writes the daemon has not acknowledged, oldest first, with
         # the sequence number of the first; numbered so a resend after a lost ack is
         # applied once by the daemon that already saw it, and in full by a new one.
@@ -315,12 +314,17 @@ class GatewaySession:
             "ring_position": core.stream.scrollback.position,
         }
 
+    @property
+    def sockets(self) -> set[TerminalSocket]:
+        """The browsers attached here (`TerminalCore.sockets`)."""
+        return self.core.sockets
+
     async def close_sockets(self, code: int, message: bytes) -> None:
-        for socket in tuple(self.sockets):
-            close = getattr(socket, "close", None)
-            if close is not None:
-                with contextlib.suppress(Exception):
-                    await close(code=code, message=message)
+        """Stop serving this session here: refuse what is in flight, close the rest."""
+        core = self.core
+        if core.retired is None:
+            core.retired = (code, message)
+        await core.close_sockets(code, message)
         for task in tuple(self.tasks):
             task.cancel()
 
@@ -402,11 +406,7 @@ class GatewayHub:
         """Run one prepared browser socket. Raises `KeyError` for a session not hosted
         here, which the caller answers with `CLOSE_USE_DAEMON`."""
         session = self.sessions[session_id]
-        session.sockets.add(ws)
-        try:
-            await serve_connection(ws, session.core, session.host, connection_id=connection_id)
-        finally:
-            session.sockets.discard(ws)
+        await serve_connection(ws, session.core, session.host, connection_id=connection_id)
 
     def feed_output(self, session_id: str, data: bytes) -> None:
         session = self.sessions.get(session_id)
@@ -670,6 +670,8 @@ class GatewayHub:
     async def _on_request(
         self, peer: FramedPeer, header: dict[str, Any], _payload: bytes
     ) -> dict[str, Any]:
+        if header.get("t") == PING:
+            return {}
         if header.get("t") != DIAGNOSTICS:
             raise RequestRefused(f"unknown message type: {header.get('t')!r}")
         wanted = header.get("sid")

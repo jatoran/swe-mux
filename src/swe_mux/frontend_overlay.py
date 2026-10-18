@@ -294,14 +294,25 @@ def route_table_digest(routes: Iterable[tuple[str, str]]) -> str:
 
 
 def daemon_api_digest() -> str:
-    """This daemon's own route-table digest.
+    """This daemon's own route-table digest, with the terminal gateway's beside it.
 
-    The lazy import is the point: `routes` reaches every route module, one of
+    A page talks to the gateway as well as the daemon (`terminal-gateway.md`), so an
+    overlay built against one gateway surface must not be served beside another:
+    the gateway's browser routes join the table, under their own method prefix so
+    no daemon route can collide with one, and so does its control protocol version,
+    which is what says the two processes still mean the same by every close code.
+
+    The lazy imports are the point: `routes` reaches every route module, one of
     which imports this one, so the dependency exists only while this is running.
     """
     from . import routes
+    from .terminal_core.protocol import GATEWAY_PROTOCOL_VERSION
+    from .terminal_gateway import BROWSER_ROUTES
 
-    return route_table_digest((route.method, route.path) for route in routes.all_routes())
+    table = [(route.method, route.path) for route in routes.all_routes()]
+    table += [(f"GATEWAY-{method}", path) for method, path in BROWSER_ROUTES]
+    table.append(("GATEWAY-PROTOCOL", str(GATEWAY_PROTOCOL_VERSION)))
+    return route_table_digest(table)
 
 
 def _relative_posix(path: Path, root: Path) -> str:

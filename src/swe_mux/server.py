@@ -195,6 +195,7 @@ from .routes import notes as notes_routes
 from .routes import project_actions as project_action_routes
 from .routes import sessions as session_routes
 from .routes import terminal as terminal_routes
+from .routes.pty import SessionTerminalHost
 from .routes.support import _registered_identity
 from .runtime_config import CONFIG_WATCH_LOOP, watch_config
 from .scan_timeline import ScanContext, ScanTimelineService
@@ -238,6 +239,7 @@ from .storage_usage import ProjectFootprintTarget, StorageUsage
 from .supervisor_client import SupervisorClient, SupervisorUnavailable
 from .telemetry_service import CanonicalTelemetryService
 from .terminal_core import WriteCondition
+from .terminal_placement import TerminalPlacement
 from .tier0_store import Tier0Context, Tier0Store
 from .transcript_discovery import TranscriptScanner
 from .update_check import UPDATE_CHECK_LOOP, UpdateChecker
@@ -1411,12 +1413,26 @@ async def _start_terminal_gateway(
     The gateway carries terminals from the PTY supervisor, so without one there is
     nothing for it to carry and terminals stay on this daemon.
     """
-    gateway_host = GatewayHost(config, generation=app[keys.DAEMON_GENERATION])
+    generation = app[keys.DAEMON_GENERATION]
+    gateway_host = GatewayHost(config, generation=generation)
     publish(app, {keys.TERMINAL_GATEWAY: gateway_host})
     if supervisor_client is None:
         gateway_host.mark_unavailable("no PTY supervisor is attached")
-    else:
-        await gateway_host.start()
+        return gateway_host
+    sessions: SessionManager = app[keys.SESSIONS]
+    placement = TerminalPlacement(
+        gateway_host.hub,
+        sessions=lambda: sessions.sessions,
+        host_for=lambda session: SessionTerminalHost(app, session, generation),
+    )
+    gateway_host.placement = placement
+    if gateway_host.enabled:
+        sessions.terminal_placement = placement.place
+    # The browser traffic the gateway carried, in this daemon's counters.
+    network_usage: NetworkUsage | None = app.get(keys.NETWORK_USAGE)
+    if network_usage is not None:
+        gateway_host.hub.on_metering = network_usage.merge_remote
+    await gateway_host.start()
     return gateway_host
 
 

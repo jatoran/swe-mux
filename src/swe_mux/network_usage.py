@@ -98,10 +98,58 @@ def _known_empty_response(request: web.Request, response: web.StreamResponse) ->
     )
 
 
+#: How many other processes' reports are kept: one per terminal gateway process this
+#: daemon has heard from, which is one at a time and a few across restarts.
+MAX_REMOTE_SOURCES = 8
+#: How a process's routes and channels are told apart from the daemon's own.
+REMOTE_LABEL = "gateway"
+
+
+def _count(value: Any) -> int:
+    return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else 0
+
+
+def _counter(cls: type[Any], row: Any) -> Any:
+    """A counter from one report row, its unknown or malformed fields read as zero."""
+    values = row if isinstance(row, dict) else {}
+    return cls(**{name: _count(values.get(name)) for name in asdict(cls())})
+
+
+def _delta(cls: type[Any], latest: Any, base: Any) -> Any:
+    """What a cumulative counter gained since ``base``. A gauge (active connections)
+    is the latest reading, not a difference."""
+    now, before = _counter(cls, latest), _counter(cls, base)
+    for name in asdict(now):
+        if name != "active_connections":
+            setattr(now, name, max(0, getattr(now, name) - getattr(before, name)))
+    return now
+
+
+def _rows(report: Any, key: str) -> list[dict[str, Any]]:
+    rows = report.get(key) if isinstance(report, dict) else None
+    return [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
+
+
+def _find(report: Any, key: str, **match: str) -> dict[str, Any] | None:
+    """The row of ``report[key]`` whose fields equal ``match``, or None."""
+    for row in _rows(report, key):
+        if all(str(row.get(name)) == value for name, value in match.items()):
+            return row
+    return None
+
+
 class NetworkUsage:
-    """Daemon-boot traffic counters grouped by peer, route, and socket channel."""
+    """Daemon-boot traffic counters grouped by peer, route, and socket channel.
+
+    Traffic another of swe-mux's processes carried for the same browsers - the
+    terminal gateway's terminal sockets - is folded in from the cumulative reports it
+    sends (`merge_remote`), so the window counts every byte a browser exchanged with
+    swe-mux, and that process's routes and channels carry its name.
+    """
 
     def __init__(self) -> None:
+        self._remote: dict[str, dict[str, Any]] = {}
+        self._remote_baselines: dict[str, dict[str, Any] | None] = {}
         self.reset()
 
     def reset(self) -> None:
@@ -113,6 +161,72 @@ class NetworkUsage:
         self._ws_sent_payloads: dict[
             tuple[str, str, str], WebSocketPayloadCounter
         ] = defaultdict(WebSocketPayloadCounter)
+        # A report is cumulative over its process's life, so a fresh window counts
+        # only what each process carries from here on.
+        self._remote_baselines = dict(self._remote)
+
+    def merge_remote(self, header: dict[str, Any]) -> None:
+        """Take another process's latest cumulative report (`terminal_gateway`'s
+        `metering`). Each process is one source, named by its `gateway_id`."""
+        source = header.get("gateway_id")
+        usage = header.get("usage")
+        if not isinstance(source, str) or not source or not isinstance(usage, dict):
+            return
+        if source not in self._remote:
+            started = usage.get("started_at")
+            # A process counting since before this window opened carried some of it
+            # outside the window: its first report here is where this window starts.
+            began_earlier = isinstance(started, (int, float)) and started < self.started_at
+            self._remote_baselines[source] = usage if began_earlier else None
+        self._remote.pop(source, None)
+        self._remote[source] = usage
+        while len(self._remote) > MAX_REMOTE_SOURCES:
+            oldest = next(iter(self._remote))
+            self._remote.pop(oldest)
+            self._remote_baselines.pop(oldest, None)
+
+    def _fold_remote(
+        self,
+        http_routes: dict[tuple[str, str], HttpCounter],
+        http_peers: dict[str, HttpCounter],
+        ws_channels: dict[str, WebSocketCounter],
+        ws_peers: dict[str, WebSocketCounter],
+        ws_sent: dict[tuple[str, str, str], WebSocketPayloadCounter],
+    ) -> None:
+        for source, report in self._remote.items():
+            base = self._remote_baselines.get(source)
+            for row in _rows(report, "http_routes"):
+                method, route = str(row.get("method")), str(row.get("route"))
+                before = _find(base, "http_routes", method=method, route=route)
+                http_routes[(method, f"{route} ({REMOTE_LABEL})")].add(
+                    _delta(HttpCounter, row, before)
+                )
+            for row in _rows(report, "peers"):
+                peer = str(row.get("peer"))
+                before = _find(base, "peers", peer=peer) or {}
+                http_peers[peer].add(_delta(HttpCounter, row.get("http"), before.get("http")))
+                ws_peers[peer].add(
+                    _delta(WebSocketCounter, row.get("websocket"), before.get("websocket"))
+                )
+            for row in _rows(report, "websocket_channels"):
+                channel = str(row.get("channel"))
+                before = _find(base, "websocket_channels", channel=channel)
+                ws_channels[f"{channel} ({REMOTE_LABEL})"].add(
+                    _delta(WebSocketCounter, row, before)
+                )
+            for row in _rows(report, "websocket_sent_payloads"):
+                peer, channel, kind = (
+                    str(row.get("peer")),
+                    str(row.get("channel")),
+                    str(row.get("kind")),
+                )
+                before = _find(
+                    base, "websocket_sent_payloads", peer=peer, channel=channel, kind=kind
+                )
+                gained = _delta(WebSocketPayloadCounter, row, before)
+                counter = ws_sent[(peer, f"{channel} ({REMOTE_LABEL})", kind)]
+                counter.frames += gained.frames
+                counter.bytes += gained.bytes
 
     def record_http(self, request: web.Request, response: web.StreamResponse) -> None:
         request_length = request.content_length
@@ -163,13 +277,34 @@ class NetworkUsage:
         counter.bytes += max(0, size)
 
     def snapshot(self) -> dict[str, Any]:
+        # Copies, so another process's traffic is folded into the answer and never
+        # into this process's own counters.
+        http_routes: dict[tuple[str, str], HttpCounter] = defaultdict(HttpCounter)
+        http_peers: dict[str, HttpCounter] = defaultdict(HttpCounter)
+        ws_channels: dict[str, WebSocketCounter] = defaultdict(WebSocketCounter)
+        ws_peers: dict[str, WebSocketCounter] = defaultdict(WebSocketCounter)
+        ws_sent: dict[tuple[str, str, str], WebSocketPayloadCounter] = defaultdict(
+            WebSocketPayloadCounter
+        )
+        for route_key, http_counter in self._http_routes.items():
+            http_routes[route_key].add(http_counter)
+        for peer, http_counter in self._http_peers.items():
+            http_peers[peer].add(http_counter)
+        for channel, websocket_counter in self._ws_channels.items():
+            ws_channels[channel].add(websocket_counter)
+        for peer, websocket_counter in self._ws_peers.items():
+            ws_peers[peer].add(websocket_counter)
+        for payload_key, payload_counter in self._ws_sent_payloads.items():
+            ws_sent[payload_key].frames += payload_counter.frames
+            ws_sent[payload_key].bytes += payload_counter.bytes
+        self._fold_remote(http_routes, http_peers, ws_channels, ws_peers, ws_sent)
         http_total = HttpCounter()
-        for http_counter in self._http_routes.values():
+        for http_counter in http_routes.values():
             http_total.add(http_counter)
         websocket_total = WebSocketCounter()
-        for websocket_counter in self._ws_channels.values():
+        for websocket_counter in ws_channels.values():
             websocket_total.add(websocket_counter)
-        peers = sorted(set(self._http_peers) | set(self._ws_peers))
+        peers = sorted(set(http_peers) | set(ws_peers))
         return {
             "started_at": self.started_at,
             "uptime_seconds": round(max(0.0, time.time() - self.started_at), 3),
@@ -184,18 +319,18 @@ class NetworkUsage:
             "peers": [
                 {
                     "peer": peer,
-                    "http": asdict(self._http_peers.get(peer, HttpCounter())),
-                    "websocket": asdict(self._ws_peers.get(peer, WebSocketCounter())),
+                    "http": asdict(http_peers.get(peer, HttpCounter())),
+                    "websocket": asdict(ws_peers.get(peer, WebSocketCounter())),
                 }
                 for peer in peers
             ],
             "http_routes": [
                 {"method": method, "route": route, **asdict(counter)}
-                for (method, route), counter in sorted(self._http_routes.items())
+                for (method, route), counter in sorted(http_routes.items())
             ],
             "websocket_channels": [
                 {"channel": channel, **asdict(counter)}
-                for channel, counter in sorted(self._ws_channels.items())
+                for channel, counter in sorted(ws_channels.items())
             ],
             "websocket_sent_payloads": [
                 {
@@ -204,9 +339,7 @@ class NetworkUsage:
                     "kind": kind,
                     **asdict(counter),
                 }
-                for (peer, channel, kind), counter in sorted(
-                    self._ws_sent_payloads.items()
-                )
+                for (peer, channel, kind), counter in sorted(ws_sent.items())
             ],
         }
 

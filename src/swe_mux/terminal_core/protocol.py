@@ -13,7 +13,8 @@ browsers, with the descriptor it implies), `presence` (the leading device class)
 `pending_submit` (whether a delivery sits unsubmitted in the composer), `write`
 and `repaint` (each carrying a request id the result answers), `state_ack`, and
 `quit` (the daemon is quitting, so the gateway exits too).
-`diagnostics` is the one request: it wants an answer and orders against nothing.
+`diagnostics` and `ping` are the requests: they want an answer and order against
+nothing, and `ping`'s answer is empty - it exists to be answered.
 
 **Gateway to daemon**: `state`, one per session and coalesced - the authoritative
 `input_revision`, the last input's age, the keystroke writes whose side effects
@@ -49,7 +50,10 @@ GATEWAY_PROTOCOL_VERSION = 1
 #: Optional features, negotiated at `hello`. A peer that did not agree one is
 #: never sent its messages.
 CAP_DIAGNOSTICS = "diagnostics"
-GATEWAY_CAPABILITIES: tuple[str, ...] = (CAP_DIAGNOSTICS,)
+#: `ping`, a request the gateway answers at once and with nothing: how the daemon
+#: tells a gateway that is busy from one whose loop has stopped (item 32).
+CAP_PING = "ping"
+GATEWAY_CAPABILITIES: tuple[str, ...] = (CAP_DIAGNOSTICS, CAP_PING)
 
 # Daemon -> gateway.
 UPSERT = "upsert"
@@ -64,6 +68,7 @@ REPAINT = "repaint"
 STATE_ACK = "state_ack"
 QUIT = "quit"
 DIAGNOSTICS = "diagnostics"
+PING = "ping"
 
 # Gateway -> daemon.
 STATE = "state"
@@ -226,6 +231,7 @@ def optional_age(value: Any) -> float | None:
 __all__ = [
     "BROADCAST",
     "CAP_DIAGNOSTICS",
+    "CAP_PING",
     "CLOSE_GATEWAY_RESTARTING",
     "CLOSE_USE_DAEMON",
     "CLOSE_USE_GATEWAY",
@@ -240,6 +246,7 @@ __all__ = [
     "MAX_PENDING_WRITES",
     "MAX_PENDING_WRITE_BYTES",
     "PENDING_SUBMIT",
+    "PING",
     "PRESENCE",
     "REMOVE",
     "REPAINT",

@@ -143,6 +143,7 @@ One session's terminal, independent of the process hosting it (`development/DAEM
 
 - `stream.py` - `TerminalStream`: the retained ring and the replay-prefix parsers (screen mode, bracketed paste, sticky modes), what an attach replays, deltas and resyncs, and the `PtySubscriber` queues every byte fans out to.
 - `core.py` - `TerminalCore`: input ownership and the claim log, viewports and the arbitrated geometry, the repaint pulse and the resize-settle scheduler, client-diagnostic rate limits, and the input accounting delivery readiness reads (`input_revision`, the last input's time, the composer estimate).
+  It knows the browser sockets it serves (`sockets`, kept by `serve_connection`), and `retire(code, message)` ends its service when another process takes the terminal: a retired core writes and resizes nothing, refuses a socket at the handshake and each message on an attached one, and closes every browser with the code.
 - `connection.py` - one browser connection from the 0.25 s attach handshake to detach: replay, the sender with its output credit (`flow.py`), claims, input frames and client frames.
 - `host.py` - the only things the core asks of its host: a live `TerminalDescriptor` (state, created and stopping flags, the four harness traits it acts on), the record snapshot and revision, the presence leader, an event sink, the side effects typed input owes, and broadcast.
 
@@ -151,10 +152,11 @@ One session's terminal, independent of the process hosting it (`development/DAEM
   Each session's `state` goes out at most one unacknowledged at a time, and the keystroke writes it carries are numbered so a resend applies once.
 - `remote.py` - `RemoteHub` and `RemoteTerminal`, the daemon's side: a mirror that stands on `Session.terminal` where a `TerminalCore` stands in process, answering the same attribute names from what the gateway reports and running the daemon's own `TerminalHost` side effects on each keystroke write.
   The gateway owns the input accounting, ownership and geometry; the daemon owns what typing means and `pending_submit`.
+  `RemoteHub.connect(before_sync=...)` runs the handover between the handshake and the first notice, `ping` and `last_heard` are the liveness reading a hung gateway is judged by, and `RemoteTerminal.hand_back` seeds the in-process core that takes a terminal back (`terminal_placement.py`).
 
 `Session` constructs its core and keeps every attribute it had as a view onto it (`_TerminalView`), so delivery readiness, automation's attended checks and every other reader are unchanged; the per-chunk fanout reaches the stream directly, because a view read costs a lookup on the hottest path in the daemon.
 A `RemoteTerminal` keeps the daemon's own stream, so the same views and the fanout work unchanged when the core is in the gateway; only browser attachment moves, which is why "is anyone looking" is `Session.attended` (`attached_connections` on either terminal) rather than the local `subscribers`.
-`routes/pty.py` hosts the core in process (`SessionTerminalHost`), and closes a `/pty` upgrade for a session whose terminal is remote with 4012.
+`routes/pty.py` hosts the core in process (`SessionTerminalHost`), and closes a `/pty` upgrade for a session whose terminal is remote with 4012 - after waiting, during the daemon's first gateway connection, to learn which process that is (`GatewayHost.settle`).
 The core's mutations of what the daemon mirrors call `on_change` (`note_typed_input`, `note_pointer_input`, `set_terminal_mode`, `record_claim`, geometry, viewports, ownership), which is how the gateway knows a session has something to send; in process it is unset.
 
 `TerminalCore.write` is the daemon's only PTY write (item 25), and `tests/test_pty_single_writer.py` fails on a `pty.write` or `pty.resize` anywhere outside the core and the PTY implementations under it.

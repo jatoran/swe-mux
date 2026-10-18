@@ -17,10 +17,11 @@ import socket
 import subprocess
 import sys
 import time
+import types
 from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import psutil
 import pytest
@@ -38,6 +39,7 @@ from swe_mux.gateway_host import (
     GatewayHost,
     terminal_transport,
 )
+from swe_mux.terminal_core import RemoteTerminal, TerminalCore
 from swe_mux.terminal_gateway import (
     DISCOVERY_FILENAME,
     LOCK_FILENAME,
@@ -45,7 +47,10 @@ from swe_mux.terminal_gateway import (
     gateway_command,
     read_discovery,
 )
+from swe_mux.terminal_placement import TerminalPlacement
 from tests.support.settle import until
+from tests.support.supervised_session import supervised_session
+from tests.support.terminal_rig import DaemonHost
 
 #: Long enough for a gateway to be found again, short enough that one a failed test
 #: leaves behind is gone before anyone notices it.
@@ -330,6 +335,179 @@ async def test_a_host_stopped_while_its_spawn_is_starting_leaves_nothing_behind(
     assert process is not None
     await host.stop(quit=True)
     assert process.wait(timeout=15) is not None
+
+
+# --- which process holds the terminals (item 32) ---------------------------------------
+
+
+def place(host: GatewayHost, *sessions: Any) -> dict[str, Any]:
+    """Give ``host`` a placement over these sessions, as the composition root does."""
+    registry = {session.record.id: session for session in sessions}
+    host.placement = TerminalPlacement(
+        host.hub, sessions=lambda: registry, host_for=lambda _session: DaemonHost()
+    )
+    return registry
+
+
+async def test_the_gateway_takes_the_terminals_and_gives_them_back_when_it_dies(
+    config: FakeConfig,
+) -> None:
+    # A long restart backoff, so the terminal must come back when the connection
+    # closes rather than whenever the next gateway happens to be looked for.
+    host = make_host(config, restart_initial=5.0, restart_max=5.0)
+    session, _client = supervised_session()
+    place(host, session)
+    async with started(host):
+        assert isinstance(session.terminal, RemoteTerminal)
+        assert host.placement is not None and host.placement.handovers == 1
+        pid, created = identity(host)
+        assert host.holder == (pid, created)
+
+        end_process(pid)
+
+        await until(
+            lambda: isinstance(session.terminal, TerminalCore),
+            seconds=3,
+            what="the terminal comes back as soon as the dead gateway's connection closes",
+        )
+        assert "exited" in host.placement.last_takeback_reason
+        await until(
+            lambda: host.ready and host.pid != pid and isinstance(session.terminal, RemoteTerminal),
+            seconds=60,
+            what="and goes to the gateway that replaces it",
+        )
+        assert host.placement.handovers == 2
+
+
+async def test_a_hung_gateway_is_ended_and_its_terminals_come_back(config: FakeConfig) -> None:
+    """Silent to its pings and to its own `/health`: ended by its identity, terminals back.
+
+    Suspending the process is the honest stand-in for a hung loop: it keeps its
+    sockets, accepts connections into their backlog, and answers nothing.
+    """
+    host = make_host(config, probe_interval=0.2, probe_timeout=0.5, hung_probes=2)
+    session, _client = supervised_session()
+    place(host, session)
+    async with started(host):
+        pid, created = identity(host)
+        gateway = psutil.Process(pid)
+        gateway.suspend()
+        try:
+            await until(
+                lambda: host.hung_ends == 1 and isinstance(session.terminal, TerminalCore),
+                seconds=60,
+                what="the hung gateway is ended and its terminals come back",
+            )
+            assert not alive(pid, created)
+            assert "pings unanswered" in host.last_hung_reason
+            await until(
+                lambda: host.ready and host.pid != pid,
+                seconds=60,
+                what="a new gateway takes over",
+            )
+        finally:
+            with contextlib.suppress(psutil.Error):
+                gateway.resume()
+            end_process(pid)
+
+
+async def test_a_gateway_still_serving_its_browsers_is_never_ended(
+    config: FakeConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Pings unanswered but `/health` answering: the connection is renewed, the gateway
+    and its terminals stay. Killing on the control path's word alone would let a
+    daemon-side fault end a healthy gateway."""
+    host = make_host(config, probe_interval=0.2, probe_timeout=0.5, hung_probes=2)
+    session, _client = supervised_session()
+    place(host, session)
+    async with started(host):
+        pid, created = identity(host)
+
+        async def silent(_timeout: float) -> bool:
+            return False
+
+        monkeypatch.setattr(host.hub, "ping", silent)
+        await until(lambda: host.restarts >= 1, seconds=30, what="the connection is renewed")
+        await until(lambda: host.ready, seconds=30, what="and reconnected")
+        assert host.hung_ends == 0
+        assert alive(pid, created)
+        assert host.pid == pid
+        assert isinstance(session.terminal, RemoteTerminal)
+
+
+async def test_a_late_timer_is_this_daemons_stall_not_the_gateways_silence(
+    config: FakeConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    host = make_host(config, probe_interval=0.01, probe_timeout=0.05, hung_probes=2)
+    suspected: list[str] = []
+
+    async def suspect(_record: dict[str, Any], why: str) -> None:
+        suspected.append(why)
+
+    monkeypatch.setattr(host, "_suspect_hung", suspect)
+    peer = types.SimpleNamespace(closed=False)
+
+    async def late(wait_seconds: float) -> bool:
+        # The timer that ends this wait fires long after it was due: the daemon's
+        # own loop was not running.
+        await asyncio.sleep(wait_seconds * 3)
+        return False
+
+    monkeypatch.setattr(host.hub, "ping", late)
+    watch = asyncio.create_task(host._watch(peer, {"pid": 1, "port": 1}))
+    await asyncio.sleep(0.6)
+    assert host.probe_misses == 0 and suspected == []
+
+    async def silent(_timeout: float) -> bool:
+        return False
+
+    monkeypatch.setattr(host.hub, "ping", silent)
+    await until(lambda: bool(suspected), seconds=5, what="on-time silence is counted")
+    assert host.probe_misses == 2
+    await asyncio.wait_for(watch, timeout=5)
+
+
+async def test_a_terminal_socket_waits_for_the_first_connection_to_settle(
+    config: FakeConfig,
+) -> None:
+    host = make_host(config)
+    session, _client = supervised_session()
+    local, _client = supervised_session("local")
+    local.pty = cast(Any, types.SimpleNamespace())
+    place(host, session, local)
+
+    # A session the gateway can never hold does not wait.
+    await asyncio.wait_for(host.settle(local), timeout=0.5)
+
+    waiter = asyncio.create_task(host.settle(session))
+    await asyncio.sleep(0.2)
+    assert not waiter.done()
+    host.settled.set()
+    await asyncio.wait_for(waiter, timeout=1)
+
+    # And a gateway that is off never makes anything wait.
+    config.terminal_gateway_enabled = False
+    off = make_host(config)
+    place(off, session)
+    await asyncio.wait_for(off.settle(session), timeout=0.5)
+
+
+def test_a_gateway_holding_terminals_through_a_lost_connection_still_serves_them(
+    config: FakeConfig,
+) -> None:
+    host = make_host(config)
+    session, _client = supervised_session()
+    place(host, session)
+    host.gateway = {"pid": 1, "port": config.gateway_port}
+    host.state = gateway_host_module.STATE_BACKOFF
+    assert host.transport()["transport"] == TRANSPORT_DAEMON
+    assert host.placement is not None
+    host.placement._to_gateway(session)
+    assert host.transport() == {
+        "transport": TRANSPORT_GATEWAY,
+        "state": gateway_host_module.STATE_BACKOFF,
+        "port": config.gateway_port,
+    }
 
 
 # --- reporting -------------------------------------------------------------------------
