@@ -11,15 +11,17 @@ checked at `hello` - and this module is the vocabulary.
 through this gateway), `update` and `exit` (a snapshot frame for attached
 browsers, with the descriptor it implies), `presence` (the leading device class),
 `pending_submit` (whether a delivery sits unsubmitted in the composer), `write`
-and `repaint` (each carrying a request id the result answers), and `state_ack`.
+and `repaint` (each carrying a request id the result answers), `state_ack`, and
+`quit` (the daemon is quitting, so the gateway exits too).
 `diagnostics` is the one request: it wants an answer and orders against nothing.
 
 **Gateway to daemon**: `state`, one per session and coalesced - the authoritative
 `input_revision`, the last input's age, the keystroke writes whose side effects
 the daemon owes (in order, because interrupt detection and the composer estimate
 read each write on its own), and the terminal's mode, owner, geometry and attach
-count; `event` for the event log; `write_result` and `repaint_result`; and
-`broadcast`, typed text the daemon delivers to the rest of the broadcast set.
+count; `event` for the event log; `write_result` and `repaint_result`;
+`broadcast`, typed text the daemon delivers to the rest of the broadcast set; and
+`metering`, the browser traffic the gateway carried, for the daemon's counters.
 
 **Coalescing is acknowledged, not timed.** A session has at most one `state` in
 flight; later changes fold into the next one, which goes out when the daemon's
@@ -60,6 +62,7 @@ PENDING_SUBMIT = "pending_submit"
 WRITE = "write"
 REPAINT = "repaint"
 STATE_ACK = "state_ack"
+QUIT = "quit"
 DIAGNOSTICS = "diagnostics"
 
 # Gateway -> daemon.
@@ -68,6 +71,7 @@ EVENT = "event"
 WRITE_RESULT = "write_result"
 REPAINT_RESULT = "repaint_result"
 BROADCAST = "broadcast"
+METERING = "metering"
 
 #: WebSocket close codes a browser acts on (`DAEMON_LOAD_ISOLATION.md` items 30 and
 #: 32): reconnect to the daemon for this session, wait for the gateway to return,
@@ -230,6 +234,8 @@ __all__ = [
     "EXIT",
     "GATEWAY_CAPABILITIES",
     "GATEWAY_PROTOCOL_VERSION",
+    "METERING",
+    "QUIT",
     "MAX_PENDING_EVENTS",
     "MAX_PENDING_WRITES",
     "MAX_PENDING_WRITE_BYTES",

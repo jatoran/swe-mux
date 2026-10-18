@@ -878,7 +878,7 @@ Items are worked in order, and an item may reorder, split or remove later items 
     Ten deliberate breaks - sending while unacknowledged, applying writes without their numbers, ignoring a write's condition, ignoring the reported revision, a re-upsert forgetting the browsers' state, ignoring the sessions set, dropping the leader, dropping `pending_submit`, not reporting keystrokes, never sending the claim log - each failed the file.
     The queue, auto-delivery and agent-messaging writer doubles became async; four attended doubles gained `attended`.
 
-- [ ] **28. The terminal gateway process.**
+- [x] **28. The terminal gateway process.**
   - **Why:** this is the isolation itself.
   - **Change:**
     - `swe_mux.terminal_gateway`, frozen as `swe-mux.exe --gateway-child`: an aiohttp app serving `/pty/{sid}` and a health route, hosting terminal cores.
@@ -890,6 +890,31 @@ Items are worked in order, and an item may reorder, split or remove later items 
     - It exits on the daemon's quit intent, and after a linger with no daemon attached and no live sessions.
   - **Where:** `terminal_gateway.py`, `desktop.py:1141-1225`, a new `design/features/terminal-gateway.md`.
   - **Done when:** a terminal attached through the gateway keeps echoing while the daemon's loop is deliberately blocked.
+  - **Done (2026-10-18).** `src/swe_mux/terminal_gateway.py` is the process (`design/features/terminal-gateway.md`): a `GatewayHub` for the cores, a `SupervisorLink` at the `terminal` scope, `/pty/{sid}` and `/health` under `gateway_middleware`, `InstanceLock`, discovery, metering and its lifecycle.
+    `desktop.py` dispatches `--gateway-child`; from source it is `python -m swe_mux.terminal_gateway`, and `gateway_command` builds both.
+    Nothing starts it yet - that is item 29 - so the running app is unchanged.
+  - **Measured: typing echoes through a blocked daemon.** The gateway as a process over a real supervisor, a browser on its own thread typing every 50 ms, and the daemon's loop blocked three times for 2 s each: 145 keystrokes, 97 of them during a block, echo p50 0.81 ms and max 1.18 ms, and the daemon applied all 145 in order once each block ended.
+    The test version (`test_typing_keeps_echoing_while_the_daemon_is_blocked`) blocks for 1 s and asserts every echo under 500 ms, which is two orders of magnitude of headroom for a loaded runner rather than a timing bet.
+  - **Settled: subscribe eagerly.** 36 sessions with a 2 MiB retained ring each, the gateway as a process:
+
+    | Policy | RSS settled | RSS after 10 attaches | Attach p50, cold | Attach p50, warm |
+    | --- | --- | --- | --- | --- |
+    | `eager` | 114 MiB (41 empty) | 114 MiB | 2.7 ms | 2.7 ms |
+    | `on_attach` | 41 MiB | 64 MiB | 15.5 ms | 2.7 ms |
+
+    Parsing all 36 sessions' output at 20 KiB/s each for ten seconds cost an immeasurable amount of CPU under both, so CPU did not decide it.
+    Eager costs the gateway the bound the daemon already pays for its own copy and makes every attach a read of local memory, which is the point of the process; `on_attach` stays as a flag for a machine where the memory matters.
+    The first version of `on_attach` kept the ring after its linger and so saved nothing, which the measurement found: it now releases the ring and the next subscribe is a whole-buffer one, which is what the 15.5 ms is.
+  - **Decisions.**
+    - **The single instance is a file lock**, `terminal-gateway.lock` (`msvcrt.locking` / `fcntl.flock`), because the supervisor's named mutex has no POSIX twin; the OS drops it however the process dies.
+    - **The build id is a digest over compiled code**, not `__version__`, over `GATEWAY_MODULES`, the exact closure; a fresh-interpreter test fails when the list drifts from what the module loads, so item 29's version-skew check cannot be blind to a module it forgot.
+    - **Health is 503 until a supervisor and a first daemon**, because before its first daemon the gateway does not know which sessions it holds.
+    - **Metering is cumulative**, a `NetworkUsage` snapshot every five seconds when it changed, so a report the daemon misses costs nothing; the daemon's side of it is item 32's.
+    - **A subscribe reply is applied in the read loop** (`framed_ipc`'s reply hook), so output after the reply can never land before the bytes the reply carried.
+    - **It keeps every session through a daemon's absence** and exits only on `quit`, or after 120 s with no daemon *and* nothing live under the supervisor - a live session keeps it up however slow a redeploy is.
+  - **Left to later items, as the plan assigns them.** The breakaway spawn, the `terminal_gateway_port` and `terminal_gateway_enabled` config fields and the stderr redirect to `terminal-gateway-console.log` belong to the spawner (item 29); the process inspector must classify the gateway as infrastructure and reserve its ports (frozen `--gateway-child` is the app image, source `-m swe_mux.terminal_gateway` matches the session-helper pattern), and redeploy must stop it gracefully (item 33).
+  - **Tests:** `tests/test_terminal_gateway.py`, 17, against a real in-process `SupervisorServer`: the supervisor vocabulary it speaks, the build-id closure, the command shapes, the instance lock, discovery written and removed, health 503 then 200, quit, idle exit, a browser typing and seeing its echo under both policies at the `terminal` scope, `on_attach` releasing the ring and resubscribing whole, a gap and a lost supervisor connection each resubscribing as a delta, an unknown session closed with 4010, a foreign `Origin` refused, metering reaching the daemon, and the blocked-daemon test above with the gateway as a real process.
+    Ten deliberate breaks - the hello without the terminal scope, resubscribes never sending `since`, the linger keeping the ring, eager never subscribing early, health always ready, idle never ending it, the daemon's quit ignored, a gap ignored, no browser policy, metering never sent - each failed the file.
 
 - [ ] **29. Daemon-owned gateway lifecycle.**
   - **Why:** the gateway must exist wherever the daemon runs, including source mode, standalone daemons, and Linux and macOS, which have no tray.

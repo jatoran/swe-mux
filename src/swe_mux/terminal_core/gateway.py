@@ -46,8 +46,10 @@ from .protocol import (
     MAX_PENDING_EVENTS,
     MAX_PENDING_WRITE_BYTES,
     MAX_PENDING_WRITES,
+    METERING,
     PENDING_SUBMIT,
     PRESENCE,
+    QUIT,
     REMOVE,
     REPAINT,
     REPAINT_RESULT,
@@ -350,6 +352,15 @@ class GatewayHub:
         self.events_dropped = 0
         self._flush_scheduled = False
         self._tasks: set[asyncio.Task[Any]] = set()
+        # Whether any daemon has attached since this process started: the gateway
+        # is not ready to serve a browser before it knows which sessions it holds.
+        self.daemon_seen = False
+        # The process around the hub (`terminal_gateway.py`): told when the daemon
+        # asks it to exit, and when a session arrives or leaves, which is when its
+        # supervisor subscription may start or stop.
+        self.on_quit: Callable[[], None] | None = None
+        self.on_session_added: Callable[[str], None] | None = None
+        self.on_session_removed: Callable[[str], None] | None = None
         self.server = FramedServer(
             token=token,
             protocol=GATEWAY_PROTOCOL_VERSION,
@@ -402,6 +413,7 @@ class GatewayHub:
 
     def _daemon_connected(self, peer: FramedPeer) -> None:
         previous, self.daemon = self.daemon, peer
+        self.daemon_seen = True
         if previous is not None and not previous.closed:
             # A restarted daemon's successor: the newest one is the daemon.
             self._spawn(previous.close("superseded by a newer daemon connection"))
@@ -501,6 +513,8 @@ class GatewayHub:
             )
             self.sessions[sid] = session
             log.info("terminal gateway now hosts session %s (%s)", sid, descriptor.backend)
+            if self.on_session_added is not None:
+                self.on_session_added(sid)
         else:
             # A daemon that restarted re-sends what it serves; everything the
             # browsers built up here - ownership, viewports, the revision - stays.
@@ -519,6 +533,8 @@ class GatewayHub:
             return
         log.info("terminal gateway no longer hosts session %s", session_id)
         self._spawn(session.close_sockets(CLOSE_USE_DAEMON, b"moved"))
+        if self.on_session_removed is not None:
+            self.on_session_removed(session_id)
 
     def _sessions(self, header: dict[str, Any], _payload: bytes) -> None:
         wanted = header.get("sids")
@@ -618,6 +634,15 @@ class GatewayHub:
         if session is not None and isinstance(upto, int):
             session.acknowledge(upto)
 
+    def _quit(self, _header: dict[str, Any], _payload: bytes) -> None:
+        log.info("terminal gateway: the daemon is quitting, so the gateway exits too")
+        if self.on_quit is not None:
+            self.on_quit()
+
+    def send_metering(self, header: dict[str, Any]) -> bool:
+        """Send traffic counters now; False when no daemon took them."""
+        return self._notify({"t": METERING, **header})
+
     _NOTICES: dict[str, Callable[[GatewayHub, dict[str, Any], bytes], None]] = {
         UPSERT: _upsert,
         REMOVE: _remove,
@@ -629,6 +654,7 @@ class GatewayHub:
         WRITE: _write,
         REPAINT: _repaint,
         STATE_ACK: _state_ack,
+        QUIT: _quit,
     }
 
     async def _on_request(

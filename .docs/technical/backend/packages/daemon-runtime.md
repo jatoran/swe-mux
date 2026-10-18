@@ -90,6 +90,16 @@ Frozen it runs as `swe-mux.exe --worker-child`; from source as `python -m swe_mu
 
 **Not:** a place for state the daemon cannot push back after a restart.
 
+### `terminal_gateway.py`
+
+The terminal gateway process (`../../../design/features/terminal-gateway.md`): a `GatewayHub` for the cores, a `SupervisorLink` that feeds them from the PTY supervisor at the `terminal` scope with `output_gap` and `subscribe_since`, and an aiohttp listener for `/pty/{sid}` and `/health` under `http_origin_policy.gateway_middleware`.
+`SupervisorLink` subscribes by policy (`eager`, the measured default, or `on_attach`, which releases a session's ring a linger after its last browser), applies a subscribe reply inside its read loop, resubscribes as a delta after a `gap` or a lost connection, and writes and resizes as notices.
+`TerminalGateway.run` holds the instance lock (`InstanceLock`, an exclusive file lock on `terminal-gateway.lock`, on every platform), writes `terminal-gateway.json` once both listeners are bound, meters browser traffic to the daemon, and exits on the daemon's `quit` or after `--idle-exit-seconds` with no daemon and nothing live.
+`GATEWAY_MODULES` is the exact `swe_mux` closure the process loads and `gateway_build_id` the digest over its compiled code; `tests/test_terminal_gateway.py` checks the list in a fresh interpreter.
+`gateway_command` is the one place its argv is built: `swe-mux.exe --gateway-child` frozen, `python -m swe_mux.terminal_gateway` from source.
+
+**Not:** a session's meaning (status, delivery, the event log), which stays in the daemon; not the daemon's runtime, which it never imports - the closure test is what holds that; and not yet spawned by anything, which is item 29.
+
 ### `stall_watchdog.py`
 
 Bounded sampling through owned Python frame references, canary starvation measurements, and rotating `loop-stalls.log` output.
@@ -226,6 +236,8 @@ Rotating `daemon.log` and `access.log` handlers, the faulthandler `crash.log`, r
   Its logger is pinned at WARNING, so a root raised to DEBUG for a diagnosis does not bring the per-batch lines back; the owners' counters (`git_monitor.watch` on `/api/diagnostics/background`) carry what those lines did.
 - **`run_bounded`'s `operation_id` is read from the same contextvar at each call site** (`usage.py` passes the refresh's own id instead, since a refresh is the operation and already stamps its event with it).
   The parameter existed with no caller until W4.5.3, so every `bounded_command_timed_out` and output-cap line read `operation_id=None` beside a caller line carrying a real one.
+
+The worker and the terminal gateway each get the same shape in their own file (`setup_worker_logging`, `setup_gateway_logging`: `worker.log` and `terminal-gateway.log`, 10 MB × 3, through the same writer thread and formatter), so a line in either reads like a daemon line.
 
 **Not:** the supervisor's logging, which is stdlib-inline there to keep its import closure frozen; nor deciding *what* is worth logging, which belongs to the module doing the work.
 

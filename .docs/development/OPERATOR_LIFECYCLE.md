@@ -130,7 +130,7 @@ What it does, stated so an uninstall or a support question has something to chec
 **Why it is a third bundle rather than `{app}` on `PATH`, measured 2026-08-29.**
 The first attempt at this was refused, and the refusal is worth keeping, because the obvious version would have been worse than the gap it closed.
 `packaging/swe_mux.spec` builds exactly one executable, `swe-mux.exe`, with `console=False` - the windowed launcher, whose whole purpose is to open a native window with no console behind it.
-A GUI-subsystem process has no `stdout` and no `stderr` at all (`desktop.redirect_gui_streams` points both at `<data_dir>\desktop-shell.log` precisely because of this), and `desktop.main` dispatches only `--daemon-child`, `--supervisor-child`, `--worker-child`, and an allowlisted `-m` pair that does not include `swe_mux.cli`.
+A GUI-subsystem process has no `stdout` and no `stderr` at all (`desktop.redirect_gui_streams` points both at `<data_dir>\desktop-shell.log` precisely because of this), and `desktop.main` dispatches only `--daemon-child`, `--supervisor-child`, `--worker-child`, `--gateway-child`, and an allowlisted `-m` pair that does not include `swe_mux.cli`.
 So adding `{app}\swe-mux` to `PATH` would have published a launcher that opens a window, under a name a user would type expecting a table of sessions.
 Adding a console executable *to that bundle* was the other obvious move and is also wrong: the spec's `# No second executable` comment records that nothing from it should run inside a task terminal, because a running copy locks `dist\swe-mux` against the staged swap a redeploy performs - and a CLI on `PATH` lives in exactly such a terminal.
 `swe-mux-cli` is the resolution: its own spec, its own directory, so the only tree a running client can lock is its own.
@@ -372,6 +372,7 @@ All rotate, so a noisy day cannot grow an unbounded file.
 | `desktop-daemon.log`, `daemon-relaunch.log` | The console redirect held by whoever spawned the daemon: an early-startup and native-stderr crash catcher, not the structured log. |
 | `supervisor.log`, `supervisor-console.log` | The PTY supervisor's own logs. |
 | `worker.log`, `worker-console.log` | The worker process's log (10 MB × 3) and what its interpreter printed before logging started. |
+| `terminal-gateway.log`, `terminal-gateway-console.log` | The terminal gateway's log (10 MB × 3) and what its interpreter printed before logging started. Absent until the daemon starts a gateway, which no release does yet (`DAEMON_LOAD_ISOLATION.md` items 29 and 34). |
 | `redeploy.log`, `redeploy-result.json` | The frozen-app redeploy's output and last verdict. |
 | `lifecycle.log`, `git-provenance-backfill.log` | The lifecycle ledger and the provenance backfill's log. |
 
@@ -383,7 +384,7 @@ All rotate, so a noisy day cannot grow an unbounded file.
 | `<harness>-hooks.json`, `<harness>-mcp.json` | Per-harness hook settings and MCP registration, written by the Claude adapter family. |
 | `sessions/<session-id>/` | Per-session hook settings and identity, removed when the session tears down. |
 | `omp-extensions/`, `opencode-configs/` | Per-harness config roots a shim-launched harness materializes into. |
-| `supervisor.json`, `daemon-heartbeat.json`, `redeploy.lock` | Live-process discovery and coordination files. |
+| `supervisor.json`, `terminal-gateway.json`, `terminal-gateway.lock`, `daemon-heartbeat.json`, `redeploy.lock` | Live-process discovery and coordination files. |
 | `tls/` | Tailscale certificate material. |
 | `usage-cache.json` | The usage reconstruction cache. |
 | `webview/` | The desktop WebView's own storage. |
@@ -605,8 +606,8 @@ Project *content* is not in here and is not swe-mux's to back up: Projects point
 
 ### What is safely disposable
 
-- Every log: `daemon.log*`, `access.log*`, `crash.log`, `desktop-daemon.log*`, `daemon-relaunch.log`, `supervisor.log`, `supervisor-console.log`, `worker.log*`, `worker-console.log`, `redeploy.log`, `lifecycle.log`, `git-provenance-backfill.log`.
-- Everything regenerated per run: `bin/`, `<harness>-hooks.json`, `<harness>-mcp.json`, `sessions/`, `omp-extensions/`, `opencode-configs/`, `supervisor.json`, `daemon-heartbeat.json`, `desktop-control.token`, `redeploy.lock`, `redeploy-result.json`, `hook-spool/`, `tls/`, `usage-cache.json`, `webview/`.
+- Every log: `daemon.log*`, `access.log*`, `crash.log`, `desktop-daemon.log*`, `daemon-relaunch.log`, `supervisor.log`, `supervisor-console.log`, `worker.log*`, `worker-console.log`, `terminal-gateway.log*`, `terminal-gateway-console.log`, `redeploy.log`, `lifecycle.log`, `git-provenance-backfill.log`.
+- Everything regenerated per run: `bin/`, `<harness>-hooks.json`, `<harness>-mcp.json`, `sessions/`, `omp-extensions/`, `opencode-configs/`, `supervisor.json`, `terminal-gateway.json`, `terminal-gateway.lock`, `daemon-heartbeat.json`, `desktop-control.token`, `redeploy.lock`, `redeploy-result.json`, `hook-spool/`, `tls/`, `usage-cache.json`, `webview/`.
 - Re-downloadable assets: `voice-models/`.
 - Bounded caches whose loss costs only history you can regenerate: `voice/` (clips, capped by `tts_cache_mb`), `preview-shots/`, `recovery/` (post-mortem terminal bytes; the registry rows that bring sessions back live in `mux.db`, not here).
 

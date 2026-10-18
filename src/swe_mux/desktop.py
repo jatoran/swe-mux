@@ -1228,6 +1228,12 @@ def main(argv: Sequence[str] | None = None) -> None:
 
         worker_main(arguments[1:])
         return
+    if arguments[:1] == ["--gateway-child"]:
+        # The terminal gateway (`terminal_gateway.py`), as the frozen app runs it.
+        from .terminal_gateway import main as gateway_main
+
+        gateway_main(arguments[1:])
+        return
     _run_desktop_shell(arguments)
 
 

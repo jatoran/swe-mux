@@ -689,6 +689,7 @@ Daemon to gateway:
 - `write {sid, rid, text, accounted, condition}` with the bytes as payload - `condition` is `{input_revision, operator_quiet_seconds, no_pending_submit}` or null; `accounted` advances the input revision and the last input's time as operator input.
 - `repaint {sid, rid}` - the one-column pulse.
 - `state_ack {sid, upto}` - every keystroke write numbered below `upto` is applied.
+- `quit {}` - the daemon is stopping for good rather than restarting, so the gateway exits too.
 - `diagnostics {sid?}` - the one request; the reply carries each session's ownership, geometry, attachments, claims, accounting and pending writes.
 
 Gateway to daemon:
@@ -702,9 +703,23 @@ Gateway to daemon:
 - `write_result {sid, rid, written, reason?, revision, age}` and `repaint_result {sid, rid, applied}`.
   A refused write names the part of its condition that moved (`input_revision_moved`, `operator_recently_typed`, `unsubmitted_delivery_in_composer`); `not_hosted` and `write_failed:*` mean the gateway could not write at all.
 - `broadcast {sid, data}` - typed text the daemon delivers to the rest of the broadcast set (`routes/terminal.deliver_broadcast`).
+- `metering {gateway_id, usage}` - the browser traffic the gateway carried, as a `NetworkUsage` snapshot cumulative since the gateway started, so a report the daemon misses costs nothing; sent every five seconds when it changed.
 
 Ages are seconds since the event, never clock readings.
 Browser close codes: 4010 reconnect to the daemon, 4011 the gateway is restarting, 4012 (from the daemon's `/pty`) reconnect to the gateway, which holds this terminal.
+
+### The gateway process's own surface
+
+The process behind that protocol (`design/features/terminal-gateway.md`, item 28) has two browser endpoints on its own port, under the daemon's browser policy (`http_origin_policy.gateway_middleware`):
+
+- `GET /pty/{sid}` - the terminal WebSocket, with exactly the daemon's `/pty/{sid}` frames (`design/features/terminal-input.md`).
+  A session the gateway does not hold is closed at once with 4010; a supervisor its link cannot reach, with 4011.
+- `GET /health` - `{status, pid, build, build_id, protocol, supervisor, daemon_attached, daemon_seen, sessions, uptime_seconds}`, where `supervisor` is the link's state (`connected`, `supervisor_pid`, the granted `capabilities`, the subscribe `policy`, `live` and `subscribed` session counts, and the counters `connects`, `connect_failures`, `gaps`, `delta_subscribes`, `full_subscribes`).
+  503 with `status: "starting"` until it has a supervisor and has heard from a daemon; 200 with `status: "ok"` after.
+
+It announces itself in `<data_dir>/terminal-gateway.json`, written atomically once both listeners are bound and removed on exit while it is still its own: `{pid, created_at, started_at, port, hosts, control_port, token, build, build_id, protocol, daemon_port}`.
+`created_at` is the process's creation time, so a reader can tell a recycled pid from the gateway that wrote the record; `build_id` is the digest a daemon compares against its own copy of the gateway's code before adopting a gateway it did not start (item 29).
+`<data_dir>/terminal-gateway.lock` is held exclusively for the process's life and is not data.
 
 ## Canonical Projects and Groups
 

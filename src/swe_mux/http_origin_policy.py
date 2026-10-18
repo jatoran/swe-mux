@@ -31,6 +31,7 @@ from collections.abc import Awaitable, Callable
 from urllib.parse import SplitResult, urlsplit
 
 from aiohttp import web
+from aiohttp.typedefs import Middleware
 
 LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 #: The suffix of a MagicDNS name, which is how Tailscale Serve's HTTPS page is reached.
@@ -43,7 +44,6 @@ _TAILNET_V4 = ipaddress.ip_network("100.64.0.0/10")
 _TAILNET_V6 = ipaddress.ip_network("fd7a:115c:a1e0::/48")
 
 Handler = Callable[[web.Request], Awaitable[web.StreamResponse]]
-Middleware = Callable[[web.Request, Handler], Awaitable[web.StreamResponse]]
 
 
 def is_tailscale_ip(value: str) -> bool:
@@ -153,13 +153,17 @@ def gateway_origin_allowed(
     )
 
 
-def gateway_middleware(*, daemon_port: int, gateway_port: int) -> Middleware:
+def gateway_middleware(
+    *, daemon_port: int, gateway_port: int | Callable[[], int]
+) -> Middleware:
     """The terminal gateway's request policy, as an aiohttp middleware.
 
     The same two refusals the daemon's `security_middleware` makes, with the
     gateway's origin rule: 421 for a Host outside the allowlist, 403 for a page
-    that is not this machine's.
+    that is not this machine's. ``gateway_port`` may be read per request, for a
+    gateway whose port the OS chose when it bound.
     """
+    port_of = gateway_port if callable(gateway_port) else lambda: gateway_port
 
     @web.middleware
     async def gateway_policy(request: web.Request, handler: Handler) -> web.StreamResponse:
@@ -170,7 +174,7 @@ def gateway_middleware(*, daemon_port: int, gateway_port: int) -> Middleware:
             origin,
             request.headers.get("Host", ""),
             daemon_port=daemon_port,
-            gateway_port=gateway_port,
+            gateway_port=port_of(),
         ):
             raise web.HTTPForbidden(text="cross-origin browser control is not allowed")
         return await handler(request)

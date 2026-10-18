@@ -72,6 +72,10 @@ ACCESS_LOG_BACKUPS = 20
 WORKER_LOG_NAME = "worker.log"
 WORKER_LOG_BYTES = 10 * 1024 * 1024
 WORKER_LOG_BACKUPS = 3
+#: The terminal gateway's own log (`terminal_gateway.py`), on the same terms.
+GATEWAY_LOG_NAME = "terminal-gateway.log"
+GATEWAY_LOG_BYTES = 10 * 1024 * 1024
+GATEWAY_LOG_BACKUPS = 3
 
 #: A single rendered `extra` value is truncated here. Bounded because one
 #: oversized field must not be able to push a whole rotation's worth of real
@@ -516,17 +520,30 @@ def setup_worker_logging(data_dir: Path, level: str = "INFO") -> None:
     `worker-console.log`, which is for what the interpreter says before this runs
     and for native crashes, not for every line.
     """
+    _setup_child_logging(
+        data_dir, level, WORKER_LOG_NAME, max_bytes=WORKER_LOG_BYTES, backups=WORKER_LOG_BACKUPS
+    )
+
+
+def setup_gateway_logging(data_dir: Path, level: str = "INFO") -> None:
+    """Configure the terminal gateway's logging: its own rotating `terminal-gateway.log`.
+
+    No console handler, for the worker's reason: the spawner points stderr at
+    `terminal-gateway-console.log` for what the interpreter says before this runs.
+    """
+    _setup_child_logging(
+        data_dir, level, GATEWAY_LOG_NAME, max_bytes=GATEWAY_LOG_BYTES, backups=GATEWAY_LOG_BACKUPS
+    )
+
+
+def _setup_child_logging(
+    data_dir: Path, level: str, name: str, *, max_bytes: int, backups: int
+) -> None:
     data_dir.mkdir(parents=True, exist_ok=True)
     root = logging.getLogger()
     root.setLevel(normalize_level(level))
     quiet_library_loggers()
-    root.addHandler(
-        rotating_handler(
-            data_dir / WORKER_LOG_NAME,
-            max_bytes=WORKER_LOG_BYTES,
-            backups=WORKER_LOG_BACKUPS,
-        )
-    )
+    root.addHandler(rotating_handler(data_dir / name, max_bytes=max_bytes, backups=backups))
 
 
 def flush_logs() -> None:

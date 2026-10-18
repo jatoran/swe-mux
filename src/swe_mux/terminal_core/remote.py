@@ -34,7 +34,7 @@ import asyncio
 import logging
 import time
 from collections import deque
-from collections.abc import Coroutine
+from collections.abc import Callable, Coroutine
 from typing import Any
 
 from ..composer_input import ComposerState, PendingSubmit
@@ -54,8 +54,10 @@ from .protocol import (
     EXIT,
     GATEWAY_CAPABILITIES,
     GATEWAY_PROTOCOL_VERSION,
+    METERING,
     PENDING_SUBMIT,
     PRESENCE,
+    QUIT,
     REMOVE,
     REPAINT,
     REPAINT_RESULT,
@@ -330,6 +332,9 @@ class RemoteHub:
         self._answers: dict[int, asyncio.Future[dict[str, Any]]] = {}
         self._tasks: set[asyncio.Task[Any]] = set()
         self.write_failures = 0
+        # Where the browser traffic the gateway carried is counted (the daemon's
+        # network usage); None drops it.
+        self.on_metering: Callable[[dict[str, Any]], None] | None = None
 
     @property
     def connected(self) -> bool:
@@ -395,6 +400,10 @@ class RemoteHub:
     def release(self, session_id: str) -> None:
         if self.terminals.pop(session_id, None) is not None:
             self._notify({"t": REMOVE, "sid": session_id})
+
+    def quit(self) -> bool:
+        """Tell the gateway the daemon is quitting, so it exits too."""
+        return self._notify({"t": QUIT})
 
     def set_presence(self, leader: str | None) -> None:
         if leader == self.leader:
@@ -552,6 +561,9 @@ class RemoteHub:
             self._apply_event(header)
         elif kind == BROADCAST:
             self._apply_broadcast(header)
+        elif kind == METERING:
+            if self.on_metering is not None:
+                self.on_metering(header)
         else:
             log.warning("terminal gateway client ignored an unknown notice %r", kind)
 
