@@ -71,6 +71,9 @@ export default defineConfig({
     ],
     exclude: ['@continuity-editor/editor'],
   },
-  server: { proxy: { '/api': 'http://127.0.0.1:8765', '/pty': { target: 'ws://127.0.0.1:8765', ws: true }, '/events': { target: 'ws://127.0.0.1:8765', ws: true } } },
+  // `/gateway` is the terminal gateway, which development reaches the way an `https:`
+  // page reaches it through Tailscale Serve (`src/terminalTransport.ts`); 8766 is its
+  // default port, the daemon's plus one. `/pty` stays the daemon's.
+  server: { proxy: { '/api': 'http://127.0.0.1:8765', '/pty': { target: 'ws://127.0.0.1:8765', ws: true }, '/gateway': { target: 'ws://127.0.0.1:8766', ws: true }, '/events': { target: 'ws://127.0.0.1:8765', ws: true } } },
   build: { outDir: '../src/swe_mux/static', emptyOutDir: true },
 })

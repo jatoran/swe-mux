@@ -343,3 +343,28 @@ test('the probe asks for a fresh answer, with a deadline, and counts every failu
   )
   assert.equal(hung, 'missed')
 })
+
+test("a healthy answer's body is handed on, and an unreadable one is still healthy", async () => {
+  const bodies: unknown[] = []
+  const health = { ok: true, terminal_transport: { transport: 'gateway', state: 'running', port: 8766 } }
+  assert.equal(
+    await probeDaemon(async () => ({ ok: true, json: async () => health }), 100, body => bodies.push(body)),
+    'ok',
+  )
+  // A copy, so the assertion does not narrow `bodies` to the health shape for the rest.
+  assert.deepEqual([...bodies], [health])
+  assert.equal(
+    await probeDaemon(
+      async () => ({ ok: true, json: async () => { throw new SyntaxError('not json') } }),
+      100,
+      body => bodies.push(body),
+    ),
+    'ok',
+  )
+  // A 503's body is not read: a starting daemon's transport is not yet a fact.
+  assert.equal(
+    await probeDaemon(async () => ({ ok: false, json: async () => health }), 100, body => bodies.push(body)),
+    'missed',
+  )
+  assert.equal(bodies.length, 1)
+})

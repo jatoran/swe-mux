@@ -12,7 +12,8 @@ import { WebglAddon } from '@xterm/addon-webgl'
 import { Unicode11Addon } from '@xterm/addon-unicode11'
 import { ClipboardAddon } from '@xterm/addon-clipboard'
 import '@xterm/xterm/css/xterm.css'
-import { api, openWebSocket, uploadTerminalAttachment } from './api'
+import { api, uploadTerminalAttachment } from './api'
+import { REDIRECT_DELAY_MS, refreshTerminalTransport, terminalTransport } from './terminalTransport'
 import { takeBranchSeed } from './branchSeed'
 import type { Session } from './types'
 import { sessionDisplayName } from './sessionNames'
@@ -2217,11 +2218,14 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       window.clearTimeout(handshakeTimer)
       handshakeTimer=undefined
     }
-    const scheduleReconnect=()=>{
+    // `redirect` is a close that named where to go next (`terminalTransport.ts`): the
+    // gateway refusing a session that is the daemon's, the daemon refusing one that is the
+    // gateway's, a gateway going away. Those go at once rather than after the backoff.
+    const scheduleReconnect=(redirect=false)=>{
       if(disposed||['exited','crashed'].includes(stateRef.current)||reconnectTimer!==undefined)return
       setConnectionState('reconnecting')
-      const delay=retryDelay(reconnectAttempt)
-      reconnectAttempt+=1
+      const delay=redirect?REDIRECT_DELAY_MS:retryDelay(reconnectAttempt)
+      if(!redirect)reconnectAttempt+=1
       nextAttemptAt=Date.now()+delay
       reconnectTimer=window.setTimeout(()=>{reconnectTimer=undefined;nextAttemptAt=null;connect(true)},delay)
     }
@@ -2505,9 +2509,18 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       setConnectionState(reconnecting?'reconnecting':'connecting')
       attemptStartedAt=Date.now()
       let next:WebSocket
+      // The gateway or the daemon, from the last `terminal_transport` and whatever the
+      // previous socket's close said (`terminalTransport.ts`).
+      const transport=terminalTransport()
+      const route=transport.route(session.id,location)
+      let opened=false
       // Constructing a socket can throw outright (no route, blocked scheme). That must feed
       // the retry path rather than escape into the caller's timer.
-      try{next=openWebSocket(`/pty/${session.id}`)}catch{socket=null;scheduleReconnect();return}
+      try{next=new WebSocket(route.url)}catch{
+        socket=null
+        scheduleReconnect(transport.closed(session.id,route.via,0,false).immediate)
+        return
+      }
       next.binaryType='arraybuffer'
       socket=next
       // A handshake that stalls (resumed PWA, route gone) never fires close or error, so
@@ -2518,11 +2531,13 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         next.onclose=null;next.onerror=null;next.onmessage=null
         try{next.close()}catch{/* already tearing down */}
         socket=null
-        scheduleReconnect()
+        scheduleReconnect(transport.closed(session.id,route.via,0,false).immediate)
       },HANDSHAKE_TIMEOUT_MS)
       next.onopen=()=>{
         if(socket!==next)return
         clearHandshakeWatchdog()
+        opened=true
+        transport.opened(session.id,route.via)
         reconnectAttempt=0
         setConnectionState('connected')
         if(!reconnecting)reportStartup('socket_open')
@@ -2567,7 +2582,15 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         if(!reconnecting&&!mobileLiveInput&&!focusHeldByOtherField(activeEditableField()))term.focus()
       }
       next.onmessage=event=>{if(socket===next)handleMessage(event,next)}
-      next.onclose=()=>{if(socket!==next)return;socket=null;attachmentReadyRef.current=false;setAttachmentReady(false);scheduleReconnect()}
+      next.onclose=event=>{
+        if(socket!==next)return
+        clearHandshakeWatchdog()
+        socket=null;attachmentReadyRef.current=false;setAttachmentReady(false)
+        const {immediate}=transport.closed(session.id,route.via,event.code,opened)
+        // The daemon said the gateway holds this session before any report named its port.
+        if(transport.needsReport(session.id))void refreshTerminalTransport()
+        scheduleReconnect(immediate)
+      }
       next.onerror=()=>{if(socket===next)next.close()}
     }
     const reconnect=()=>{

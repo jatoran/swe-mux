@@ -943,7 +943,7 @@ Items are worked in order, and an item may reorder, split or remove later items 
     Elsewhere: a stopping gateway closes its browsers with 4011 (`test_terminal_gateway.py`), the gateway reserved by pid from the host and from the mirror (`test_process_infrastructure_identity.py`), the mirror's pid validation (`test_process_sampling_worker.py`), and `terminal_transport` on a default daemon's health (`test_startup_gate.py`).
     Ten deliberate breaks - accepting another build, replacing its own gateway for its build, a quitting daemon never asking, a restarting daemon quitting it, trusting a dead gateway's record, accepting a port mismatch, recovery allowed to terminate the gateway, the inspector not reserving it, browsers dropped rather than told, health silent on the transport - each failed the suite; the port case was missed at first and is what the port test was written for.
 
-- [ ] **30. Frontend transport selection and fallback.**
+- [x] **30. Frontend transport selection and fallback.**
   - **Why:** the browser must reach the gateway on every access path and fall back without user action.
   - **Change:**
     - The `/pty` URL rule in `api.ts`: an `https:` page (Tailscale Serve) uses same-origin `/pty/`, which the Serve mount routes to the gateway; an `http:` page uses `ws://<hostname>:<terminal_gateway_port>/pty/<sid>`; and when the gateway is down, refuses the session, or `terminal_transport` says `daemon`, the page uses same-origin `/pty/` on the daemon.
@@ -952,6 +952,16 @@ Items are worked in order, and an item may reorder, split or remove later items 
     - Vite proxies `/pty` to the gateway in development (`frontend/vite.config.ts:74`), and `demo/fakeSocket.ts` keeps its `^/pty/` match.
   - **Where:** `frontend/src/api.ts`, `frontend/src/TerminalPane.tsx`, `frontend/src/liveness.ts`, `technical/frontend/packages.md`.
   - **Done when:** unit tests cover the URL rule and a renderer test covers fallback and reconnect.
+  - **Done (2026-10-18), with one deviation.** `frontend/src/terminalTransport.ts` holds the transport state and the URL rule (`design/features/terminal-gateway.md`, "Browsers"); `daemonLiveness.probeDaemon` feeds it each healthy `/api/health` body; `TerminalPane.tsx` asks it on every connect and hands it every close, a stalled handshake included.
+  - **The deviation: an `https:` page reaches the gateway at `/gateway/pty/<id>`, not at same-origin `/pty/`.** With Serve's mount at `/pty`, a down gateway would leave an `https:` page with no route to the daemon at all, because the daemon's `/pty` would be behind the mount - and falling back to the daemon is the whole safety property.
+    So `/pty` stays the daemon's on every access path, the gateway answers under `/gateway/pty/{sid}` as well as `/pty/{sid}` (so it works whether Serve strips the mount prefix or not, which item 31 settles), and the Vite dev server proxies `/gateway` the same way.
+  - **The last report is remembered**, in memory and for ten minutes in `localStorage`, because the moment the gateway matters most - a reconnect during a daemon restart, or a page the service worker reloads while the daemon is down - is the moment the daemon cannot be asked.
+  - **Every close that names where to go is answered at once** (50 ms rather than the one-second-and-up backoff): 4010 holds that session on the daemon for a minute, 4011 holds the gateway off for two seconds, a gateway that never opened is backed off from (five seconds doubling to a minute), and 4012 from the daemon outranks a stale report for ten seconds and, before any report named the gateway's port, asks `/api/health` once more.
+    A session redirected more than four times in ten seconds takes the ordinary backoff, so two processes disagreeing about one session cannot make a busy loop of it.
+  - **Tests:** `frontend/test/terminalTransport.test.ts`, 14: the URL rule on loopback, the tailnet, IPv6, Serve and the dev proxy; report parsing; each close code; the failure backoff doubling and resetting on an answer; an ordinary drop keeping the transport; 4012 outranking a stale report and asking for one when there is none; the bounce guard; a newly-up gateway tried at once; the remembered report surviving a reload and expiring.
+    `daemonLiveness.test.ts` gained the body hand-off (a 503's body is not read).
+    `frontend/test/renderer/terminal-transport.spec.ts`, 6, drives the real `TerminalPane` over scripted sockets (`terminal-transport-harness.html`) and reads off the screen which process served it: the daemon with no report, the gateway with one, 4010 falling back to the daemon, an unreachable gateway falling back inside the handshake window, a 4011 to the daemon and a 4012 back to the gateway, and a 4012 followed before any report named the gateway.
+    `tests/test_terminal_gateway.py` gained a terminal reached through the `/gateway` prefix with a reverse proxy's Host and Origin.
 
 - [ ] **31. Tailscale Serve mount and firewall.**
   - **Why:** an `https:` phone page cannot open `ws:` to another port, and direct tailnet HTTP needs the gateway port reachable.

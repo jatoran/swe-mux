@@ -715,6 +715,7 @@ The process behind that protocol (`design/features/terminal-gateway.md`, item 28
 
 - `GET /pty/{sid}` - the terminal WebSocket, with exactly the daemon's `/pty/{sid}` frames (`design/features/terminal-input.md`).
   A session the gateway does not hold is closed at once with 4010; a supervisor its link cannot reach, with 4011.
+  `GET /gateway/pty/{sid}` is the same socket, for a reverse proxy that keeps the `/gateway` prefix it mounts the gateway under - Tailscale Serve for an `https:` page, Vite in development - which is the path an `https:` page uses (`features/terminal-gateway.md`, "Browsers").
 - `GET /health` - `{status, pid, build, build_id, protocol, supervisor, daemon_attached, daemon_seen, sessions, uptime_seconds}`, where `supervisor` is the link's state (`connected`, `supervisor_pid`, the granted `capabilities`, the subscribe `policy`, `live` and `subscribed` session counts, and the counters `connects`, `connect_failures`, `gaps`, `delta_subscribes`, `full_subscribes`).
   503 with `status: "starting"` until it has a supervisor and has heard from a daemon; 200 with `status: "ok"` after.
 

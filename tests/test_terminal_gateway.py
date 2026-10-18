@@ -438,6 +438,33 @@ async def test_a_session_the_gateway_does_not_hold_goes_to_the_daemon(
             await hub.close()
 
 
+async def test_a_reverse_proxy_reaches_the_terminal_under_the_gateway_prefix(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An `https:` page reaches the gateway through Tailscale Serve's `/gateway` mount.
+
+    Whether the proxy strips the prefix or not, the socket is the same one; here the
+    prefix arrives intact, with the Host and Origin a reverse proxy presents.
+    """
+    async with open_supervisor(tmp_path, monkeypatch) as running:
+        echo_session(running.server)
+        async with running_gateway(tmp_path) as gateway:
+            hub = await attach_daemon(gateway)
+            session = aiohttp.ClientSession()
+            try:
+                ws = await session.ws_connect(
+                    f"http://127.0.0.1:{gateway.port}/gateway/pty/{SID}",
+                    headers={"Origin": f"http://127.0.0.1:{gateway.port}"},
+                )
+                browser = Browser(session, ws)
+                await browser.attach()
+                await ws.send_json({"type": "input", "data": "via-proxy"})
+                await browser.read_until(lambda: browser.output.endswith(b"via-proxy"))
+            finally:
+                await session.close()
+                await hub.close()
+
+
 async def test_a_foreign_page_is_refused_by_the_gateways_listener(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

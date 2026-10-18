@@ -6,7 +6,8 @@ The terminal gateway is a process of its own that carries terminals instead: bro
 The daemon can stall, or restart, and typing keeps echoing.
 
 Status (2026-10-18): the gateway process exists (item 28) and, with `terminal_gateway_enabled` on, the daemon finds or starts it and owns its lifecycle (item 29).
-The daemon does not yet hand it sessions or send browsers to it; that is items 30 to 32, and the switch stays off until item 34.
+Browsers open terminals on it whenever the daemon reports it (item 30); the daemon does not yet hand it sessions, so until item 32 every session is still the daemon's and a browser that tries the gateway is sent back with 4010.
+The switch stays off until item 34.
 
 ## What runs where
 
@@ -43,7 +44,7 @@ Parsing every session's output was immeasurable under either policy (36 sessions
 
 ## The browser listener
 
-`/pty/{sid}` is the terminal WebSocket, and `/health` reports readiness.
+`/pty/{sid}` is the terminal WebSocket (also served as `/gateway/pty/{sid}`, for a reverse proxy that keeps its mount prefix), and `/health` reports readiness.
 The gateway binds the daemon's host set (loopback, the tailnet address, the WSL bridge address) on its own port, which the daemon passes it, re-binds a listener asyncio closes after a failed accept (`ListenerGuard`), and runs under the same `resilient_event_loop` the daemon does.
 
 - **Browser policy** is the daemon's, from the same module (`http_origin_policy.gateway_middleware`, item 26): 421 for a Host outside the allowlist, 403 for a page that is not this machine's.
@@ -70,6 +71,21 @@ The gateway binds the daemon's host set (loopback, the tailnet address, the WSL 
 - **Its process**: `cwd` in the data directory, so it never locks an app tree against a rebuild; above-normal priority (`--priority`); the daemon's GIL switch interval and a 1 ms timer resolution; its own rotating `terminal-gateway.log` (10 MB x 3), and `crash.log` for a native crash, like every swe-mux process; `terminal-gateway-console.log` (`CONSOLE_LOG_NAME`) is the name its spawner gives the stderr redirect for what the interpreter says before logging starts.
 - **How it is started**: by the daemon (below), frozen as `swe-mux.exe --gateway-child` and from source as `python -m swe_mux.terminal_gateway` (`terminal_gateway.gateway_command`), never as `-m swe_mux`, which would load the whole daemon.
   Exit codes: 0 a stop, 3 another gateway already runs, 4 a listener that would not bind, 1 a failure.
+
+## Browsers
+
+The frontend chooses per connection (`frontend/src/terminalTransport.ts`, item 30), from the `terminal_transport` the daemon reports on `/api/health`, which the liveness probe already polls every four seconds.
+The last report is remembered for ten minutes in `localStorage`, because a reconnect during a daemon restart, and a page reloaded from the service worker while the daemon is down, are exactly when the gateway matters and the daemon cannot be asked.
+
+- **The daemon is same-origin `/pty/<id>` on every access path**, and stays the fallback for everything.
+- **An `http:` page reaches the gateway on its own port**, `ws://<host>:<port>/pty/<id>`: loopback, the tailnet address, the WSL bridge.
+- **An `https:` page goes through the proxy in front of it**, `wss://<host>/gateway/pty/<id>`, because a page served over TLS cannot open `ws:` to another port.
+  Tailscale Serve mounts the gateway at `/gateway` (item 31), and the gateway answers under that prefix as well as without it, so it works whether the proxy strips the prefix or not.
+  The plan had the mount at `/pty` itself, which would have taken the daemon's `/pty` away from an `https:` page - the very route a down gateway has to fall back to.
+- **The Vite dev server proxies `/gateway` the same way**, so development is the `https:` shape over plain HTTP.
+
+A close says where to go next, and the pane reconnects at once rather than after its backoff: 4010 from the gateway (the session is the daemon's - in-process or cold) holds that one session on the daemon for a minute; 4011 (the gateway is going away) holds the gateway off for two seconds; a gateway that never opened is backed off from, five seconds doubling to a minute, while the daemon serves; and 4012 from the daemon (the session is the gateway's) sends the pane back at once, even ahead of the next health report.
+A session bounced more than four times in ten seconds falls back to the ordinary reconnect backoff, so two processes that disagree cannot make a busy loop of it.
 
 ## Owned by the daemon
 

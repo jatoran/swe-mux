@@ -88,6 +88,8 @@ CAPABILITY_SUBSCRIBE_SINCE = "subscribe_since"
 CAPABILITY_TERMINAL_SCOPE = "terminal_scope"
 SUPERVISOR_CAPABILITIES = (CAPABILITY_OUTPUT_GAP, CAPABILITY_SUBSCRIBE_SINCE)
 
+#: Where a reverse proxy in front of an `https:` page mounts the gateway.
+GATEWAY_PROXY_PREFIX = "/gateway"
 DISCOVERY_FILENAME = "terminal-gateway.json"
 LOCK_FILENAME = "terminal-gateway.lock"
 CONSOLE_LOG_NAME = "terminal-gateway-console.log"
@@ -697,6 +699,10 @@ class TerminalGateway:
         )
         app[keys.NETWORK_USAGE] = self.usage
         app.router.add_get("/pty/{sid}", self._pty)
+        # The same socket under the prefix a reverse proxy mounts the gateway at
+        # (Tailscale Serve for an `https:` page, Vite in development), so it is reached
+        # whether or not the proxy strips the prefix (`frontend/src/terminalTransport.ts`).
+        app.router.add_get(f"{GATEWAY_PROXY_PREFIX}/pty/{{sid}}", self._pty)
         app.router.add_get("/health", self._health)
         return app
 

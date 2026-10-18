@@ -9,6 +9,7 @@
 // which is what runs the unit suite (see `updateCheck.ts`).
 import { useEffect, useState } from 'preact/hooks'
 import type { DocumentLike } from './liveness.ts'
+import { noteHealthBody } from './terminalTransport.ts'
 
 /** How long the scheduler waits after one probe settles before sending the next. */
 export const DAEMON_PROBE_INTERVAL_MS = 4000
@@ -92,23 +93,32 @@ export function daemonStallText(since: number, now: number): string {
   return `${DAEMON_STALL_HEADING} (${stallSeconds(since, now)}s). ${DAEMON_STALL_PROMISE}`
 }
 
-type FetchLike = (input: string, init?: RequestInit) => Promise<{ ok: boolean }>
+type FetchLike = (input: string, init?: RequestInit) => Promise<{ ok: boolean; json?: () => Promise<unknown> }>
 
 /**
  * One probe of `/api/health`. Same shape as the redeploy wait loop's `ask`:
  * `cache: 'no-store'` so no cache can answer for the daemon, an `AbortController`
  * deadline so a hung request settles as a miss rather than never, and any
  * rejection - abort, network error - counted the same as a non-2xx.
+ *
+ * A healthy answer's body goes to `onBody`: it carries `terminal_transport`, which is
+ * where terminals open (`terminalTransport.ts`), and this is the poll that keeps it
+ * current. A body that will not parse is still a healthy daemon.
  */
 export async function probeDaemon(
   fetchImpl: FetchLike = (input, init) => fetch(input, init),
   timeoutMs = DAEMON_PROBE_TIMEOUT_MS,
+  onBody: (body: unknown) => void = noteHealthBody,
 ): Promise<DaemonProbeOutcome> {
   const controller = new AbortController()
   const deadline = setTimeout(() => controller.abort(), timeoutMs)
   try {
     const response = await fetchImpl('/api/health', { cache: 'no-store', signal: controller.signal })
-    return response.ok ? 'ok' : 'missed'
+    if (!response.ok) return 'missed'
+    if (response.json) {
+      try { onBody(await response.json()) } catch { /* healthy, just unreadable */ }
+    }
+    return 'ok'
   } catch {
     return 'missed'
   } finally {

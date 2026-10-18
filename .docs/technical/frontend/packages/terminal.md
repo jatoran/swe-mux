@@ -106,6 +106,21 @@ Its input is one wheel event per row, because xterm emits exactly one scroll rep
 
 `TerminalPane.tsx` owns the socket, the DOM, and the take-over strip.
 
+## Which process a terminal socket opens on
+
+`terminalTransport.ts`
+
+The terminal gateway or the daemon (`../../../design/features/terminal-gateway.md`, "Browsers").
+`TerminalTransportState` holds the last `terminal_transport` from `/api/health`, in memory and in `localStorage` for ten minutes, because a reconnect during a daemon restart is when the gateway matters most and the daemon cannot be asked then.
+`daemonLiveness.probeDaemon` feeds it from the poll that already runs, and `refreshTerminalTransport` asks once more when the daemon's 4012 arrives before any report named the gateway's port.
+
+- `route(sessionId, location)` is the URL rule: the daemon is same-origin `/pty/<id>` everywhere; the gateway is `ws://<host>:<port>/pty/<id>` from an `http:` page and `wss://<host>/gateway/pty/<id>` from an `https:` one, which Tailscale Serve mounts on the gateway; the Vite dev server proxies `/gateway` the same way.
+- `closed(sessionId, via, code, opened)` reads a close: 4010 from the gateway holds that session on the daemon for a minute, 4011 holds the whole gateway off for two seconds, a gateway that never opened is backed off from from five seconds doubling to a minute, and 4012 from the daemon clears both and outranks a stale report for ten seconds.
+  It answers whether the next attempt goes at once, which is true for every close that named where to go, and false once one session has been redirected four times in ten seconds.
+- `opened` resets the gateway backoff, so one answer is enough to trust it again.
+
+`TerminalPane.tsx` asks `route` on every connect and hands every close, including a stalled handshake (code 0), to `closed`.
+
 ## Mobile soft keyboard
 
 `mobileKeyboard.ts`, `mobileTerminalIme.ts`
