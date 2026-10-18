@@ -256,6 +256,16 @@ Outside `routes/` deliberately, because `preview_transport.py` streams its own r
 
 **Not:** the middlewares themselves, static-asset cache headers, or resolving a request to the Project or session it names (`routes/support.py`).
 
+### `http_origin_policy.py`
+
+Which browser pages may drive a swe-mux surface, for every process that serves one (`development/DAEMON_LOAD_ISOLATION.md` item 26): the Host allowlist (`allowed_browser_host` - loopback, a Tailscale address, a `*.ts.net` name - with `is_tailscale_ip`), which requests are judged on their `Origin` (`origin_to_check`: state changes and WebSocket upgrades), and the two origin rules.
+The daemon's `browser_origin_matches_request` requires the page to be its own origin, port included.
+The terminal gateway's `gateway_origin_allowed` accepts the same host on the daemon's port, its own, or 443 on a `*.ts.net` name, plus the daemon's exact rule for a reverse proxy in front of it; `gateway_middleware` applies it with the daemon's two refusals (421 for the Host, 403 for the page).
+Neither rule ever accepts another host: every allowed name names a machine, and a page from another machine on the tailnet is not this one's.
+`server.security_middleware` is the daemon's middleware over it, adding the sandboxed-preview `Origin: null` exception and the response headers.
+
+**Not:** response headers (`http_support.py`) or anything of the daemon's runtime - `tests/test_http_origin_policy.py` asserts that importing it loads no other `swe_mux` module, because the gateway imports it.
+
 ### `runtime_config.py`
 
 Applying a changed config to a live runtime without a restart: the config-file mtime probe, the watch loop that notices an external edit, the field set that invalidates LLM readiness, and `apply_runtime_config`, which pushes each changed hot field onto the handle that owns it.
@@ -416,7 +426,7 @@ Contracts: `../../../design/features/desktop-shell.md` § Renderer isolation and
 
 Direct-tailnet discovery and status, ephemeral certificate preparation for the daemon's direct private HTTPS listener, and the pure connection-state classifier `classify_tailscale_connection` (not-installed, logged-out, or connected-as-`<device>`, from `BackendState` plus `Self.DNSName`).
 
-**Not:** ACL or policy changes, Serve or Funnel enablement, or browser permission.
+**Not:** ACL or policy changes, Serve or Funnel enablement, or browser permission; `is_tailscale_ip` lives in `http_origin_policy.py`, which the Host allowlist needs without this module's subprocess machinery.
 
 ### `windows_firewall.py`
 

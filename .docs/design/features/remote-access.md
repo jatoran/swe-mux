@@ -142,6 +142,11 @@ listener, with optional Tailscale Serve for browser-recognized HTTPS.
 - Browser control validates Host plus the full Origin authority, including an explicit
   port, on mutations and WebSocket upgrades. Responses carry CSP, nosniff, referrer,
   permissions, opener, and resource policy headers.
+  The policy is one module (`http_origin_policy.py`) for every process that serves a browser.
+  The planned terminal gateway listens on its own port, so it cannot require the page to be
+  its own origin; it accepts the same host on the daemon's port, its own, or 443 on a
+  `*.ts.net` name, and never another host - a page from another tailnet machine is refused
+  even though its address is on the Host allowlist.
 - Expensive/upload/bridge routes use targeted body, response, concurrency, idle, and
   duration limits. No blanket per-user limiter or enterprise audit subsystem exists;
   privileged user actions enter the existing metadata-only EventBus.

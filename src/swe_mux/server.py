@@ -18,7 +18,6 @@ from collections import deque
 from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
 from uuid import uuid4
 
 from aiohttp import web
@@ -96,6 +95,13 @@ from .harness import (
 from .history import HistoryIndex, HistorySearchBudgetExceeded
 from .history_backfill import HistoryBackfillManager
 from .history_scan import HistoryScanManager
+from .http_origin_policy import (
+    allowed_browser_host,
+    browser_origin_matches_request,
+    is_websocket_upgrade,
+    origin_to_check,
+    request_host,
+)
 from .http_support import (
     REQUEST_ID_HEADER,
     REQUEST_ID_KEY,
@@ -228,9 +234,6 @@ from .startup_phases import StartupTimeline
 from .status_timeline import StatusTimelineStore
 from .storage_usage import ProjectFootprintTarget, StorageUsage
 from .supervisor_client import SupervisorClient, SupervisorUnavailable
-from .tailscale import (
-    is_tailscale_ip,
-)
 from .telemetry_service import CanonicalTelemetryService
 from .tier0_store import Tier0Context, Tier0Store
 from .transcript_discovery import TranscriptScanner
@@ -503,42 +506,6 @@ async def error_middleware(request: web.Request, handler: Handler) -> web.Stream
         return json_response({"error": "internal server error"}, 500)
 
 
-def allowed_browser_host(host: str) -> bool:
-    normalized = host.strip().rstrip(".").casefold()
-    return (
-        normalized in {"localhost", "127.0.0.1", "::1"}
-        or normalized.endswith(".ts.net")
-        or is_tailscale_ip(normalized)
-    )
-
-
-def request_host(request: web.Request) -> str:
-    raw = request.headers.get("Host", "")
-    try:
-        return urlsplit(f"//{raw}").hostname or ""
-    except ValueError:
-        return ""
-
-
-def browser_origin_matches_request(origin: str, raw_host: str) -> bool:
-    try:
-        parsed_origin = urlsplit(origin)
-        parsed_host = urlsplit(f"//{raw_host}")
-        origin_port = parsed_origin.port
-        request_port = parsed_host.port
-    except ValueError:
-        return False
-    if parsed_origin.scheme not in {"http", "https"}:
-        return False
-    if not parsed_origin.hostname or not parsed_host.hostname:
-        return False
-    if parsed_origin.hostname.casefold() != parsed_host.hostname.casefold():
-        return False
-    # Browsers include a non-default port in Origin and Host. A missing port on both sides
-    # also covers Tailscale Serve's ordinary HTTPS authority.
-    return origin_port == request_port
-
-
 def _apply_static_cache_headers(response: web.StreamResponse, request: web.Request) -> None:
     if request.path == "/":
         # The document names content-addressed assets and carries the UI build identity.
@@ -550,13 +517,13 @@ def _apply_static_cache_headers(response: web.StreamResponse, request: web.Reque
 
 @web.middleware
 async def security_middleware(request: web.Request, handler: Handler) -> web.StreamResponse:
-    host = request_host(request)
-    if not allowed_browser_host(host):
+    """The daemon's browser policy (`http_origin_policy`): an allowed Host, and a
+    page that is this server's own origin for anything a page could abuse."""
+    if not allowed_browser_host(request_host(request)):
         raise web.HTTPMisdirectedRequest(text="unsupported Host")
-    mutating = request.method not in {"GET", "HEAD", "OPTIONS"}
-    websocket = request.headers.get("Upgrade", "").casefold() == "websocket"
-    origin = request.headers.get("Origin")
-    if origin and (mutating or websocket):
+    websocket = is_websocket_upgrade(request)
+    origin = origin_to_check(request)
+    if origin is not None:
         sandboxed_preview = request.path.startswith("/preview/") and origin == "null"
         if not sandboxed_preview and not browser_origin_matches_request(
             origin, request.headers.get("Host", "")

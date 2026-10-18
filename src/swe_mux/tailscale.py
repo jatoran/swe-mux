@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import copy
 import functools
-import ipaddress
 import json
 import re
 import ssl
@@ -15,6 +14,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from .bounded_subprocess import run_bounded
+from .http_origin_policy import is_tailscale_ip
 from .shim_paths import which_real
 
 #: `tailscale status --json` is a few KiB per peer; 1 MiB is far above any real tailnet.
@@ -305,16 +305,6 @@ async def _status(executable: str, command: str) -> tuple[Any | None, str]:
         return json.loads(outcome.stdout.decode("utf-8", "replace").strip() or "{}"), ""
     except json.JSONDecodeError:
         return None, f"Tailscale returned unreadable {command} status."
-
-
-def is_tailscale_ip(value: str) -> bool:
-    try:
-        address = ipaddress.ip_address(value.strip())
-    except ValueError:
-        return False
-    if address.version == 4:
-        return address in ipaddress.ip_network("100.64.0.0/10")
-    return address in ipaddress.ip_network("fd7a:115c:a1e0::/48")
 
 
 @functools.cache

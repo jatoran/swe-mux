@@ -13,6 +13,11 @@ from aiohttp.test_utils import TestClient, TestServer
 
 from swe_mux import app_keys as keys
 from swe_mux.bounded_subprocess import ProcessOutcome
+from swe_mux.http_origin_policy import (
+    allowed_browser_host,
+    browser_origin_matches_request,
+    is_tailscale_ip,
+)
 from swe_mux.preview_transport import (
     PREVIEW_HTTP_CONCURRENCY,
     PREVIEW_WS_CONCURRENCY,
@@ -23,18 +28,12 @@ from swe_mux.preview_transport import (
 )
 from swe_mux.processes import PreviewRegistration
 from swe_mux.routes.agent_ingress import HOOK_RATE_LIMIT, hook_ingress
-from swe_mux.server import (
-    allowed_browser_host,
-    browser_origin_matches_request,
-    error_middleware,
-    security_middleware,
-)
+from swe_mux.server import error_middleware, security_middleware
 from swe_mux.tailscale import (
     _funnel_urls,
     _serve_urls,
     _urls,
     enable_mobile_voice_serve,
-    is_tailscale_ip,
     listener_host_values,
     mobile_voice_url,
 )
