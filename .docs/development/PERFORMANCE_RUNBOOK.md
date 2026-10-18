@@ -287,6 +287,27 @@ The same thread served live ingestion, which dropped 710 observations while it w
 
 The log says the same per event: `canonical telemetry segment ... sealed`/`unsealed: <reason>` at INFO, a seal of 30 seconds or more and a reconciliation pass of 30 seconds or more at WARNING, and `canonical telemetry re-read <run> from the start (<reason>)` when a transcript was replaced.
 
+#### Executor saturation
+
+A daemon can stop answering with a healthy loop, when the work behind its requests is queued on a thread pool whose workers are all busy.
+The loop keeps turning, so `loop_lag` and the stall watchdog see nothing; what goes wrong is everything that awaits `asyncio.to_thread` or the default executor.
+That pool is shared: 32 workers (`mux-default`) serve every `to_thread` in the daemon, so one bulk job that takes all of them starves callers that have nothing to do with it.
+
+`grep executor_ daemon.log` answers it, from a monitor thread of its own that reads the pools' counters every two seconds (`executor_accounting.SaturationMonitor`):
+
+- `executor_saturated pool=... workers=... running=... queued=... oldest_wait_s=... longest=label:seconds,...` (WARNING) when every worker of a pool is busy and an item has waited five seconds; `longest` names what the workers are running, which is the culprit.
+- `executor_still_saturated ... for_s=...` (WARNING) every thirty seconds while it lasts, and `executor_saturation_cleared pool=... duration_s=... deepest_queue=...` (INFO) when it ends.
+- `executor_item_long_running pool=mux-default label=... running_s=...` (WARNING) once per item that has held a shared worker for a minute, saturated or not. Long work belongs on a pool or a thread of its own (`technical/backend/packages/runtime-rules.md`).
+
+`GET /api/diagnostics/background` → `executor_work.pools[]` gives the same reading now, per pool: `oldest_wait_ms` and `longest_running[]` beside the since-start counters.
+That read runs on a one-thread executor of its own, so it answers while the shared pool is full.
+
+The outage this was built for, 2026-10-18: removing 33 worktrees in about a minute scheduled one whole-graveyard purge per removal, each on the shared pool.
+Thirty-two purges took every worker and deleted the same trees concurrently, the 33rd removal's burial never started, and the lifecycle heartbeat and health's build-id read, both queued behind them, went stale.
+The tray read the stale heartbeat as a stopped loop and replaced a daemon that was only busy, and nothing in `daemon.log` said why.
+At the same time the Git watcher classified every deletion event in Python, 147-184 us each across 81 watch candidates, which held the GIL for about 150 s and convoyed the loop: small requests went from 0.5 ms to about 300 ms.
+Four changes answer it: one coalescing purger thread (`design/features/git.md` § Refresh and mutation boundary), liveness signals on executors of their own (`design/features/daemon-resilience.md`), a watcher that judges a batch a folder at a time (1.2 us a file), and this monitor.
+
 ### 4. Profile, if the first three did not name the culprit
 
 `py-spy` attaches to the frozen daemon.

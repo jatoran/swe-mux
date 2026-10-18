@@ -30,6 +30,11 @@
   The rules keep at most 5,000 entries, directories before single files, and are parsed in a worker thread.
 - **Watches are shared and live off the loop.** Checkouts are covered by a minimal set of roots: a primary checkout with linked worktrees nested inside it is one watch, and a Git directory shared by several worktrees is watched once.
   Each watch runs on its own daemon thread (watchfiles' synchronous `watch`), classifies a batch with pure string work, and posts only "this checkout changed" to the event loop, so no per-path work and no filesystem resolve ever reaches it.
+- **A batch is judged a folder at a time** (`git_watch.classify_batch`).
+  The watch thread's Python holds the GIL, and while it runs every syscall the event loop makes waits to win it back, so a small request measured 0.5 ms became about 300 ms during classification.
+  So each folder in a batch is judged once - whether any checkout watching it could care about anything below it - and a quiet folder answers every file in it with one dictionary read; only paths in a folder that might matter are classified one at a time.
+  The judgement is exact, not a heuristic: it applies the per-path rules to the folder's whole subtree, and a randomized test compares it with per-path classification on nested worktrees, Git directories, the graveyard, noise, ignore rules, `.gitignore` edits, and case and separator variants.
+  Measured on a primary checkout's watch with forty nested worktrees (81 candidates, every linked worktree listing the shared Git directory), a graveyard purge cost 147-184 us of Python per deleted file before and 1.2 us after - about 150 s of GIL time for a 32-checkout purge, now about 1 s.
   The checkout layout a watch needs (toplevel, Git directory, common directory) is resolved once per `(cwd, git dir, common dir)` in a worker thread and memoized, where the linked-worktree name used to call `realpath` on the loop on every read.
 - **Changes are never lost to a read in flight.** A checkout's dirty mark is cleared before its read starts, so a change that lands mid-read marks it due again, and a watch that starts after the read that resolved its checkout (after a failure's cooldown, say) buys one catch-up read covering the gap.
 - Deduplicate by cwd and cap concurrency; branch/status/upstream/git-dir calls run in parallel with bounded timeouts.
@@ -582,10 +587,19 @@ The whole-Project reading is still several hundred milliseconds of Git, and that
   Client cancellation cannot interrupt a mutation after Git starts changing repository state.
 - Removal renames the checkout out of the way and deletes it afterwards (`worktree_graveyard.py`).
   Deleting an agent worktree is ten to twenty seconds of honest filesystem work - a checkout carrying `node_modules` and `.venv` is tens of thousands of small files, and NTFS unlink plus per-file antivirus scanning is what that costs - and none of that time is spent deciding anything.
-  The directory is moved into the repository's graveyard with one rename, Git is told to forget the registration, and a background task deletes the bytes.
+  The directory is moved into the repository's graveyard with one rename, Git is told to forget the registration, and the bytes are deleted afterwards.
+- **One purger deletes for the whole daemon** (`worktree_graveyard.GraveyardPurger`), on a thread of its own.
+  A removal only asks it to clear the graveyard; it never deletes and never borrows an executor worker.
+  Per graveyard there is at most one pass running and one waiting: a request for a graveyard already waiting folds into that pass, and a request for the graveyard being purged queues exactly one more, because the running pass listed the graveyard before the new checkout was buried.
+  On 2026-10-18 the previous design - one purge of the whole graveyard per removal, on the shared default executor - turned thirty-five removals in a minute into thirty-two concurrent purges deleting the same trees.
+  They held every one of the executor's 32 workers for minutes, the 33rd removal's rename queued behind them and never ran, and the daemon's heartbeat and health probe, both submitted to the same pool, went silent until the tray's recovery killed it as hung.
+  The purger runs at normal priority on purpose: a lowered thread can be descheduled while it holds the GIL, and the event loop would wait behind it.
+  Measured, one deletion thread costs the loop's small requests 0.5 ms -> 0.7 ms at p50, while thirty-two concurrent ones made the deletion 2.4x slower and spiked the loop to 137 ms.
+  Its state - what it is deleting and for how long, what waits, requests absorbed, and the last pass - is `worktree_graveyard` on `GET /api/diagnostics/background`, and each pass logs `worktree_graveyard_purge_started` and `worktree_graveyard_purge_finished` with its duration.
 - The graveyard is `<git-common-dir>/swe-mux-graveyard`, and its location is a correctness constraint rather than a tidiness preference.
   It is outside every working tree, so a buried checkout can never appear as untracked files in `git status` - which would raise dirty counts and make the land queue refuse to land that checkout.
-  `.git` is the first entry of the default project-ignore list, so a purge deleting thirty thousand files does not become thirty thousand watcher events.
+  `.git` is the first entry of the default project-ignore list, so a purge deleting thirty thousand files does not become thirty thousand Project-watcher events.
+  The Git monitor's watch of a primary checkout does receive them, because it covers that checkout's `.git`, and judges them a folder at a time ("A batch is judged a folder at a time" in this document).
   And it is never in `git worktree list`, so Map cannot draw a row for it.
   A sibling directory beside the worktree would always be same-volume, but `.claude/worktrees/` is gitignored only in repositories that happen to say so, which is not a fact about anyone else's.
 - What drops the registration after the rename is `git worktree remove` on the original path, measured to succeed and to drop that entry alone.
@@ -597,6 +611,8 @@ The whole-Project reading is still several hundred milliseconds of Git, and that
   Git keeping the registration after a successful rename puts the tree back exactly where it was and lets the ordinary in-place removal answer.
 - Purging is idempotent and never removes the graveyard root, so a purge racing a burial cannot delete the directory another removal is renaming into.
   Whatever it cannot delete stays for the next purge: the next removal, or the sweep at daemon start that clears what a killed purge left behind.
+  The sweep is a request to the same purger, so its `.git` checks and its deletion run on the purger's thread too.
+  A stopping daemon does not wait for a pass: the purger finishes at most the checkout it is deleting and leaves the rest to the next daemon's sweep.
 - Removing an exact prunable root whose directory still exists but whose `.git` link is missing first runs path-specific `git worktree repair`, then validates the resulting exact registration, `.git` link, and reported top-level before removal.
   Post-state validation always runs because Git repair can restore the requested root while returning nonzero for another repair problem; a usable exact root continues to removal and an unusable root returns the repair failure.
   Missing directories and other non-repairable prune states return a typed conflict instead of globally pruning unrelated worktrees.

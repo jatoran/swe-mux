@@ -97,6 +97,25 @@ Construct `AccountedThreadPoolExecutor`; `tests/test_executor_accounting.py` fai
 A submission wrapper whose real work is an argument registers itself with `register_wrapper`, as `run_sqlite_operation` does, or every call through it shares one label.
 A long-lived thread that blocks waiting for work wraps the wait in `parked_threads.parked(reason)`, so a stall report counts it as parked instead of listing it as busy.
 
+### Long work never holds the shared pool, and liveness never waits on it
+
+`asyncio.to_thread` and `run_in_executor(None, ...)` submit to one pool for the whole daemon (`mux-default`, 32 workers, constructed `shared=True` in `__main__.py`), so every caller competes for every worker.
+That is right for short calls - a `stat`, a small read, a query - and wrong for anything that can run for minutes or be asked for many times at once.
+On 2026-10-18 one graveyard purge per worktree removal took all 32 workers for minutes, and everything else in the daemon that used `to_thread` queued behind deletions it had nothing to do with.
+So:
+
+- Bulk or unbounded work runs on a thread or a pool of its own, sized for the work, with requests coalesced where repeats are redundant.
+  `worktree_graveyard.GraveyardPurger` is the pattern: one thread, at most one pass running and one waiting per graveyard.
+- A signal that says the daemon is alive never awaits the shared pool, because a full pool would make a busy daemon read as a dead one.
+  The lifecycle heartbeat writes on its own one-thread executor (`mux-heartbeat`).
+  Health's build-id read refreshes on another (`mux-ui-build`) and answers with the last reading after a quarter second.
+  The background-diagnostics snapshot of the executors runs on a third (`mux-diagnostics`), so the report on a full pool is not queued in it.
+- A dedicated thread doing GIL-heavy work stays at normal priority.
+  Lowering it lets the OS deschedule it while it holds the GIL, and the event loop then waits for a thread that is not running - a priority inversion that turns a cheap thread into a stall.
+  Measured on the purger's work, one normal-priority deletion thread costs the loop's small requests 0.5 ms to 0.7 ms at p50, while 32 concurrent ones cost 137 ms spikes.
+
+`executor_accounting.SaturationMonitor` makes a breach visible rather than preventing it: it logs `executor_saturated` while any pool has every worker busy and an item waiting five seconds, and `executor_item_long_running` for any item that holds a shared worker for a minute (`development/PERFORMANCE_RUNBOOK.md` § Executor saturation).
+
 ### A subprocess is spawned on the spawn loop, never on the daemon's
 
 asyncio spawns a child synchronously on the loop that asks: the Windows proactor transport calls `CreateProcess` inside its constructor, and the POSIX fork-and-exec is the same shape.
@@ -113,7 +132,8 @@ A query whose output would exceed its cap is refused as `too_large` rather than 
 
 `ui_build.ui_build_id_cached` is what a request handler asks for the served frontend's identity; `read_ui_build_id` is the synchronous stat-and-parse behind it and is for threads and the doctor.
 The health endpoint is polled every few seconds by the tray, the stall banner and every open tab, and the same morning's dumps showed its `index.html` stat holding the loop for up to 15 s, thirteen times.
-The reading is trusted for `UI_BUILD_FRESH_SECONDS` and refreshed in a thread after that; a redeploy or an overlay install restarts the daemon, so the staleness is never visible.
+The reading is trusted for `UI_BUILD_FRESH_SECONDS` and refreshed after that on a one-thread executor of its own, with concurrent refreshes sharing one; a redeploy or an overlay install restarts the daemon, so the staleness is never visible.
+A refresh that has not answered within `UI_BUILD_WAIT_SECONDS` (0.25 s) is left running and the caller gets the last reading, so a slow disk can delay the next reading but never the health answer.
 
 ### The fleet runs below the daemon, and only ever gets lowered
 

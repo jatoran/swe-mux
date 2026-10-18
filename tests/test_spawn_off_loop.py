@@ -152,6 +152,9 @@ async def test_the_build_id_is_read_once_per_freshness_window(
         return real_read(frontend_dir)
 
     monkeypatch.setattr(ui_build, "read_ui_build_id", counting)
+    # The bounded wait is what keeps a health probe prompt; here the question is how
+    # often the stat runs, so a loaded test host must not turn a read into a miss.
+    monkeypatch.setattr(ui_build, "UI_BUILD_WAIT_SECONDS", 30.0)
     ui_build.forget_ui_build_id(tmp_path)
 
     assert await ui_build.ui_build_id_cached(tmp_path) == first
@@ -165,7 +168,10 @@ async def test_the_build_id_is_read_once_per_freshness_window(
     assert len(stats) == 2
 
 
-async def test_a_missing_index_is_remembered_for_the_window_too(tmp_path: Path) -> None:
+async def test_a_missing_index_is_remembered_for_the_window_too(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(ui_build, "UI_BUILD_WAIT_SECONDS", 30.0)
     ui_build.forget_ui_build_id(tmp_path)
     assert await ui_build.ui_build_id_cached(tmp_path) is None
     _write_index(tmp_path / "index.html", "c" * 64)

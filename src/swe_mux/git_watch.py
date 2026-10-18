@@ -18,7 +18,9 @@ Four rules shape it:
 - **A change is classified without touching the filesystem.** Every event is a path
   string; matching it against a checkout is string work. A `resolve` per event would
   be the per-event filesystem call that stalled the event loop in the first place,
-  and a build storm delivers tens of thousands of them.
+  and a build storm delivers tens of thousands of them. The string work is per
+  *folder*, not per file (`classify_batch`): it holds the GIL against the event loop,
+  and a worktree purge inside `.git` delivers about 26,000 deletions per checkout.
 - **No per-path work runs on the event loop.** Each OS watch lives on its own thread
   (watchfiles' blocking `watch`), classifies its own batches there, and hands the
   loop only the checkouts a batch concerned. `awatch` would build every batch's
@@ -214,22 +216,221 @@ def tree_change_matters(parts: list[str], rules: IgnoreRules) -> tuple[bool, boo
     return True, rules_changed
 
 
-def classify_batch(paths: Iterable[str], candidates: Iterable[Candidate]) -> dict[str, bool]:
+#: What can change below a directory, for every checkout watching it.
+_LIVE = 0
+_QUIET_UNLESS_GITIGNORE = 1
+_QUIET = 2
+
+if _CASE_INSENSITIVE:
+
+    def _last_separator(path: str) -> int:
+        return max(path.rfind("\\"), path.rfind("/"))
+
+    _STRIP = "\\/"
+else:
+
+    def _last_separator(path: str) -> int:
+        return path.rfind("/")
+
+    _STRIP = "/"
+
+
+def _strip_key(key: str) -> str:
+    return key.rstrip(_STRIP)
+
+
+def _ancestors(key: str) -> Iterable[str]:
+    """`key` and every directory above it, as stripped keys. String-only."""
+    probe = key
+    cut = 0
+    while cut >= 0:
+        yield probe
+        cut = _last_separator(probe)
+        probe = probe[:cut]
+
+
+def _gitdir_subtree_is_quiet(parts: list[str]) -> bool:
+    """Whether no change anywhere below `parts` (inside a Git directory) can matter.
+
+    The subtree form of `git_dir_change_matters`: below a linked worktree's
+    `worktrees/<name>/` the first component is what decides, everywhere else the
+    first component of the path itself, and only `refs` and the state entries carry
+    state at any depth.
+    """
+    if not parts:
+        return False
+    if parts[0] == "worktrees":
+        if len(parts) < 3:
+            return False
+        parts = parts[2:]
+    return parts[0] != "refs" and parts[0] not in GIT_STATE_ENTRIES
+
+
+def _covers_directory(rules: IgnoreRules, parts: list[str]) -> bool:
+    """Whether Git's ignore answer covers every path below `parts` by a directory."""
+    if not rules.directories or not parts:
+        return False
+    prefix = ""
+    for part in parts:
+        prefix = f"{prefix}{_fold(part)}/"
+        if prefix in rules.directories:
+            return True
+    return False
+
+
+@dataclass(slots=True, frozen=True)
+class CandidateIndex:
+    """One watch's candidates, arranged so a path finds its own without a scan.
+
+    `by_interest` maps an interest (without trailing separators) to the candidates
+    watching it, so the candidates containing a path are found by looking up the
+    path's own ancestors - a dozen dict reads - instead of testing every candidate.
+    `above` holds every directory with an interest strictly below it, which is what
+    decides that a directory's subtree can be judged as a whole.
+    """
+
+    candidates: tuple[Candidate, ...] = ()
+    by_interest: Mapping[str, tuple[Candidate, ...]] = field(default_factory=dict)
+    above: frozenset[str] = frozenset()
+    #: Per interest, the distinct (kind, rules) a subtree is judged by. Every linked
+    #: worktree lists the shared Git directory as an interest, so forty nested
+    #: worktrees are forty candidates there and one judgement.
+    judges: Mapping[str, tuple[tuple[WatchKind, IgnoreRules | None], ...]] = field(
+        default_factory=dict
+    )
+
+    @classmethod
+    def build(cls, candidates: Iterable[Candidate]) -> CandidateIndex:
+        listed = tuple(candidates)
+        grouped: dict[str, list[Candidate]] = {}
+        judges: dict[str, dict[tuple[WatchKind, IgnoreRules | None], None]] = {}
+        above: set[str] = set()
+        for candidate in listed:
+            _root, interest, kind, rules = candidate
+            key = _strip_key(interest)
+            grouped.setdefault(key, []).append(candidate)
+            # A Git directory's verdict never reads ignore rules.
+            judges.setdefault(key, {})[(kind, rules if kind == "tree" else None)] = None
+            above.update(list(_ancestors(key))[1:])
+        return cls(
+            listed,
+            {key: tuple(items) for key, items in grouped.items()},
+            frozenset(above),
+            {key: tuple(found) for key, found in judges.items()},
+        )
+
+    def containing(self, folded: str) -> list[Candidate]:
+        """The candidates whose interest is `folded` or a directory above it."""
+        found: list[Candidate] = []
+        for probe in _ancestors(_strip_key(folded)):
+            hits = self.by_interest.get(probe)
+            if hits:
+                found.extend(hits)
+        return found
+
+
+def _parts_below(normalized: str, folded: str, interest: str) -> list[str]:
+    """`relative_parts` for a path already known to be inside `interest`."""
+    key = _strip_key(interest)
+    if _strip_key(folded) == key:
+        return []
+    return [part for part in _SEPARATORS.split(normalized[len(key) :]) if part]
+
+
+def _subtree_state(directory: str, index: CandidateIndex) -> int:
+    """What can change below `directory`, for every checkout watching it.
+
+    Exact rather than heuristic: a directory is quiet only when every candidate
+    containing it would reject every path below it, judged with the same rules
+    `classify_batch` applies one path at a time. A deletion storm empties one folder
+    at a time, so one judgement here answers every file in that folder.
+    """
+    normalized = os.path.normpath(directory)
+    folded = os.path.normcase(normalized)
+    if _strip_key(folded) in index.above:
+        return _LIVE
+    state = _QUIET
+    for interest in _ancestors(_strip_key(folded)):
+        judges = index.judges.get(interest)
+        if not judges:
+            continue
+        parts = _parts_below(normalized, folded, interest)
+        for kind, rules in judges:
+            if kind == "gitdir":
+                if not _gitdir_subtree_is_quiet(parts):
+                    return _LIVE
+            elif parts and parts[0] == ".git":
+                if not _gitdir_subtree_is_quiet(parts[1:]):
+                    return _LIVE
+            elif any(part in ALWAYS_NOISE for part in parts):
+                continue
+            elif rules is not None and _covers_directory(rules, parts):
+                # Ignored, except that an edited `.gitignore` is always a change.
+                state = min(state, _QUIET_UNLESS_GITIGNORE)
+            else:
+                return _LIVE
+    return state
+
+
+def classify_batch(
+    paths: Iterable[str], candidates: CandidateIndex | Iterable[Candidate]
+) -> dict[str, bool]:
     """Which checkouts a batch of changed paths concerns, and whether its rules moved.
 
     Pure string work, run on the watch's own thread. A checkout stops being examined
     once it is known to be concerned *and* its rules are known to have moved, so a
     storm inside an ignored directory costs one pass and nothing more.
+
+    Each path's folder is judged once per batch (`_subtree_state`): a folder whose
+    subtree no checkout can care about answers every file in it with one dict read.
+    That is what a purge or an `npm ci` needs. Measured 2026-10-18 on a watch of the
+    primary checkout and forty nested worktrees (81 candidates), a graveyard purge's
+    deletions cost 147-184 us of GIL-holding Python per file before and 1.2 us after
+    (3.3 us when every path is in a different folder). While a batch is classified the
+    event loop's requests convoy behind it (0.5 ms became ~300 ms), so total time is
+    what matters: about 150 s of it for a 32-checkout purge before, about 1 s after.
     """
-    listed = tuple(candidates)
+    index = (
+        candidates if isinstance(candidates, CandidateIndex) else CandidateIndex.build(candidates)
+    )
     verdicts: dict[str, bool] = {}
+    #: Per folder in this batch: its subtree state, and (only once a path in it needs
+    #: judging one at a time) the candidates containing it.
+    folders: dict[str, int] = {}
+    containing_by_folder: dict[str, list[Candidate]] = {}
     for path in paths:
-        for root_key, interest, kind, rules in listed:
+        if path[-1:] in _STRIP and len(path) > 1:
+            # A directory spelled with its trailing separator is the directory, not
+            # something inside it, so it must not be judged by its own subtree.
+            path = path.rstrip(_STRIP) or path
+        cut = _last_separator(path)
+        if cut > 0:
+            parent = path[:cut]
+            state = folders.get(parent)
+            if state is None:
+                state = folders[parent] = _subtree_state(parent, index)
+            if state == _QUIET:
+                continue
+            if state == _QUIET_UNLESS_GITIGNORE and path[cut + 1 :] != ".gitignore":
+                continue
+            normalized = os.path.normpath(path)
+            folded = os.path.normcase(normalized)
+            containing = containing_by_folder.get(parent)
+            if containing is None:
+                # A candidate whose interest is the path itself is left out on purpose:
+                # a change *at* an interest root concerns nobody
+                # (`tree_change_matters([])` and `git_dir_change_matters([])` are false).
+                containing = containing_by_folder[parent] = index.containing(
+                    os.path.normcase(os.path.normpath(parent))
+                )
+        else:
+            normalized = os.path.normpath(path)
+            folded = os.path.normcase(normalized)
+            containing = index.containing(folded)
+        for root_key, interest, kind, rules in containing:
             if verdicts.get(root_key):
                 continue
-            parts = relative_parts(path, interest)
-            if parts is None:
-                continue
+            parts = _parts_below(normalized, folded, interest)
             if kind == "gitdir":
                 matters, rules_changed = git_dir_change_matters(parts), False
             else:
@@ -291,7 +492,7 @@ class _Watch:
     path: str
     #: Replaced wholesale (never mutated) whenever roots or their rules change, so
     #: the watch thread can read it without a lock.
-    candidates: tuple[Candidate, ...] = ()
+    candidates: CandidateIndex = field(default_factory=CandidateIndex)
     thread: threading.Thread | None = None
     stop: threading.Event = field(default_factory=threading.Event)
     ended: bool = False
@@ -462,7 +663,7 @@ class CheckoutWatches:
 
     def _publish_candidates(self) -> None:
         for watch_key, watch in self._watches.items():
-            watch.candidates = tuple(
+            watch.candidates = CandidateIndex.build(
                 (root_key, interest, kind, root.rules)
                 for root_key, root in self._roots.items()
                 for interest, kind in root.layout.interests()

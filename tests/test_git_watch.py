@@ -11,8 +11,10 @@ from __future__ import annotations
 
 import asyncio
 import os
+import random
 import subprocess
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -164,6 +166,135 @@ def test_a_storm_inside_ignored_directories_concerns_no_checkout() -> None:
     paths = [_p("node_modules", f"pkg{index}", "index.js") for index in range(5000)]
     candidate: Candidate = (key, key, "tree", IgnoreRules())
     assert classify_batch(paths, [candidate]) == {}
+
+
+def _classify_one_path_at_a_time(
+    paths: list[str], candidates: list[Candidate]
+) -> dict[str, bool]:
+    """The classification as it was before folders were judged: the reference."""
+    verdicts: dict[str, bool] = {}
+    for path in paths:
+        for root_key, interest, kind, rules in candidates:
+            if verdicts.get(root_key):
+                continue
+            parts = relative_parts(path, interest)
+            if parts is None:
+                continue
+            if kind == "gitdir":
+                matters, rules_changed = git_dir_change_matters(parts), False
+            else:
+                matters, rules_changed = tree_change_matters(parts, rules)
+            if matters:
+                verdicts[root_key] = verdicts.get(root_key, False) or rules_changed
+    return verdicts
+
+
+def _nested_candidates(names: list[str]) -> list[Candidate]:
+    """A primary checkout and linked worktrees nested inside it, as one watch sees them."""
+    primary = CheckoutLayout(ROOT, _p(".git"), _p(".git"))
+    layouts = [primary] + [
+        CheckoutLayout(_p(".claude", "worktrees", name), _p(".git", "worktrees", name), _p(".git"))
+        for name in names
+    ]
+    rules = {
+        primary.key: IgnoreRules(
+            directories=frozenset({".claude/", "dist/", "build/out/"}),
+            files=frozenset({"notes.log"}),
+        )
+    }
+    return [
+        (layout.key, interest, kind, rules.get(layout.key, IgnoreRules()))
+        for layout in layouts
+        for interest, kind in layout.interests()
+    ]
+
+
+def _random_path(rng: random.Random, names: list[str]) -> str:
+    name = rng.choice(names)
+    leaf = rng.choice(["a.py", "index.js", ".gitignore", "HEAD", "index", "x.lock", "data"])
+    shapes = [
+        ("src", "pkg", leaf),
+        (".git", "HEAD"),
+        (".git", "index"),
+        (".git", "objects", "ab", "cdef"),
+        (".git", "refs", "heads", rng.choice(["main", "main.lock", "feature"])),
+        (".git", "worktrees", name, rng.choice(["HEAD", "index", "logs", "ORIG_HEAD"])),
+        (".git", "worktrees", name, "logs", "HEAD"),
+        (".git", "worktrees"),
+        (".git", "worktrees", name),
+        (".git", "swe-mux-graveyard", f"{name}-0123", "node_modules", "p", leaf),
+        (".git", "swe-mux-graveyard", f"{name}-0123", "src", leaf),
+        (".git", "rebase-merge", "done"),
+        (".claude", "worktrees", name, "src", leaf),
+        (".claude", "worktrees", name, "node_modules", "p", leaf),
+        (".claude", "worktrees", name, ".venv", "Lib", leaf),
+        (".claude", "worktrees", name),
+        (".claude", "worktrees"),
+        (".claude", "worktrees", name, "sub", ".gitignore"),
+        ("dist", "bundle", leaf),
+        ("dist", ".gitignore"),
+        ("build", "out", "deep", leaf),
+        ("build", "kept", leaf),
+        ("notes.log",),
+        ("node_modules", "p", leaf),
+        (".gitignore",),
+        (leaf,),
+        (),
+    ]
+    path = _p(*rng.choice(shapes))
+    if rng.random() < 0.1:
+        path = path + os.sep
+    if os.name == "nt" and rng.random() < 0.2:
+        path = path.upper() if rng.random() < 0.5 else path.replace("\\", "/")
+    if rng.random() < 0.05:
+        path = os.path.abspath(os.sep.join(["", "elsewhere", leaf]))
+    return path
+
+
+def test_judging_folders_gives_exactly_the_verdicts_of_judging_every_path() -> None:
+    """The fast classification is the old one, path for path, on hostile input.
+
+    Nested worktrees, their private Git directories, the graveyard, noise, Git's
+    ignore answer, `.gitignore` edits inside ignored directories, trailing
+    separators, and on Windows case and separator variants - in random batches, so
+    a folder judged for one path is reused for every other path in that folder.
+    """
+    names = [f"wt-{index}" for index in range(6)]
+    candidates = _nested_candidates(names)
+    index = git_watch.CandidateIndex.build(candidates)
+    rng = random.Random(20261018)
+    for _ in range(400):
+        batch = [_random_path(rng, names) for _ in range(rng.randint(1, 60))]
+        expected = _classify_one_path_at_a_time(batch, candidates)
+        assert classify_batch(batch, index) == expected, batch
+        assert classify_batch(batch, candidates) == expected, batch
+
+
+def test_a_purge_storm_is_judged_once_per_folder(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pinned as a count because the cost is the point: one judgement per folder.
+
+    Measured 2026-10-18, a primary watch carrying forty nested worktrees paid 147 us
+    of GIL-holding Python per deleted file, and a purge deletes ~26,000 per checkout;
+    while it ran, a small request on the event loop went from 0.5 ms to 304 ms.
+    Judging folders brought it to 1.2 us per file.
+    """
+    names = [f"wt-{index}" for index in range(40)]
+    index = git_watch.CandidateIndex.build(_nested_candidates(names))
+    judged: list[str] = []
+    real = git_watch._subtree_state
+
+    def counting(directory: str, candidate_index: git_watch.CandidateIndex) -> Any:
+        judged.append(directory)
+        return real(directory, candidate_index)
+
+    monkeypatch.setattr(git_watch, "_subtree_state", counting)
+    storm = [
+        # One buried checkout per 500 files, one folder per 50.
+        _p(".git", "swe-mux-graveyard", f"wt-{n // 500}-x", "node_modules", f"p{n // 50}", f"{n}")
+        for n in range(5000)
+    ]
+    assert classify_batch(storm, index) == {}
+    assert len(judged) == len({path.rsplit(os.sep, 1)[0] for path in storm}) == 100
 
 
 def test_layout_interests_are_the_tree_plus_git_directories_outside_it() -> None:

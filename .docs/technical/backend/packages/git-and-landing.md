@@ -66,6 +66,11 @@ A minimal cover of roots (nested worktrees share their primary's watch, a shared
 Classification ignores Git internals that are not state (objects, logs, lock files, the monitor's own reads), paths the repository's ignore listing covers, and a fixed set of dependency and build directories.
 A watch that fails to start cools down for 60 seconds and its checkout falls back to timed polling; the cover is capped at 32 watches for the same reason.
 
+A watch's candidates (each checkout's interests and the rules that judge them) are published as a `CandidateIndex`, built once per cover change: the candidates for a path are found by walking its ancestors through `by_interest` rather than by testing every candidate, and `judges` dedupes the (kind, rules) pairs an interest carries, because every linked worktree lists the same shared Git directory.
+`classify_batch` then judges a batch a folder at a time: the string work and the subtree verdict (`_subtree_state`: live, quiet unless a `.gitignore` changed, or quiet) are computed once per distinct parent folder, and a file is judged on its own only when its folder is live, or when it is a `.gitignore` in a folder that is otherwise quiet.
+The folder verdict is exact rather than a heuristic, and `tests/test_git_watch.py` compares it with per-path classification over randomized batches.
+It exists because a graveyard purge emits one deletion event per file: on 2026-10-18 classifying them one at a time across 81 candidates cost 147-184 us of Python each, about 150 s of GIL time for one burst, and it convoyed the event loop; per folder it is about 1.2 us a file.
+
 **Not:** running Git for state (`git_monitor`), deciding when a read is due, or Project file watches (`project_watcher.py`).
 
 ## `session_patch.py`

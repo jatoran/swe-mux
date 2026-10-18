@@ -25,6 +25,7 @@ from ..deterministic_consumers import DeterministicConsumerService
 from ..errors import NotFound
 from ..event_bus import EventBus
 from ..executor_accounting import LEDGER as EXECUTOR_LEDGER
+from ..executor_accounting import AccountedThreadPoolExecutor
 from ..gateway_host import terminal_transport
 from ..gil_switch import gil_switch_interval_ms
 from ..harness import (
@@ -68,6 +69,9 @@ from . import history
 from .support import _query_epoch
 
 log = logging.getLogger(__name__)
+
+#: Where the executor reading is built: never the default executor it describes.
+_DIAGNOSTICS_POOL = AccountedThreadPoolExecutor(max_workers=1, thread_name_prefix="mux-diagnostics")
 
 
 def _live_state_log_payload(
@@ -484,8 +488,20 @@ async def get_background_health(request: web.Request) -> web.Response:
             "stall_watchdog": request.app[keys.STALL_WATCHDOG].snapshot(),
             # CPU spent off the loop, per callable, across every accounted executor
             # (`executor_accounting.py`): which background work costs the most, since
-            # start and over the last minute. Built off the loop; it scans the ring.
-            "executor_work": await asyncio.to_thread(EXECUTOR_LEDGER.snapshot),
+            # start and over the last minute, and each pool's backlog right now. Built
+            # off the loop, on a thread of its own rather than the default executor:
+            # the reading exists to diagnose a saturated pool, and asking that pool for
+            # it would hang the endpoint exactly when it is needed.
+            "executor_work": await asyncio.get_running_loop().run_in_executor(
+                _DIAGNOSTICS_POOL, EXECUTOR_LEDGER.snapshot
+            ),
+            # The worktree graveyard's purger (`worktree_graveyard.GraveyardPurger`):
+            # what it is deleting, what waits, and how many requests it absorbed.
+            "worktree_graveyard": (
+                purger.status()
+                if (purger := request.app.get(keys.GRAVEYARD_PURGER)) is not None
+                else None
+            ),
             # The shared screen-verdict cache (`session.SCREEN_VERDICTS`): how many
             # classifications ran and how many asks were answered without one.
             # Classification was the daemon's largest GIL consumer before it.

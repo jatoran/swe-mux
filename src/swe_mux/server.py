@@ -74,6 +74,7 @@ from .deterministic_consumers import ConsumerContext, DeterministicConsumerServi
 from .device_presence import DevicePresenceStore
 from .errors import NotFound, TelemetryUnavailable
 from .event_bus import EventBus
+from .executor_accounting import AccountedThreadPoolExecutor
 from .factory_reset import clear_request as clear_factory_reset_request
 from .factory_reset import describe as describe_factory_reset
 from .factory_reset import perform_reset
@@ -251,7 +252,7 @@ from .voice import (
     VoiceStore,
 )
 from .worker_host import WorkerHost
-from .worktree_mutation import sweep_graveyards
+from .worktree_graveyard import GraveyardPurger
 from .worktree_verify import (
     VerifyApprovalStore,
 )
@@ -748,11 +749,23 @@ async def _lifecycle_heartbeat_loop(data_dir: Path) -> None:
     daemon kept running perfectly while every subsequent start reported it as
     "died without a clean shutdown" — a false forensic that sends the next
     investigation after a crash that never happened.
+
+    The write runs on a thread of its own, never the shared default executor. The
+    tray's recovery reads this file to decide whether the *loop* has stopped, and a
+    write queued behind a saturated pool says "stopped" about a loop that is turning:
+    on 2026-10-18 thirty-two graveyard purges held all 32 default workers, the
+    heartbeat went stale, and the recovery killed a live daemon after 45 s instead of
+    giving a busy one its 180 s (`daemon_recovery.HEARTBEAT_STALE_SECONDS`).
     """
-    while True:
-        await asyncio.sleep(HEARTBEAT_INTERVAL_SECONDS)
-        with background.iteration(LIFECYCLE_HEARTBEAT_LOOP):
-            await asyncio.to_thread(heartbeat, data_dir)
+    executor = AccountedThreadPoolExecutor(max_workers=1, thread_name_prefix="mux-heartbeat")
+    loop = asyncio.get_running_loop()
+    try:
+        while True:
+            await asyncio.sleep(HEARTBEAT_INTERVAL_SECONDS)
+            with background.iteration(LIFECYCLE_HEARTBEAT_LOOP):
+                await loop.run_in_executor(executor, heartbeat, data_dir)
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
 
 
 async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
@@ -2809,17 +2822,16 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
     )
     process_restore_task.add_done_callback(log_task_failure)
     deferred_tasks.append(process_restore_task)
-    # Deferred for the same reason: a removal whose purge was cancelled by the last
+    # Deferred for the same reason: a removal whose purge was stopped by the last
     # shutdown left a buried checkout on disk, and nobody would ever notice it. Two
-    # stats per Project, then whatever deletion the leftovers need.
-    graveyard_sweep = asyncio.create_task(
-        asyncio.to_thread(
-            sweep_graveyards, [project.root for project in projects.projects.values()]
-        ),
-        name="worktree-graveyard-sweep",
-    )
-    graveyard_sweep.add_done_callback(log_task_failure)
-    deferred_tasks.append(graveyard_sweep)
+    # stats per Project, then whatever deletion the leftovers need - all on the
+    # purger's own thread, never on a pool worker for the minutes a large graveyard
+    # takes (`worktree_graveyard.GraveyardPurger`).
+    # Published the moment it exists, so a build that fails after this point still
+    # stops it in teardown.
+    graveyard_purger = GraveyardPurger()
+    publish(app, {keys.GRAVEYARD_PURGER: graveyard_purger})
+    graveyard_purger.request_sweep([project.root for project in projects.projects.values()])
     ghost_windows.start()
     fleet.start()
     voice.start()
@@ -3038,10 +3050,6 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
             # Kept beside the automation set and cancelled the same way, so a daemon
             # shutdown does not leave a timer holding a reference to a dead session.
             keys.ACTION_TIMEOUT_TASKS: set(),
-            # One entry per worktree-removal purge in flight. Cancelled at shutdown like
-            # the rest: the graveyard is durable, so a cancelled purge costs disk until
-            # the next removal or the sweep at the next daemon start.
-            keys.GRAVEYARD_TASKS: set(),
             # Cancelled in teardown alongside every other one-shot task; published
             # rather than kept as a local because teardown no longer shares this
             # function's scope.
@@ -3113,7 +3121,12 @@ async def _teardown_runtime(app: web.Application) -> None:  # noqa: PLR0912, PLR
             task.cancel()
     if one_shot_tasks:
         await asyncio.gather(*one_shot_tasks, return_exceptions=True)
-    for holder in (keys.AUTOMATION_TASKS, keys.ACTION_TIMEOUT_TASKS, keys.GRAVEYARD_TASKS):
+    # Stopped without waiting: the graveyard is durable, so an unfinished pass costs
+    # disk until the next removal or the sweep at the next daemon start.
+    graveyard_purger: GraveyardPurger | None = app.get(keys.GRAVEYARD_PURGER)
+    if graveyard_purger is not None:
+        graveyard_purger.stop()
+    for holder in (keys.AUTOMATION_TASKS, keys.ACTION_TIMEOUT_TASKS):
         held: set[asyncio.Task[Any]] = app.get(holder) or set()
         pending = tuple(held)
         for task in pending:

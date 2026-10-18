@@ -14,7 +14,7 @@ from aiohttp import web
 from . import app_keys as keys
 from .cli import invoked_as
 from .config import LOOPBACK_HOSTS, Config, load_config
-from .executor_accounting import AccountedThreadPoolExecutor
+from .executor_accounting import AccountedThreadPoolExecutor, SaturationMonitor
 from .gil_switch import apply_gil_switch_interval
 from .host_platform import IS_WINDOWS
 from .http_support import ACCESS_LOG_FORMAT
@@ -162,8 +162,30 @@ async def serve(
     # is accounted per callable, so a stall's CPU burner is named by what it ran
     # rather than as one of thirty-odd interchangeable threads (executor_accounting).
     asyncio.get_running_loop().set_default_executor(
-        AccountedThreadPoolExecutor(thread_name_prefix="mux-default")
+        AccountedThreadPoolExecutor(thread_name_prefix="mux-default", shared=True)
     )
+    # Its own thread, so it can say a pool has stopped serving the work behind it
+    # while the loop and every worker are busy - the one state nothing else reports.
+    saturation_monitor = SaturationMonitor()
+    saturation_monitor.start()
+    try:
+        await _serve(
+            config,
+            desktop_control_token=desktop_control_token,
+            relaunch_command=relaunch_command,
+            browser=browser,
+        )
+    finally:
+        saturation_monitor.stop()
+
+
+async def _serve(
+    config: Config,
+    *,
+    desktop_control_token: str | None,
+    relaunch_command: list[str] | None,
+    browser: bool,
+) -> None:
     hosts = await listener_hosts(config.host, config.tailnet_enabled, config.wsl_bridge_enabled)
     if config.tailnet_enabled and len(hosts) == 1:
         logging.getLogger(__name__).warning(

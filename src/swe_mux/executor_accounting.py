@@ -31,12 +31,15 @@ from __future__ import annotations
 
 import contextvars
 import functools
+import itertools
+import logging
 import threading
 import time
 import weakref
 from collections import deque
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
+from dataclasses import dataclass
 from typing import Any
 
 #: Completed work items kept for stall windows: several minutes of a busy daemon.
@@ -122,6 +125,11 @@ class WorkLedger:
     def register_pool(self, pool: AccountedThreadPoolExecutor) -> None:
         with self._lock:
             self._pools.add(pool)
+
+    def pools(self) -> list[AccountedThreadPoolExecutor]:
+        """Every live pool recording into this ledger."""
+        with self._lock:
+            return list(self._pools)
 
     def begin(self, label: str) -> tuple[float, float]:
         started = self._clock()
@@ -214,7 +222,13 @@ LEDGER = WorkLedger()
 
 
 class _Occupancy:
-    """How full one pool is, now and at its peak, and how long work waited."""
+    """How full one pool is, now and at its peak, and how long work waited.
+
+    Besides the counters it keeps *which* items are waiting (since when) and which
+    are running (what, since when), because a count cannot answer the question a
+    saturated pool raises: what is holding the workers, and for how long has the work
+    behind them been waiting. Both maps are bounded by the pool's own backlog.
+    """
 
     def __init__(self) -> None:
         self.lock = threading.Lock()
@@ -225,78 +239,128 @@ class _Occupancy:
         self.submitted = 0
         self.max_wait = 0.0
         self.waits: deque[float] = deque(maxlen=RECENT_WAITS)
+        self._tokens = itertools.count()
+        #: token -> (label, submitted at) for every item no worker has taken yet.
+        self.pending: dict[int, tuple[str, float]] = {}
+        #: token -> (label, started at) for every item a worker is running.
+        self.active: dict[int, tuple[str, float]] = {}
 
-    def submitted_one(self) -> None:
+    def submitted_one(self, label: str, at: float) -> int:
         with self.lock:
+            token = next(self._tokens)
             self.submitted += 1
             self.queued += 1
             self.peak_queued = max(self.peak_queued, self.queued)
+            self.pending[token] = (label, at)
+        return token
 
-    def started(self, waited: float) -> None:
+    def started(self, token: int, label: str, at: float) -> None:
         with self.lock:
+            submitted = self.pending.pop(token, (label, at))[1]
+            waited = max(0.0, at - submitted)
             self.queued -= 1
             self.running += 1
             self.peak_running = max(self.peak_running, self.running)
             self.waits.append(waited)
             self.max_wait = max(self.max_wait, waited)
+            self.active[token] = (label, at)
 
-    def finished(self) -> None:
+    def finished(self, token: int) -> None:
         with self.lock:
             self.running -= 1
+            self.active.pop(token, None)
 
-    def abandoned(self) -> None:
+    def abandoned(self, token: int) -> None:
         """A queued item was cancelled before any worker took it."""
         with self.lock:
-            self.queued -= 1
+            if self.pending.pop(token, None) is not None:
+                self.queued -= 1
 
 
 def _accounted(
     ledger: WorkLedger,
     occupancy: _Occupancy,
-    submitted: float,
+    token: int,
     label: str,
     fn: Callable[..., Any],
     args: tuple[Any, ...],
     kwargs: dict[str, Any],
 ) -> Any:
-    occupancy.started(time.perf_counter() - submitted)
-    token = ledger.begin(label)
+    occupancy.started(token, label, time.perf_counter())
+    accounting = ledger.begin(label)
     try:
         return fn(*args, **kwargs)
     finally:
-        ledger.end(label, *token)
-        occupancy.finished()
+        ledger.end(label, *accounting)
+        occupancy.finished(token)
 
 
 class AccountedThreadPoolExecutor(ThreadPoolExecutor):
-    """A `ThreadPoolExecutor` whose work items are accounted in a `WorkLedger`."""
+    """A `ThreadPoolExecutor` whose work items are accounted in a `WorkLedger`.
 
-    def __init__(self, *args: Any, ledger: WorkLedger | None = None, **kwargs: Any) -> None:
+    ``shared`` marks a pool many unrelated callers submit to - the loop's default
+    executor - where one item holding a worker for minutes takes capacity from
+    everything else, so the saturation monitor also reports long-running items there.
+    """
+
+    def __init__(
+        self,
+        *args: Any,
+        ledger: WorkLedger | None = None,
+        shared: bool = False,
+        **kwargs: Any,
+    ) -> None:
         super().__init__(*args, **kwargs)
         self._ledger = ledger if ledger is not None else LEDGER
         self._occupancy = _Occupancy()
+        self.shared = shared
         self._ledger.register_pool(self)
+
+    @property
+    def name(self) -> str:
+        return self._thread_name_prefix or "(unnamed)"
 
     def submit[**P, T](self, fn: Callable[P, T], /, *args: P.args, **kwargs: P.kwargs) -> Future[T]:
         label = work_label(fn, args)
         occupancy = self._occupancy
-        occupancy.submitted_one()
+        token = occupancy.submitted_one(label, time.perf_counter())
         try:
             future = super().submit(
                 _accounted,
                 self._ledger,
                 occupancy,
-                time.perf_counter(),
+                token,
                 label,
                 fn,
                 args,
                 kwargs,
             )
         except BaseException:
-            occupancy.abandoned()
+            occupancy.abandoned(token)
             raise
-        future.add_done_callback(_count_if_abandoned(occupancy))
+        future.add_done_callback(_count_if_abandoned(occupancy, token))
         return future
+
+    def pressure(self, now: float | None = None) -> PoolPressure:
+        """How long the oldest waiting item has waited, and what the workers run."""
+        at = time.perf_counter() if now is None else now
+        stats = self._occupancy
+        with stats.lock:
+            oldest = min((submitted for _label, submitted in stats.pending.values()), default=None)
+            running = sorted(
+                ((label, at - started) for label, started in stats.active.values()),
+                key=lambda item: -item[1],
+            )
+            queued = stats.queued
+        return PoolPressure(
+            name=self.name,
+            max_workers=self._max_workers,
+            running=len(running),
+            queued=queued,
+            oldest_wait=0.0 if oldest is None else max(0.0, at - oldest),
+            longest_running=tuple(running[:PRESSURE_TOP]),
+            shared=self.shared,
+        )
 
     def occupancy(self) -> dict[str, Any]:
         stats = self._occupancy
@@ -318,12 +382,196 @@ class AccountedThreadPoolExecutor(ThreadPoolExecutor):
                 "p50": round(waits[len(waits) // 2] * 1000, 2),
                 "p99": round(waits[min(len(waits) - 1, int(len(waits) * 0.99))] * 1000, 2),
             }
+        pressure = self.pressure()
+        reading["oldest_wait_ms"] = round(pressure.oldest_wait * 1000, 1)
+        reading["longest_running"] = [
+            {"label": label, "seconds": round(seconds, 1)}
+            for label, seconds in pressure.longest_running
+        ]
         return reading
 
 
-def _count_if_abandoned(occupancy: _Occupancy) -> Callable[[Future[Any]], None]:
+def _count_if_abandoned(occupancy: _Occupancy, token: int) -> Callable[[Future[Any]], None]:
     def done(future: Future[Any]) -> None:
         if future.cancelled():
-            occupancy.abandoned()
+            occupancy.abandoned(token)
 
     return done
+
+
+# --- saturation ----------------------------------------------------------------------
+
+#: Running items named per pool in a pressure reading and a saturation warning.
+PRESSURE_TOP = 5
+#: A pool is saturated when every worker is busy and the oldest waiting item has
+#: waited this long. Five seconds is past any ordinary burst and well inside the
+#: thirty seconds after which the tray reads a silent heartbeat as a dead loop.
+SATURATION_WAIT_SECONDS = 5.0
+#: How often a saturation that persists is restated, with its current numbers.
+SATURATION_REPEAT_SECONDS = 30.0
+#: An item on a shared pool running this long is named once: it is holding a worker
+#: every unrelated caller competes for, which is how one bulk job starves the rest.
+LONG_RUNNING_SECONDS = 60.0
+#: How often the monitor looks.
+MONITOR_INTERVAL_SECONDS = 2.0
+
+
+@dataclass(frozen=True, slots=True)
+class PoolPressure:
+    """One pool's backlog at one instant."""
+
+    name: str
+    max_workers: int
+    running: int
+    queued: int
+    oldest_wait: float
+    #: (label, seconds running), longest first.
+    longest_running: tuple[tuple[str, float], ...]
+    shared: bool = False
+
+    @property
+    def saturated(self) -> bool:
+        return (
+            self.queued > 0
+            and self.running >= self.max_workers
+            and self.oldest_wait >= SATURATION_WAIT_SECONDS
+        )
+
+
+def _describe_running(pressure: PoolPressure) -> str:
+    return ",".join(f"{label}:{seconds:.0f}s" for label, seconds in pressure.longest_running) or "-"
+
+
+class SaturationMonitor:
+    """Says, in `daemon.log`, when a pool has stopped serving the work behind it.
+
+    The 2026-10-18 outage left no trace: thirty-two graveyard purges held every worker
+    of the default executor for minutes, everything submitted behind them waited, and
+    the loop itself kept turning - so the stall watchdog, which measures the loop, had
+    nothing to report, and the daemon was killed as hung with no line saying why.
+
+    This runs on its own thread, so it reports when the loop *and* every pool are
+    busy, and it reads only counters the pools already keep. It logs a saturation
+    when it starts (WARNING, naming what the workers are running), again every
+    `SATURATION_REPEAT_SECONDS` while it lasts, and when it clears (INFO, with how
+    long it lasted and the deepest backlog seen); and, for shared pools, any one item
+    running past `LONG_RUNNING_SECONDS`, once per item.
+    """
+
+    def __init__(
+        self,
+        ledger: WorkLedger | None = None,
+        *,
+        interval: float = MONITOR_INTERVAL_SECONDS,
+        clock: Callable[[], float] = time.perf_counter,
+        logger: logging.Logger | None = None,
+    ) -> None:
+        self._ledger = ledger if ledger is not None else LEDGER
+        self._interval = interval
+        self._clock = clock
+        self._log = logger or logging.getLogger(__name__)
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+        #: pool name -> (saturated since, last stated at, deepest queue seen)
+        self._saturated: dict[str, tuple[float, float, int]] = {}
+        #: (pool name, label, started at) of long-running items already named.
+        self._named_long: set[tuple[str, str, float]] = set()
+        self.saturations = 0
+        self.long_running_reports = 0
+
+    def start(self) -> None:
+        if self._thread is not None and self._thread.is_alive():
+            return
+        self._stop.clear()
+        self._thread = threading.Thread(
+            target=self._run, name="executor-saturation-monitor", daemon=True
+        )
+        self._thread.start()
+
+    def stop(self, timeout: float = 2.0) -> None:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout)
+
+    def _run(self) -> None:
+        # unsupervised-loop-ok: its own OS thread; `check` guards every pass, and
+        # this thread exists to report while the loop and its pools cannot.
+        while not self._stop.wait(self._interval):
+            try:
+                self.check()
+            except Exception:
+                self._log.exception("executor saturation check failed")
+
+    def check(self) -> None:
+        """One look at every pool; logs what changed. Callable directly in tests."""
+        now = self._clock()
+        seen: set[str] = set()
+        for pool in self._ledger.pools():
+            pressure = pool.pressure(now)
+            seen.add(pressure.name)
+            self._assess(pressure, now)
+        for name in tuple(self._saturated):
+            if name not in seen:
+                del self._saturated[name]
+
+    def _assess(self, pressure: PoolPressure, now: float) -> None:
+        state = self._saturated.get(pressure.name)
+        if pressure.saturated:
+            if state is None:
+                self.saturations += 1
+                self._saturated[pressure.name] = (now, now, pressure.queued)
+                self._log.warning(
+                    "executor_saturated pool=%s workers=%d running=%d queued=%d "
+                    "oldest_wait_s=%.1f longest=%s",
+                    pressure.name,
+                    pressure.max_workers,
+                    pressure.running,
+                    pressure.queued,
+                    pressure.oldest_wait,
+                    _describe_running(pressure),
+                )
+            else:
+                since, stated, deepest = state
+                deepest = max(deepest, pressure.queued)
+                if now - stated >= SATURATION_REPEAT_SECONDS:
+                    stated = now
+                    self._log.warning(
+                        "executor_still_saturated pool=%s workers=%d queued=%d "
+                        "oldest_wait_s=%.1f for_s=%.0f longest=%s",
+                        pressure.name,
+                        pressure.max_workers,
+                        pressure.queued,
+                        pressure.oldest_wait,
+                        now - since,
+                        _describe_running(pressure),
+                    )
+                self._saturated[pressure.name] = (since, stated, deepest)
+        elif state is not None:
+            since, _stated, deepest = state
+            del self._saturated[pressure.name]
+            self._log.info(
+                "executor_saturation_cleared pool=%s duration_s=%.1f deepest_queue=%d",
+                pressure.name,
+                now - since,
+                deepest,
+            )
+        if not pressure.shared:
+            return
+        for label, seconds in pressure.longest_running:
+            if seconds < LONG_RUNNING_SECONDS:
+                break
+            # Started-at, rounded, identifies the item across passes.
+            key = (pressure.name, label, round(now - seconds, 1))
+            if key in self._named_long:
+                continue
+            self._named_long.add(key)
+            self.long_running_reports += 1
+            self._log.warning(
+                "executor_item_long_running pool=%s label=%s running_s=%.0f "
+                "detail=holds a shared worker; move long work to a pool or thread of its own",
+                pressure.name,
+                label,
+                seconds,
+            )
+        if len(self._named_long) > 4096:
+            self._named_long.clear()

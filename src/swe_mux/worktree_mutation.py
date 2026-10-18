@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -169,23 +169,6 @@ async def bury_worktree(
         return None
 
 
-def sweep_graveyards(roots: Sequence[str]) -> None:
-    """Purge leftovers from removals a previous daemon did not finish.
-
-    Filesystem only, no Git: for each Project root whose `.git` is a directory,
-    that directory is the common one and its graveyard is purged. A Project root
-    that is itself a linked worktree carries a `.git` *file* and is skipped - its
-    common directory belongs to a repository that is either registered here in its
-    own right or will be swept by the next removal, and resolving it would mean
-    running Git for every Project on the startup path.
-    """
-    for root in roots:
-        common = Path(root) / ".git"
-        if not common.is_dir():
-            continue
-        worktree_graveyard.purge(worktree_graveyard.graveyard_root(common))
-
-
 @dataclass(frozen=True, slots=True)
 class RemovalRefused:
     """The removal stopped, and what the operator should be told about it.
@@ -219,7 +202,7 @@ class RemovalCompleted:
     #: aside), or `purging` (the fast path's graveyard, deleted in the background).
     cleanup_status: str
     cleanup_path: str | None
-    #: The graveyard directory the caller should purge off the request path.
+    #: The graveyard the caller should ask the purger to clear, off the request path.
     purge_root: Path | None = None
 
 

@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import logging
 import re
 import threading
 import time
+from concurrent.futures import Future
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -166,6 +169,120 @@ def test_a_pool_reports_its_peak_occupancy_and_how_long_work_waited() -> None:
     assert reading["submitted"] == 5
     assert reading["max_wait_ms"] >= 40, "the queued items waited for the blocked ones"
     assert reading["wait_ms"]["p99"] >= reading["wait_ms"]["p50"]
+
+
+def _held_pool(
+    ledger: WorkLedger, *, shared: bool = False, name: str = "held"
+) -> tuple[AccountedThreadPoolExecutor, threading.Event, list[Future[Any]]]:
+    """A one-worker pool whose worker is busy, with one more item waiting behind it."""
+    pool = AccountedThreadPoolExecutor(
+        max_workers=1, thread_name_prefix=name, ledger=ledger, shared=shared
+    )
+    release = threading.Event()
+    running = pool.submit(release.wait, 30)
+    deadline = time.monotonic() + 10
+    while pool.pressure().running != 1 and time.monotonic() < deadline:
+        time.sleep(0.01)
+    waiting = pool.submit(plain_function)
+    return pool, release, [running, waiting]
+
+
+def test_a_pool_says_how_long_its_oldest_item_has_waited_and_what_holds_it() -> None:
+    ledger = WorkLedger()
+    pool, release, futures = _held_pool(ledger)
+    try:
+        later = time.perf_counter() + 7.0
+        pressure = pool.pressure(later)
+        assert (pressure.running, pressure.queued) == (1, 1)
+        assert pressure.oldest_wait >= 7.0
+        assert [label for label, _seconds in pressure.longest_running] == ["Event.wait"]
+        assert pressure.saturated, "every worker busy and the oldest waited past the bound"
+        assert not pool.pressure().saturated, "a wait of milliseconds is not saturation"
+        reading = pool.occupancy()
+        assert reading["longest_running"][0]["label"] == "Event.wait"
+    finally:
+        release.set()
+        for future in futures:
+            future.result(timeout=10)
+        pool.shutdown(wait=True)
+    assert pool.pressure().queued == 0
+    assert pool.pressure().longest_running == ()
+
+
+def test_the_monitor_reports_a_saturation_once_restates_it_and_says_when_it_clears(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The 2026-10-18 outage logged nothing: the loop turned while the pool starved."""
+    ledger = WorkLedger()
+    pool, release, futures = _held_pool(ledger, name="starved")
+    offset = {"seconds": 0.0}
+    monitor = accounting.SaturationMonitor(
+        ledger, clock=lambda: time.perf_counter() + offset["seconds"]
+    )
+    try:
+        with caplog.at_level(logging.INFO, logger="swe_mux.executor_accounting"):
+            monitor.check()
+            offset["seconds"] = 10.0
+            monitor.check()
+            monitor.check()
+            offset["seconds"] = 10.0 + accounting.SATURATION_REPEAT_SECONDS + 1
+            monitor.check()
+            release.set()
+            for future in futures:
+                future.result(timeout=10)
+            monitor.check()
+    finally:
+        release.set()
+        pool.shutdown(wait=True)
+    messages = [record.getMessage() for record in caplog.records]
+
+    def lines(event: str) -> list[str]:
+        return [m for m in messages if m.startswith(f"{event} pool=starved")]
+
+    started = lines("executor_saturated")
+    assert len(started) == 1 and "longest=Event.wait" in started[0]
+    assert len(lines("executor_still_saturated")) == 1
+    assert len(lines("executor_saturation_cleared")) == 1
+    assert monitor.saturations == 1
+
+
+def test_a_long_item_on_a_shared_pool_is_named_once(caplog: pytest.LogCaptureFixture) -> None:
+    ledger = WorkLedger()
+    pool, release, futures = _held_pool(ledger, shared=True, name="shared")
+    private, private_release, private_futures = _held_pool(ledger, name="private")
+    offset = {"seconds": accounting.LONG_RUNNING_SECONDS + 5}
+    monitor = accounting.SaturationMonitor(
+        ledger, clock=lambda: time.perf_counter() + offset["seconds"]
+    )
+    try:
+        with caplog.at_level(logging.WARNING, logger="swe_mux.executor_accounting"):
+            monitor.check()
+            offset["seconds"] += 30
+            monitor.check()
+    finally:
+        release.set()
+        private_release.set()
+        for future in (*futures, *private_futures):
+            future.result(timeout=10)
+        pool.shutdown(wait=True)
+        private.shutdown(wait=True)
+    long_running = [
+        record.getMessage()
+        for record in caplog.records
+        if record.getMessage().startswith("executor_item_long_running")
+    ]
+    assert len(long_running) == 1, "named once, on the shared pool only"
+    assert "pool=shared" in long_running[0] and "label=Event.wait" in long_running[0]
+
+
+def test_the_monitor_runs_on_its_own_thread_and_stops() -> None:
+    monitor = accounting.SaturationMonitor(WorkLedger(), interval=0.01)
+    monitor.start()
+    try:
+        assert any(thread.name == "executor-saturation-monitor" for thread in threading.enumerate())
+    finally:
+        monitor.stop(timeout=5)
+    assert not any(thread.name == "executor-saturation-monitor" for thread in threading.enumerate())
 
 
 def test_every_daemon_executor_is_accounted() -> None:

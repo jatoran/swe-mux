@@ -169,12 +169,14 @@ A batch schedules its own flush, so nothing is left pending when a loop closes.
 ### `executor_accounting.py`
 
 `AccountedThreadPoolExecutor`, the only executor class the daemon constructs, and the process-wide `WorkLedger` it records into: each work item's thread CPU and wall time against a label naming the callable, unwrapped through `functools.partial`, `asyncio.to_thread`'s `Context.run`, and registered wrappers (`run_sqlite_operation` registers itself).
-`__main__.serve` installs one as the loop's default executor before anything reaches `asyncio.to_thread`.
+`__main__.serve` installs one as the loop's default executor before anything reaches `asyncio.to_thread`, constructed `shared=True` because every `to_thread` in the daemon competes for its workers.
 The stall watchdog reads a window of it to name what a CPU-burning worker ran; `/api/diagnostics/background` reads the totals as `executor_work`.
-Each pool also reports its occupancy (`executor_work.pools`): peak running and queued items and how long items waited for a worker, which is what sizing a pool needs.
+Each pool also reports its occupancy (`executor_work.pools`): peak running and queued items and how long items waited for a worker, which is what sizing a pool needs, and its state now, from `pressure()` - how long the oldest waiting item has waited and what the workers are running, longest first.
+`SaturationMonitor`, started by `__main__.serve` on a thread of its own, reads `pressure()` from every pool every two seconds and logs a saturation when it starts, while it lasts and when it clears, plus any item that has held a worker of a shared pool for a minute.
+It is a thread rather than a loop task because the condition it reports is the one where the loop's own work is queued behind a full pool; the 2026-10-18 outage had a running loop and a full default executor, and left no line saying so.
 A bare `ThreadPoolExecutor(` anywhere in the package fails `tests/test_executor_accounting.py`.
 
-**Not:** a scheduler or a limit; it only measures.
+**Not:** a scheduler or a limit; it measures and reports.
 
 ### `parked_threads.py`
 

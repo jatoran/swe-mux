@@ -5,9 +5,12 @@ from __future__ import annotations
 import asyncio
 import threading
 import time
+from concurrent.futures import Future
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from pathlib import Path
+
+from .executor_accounting import AccountedThreadPoolExecutor
 
 UI_BUILD_META_NAME = "ui-build"
 UI_BUILD_ID_LENGTH = 64
@@ -18,6 +21,13 @@ UI_BUILD_ID_LENGTH = 64
 #: one morning. The tree it describes changes on a redeploy or an overlay install,
 #: both of which restart the daemon, so a few seconds of staleness costs nothing.
 UI_BUILD_FRESH_SECONDS = 5.0
+#: The longest a request handler waits for a refresh before answering with what it
+#: already knows. `/api/health` is the tray recovery's probe, and on 2026-10-18 it
+#: queued this read behind thirty-two graveyard purges holding every worker of the
+#: shared executor: the probe timed out, and a busy daemon was killed as a hung one.
+#: The refresh now has a thread of its own and is never waited on for longer than
+#: this, so the answer is at worst a few seconds stale, never late.
+UI_BUILD_WAIT_SECONDS = 0.25
 
 
 class _BuildMetaParser(HTMLParser):
@@ -89,20 +99,48 @@ def read_ui_build_id(frontend_dir: Path) -> str | None:
     return build_id
 
 
-async def ui_build_id_cached(frontend_dir: Path) -> str | None:
-    """The served index identity for a request handler: never a stat on the loop.
+#: One thread for every refresh, owned here rather than borrowed from the default
+#: executor, so no other work can stand between a health probe and its answer.
+_refresh_pool = AccountedThreadPoolExecutor(max_workers=1, thread_name_prefix="mux-ui-build")
+#: The refresh in flight per index path, so concurrent asks share one stat.
+_refreshing: dict[Path, Future[str | None]] = {}
 
-    Answers from the last reading while it is younger than `UI_BUILD_FRESH_SECONDS`,
-    and otherwise repeats the stat in a thread. A missing index is remembered for
-    the same window, so a tree with no frontend is not stat'ed on every poll either.
+
+def _refresh(frontend_dir: Path) -> Future[str | None]:
+    path = frontend_dir / "index.html"
+    with _cache_lock:
+        pending = _refreshing.get(path)
+        if pending is not None and not pending.done():
+            return pending
+        future = _refresh_pool.submit(read_ui_build_id, frontend_dir)
+        _refreshing[path] = future
+    return future
+
+
+async def ui_build_id_cached(frontend_dir: Path) -> str | None:
+    """The served index identity for a request handler: never a stat on the loop,
+    and never a wait on anybody else's work.
+
+    Answers from the last reading while it is younger than `UI_BUILD_FRESH_SECONDS`.
+    Otherwise it starts one refresh on this module's own thread and waits for it at
+    most `UI_BUILD_WAIT_SECONDS`; a refresh slower than that is left to finish in the
+    background and the last reading answers meanwhile (None before the first one,
+    which every reader treats as "no newer build known"). A missing index is
+    remembered for the same window, so a tree with no frontend is not stat'ed on
+    every poll either.
     """
     path = frontend_dir / "index.html"
     with _cache_lock:
         checked = _checked_at.get(path)
         cached = _cache.get(path)
+    last = cached.build_id if cached is not None else None
     if checked is not None and time.monotonic() - checked < UI_BUILD_FRESH_SECONDS:
-        return cached.build_id if cached is not None else None
-    return await asyncio.to_thread(read_ui_build_id, frontend_dir)
+        return last
+    refresh = asyncio.wrap_future(_refresh(frontend_dir))
+    try:
+        return await asyncio.wait_for(asyncio.shield(refresh), UI_BUILD_WAIT_SECONDS)
+    except TimeoutError:
+        return last
 
 
 def forget_ui_build_id(frontend_dir: Path) -> None:

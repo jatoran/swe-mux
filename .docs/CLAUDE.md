@@ -497,7 +497,8 @@
   `technical/backend/packages.md`, `technical/frontend/packages.md`,
   `technical/frontend/workspace-state.md`.
   Two rules worktree *removal* turns on. The deletion is moved off the request - the checkout
-  is renamed into `<git-common-dir>/swe-mux-graveyard` and purged in the background - and that
+  is renamed into `<git-common-dir>/swe-mux-graveyard` and purged in the background by the
+  daemon's one purger thread, never on the shared executor - and that
   location is load-bearing rather than tidy: outside every working tree (a buried checkout in
   `git status` would raise dirty counts and make the land queue refuse that checkout), inside
   `.git` so no watcher walks the purge, and never in `git worktree list`. What drops the

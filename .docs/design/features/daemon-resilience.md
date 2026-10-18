@@ -77,6 +77,11 @@ Unmanaged daemons and old builds without the record are observed without automat
 The probe is `GET /api/health` with a five-second timeout.
 Whether a run of failed probes means a hang is decided with the daemon's heartbeat (`daemon-heartbeat.json`, written from the event loop every ten seconds): a heartbeat older than thirty seconds is a stopped loop, a fresh one is a loop that is running but cannot answer in time.
 
+That distinction holds only if neither signal waits on anything a busy daemon is short of, so neither touches the shared default executor.
+The heartbeat file is written on a single-thread executor of its own (`mux-heartbeat`), and health's build-id read refreshes on another (`mux-ui-build`) and answers with the last reading if a refresh takes more than a quarter second.
+On 2026-10-18 both used the shared pool: thirty-two worktree purges held all of its workers, the heartbeat stopped being written while the loop kept turning, and the monitor read a busy daemon as a stopped one and replaced it after 45 seconds instead of 180.
+A pool that has stopped serving the work behind it is now reported in `daemon.log` as `executor_saturated` while it lasts (`development/PERFORMANCE_RUNBOOK.md` § Executor saturation), which that outage never was, because the loop was not stalled and the stall watchdog only measures the loop.
+
 | Observed condition | Behavior |
 | --- | --- |
 | Successful health probe | Clear the outage and pending replacement state. |

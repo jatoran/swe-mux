@@ -281,7 +281,7 @@ Provider usage and its cache, operational telemetry, quota series and reset revi
 ### `routes/git.py`
 
 Worktree inventory, the commit graph, provenance, commit changes, diff, repository init, per-Project `.swe-mux` setup decisions, worktree create and remove, worktree session spawn, and path reveal.
-Also holds worktree setup orchestration and graveyard-purge scheduling.
+Also holds worktree setup orchestration and the request that asks the daemon's one graveyard purger (`keys.GRAVEYARD_PURGER`) to clear a repository's graveyard after a removal; it never deletes on a request or on an executor worker.
 
 **Not:** the removal transaction (`worktree_mutation.py`), which this module only translates to HTTP.
 

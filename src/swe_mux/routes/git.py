@@ -29,7 +29,7 @@ from ..git_monitor import _git
 from ..git_operations import run_git_mutation
 from ..git_projects import resolve_project
 from ..git_provenance import summarize_git_provenance
-from ..http_support import json_response, log_task_failure
+from ..http_support import json_response
 from ..network_usage import (
     compact_json_bytes,
 )
@@ -903,22 +903,25 @@ async def reveal_path(request: web.Request) -> web.Response:
 
 
 def _schedule_graveyard_purge(app: web.Application, root: Path, operation_id: str) -> None:
-    """Delete what the graveyard holds, off the request's clock.
+    """Ask the daemon's one purger to clear the graveyard, off the request's clock.
 
     Everything under the root is purged rather than only what this removal buried:
     a purge interrupted by a daemon shutdown leaves bytes behind, and the next
-    removal is the cheapest moment to notice. A cancelled purge is not an error -
-    the graveyard is durable and the sweep at daemon start tries again.
+    removal is the cheapest moment to notice. Asking never deletes anything here and
+    never starts a second deletion: the purger folds every request for a graveyard
+    into the pass already waiting (`worktree_graveyard.GraveyardPurger`), which is
+    what keeps a bulk removal from taking the shared executor with it.
     """
-    task = asyncio.create_task(
-        asyncio.to_thread(worktree_graveyard.purge, root),
-        name=f"worktree-graveyard-purge-{operation_id}",
-    )
-    task.add_done_callback(log_task_failure)
-    tasks = app.get(keys.GRAVEYARD_TASKS)
-    if isinstance(tasks, set):
-        tasks.add(task)
-        task.add_done_callback(tasks.discard)
+    purger = app.get(keys.GRAVEYARD_PURGER)
+    if not isinstance(purger, worktree_graveyard.GraveyardPurger):
+        log.warning(
+            "worktree_graveyard_purge_unavailable root=%s operation_id=%s "
+            "detail=left for the next daemon's startup sweep",
+            root,
+            operation_id,
+        )
+        return
+    purger.request(root, operation_id=operation_id)
 
 
 ROUTES: tuple[web.RouteDef, ...] = (

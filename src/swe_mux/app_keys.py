@@ -101,6 +101,7 @@ if TYPE_CHECKING:
     from .usage import UsageManager
     from .voice import VoiceService, VoiceStore
     from .worker_host import WorkerHost
+    from .worktree_graveyard import GraveyardPurger
     from .worktree_verify import VerifyApprovalStore
 
 # --- process-level identity and configuration -------------------------------
@@ -261,8 +262,8 @@ LLM_CAPABILITIES: web.AppKey[CapabilityStore] = web.AppKey("llm_capabilities")
 AUTOMATION_TASKS: web.AppKey[set[asyncio.Task[Any]]] = web.AppKey("automation_tasks")
 #: One entry per running Project Action step that declared `timeout_seconds`.
 ACTION_TIMEOUT_TASKS: web.AppKey[set[asyncio.Task[Any]]] = web.AppKey("action_timeout_tasks")
-#: One entry per worktree-removal purge in flight.
-GRAVEYARD_TASKS: web.AppKey[set[asyncio.Task[Any]]] = web.AppKey("graveyard_tasks")
+#: The daemon's one deletion worker for buried worktree checkouts.
+GRAVEYARD_PURGER: web.AppKey[GraveyardPurger] = web.AppKey("graveyard_purger")
 #: The pid the heartbeat named when this daemon started, or -1. Captured before
 #: `daemon_started` stamps our own pid over it, because the database-maintenance
 #: phase has to know whether the predecessor is still holding `mux.db` and a

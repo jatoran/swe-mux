@@ -129,12 +129,20 @@ Two rules bound its patience, and both come from a purge loop that had neither (
 **An absent path is a purged path**: a directory Windows has marked delete-pending stays in the listing while every operation on it reports it missing, so a `FileNotFoundError` there is the deletion working, not failing.
 And a path that genuinely will not go is retried `PURGE_ATTEMPT_LIMIT` times and then abandoned with one terminal `worktree_graveyard_purge_abandoned` line; the bytes stay on disk and the next daemon tries again, which is the intended bound - a lock held by a process that has since exited gets a fresh budget, while a live one stops writing the same warning forever.
 
-**Not:** deciding *whether* a worktree may be buried, which is Git's set of refusals and lives in `worktree_mutation.py`; running Git; or scheduling the purge.
+It also owns *who* purges: `GraveyardPurger` is the one thread that deletes for the whole daemon, published as `keys.GRAVEYARD_PURGER`.
+A request for a root that is already waiting coalesces into the waiting one, and a request for the root being purged queues exactly one more pass, so a burst of removals costs at most two passes per repository however long it is.
+That replaced a purge per removal on the shared default executor: removing 33 worktrees on 2026-10-18 put 32 whole-graveyard purges on its 32 workers, the 33rd removal's burial could not start, and the daemon's heartbeat and health check, which waited on the same pool, went stale until the tray restarted a daemon that was only busy.
+One thread is also the faster drain, because the work is a filesystem walk serialised by the GIL: measured on that day's shape, 32 concurrent `rmtree`s were 2.4 times slower than one and held the event loop off for up to 137 ms.
+The thread stays at normal priority, because a lowered thread that holds the GIL makes the loop wait for it (`runtime-rules.md`, "Long work never holds the shared pool, and liveness never waits on it"), and it is parked for the stall watchdog while it purges.
+`project_graveyards` lists the graveyards a set of Project roots owns, for the startup sweep the server queues; `stop()` drops what is waiting and makes the active pass break between entries, so a daemon shutting down does not wait on a deletion the next daemon finishes.
+Its counters are in `GET /api/diagnostics/background` under `worktree_graveyard`.
+
+**Not:** deciding *whether* a worktree may be buried, which is Git's set of refusals and lives in `worktree_mutation.py`; or running Git.
 
 ### `worktree_mutation.py`
 
 The worktree removal transaction, as a service rather than a route.
-It owns the repository's registered-worktree listing, the root-identity check, orphan quarantine, the clean and removable probes, and the startup graveyard sweep.
+It owns the repository's registered-worktree listing, the root-identity check, orphan quarantine, and the clean and removable probes.
 `bury_worktree` decides whether the fast path applies, returning `None` for every case where renaming first would change what the removal means.
 `remove_registered_worktree` sequences repair, burial, Git's own removal, rollback, and cleanup.
 
@@ -145,7 +153,7 @@ That belongs to the outcome rather than to the caller because the distinction th
 A repair is verified against the post-repair listing, never against Git's exit code: the code says Git tried, only the listing says it worked.
 A Git failure that nevertheless dropped the registration is reported as a completion with a quarantined directory, not as a failure - reporting Git's error there would leave the operator looking at a checkout the repository no longer knows about.
 
-**Not:** HTTP (`routes/git.py` translates the outcome), scheduling the purge, the rename and purge mechanics (`worktree_graveyard.py`), or worktree creation.
+**Not:** HTTP (`routes/git.py` translates the outcome), the rename, the purge, or who runs it (all `worktree_graveyard.py`), or worktree creation.
 
 ### `worktree_verify.py`
 
