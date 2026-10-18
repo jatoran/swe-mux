@@ -16,8 +16,8 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import Any
 
+from swe_mux import operator_input
 from swe_mux.composer_input import ComposerState, note_unsubmitted_delivery
-from swe_mux.routes import terminal as terminal_routes
 
 NOW = 1_800_000_000.0
 
@@ -40,7 +40,7 @@ def _session(backend: str = "codex") -> Any:
 
 
 def _write(session: Any, data: str, source: str) -> None:
-    terminal_routes._note_composer_write(_Events(), session, data, source)
+    operator_input.note_composer_write(_Events(), session, data, source)
 
 
 def test_an_operator_submit_retires_an_unsubmitted_delivery() -> None:

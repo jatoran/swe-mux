@@ -2669,7 +2669,10 @@ class ProcessInspector:
                 self._deliver, process, pid, action, root_pid=root_pid
             )
         if root_interrupt and session is not None:
-            session.pty.write(b"\x03")
+            # The session's root is interrupted through its PTY - through the
+            # terminal core's one writer, and deliberately unaccounted: a process
+            # action is not operator input to the composer (`delivery-readiness.md`).
+            session.terminal.write(b"\x03")
         await self.events.emit(
             "process_action",
             session_id=session_id,

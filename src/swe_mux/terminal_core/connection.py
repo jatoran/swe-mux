@@ -480,7 +480,7 @@ async def _handle_text_input(
         await ws.send_json({"type": "input_refused", "reason": "session_ended"})
         return
     server_received_at_ms = int(time.time() * 1000)
-    core.pty.write(data)
+    core.write(data)
     now = time.monotonic()
     pointer = pointer_report_kind(data)
     if not is_terminal_response and pointer is None:
@@ -552,7 +552,7 @@ async def _handle_binary_input(
     if core.descriptor.ended:
         await ws.send_json({"type": "input_refused", "reason": "session_ended"})
         return
-    core.pty.write(data)
+    core.write(data)
     now = time.monotonic()
     core.input_revision += 1
     host.note_typed_bytes(data)

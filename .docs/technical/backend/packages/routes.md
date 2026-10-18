@@ -183,14 +183,14 @@ Scheduled runs, previews, and run history.
 Session listing and spawn, patch, read, title regeneration, standing-activity clear, approvals, delete, relaunch, stand-down, resume of a retained pane, in-place agent restart and its eligibility probe, attachments and media, and promote/demote.
 Also holds `_spawn_from_body`, the spawn transport every other spawn caller goes through, `_install_replacement`, the one layout swap Resume and Restart share, and generated-title and conversation-holder decoration.
 
-**Not:** the spawn itself (`session.py`), media validation (`session_media.py`), restart eligibility (`session_restart.py`), or terminal writes (`routes/terminal.py`).
+**Not:** the spawn itself (`session.py`), media validation (`session_media.py`), restart eligibility (`session_restart.py`), or terminal writes (`operator_input.py`).
 
 ### `routes/terminal.py`
 
 Session input, broadcast set and broadcast input, and startup metrics.
-Also holds operator-input recording, composer insertion, interrupt, and graceful end - all reached from other modules and from the composition root.
+Also holds interrupt and graceful end, both reached from other modules and from the composition root.
 
-**Not:** the PTY WebSocket (`routes/pty.py`) or input arbitration (`terminal_arbitration.py`).
+**Not:** the PTY WebSocket (`routes/pty.py`), input arbitration (`terminal_arbitration.py`), or operator-input recording and composer insertion (`operator_input.py`, which every input path shares).
 
 ### `routes/branch.py`
 

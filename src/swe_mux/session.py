@@ -2467,6 +2467,7 @@ class Session:
     last_input_report_ts: _TerminalView[float] = _TerminalView()
     input_revision: _TerminalView[int] = _TerminalView()
     composer: _TerminalView[ComposerState] = _TerminalView()
+    pending_submit: _TerminalView[PendingSubmit | None] = _TerminalView()
     terminal_mode: _TerminalView[str | None] = _TerminalView()
     terminal_mode_updated_at: _TerminalView[float] = _TerminalView()
 
@@ -2704,14 +2705,6 @@ class Session:
         # indistinguishable from one a person typed, so the queue leaves this
         # behind for the observer to consume and expire.
         self.queue_delivery_mark: tuple[float, bool] | None = None
-        # A queue delivery whose bytes reached this composer and whose Enter the
-        # CLI never took. Blocks the next delivery to this target so a second
-        # body cannot be pasted on top of the first, and clears itself at the two
-        # seams that prove the composer emptied (`composer_input.PendingSubmit`).
-        # Run-scoped and process-scoped like the composer estimate beside it: a
-        # daemon restart forgets it, which is the honest reading of "not
-        # observed", and the block it carries is one a human can override.
-        self.pending_submit: PendingSubmit | None = None
         # Set when this PTY was promoted around a nested agent CLI; used to
         # ignore shell-prompt echoes from just before/around the promotion.
         self.agent_promoted_at: float | None = None

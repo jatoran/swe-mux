@@ -350,7 +350,11 @@ class MetaHookEngine:
         elif kind == "write_pty":
             target = str(action.get("session", event.session_id or ""))
             text = str(action.get("text", "")).format_map(values)
-            self.sessions.resolve(target).pty.write(text)
+            # Through the terminal core's one writer, and deliberately unaccounted:
+            # an automation's write is not operator input, and advancing the
+            # operator-quiet clock for it would mask a different hole
+            # (`delivery-readiness.md`).
+            self.sessions.resolve(target).terminal.write(text)
         elif kind == "run":
             await self._run_process(action, values, event)
         elif kind == "http":

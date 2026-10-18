@@ -24,6 +24,8 @@ from .core import (
     CLIENT_REPAINT_MIN_INTERVAL_SECONDS,
     RESIZE_REPAINT_SETTLE_SECONDS,
     TerminalCore,
+    WriteCondition,
+    WriteRefused,
 )
 from .flow import PTY_OUTPUT_BATCH_BYTES, PTY_OUTPUT_HIGH_WATER_BYTES, PtyOutputFlow
 from .host import PtySink, TerminalDescriptor, TerminalHost, TerminalSocket
@@ -45,6 +47,8 @@ __all__ = [
     "TerminalHost",
     "TerminalSocket",
     "TerminalStream",
+    "WriteCondition",
+    "WriteRefused",
     "is_default_color_response",
     "pointer_report_kind",
     "pty_sender",

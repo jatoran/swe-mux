@@ -809,7 +809,7 @@ Items are worked in order, and an item may reorder, split or remove later items 
     The fleet harness (36 sessions, 90 s, four alternating pairs) cannot resolve a difference that small: keystroke echo p50 was 3.6-7.1 ms after against 3.6-4.3 ms before and p95 12-41 ms against 5-41 ms, every pair's spread wider than any gap between builds, with one ~740 ms host-wide spike landing in a run of each build.
   - **Tests:** the full gate, with `tests/test_pty_ws.py` and `tests/test_session_reliability.py` changed only where they named moved code (the sender's signature, the policy constants' module, and a fixture that built a `Session` without its constructor); two fanout stubs gained the stream the fanout now reads.
 
-- [ ] **25. Single-writer PTY input with conditional writes, in process.**
+- [x] **25. Single-writer PTY input with conditional writes, in process.**
   - **Why:** once input arrives in another process, a delivery decided on the daemon's mirror can paste over a keystroke still in transit, and writes from two connections have no defined order.
   - **Change:**
     - Every PTY write and resize goes through the core's write API: browser input, the prompt queue, auto-delivery, voice, MCP interrupt, REST input, broadcast, approval keystrokes, spawn-stage paste, graceful end, repaint jiggles, and the two writers that skip accounting today (`meta_hooks.py:350-353`, `processes.py:2213-2215`).
@@ -817,6 +817,18 @@ Items are worked in order, and an item may reorder, split or remove later items 
     - Input times cross the API as ages, never as `time.monotonic()` values.
     - A guard test fails on any `pty.write` or `pty.resize` outside the core, in the style of the unsupervised-loop sweep in `tests/test_background_tasks.py`.
   - **Done when:** the guard is green and the delivery tests cover a refused condition.
+  - **Done (2026-10-18).** `TerminalCore.write` is the only PTY write in the daemon, and `tests/test_pty_single_writer.py` sweeps every module's AST for a `.write(` or `.resize(` on anything named `pty` outside the core and the PTY implementations under it (the in-process host, the two backends, the supervisor and its client proxy).
+    Besides the two writers the plan named, the sweep found exactly two more: the shared accounting helper `routes/terminal.py::_record_operator_input`, through which every accounted path already wrote, and the browser's text and binary input in `terminal_core/connection.py`.
+    The helper moved into `operator_input.py` and writes through `TerminalCore.write_operator_input`, because the queue wiring, the approval sink, voice and the session routes all reached into a route module's private function for it; the browser input calls `TerminalCore.write`.
+  - **The two unaccounted writers stay unaccounted.** Automation `write_pty` and the process-action interrupt now take the one writer, but not the operator accounting: `design/features/delivery-readiness.md` records that exclusion as deliberate, since advancing the operator-quiet clock for a write no operator made would let an automation's own write hold back, or wave through, a delivery.
+    A test pins each (`test_an_automation_write_goes_through_the_core_and_is_not_operator_input`, and the process-action test asserting the revision stays at zero).
+  - **The condition is exactly what the verdict relied on.** `prompt_queue.delivery_condition` turns a safe or interject-safe verdict into a `WriteCondition`: the `input_revision` in its evidence, the `READINESS_DEBOUNCE_SECONDS` quiet window, and no pending submit.
+    Both verdicts already require all three - an interject-safe verdict refuses every hard-block reason except a running turn, and the quiet window and the pending submit are hard-block reasons - so the write re-checks nothing a verdict did not already demand.
+    A refused write re-judges at most `DELIVERY_JUDGEMENT_ATTEMPTS` (3) times and then refuses `delivery_not_safe` with the refusal reasons; a confirmed send carries no condition, and neither does the submit after a paste.
+    The core holds `pending_submit` now (Session keeps a view), so the condition is checked against state the core owns.
+  - **Measured.** The in-process hot-path benchmark reads 3.06 and 3.21 us per output chunk and 59.2 and 51.6 us per keystroke frame, against item 24's 3.31-3.35 and 59.8-63.1, so the browser path - which passes no condition - pays nothing measurable for the single writer.
+  - **Tests:** the sweep (with a self-check that it finds the core's own writes); the three refusal reasons and the holding case at the core; operator input advancing the revision and crossing as an age; and four queue cases with a readiness double that lands a keystroke between its verdict and the write - refused then blocked, refused then delivered exactly once, refused three times and given up with `input_revision_moved`, and a human override writing with no condition.
+    Writer stubs across the queue, auto-delivery and agent-messaging tests gained the `condition` keyword; the voice and process-action tests now build a real `Session` over a recording PTY (`tests/support/pty_sessions.py`), because a stub with a bare `pty.write` no longer exercises the path production takes.
 
 - [ ] **26. Shared host and origin policy.**
   - **Why:** the gateway must enforce the daemon's browser policy without copying it, and a cross-port gateway origin fails the daemon's exact `Origin == Host` rule (`server.py:481-514`).

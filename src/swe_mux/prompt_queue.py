@@ -42,11 +42,11 @@ import time
 import uuid
 from collections.abc import Callable, Collection, Hashable, Mapping, Sequence
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any, Protocol, TypeVar
 
 from .background_tasks import background
 from .composer_input import composer_insertion, note_unsubmitted_delivery
-from .delivery_readiness import DISPLAY_SCREEN_MAX_AGE_SECONDS
+from .delivery_readiness import DISPLAY_SCREEN_MAX_AGE_SECONDS, READINESS_DEBOUNCE_SECONDS
 from .executor_accounting import AccountedThreadPoolExecutor, register_wrapper
 from .harness import (
     MAX_PASTE_SUBMIT_SETTLE_SECONDS,
@@ -60,8 +60,46 @@ from .sqlite_store import (
     run_sqlite_operation,
     write_schema_version,
 )
+from .terminal_core import WriteCondition, WriteRefused
 
 T = TypeVar("T")
+
+
+class OperatorWriter(Protocol):
+    """How the queue writes into a target's terminal (`operator_input.record_operator_input`).
+
+    ``condition`` is what the delivery's readiness verdict relied on; a writer that
+    finds it no longer holds writes nothing and raises `WriteRefused`.
+    """
+
+    def __call__(
+        self, session: Any, data: str, *, condition: WriteCondition | None = None
+    ) -> None: ...
+
+
+#: How many times one send re-judges readiness after its write was refused before
+#: it gives up. A refusal means input reached the target between the verdict and
+#: the write; the next verdict sees that input, and almost always blocks on it.
+DELIVERY_JUDGEMENT_ATTEMPTS = 3
+
+
+def delivery_condition(evaluation: Mapping[str, Any]) -> WriteCondition:
+    """What a safe - or interject-safe - readiness verdict relied on.
+
+    Both verdicts require the composer untouched since the boundary they judged
+    (`input_revision`), the operator quiet for the debounce window, and no earlier
+    delivery still sitting unsubmitted; the write re-checks exactly those, so a
+    keystroke that lands after the verdict refuses the paste instead of being
+    pasted over.
+    """
+    evidence = evaluation.get("evidence")
+    revision = evidence.get("input_revision") if isinstance(evidence, Mapping) else None
+    return WriteCondition(
+        input_revision=revision if isinstance(revision, int) else None,
+        operator_quiet_seconds=READINESS_DEBOUNCE_SECONDS,
+        no_pending_submit=True,
+    )
+
 
 #: Distinct read results kept between writes: the per-tick readers ask for one
 #: summary, one policy set, the pause row and one head per live session.
@@ -1983,7 +2021,7 @@ class PromptQueueService:
         sessions: Any,
         events: Any,
         readiness: Any,
-        write_operator_input: Callable[[Any, str], None],
+        write_operator_input: OperatorWriter,
         *,
         submit_delay: float = SUBMIT_DELAY_SECONDS,
         submit_confirm_seconds: float = SUBMIT_CONFIRM_SECONDS,
@@ -2524,70 +2562,15 @@ class PromptQueueService:
             # session belongs to the first run that session gets. Never re-bound.
             await self.store.bind_run(message_id, current)
 
-        evaluation = self.readiness.evaluate(session)
-        delivery_state = str(evaluation["delivery_state"])
-        reasons = [str(reason) for reason in evaluation.get("reasons", [])]
-        blocking = protected_reasons(record, reasons)
-        if blocking:
-            raise await refuse(
-                "delivery_protected",
-                "delivery is blocked by a protection that cannot be overridden",
-                message_state="blocked",
-                delivery_state=delivery_state,
-                reasons=blocking,
-                protected=True,
-            )
-        confirmed = False
-        interjected = False
-        if delivery_state != "safe":
-            # An item that asked to be delivered *now* is authorized by its own,
-            # strictly narrower predicate rather than by an override: nothing
-            # here passes `confirm`, and every protection above has already run.
-            # `interject_state` is `safe` only for a turn both the lifecycle
-            # evidence and the CLI's own screen agree is running, with no
-            # composer content to land on top of.
-            wants_now = delivery_mode(message) == DELIVERY_NOW
-            if wants_now and str(evaluation.get("interject_state")) == "safe":
-                interjected = True
-            elif not confirm:
-                # An item that asked for `now` is refused with the reasons that
-                # actually stopped *it*. Reporting the ordinary readiness reasons
-                # would say "root_agent_working" — the one thing it was allowed
-                # to step over — and leave the real blocker unnamed.
-                refusal_reasons = reasons
-                if wants_now:
-                    refusal_reasons = [
-                        str(item) for item in evaluation.get("interject_reasons") or []
-                    ] or reasons
-                raise await refuse(
-                    "delivery_not_safe",
-                    f"delivery readiness is {delivery_state}; confirm to send anyway",
-                    message_state="blocked",
-                    delivery_state=delivery_state,
-                    reasons=refusal_reasons,
-                )
-            else:
-                confirmed = True
-
         body = str(message["body"])
         data = delivery_payload(body, session.record.backend)
         byte_count = len(data.encode("utf-8")) + len(SUBMIT_SEQUENCE)
-        try:
-            self._write(session, data)
-            await asyncio.sleep(self._paste_settle(byte_count, session.record.backend))
-            if session.record.state in {"exited", "crashed"}:
-                raise RuntimeError("the target session ended during delivery")
-            submitted = await self._submit(session, message_id, byte_count)
-            # Who asked, recorded at the only moment it is knowable. The CLI is
-            # about to fire a submit hook indistinguishable from one a person
-            # typed, and the transcript will record the prompt identically —
-            # authorship exists here and nowhere downstream. The observer reads
-            # this to decide whether the submit refreshes `last_human_prompt_at`.
-            session.queue_delivery_mark = (
-                time.time(),
-                str(message["sender_kind"]) in HUMAN_SENDER_KINDS,
-            )
-        except Exception as exc:
+        delivery_state = "unknown"
+        reasons: list[str] = []
+        confirmed = False
+        interjected = False
+
+        async def failed(exc: BaseException) -> QueueError:
             await self.store.finalize_delivery(
                 delivery_id,
                 message_id,
@@ -2612,9 +2595,101 @@ class PromptQueueService:
                 initiator=initiator,
                 bytes=byte_count,
             )
-            raise QueueError(
-                "delivery_failed", f"delivery failed: {exc}", status=502
-            ) from exc
+            return QueueError("delivery_failed", f"delivery failed: {exc}", status=502)
+
+        # Judge, then write with the judgement attached. The terminal core checks
+        # the condition with nothing able to run in between (`WriteCondition`), and
+        # a refusal means input reached the target after the verdict: judge again,
+        # since that input is evidence the next verdict has to see.
+        refusals: list[str] = []
+        for _attempt in range(DELIVERY_JUDGEMENT_ATTEMPTS):
+            evaluation = self.readiness.evaluate(session)
+            delivery_state = str(evaluation["delivery_state"])
+            reasons = [str(reason) for reason in evaluation.get("reasons", [])]
+            blocking = protected_reasons(record, reasons)
+            if blocking:
+                raise await refuse(
+                    "delivery_protected",
+                    "delivery is blocked by a protection that cannot be overridden",
+                    message_state="blocked",
+                    delivery_state=delivery_state,
+                    reasons=blocking,
+                    protected=True,
+                )
+            confirmed = False
+            interjected = False
+            if delivery_state != "safe":
+                # An item that asked to be delivered *now* is authorized by its own,
+                # strictly narrower predicate rather than by an override: nothing
+                # here passes `confirm`, and every protection above has already run.
+                # `interject_state` is `safe` only for a turn both the lifecycle
+                # evidence and the CLI's own screen agree is running, with no
+                # composer content to land on top of.
+                wants_now = delivery_mode(message) == DELIVERY_NOW
+                if wants_now and str(evaluation.get("interject_state")) == "safe":
+                    interjected = True
+                elif not confirm:
+                    # An item that asked for `now` is refused with the reasons that
+                    # actually stopped *it*. Reporting the ordinary readiness reasons
+                    # would say "root_agent_working" — the one thing it was allowed
+                    # to step over — and leave the real blocker unnamed.
+                    refusal_reasons = reasons
+                    if wants_now:
+                        refusal_reasons = [
+                            str(item) for item in evaluation.get("interject_reasons") or []
+                        ] or reasons
+                    raise await refuse(
+                        "delivery_not_safe",
+                        f"delivery readiness is {delivery_state}; confirm to send anyway",
+                        message_state="blocked",
+                        delivery_state=delivery_state,
+                        reasons=refusal_reasons,
+                    )
+                else:
+                    confirmed = True
+            # A human override answers for what that human saw, so it carries no
+            # condition; a verdict carries what it relied on.
+            condition = None if confirmed else delivery_condition(evaluation)
+            try:
+                self._write(session, data, condition=condition)
+            except WriteRefused as refused:
+                refusals.append(refused.reason)
+                log.info(
+                    "queue delivery %s to %s: input arrived after the readiness verdict"
+                    " (%s); judging again",
+                    message_id,
+                    target_id,
+                    refused.reason,
+                )
+                continue
+            except Exception as exc:
+                raise await failed(exc) from exc
+            break
+        else:
+            raise await refuse(
+                "delivery_not_safe",
+                "input kept reaching the target between each readiness verdict and its"
+                " write; confirm to send anyway",
+                message_state="blocked",
+                delivery_state=delivery_state,
+                reasons=list(dict.fromkeys(refusals)),
+            )
+        try:
+            await asyncio.sleep(self._paste_settle(byte_count, session.record.backend))
+            if session.record.state in {"exited", "crashed"}:
+                raise RuntimeError("the target session ended during delivery")
+            submitted = await self._submit(session, message_id, byte_count)
+            # Who asked, recorded at the only moment it is knowable. The CLI is
+            # about to fire a submit hook indistinguishable from one a person
+            # typed, and the transcript will record the prompt identically —
+            # authorship exists here and nowhere downstream. The observer reads
+            # this to decide whether the submit refreshes `last_human_prompt_at`.
+            session.queue_delivery_mark = (
+                time.time(),
+                str(message["sender_kind"]) in HUMAN_SENDER_KINDS,
+            )
+        except Exception as exc:
+            raise await failed(exc) from exc
         if submitted is False:
             # The bytes landed and the composer holds them; what did not happen
             # is the submit. Recording a clean `sent` here is what let a relay

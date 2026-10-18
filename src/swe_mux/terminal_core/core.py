@@ -8,9 +8,10 @@ import json
 import time
 from collections import deque
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 
-from ..composer_input import ComposerState
+from ..composer_input import ComposerState, PendingSubmit
 from ..terminal_arbitration import OwnerState, effective_geometry, release_owner
 from .diagnostics import (
     CLIENT_DIAGNOSTIC_DETAIL_LIMIT,
@@ -41,6 +42,39 @@ CLIENT_REPAINT_MIN_INTERVAL_SECONDS = 2.0
 # frame rate) settles first and costs one pulse rather than hundreds, short enough that
 # a corrupt screen is not something the user has time to start working around.
 RESIZE_REPAINT_SETTLE_SECONDS = 0.25
+
+
+@dataclass(frozen=True, slots=True)
+class WriteCondition:
+    """What a delivery decided on, re-checked atomically with its write.
+
+    Delivery readiness judges a session and the delivery's write follows. In
+    process nothing can run between the two; once keystrokes arrive in another
+    process, one can land in between, and pasting a delivery over a half-typed
+    prompt is the failure readiness exists to prevent. So the write carries what
+    the judgement relied on, and the core refuses it when that no longer holds:
+    the input revision the judgement saw, how long the human has been quiet, and
+    no earlier delivery still sitting unsubmitted in the composer.
+
+    Times are durations, never clock readings, so a condition means the same in
+    whichever process evaluates it.
+    """
+
+    input_revision: int | None = None
+    operator_quiet_seconds: float | None = None
+    no_pending_submit: bool = False
+
+
+class WriteRefused(Exception):
+    """A conditional write found its condition no longer held, and wrote nothing.
+
+    ``reason`` names which part failed. The caller re-evaluates rather than
+    retrying the write: whatever moved is evidence the judgement has to see.
+    """
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
 
 
 class TerminalCore:
@@ -124,6 +158,14 @@ class TerminalCore:
         # PTY (`composer_input.py`). Display evidence only: the delivery gate has
         # its own `input_revision` boundary and never reads this.
         self.composer = ComposerState()
+        # A queue delivery whose bytes reached this composer and whose Enter the
+        # CLI never took. Blocks the next delivery to this target so a second
+        # body cannot be pasted on top of the first, and clears itself at the two
+        # seams that prove the composer emptied (`composer_input.PendingSubmit`).
+        # Run-scoped and process-scoped like the composer estimate beside it: a
+        # daemon restart forgets it, which is the honest reading of "not
+        # observed", and the block it carries is one a human can override.
+        self.pending_submit: PendingSubmit | None = None
         # xterm's active buffer, as the owning browser reports it: corroboration
         # for the daemon's own reading of the stream (`TerminalStream.screen`).
         self.terminal_mode: str | None = None
@@ -132,6 +174,61 @@ class TerminalCore:
     @property
     def pty(self) -> PtySink:
         return self._pty()
+
+    # --- writes -------------------------------------------------------------------
+
+    def last_input_age(self) -> float | None:
+        """Seconds since the last human input, or None when there has been none.
+
+        An age rather than the monotonic stamp it is computed from, because a stamp
+        means nothing in another process (`WriteCondition`).
+        """
+        if self.last_input_event_ts <= 0:
+            return None
+        return max(0.0, time.monotonic() - self.last_input_event_ts)
+
+    def refusal(self, condition: WriteCondition) -> str | None:
+        """Which part of ``condition`` no longer holds, or None when all of it does."""
+        if condition.input_revision is not None and self.input_revision != condition.input_revision:
+            return "input_revision_moved"
+        if condition.operator_quiet_seconds is not None:
+            age = self.last_input_age()
+            if age is not None and age < condition.operator_quiet_seconds:
+                return "operator_recently_typed"
+        if condition.no_pending_submit and self.pending_submit is not None:
+            return "unsubmitted_delivery_in_composer"
+        return None
+
+    def write(self, data: str | bytes, *, condition: WriteCondition | None = None) -> None:
+        """Write to the PTY: the only place in the daemon that does.
+
+        One writer is what gives writes from several sources - a browser, the queue,
+        voice, an approval - a single order, and what lets a condition be checked
+        with nothing able to run between the check and the write. A guard test fails
+        on any other `pty.write` or `pty.resize`.
+        """
+        if condition is not None:
+            reason = self.refusal(condition)
+            if reason is not None:
+                raise WriteRefused(reason)
+        self.pty.write(data)
+
+    def write_operator_input(
+        self, data: str, *, condition: WriteCondition | None = None
+    ) -> None:
+        """Operator-class input - everything that is not a browser keystroke - with
+        the accounting delivery readiness reads.
+
+        Every such path must advance `input_revision` and the last input's time, or
+        readiness reports the composer untouched and the operator quiet for text the
+        operator just sent. The browser path accounts for itself, per keystroke kind
+        (`connection._handle_text_input`).
+        """
+        self.write(data, condition=condition)
+        now = time.monotonic()
+        self.input_revision += 1
+        self.last_input_event_ts = now
+        self.last_input_report_ts = now
 
     # --- input ownership (see terminal_arbitration) ---------------------------
 

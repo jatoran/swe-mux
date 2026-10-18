@@ -44,6 +44,7 @@ from swe_mux.processes import (
     session_facts,
 )
 from swe_mux.worker_host import WorkerHost
+from tests.support.pty_sessions import recording_session
 from tests.support.settle import until
 
 READY_SECONDS = 60.0
@@ -302,20 +303,6 @@ async def test_host_walks_in_the_worker_share_one_lock() -> None:
 
 
 @dataclass
-class FakePty:
-    written: list[bytes] = field(default_factory=list)
-
-    def write(self, data: bytes) -> None:
-        self.written.append(data)
-
-
-@dataclass
-class FakeSession:
-    record: SessionRecord
-    pty: FakePty = field(default_factory=FakePty)
-
-
-@dataclass
 class FakeConfig:
     data_dir: Path
     worker_process_enabled: bool = True
@@ -376,9 +363,12 @@ def manager_for(tree: Tree) -> Any:
     record.pid = tree.root
     record.state = "running"
     record.root_started_at = psutil.Process(tree.root).create_time()
+    # What reached the session's PTY, through its terminal core.
+    writes: list[Any] = []
     return SimpleNamespace(
-        sessions={"s1": FakeSession(record)},
+        sessions={"s1": recording_session(record, writes)},
         supervisor=SimpleNamespace(supervisor_pid=tree.supervisor.pid),
+        writes=writes,
     )
 
 
@@ -472,7 +462,9 @@ async def test_actions_run_in_the_worker_and_a_root_is_interrupted_through_its_p
                 await inspector.act("s1", 4, "terminate")
 
             await inspector.act("s1", tree.root, "interrupt")
-            assert sessions.sessions["s1"].pty.written == [b"\x03"]
+            assert sessions.writes == [b"\x03"]
+            # Not operator input, so not accounted as it (`delivery-readiness.md`).
+            assert sessions.sessions["s1"].input_revision == 0
             assert _alive(tree.root), "the root is interrupted through its PTY, not signalled"
 
             leaf = tree.leaf()

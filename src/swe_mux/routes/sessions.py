@@ -17,7 +17,7 @@ from aiohttp.multipart import BodyPartReader
 from .. import (
     app_keys as keys,
 )
-from .. import worktree_mutation
+from .. import operator_input, worktree_mutation
 from ..adapters import BackendAdapter
 from ..approvals import DEFAULT_ALLOW_RULES, normalize_rules
 from ..config import Config
@@ -520,7 +520,7 @@ async def _stage_spawn_text(app: web.Application, session: Any, text: str) -> No
     daemon-side: no mounted pane is involved, so this works headless and from
     any device (proven live 2026-08-20 — the staged session stayed idle with
     zero user messages, and a later Enter submitted exactly the staged text).
-    The paste goes through `terminal._record_operator_input` so composer shadowing and
+    The paste goes through `operator_input.record_operator_input` so composer shadowing and
     delivery-readiness accounting see it as the partial input it is.
 
     A session that never reads ready still gets the paste: the PTY buffers
@@ -544,10 +544,10 @@ async def _stage_spawn_text(app: web.Application, session: Any, text: str) -> No
             session.record.state,
             STAGE_READY_TIMEOUT_SECONDS,
         )
-    terminal._record_operator_input(
+    operator_input.record_operator_input(
         app[keys.EVENTS],
         session,
-        terminal._composer_insertion(session.record.backend, text),
+        operator_input.composer_insertion_for(session.record.backend, text),
         source="spawn_stage",
     )
     await app[keys.EVENTS].emit(
@@ -885,7 +885,9 @@ async def approve_pending_request(request: web.Request) -> web.Response:
         return json_response(
             {"error": "the approval changed; re-read it", "code": "fingerprint_changed"}, 409
         )
-    terminal._record_operator_input(request.app[keys.EVENTS], session, "\r", source="approve-once")
+    operator_input.record_operator_input(
+        request.app[keys.EVENTS], session, "\r", source="approve-once"
+    )
     await request.app[keys.EVENTS].emit(
         "approval_answered_once",
         session_id=session.record.id,

@@ -291,7 +291,7 @@ from "it was refused".
 
 `approve-once` re-checks the agent run, this session's own screen still classifying as an
 approval (`pty_tail_state`), and — when the caller supplies one — the prompt fingerprint,
-before writing a single `\r` through `_record_operator_input`. The browser routes through the
+before writing a single `\r` through `operator_input.record_operator_input`. The browser routes through the
 daemon rather than writing Enter itself because only the server can make those checks; a pane
 that wrote the byte would be sending Enter into whatever the screen had become in the meantime.
 

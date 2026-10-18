@@ -19,6 +19,7 @@ from swe_mux.routes.terminal import deliver_broadcast
 from swe_mux.session import Session
 from swe_mux.terminal_core import PtyOutputFlow, pty_sender
 from swe_mux.terminal_core import diagnostics as terminal_diagnostics
+from tests.support.pty_sessions import recording_session
 from tests.support.settle import until
 
 
@@ -1014,13 +1015,11 @@ def _broadcast_session(
     alive: bool = True,
     state: str = "running",
 ) -> Any:
-    return SimpleNamespace(
-        record=SimpleNamespace(id=identity, broadcast=included, state=state),
-        pty=SimpleNamespace(isalive=lambda: alive, write=writes[identity].append),
-        input_revision=0,
-        last_input_event_ts=0.0,
-        last_input_report_ts=0.0,
+    record = SessionRecord(
+        identity, identity, "default", "shell", identity, ".", "cmd.exe", [], state=state
     )
+    record.broadcast = included
+    return recording_session(record, writes[identity], alive=alive)
 
 
 async def test_server_broadcast_targets_each_included_live_session_once() -> None:

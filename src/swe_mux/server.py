@@ -137,6 +137,7 @@ from .network_usage import (
 )
 from .openrouter import OpenRouterClient
 from .operational_telemetry import OperationalTelemetryStore
+from .operator_input import record_operator_input
 from .path_identity import same_path
 from .plugins import PluginManager
 from .preview_store import PreviewStore
@@ -1751,13 +1752,13 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
 
     # The observer decides an approval; this is the only way it can deliver one.
     # Installed as a factory rather than called from `observation.py` directly
-    # because `terminal_routes._record_operator_input` owns the evidence accounting every human
+    # because `operator_input.record_operator_input` owns the evidence accounting every human
     # input path owes delivery readiness, and that lives here with the event bus.
     # Per-session bindings are attached by the manager as sessions are created,
     # adopted, and cold-restored (`_attach_operator_input`).
     def _operator_input_sink(session: Session) -> Callable[[str, str], None]:
         def write(data: str, source: str) -> None:
-            terminal_routes._record_operator_input(events, session, data, source=source)
+            record_operator_input(events, session, data, source=source)
 
         return write
 
@@ -1926,8 +1927,8 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
         # Queue delivery is operator input and must share the single accounting
         # helper (input_owner=False: the sender holds no ownership claim on the
         # target's PTY, same as broadcast).
-        lambda session, data: terminal_routes._record_operator_input(
-            events, session, data, source="queue", input_owner=False
+        lambda session, data, *, condition=None: record_operator_input(
+            events, session, data, source="queue", input_owner=False, condition=condition
         ),
     )
     # Phase 5: the one non-human caller of send_next, and the relay policy over

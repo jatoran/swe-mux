@@ -149,6 +149,11 @@ One session's terminal, independent of the process hosting it (`development/DAEM
 `Session` constructs its core and keeps every attribute it had as a view onto it (`_TerminalView`), so delivery readiness, automation's attended checks and every other reader are unchanged; the per-chunk fanout reaches the stream directly, because a view read costs a lookup on the hottest path in the daemon.
 `routes/pty.py` hosts the core in process (`SessionTerminalHost`).
 
+`TerminalCore.write` is the daemon's only PTY write (item 25), and `tests/test_pty_single_writer.py` fails on a `pty.write` or `pty.resize` anywhere outside the core and the PTY implementations under it.
+One writer gives writes from every source a single order, and it is what lets a write carry a `WriteCondition` - the input revision, operator-quiet window and pending-submit state a delivery's readiness verdict relied on - checked with nothing able to run between the check and the write; a condition that no longer holds raises `WriteRefused` and writes nothing.
+`write_operator_input` is the accounted variant: it writes, then advances `input_revision` and the last input's time.
+`last_input_age` reports that time as an age, because a monotonic stamp means nothing in another process.
+
 **Not:** anything of the daemon's own. `tests/test_terminal_core_boundary.py` imports the package in a fresh interpreter and fails if it loads any `swe_mux` module beyond four leaf modules (`screen_mode`, `scrollback`, `composer_input`, `terminal_arbitration`), which is what lets the same core run in the terminal gateway process.
 
 ## `console_contention.py`
@@ -178,9 +183,18 @@ ESC+CR is not a control sequence the escape stripper matches, so without naming 
 
 It also **builds** an insertion (`composer_insertion`), not only classifies one, so the construction and the reading of these bytes cannot disagree.
 The body is a bracketed paste with newlines as CR; a *leading* newline run is lifted out and emitted as `newline_keys` presses ahead of it when the harness declares `paste_leading_newline_submits`, because Codex reads a paste's first newline as Enter and submits whatever the composer held (measured 2026-08-22 against v0.149.0).
-`harness.composer_insertion_rules(backend)` resolves the pair, `server._composer_insertion` is the daemon's one caller-facing wrapper, and `composerInsertion.ts` is the browser's mirror.
+`harness.composer_insertion_rules(backend)` resolves the pair, `operator_input.composer_insertion_for` is the daemon's one caller-facing wrapper, and `composerInsertion.ts` is the browser's mirror.
 
-`routes/pty.py` (for the terminal core's typed input) and `routes/terminal.py` call it wherever `input_revision` is advanced, and `session.py` clears it when a turn opens or the session ends.
+`routes/pty.py` (for the terminal core's typed input) and `operator_input.py` call it wherever `input_revision` is advanced, and `session.py` clears it when a turn opens or the session ends.
+
+## `operator_input.py`
+
+Operator-class input: every write into a terminal that is not a browser keystroke - the HTTP input route, broadcast, voice, approvals, the prompt queue, staged spawn text, and the interrupt and graceful-end operations.
+`record_operator_input` writes through `TerminalCore.write_operator_input` (passing through any `WriteCondition`), then does what such a write owes: the remote-shell submit note, the composer estimate (`note_composer_write`), the interrupt intent, and the `terminal_input` event.
+`session_accepts_input` is the ended-session refusal and `composer_insertion_for` builds a harness's insertion bytes.
+
+**Not:** the browser path, which accounts per keystroke kind in `terminal_core/connection.py`; or the two deliberately unaccounted writers, automation `write_pty` (`meta_hooks.py`) and process-action interrupts (`processes.py`), which call `TerminalCore.write` because they are not operator input (`design/features/delivery-readiness.md`).
+It holds no state and runs in the daemon only; `processes.py` also runs in the worker process and imports nothing from here.
 
 **Not:** reading the composer, which nothing can, or authorizing anything - `delivery_readiness.py` keeps its own coarse boundary and never consults this.
 Not the queue's delivery bytes either: `prompt_queue.delivery_payload` builds those on top of this, and *drops* a leading newline rather than lifting it, because a delivery has passed the readiness gate and is about to submit.

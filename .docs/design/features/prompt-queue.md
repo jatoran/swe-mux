@@ -259,7 +259,7 @@ separately opt-in.
   Text that must open a session *unsent* travels as `stage_text` instead: the spawn
   handler waits for readiness and writes the queue's bracketed-paste bytes with no
   carriage return (`_stage_spawn_text`, `interfaces.md`), through
-  `_record_operator_input` so the parked text counts as partial input for
+  `operator_input.record_operator_input` so the parked text counts as partial input for
   delivery readiness.
 
 ## Boundaries
@@ -334,6 +334,16 @@ newlines**. One message is unaccounted for entirely. The queue reported all seve
 - **Overridable, not protected.** Auto-delivery never confirms, so it stops at the
   block; a human who has looked at the pane keeps the ability to say the mark is
   wrong.
+- **The paste carries the verdict it was decided on.** Readiness is judged and the
+  paste written in two steps, and a keystroke that lands between them makes the
+  verdict stale. So the paste is a conditional write (`delivery_condition`): the
+  terminal core writes it only if the input revision the verdict saw, the
+  operator-quiet window, and the absence of a pending submit all still hold, and
+  otherwise raises `WriteRefused` and writes nothing. A refusal is answered by
+  judging again, at most `DELIVERY_JUDGEMENT_ATTEMPTS` (3) times, because the input
+  that caused it is evidence the next verdict has to see; input that keeps racing
+  the write ends as `delivery_not_safe` naming the refusals. A confirmed send and
+  the submit after a paste carry no condition (`delivery-readiness.md`).
 
 ## Key files
 
@@ -341,7 +351,7 @@ newlines**. One message is unaccounted for entirely. The queue reported all seve
   per-store schema version `prompt_queue`), `PromptQueueService` (typed operations,
   event-driven stranding, startup reconcile), `stage_seed_argv`.
 - `src/swe_mux/server.py` — thin `queue_*` handlers, `QueueError` → typed JSON in
-  `error_middleware`, service wiring + `_record_operator_input(source="queue")` injection,
+  `error_middleware`, service wiring + `record_operator_input(source="queue")` injection,
   retention loop, `seed_text`/`stage_text` handling in `_spawn_from_body` +
   `_stage_spawn_text`.
 - `src/swe_mux/spawn_contract.py` — `SpawnRequest.seed_text` / `SpawnRequest.stage_text`

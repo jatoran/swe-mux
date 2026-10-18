@@ -13,146 +13,15 @@ from aiohttp import web
 from .. import (
     app_keys as keys,
 )
-from ..composer_input import (
-    DEFAULT_CLEAR_KEYS,
-    DEFAULT_NEWLINE_KEYS,
-    apply_composer_write,
-    classify_composer_write,
-    clear_pending_submit,
-    composer_insertion,
-)
 from ..config import Config
 from ..event_bus import EventBus
-from ..harness import (
-    HARNESSES,
-    composer_insertion_rules,
-)
 from ..http_support import json_response
-from ..observation import (
-    note_interrupt_intent,
-)
-from ..session import (
-    SessionManager,
-    note_remote_shell_submission,
-)
+from ..operator_input import record_operator_input
+from ..session import SessionManager
 from ..supervisor_client import Liveness, liveness_of
 from .support import refuse_agent_session_caller
 
 log = logging.getLogger(__name__)
-
-
-def _composer_insertion(backend: object, text: str) -> str:
-    """The bytes that leave ``text`` unsent in this backend's composer.
-
-    One resolver for every daemon-side path that stages text rather than typing
-    it, so a harness quirk is declared once in the registry instead of being
-    re-derived per call site.
-    """
-    newline_keys, lift = composer_insertion_rules(backend)
-    return composer_insertion(text, newline_keys=newline_keys, lift_leading_newline=lift)
-
-
-def _note_composer_write(events: EventBus, session: Any, data: str | bytes, source: str) -> None:
-    """Track what one operator write left sitting in the composer.
-
-    Every path that writes operator text to a PTY calls this, for the same reason
-    every one of them advances `input_revision`: text inserted by a voice append,
-    a send-to-agent, or a mobile draft is as unsent as text someone typed, and a
-    row that only lit up for keystrokes would be silent on exactly the paths that
-    stage text and walk away.
-
-    Only the empty/non-empty crossing is announced. A keystroke-rate event would
-    put one fanout on the bus per character typed, which is the traffic the
-    throttled `terminal_input` event already exists to avoid.
-    """
-    composer = getattr(session, "composer", None)
-    if composer is None:
-        return
-    text = data.decode("utf-8", "ignore") if isinstance(data, bytes) else data
-    # Which keys empty a composer is the harness's fact, not this module's. An
-    # unregistered backend keeps the historical Ctrl+U.
-    harness = HARNESSES.get(session.record.backend)
-    clear_keys = harness.composer_clear_keys if harness else DEFAULT_CLEAR_KEYS
-    newline_keys = harness.composer_newline if harness else DEFAULT_NEWLINE_KEYS
-    write = classify_composer_write(text, composer.in_paste, clear_keys, newline_keys)
-    # A write from anywhere *but* the queue that submits or discards the composer
-    # is proof the body a failed delivery left there is gone: the operator either
-    # pressed Enter over it themselves (which is how three of the 2026-09-04
-    # messages finally reached Codex) or cleared it. The queue's own carriage
-    # return is excluded deliberately — it classifies as a submit whether or not
-    # the CLI took it, so trusting it here would retire the mark on exactly the
-    # evidence that was wrong in the first place.
-    if source != "queue" and write.kind in {"submit", "clear"}:
-        retired = clear_pending_submit(session)
-        if retired is not None:
-            log.info(
-                "session %s: queue delivery %s left the composer by %s (%s)",
-                session.record.id,
-                retired.message_id,
-                write.kind,
-                source,
-            )
-    change = apply_composer_write(composer, write, time.time())
-    if change is None:
-        return
-    ledger = getattr(session, "state_transitions", None)
-    if ledger is not None:
-        ledger.append(
-            {"ts": time.time(), "kind": "composer", "action": change, "source": source}
-        )
-    log.debug(
-        "composer %s for session %s (source %s)", change, session.record.id, source
-    )
-    events.emit_background(
-        "composer_input_changed",
-        session_id=session.record.id,
-        source=source,
-        pending=composer.pending,
-    )
-
-
-def session_accepts_input(session: Any) -> bool:
-    """Whether this session still has a child that could receive keystrokes.
-
-    An ended pane stays visible until it is dismissed, and a cold one is visible
-    from the moment the daemon starts, so both are panes a person can click into
-    and type at. Neither has a PTY: `PtyHost.write` raises for a released or
-    never-spawned pseudoterminal, which arrives as a 500 on the HTTP paths and as
-    a dropped socket on the WebSocket one. Refusing here makes it an ordinary,
-    explainable "this session has ended" instead.
-    """
-    return str(getattr(session.record, "state", "")) not in {"exited", "crashed"}
-
-
-def _record_operator_input(
-    events: EventBus, session: Any, data: str, *, source: str, input_owner: bool = True
-) -> None:
-    """Write operator-originated text to a PTY with full evidence accounting.
-
-    Every human-input path must advance `input_revision`/`last_input_event_ts`
-    and emit `terminal_input`, or delivery-readiness reports
-    `partial_input_absent`/`operator_quiet` as satisfied for text the operator
-    just sent — corrupting the shadow-metric baseline Phase 5 promotion is
-    validated against. The WS path does its own (throttled) accounting; this is
-    the shared path for everything else.
-    """
-    if not session_accepts_input(session):
-        raise ValueError("session has ended and cannot accept input")
-    session.pty.write(data)
-    now = time.monotonic()
-    session.input_revision += 1
-    note_remote_shell_submission(session, data)
-    _note_composer_write(events, session, data, source)
-    note_interrupt_intent(session, data, source=source)
-    session.last_input_event_ts = now
-    session.last_input_report_ts = now
-    events.emit_background(
-        "terminal_input",
-        session_id=session.record.id,
-        source=source,
-        input_owner=input_owner,
-        bytes=len(data.encode("utf-8")),
-    )
 
 
 #: The keystroke that interrupts an agent's current turn. Universal across the
@@ -204,7 +73,7 @@ async def _interrupt_session_pty(app: web.Application, session: Any) -> None:
     would skip the `input_revision`/`terminal_input` bookkeeping the
     delivery-readiness contract depends on.
     """
-    _record_operator_input(
+    record_operator_input(
         app[keys.EVENTS], session, _INTERRUPT_KEYS, source="agent_control"
     )
     await app[keys.EVENTS].emit(
@@ -229,13 +98,13 @@ async def _end_session_gracefully(
     session.record.requested_end_reason = reason
     if session.record.state in {"exited", "crashed"}:
         return {"final_state": session.record.state, "graceful": True, "reason": reason}
-    _record_operator_input(
+    record_operator_input(
         app[keys.EVENTS], session, _INTERRUPT_KEYS, source="agent_control"
     )
     await asyncio.sleep(_INTERRUPT_SETTLE_SECONDS)
     exit_keys = str(getattr(session.pty, "graceful_exit", "") or "")
     if exit_keys and session.record.state not in {"exited", "crashed"}:
-        _record_operator_input(
+        record_operator_input(
             app[keys.EVENTS], session, exit_keys, source="agent_control"
         )
     deadline = time.monotonic() + float(config.session_control_graceful_timeout_s)
@@ -272,7 +141,7 @@ async def session_input(request: web.Request) -> web.Response:
     data = str(body.get("data", ""))
     if not data:
         return json_response({"ok": True})
-    _record_operator_input(request.app[keys.EVENTS], session, data, source="http")
+    record_operator_input(request.app[keys.EVENTS], session, data, source="http")
     return json_response({"ok": True})
 
 
@@ -343,7 +212,7 @@ async def deliver_broadcast(
         # Each target gets the same evidence accounting as any other operator
         # input; `input_owner=False` because the writer holds no ownership claim
         # on the target's PTY.
-        _record_operator_input(events, candidate, data, source="broadcast", input_owner=False)
+        record_operator_input(events, candidate, data, source="broadcast", input_owner=False)
         delivered.append(candidate.record.id)
     events.emit_background(
         "broadcast_delivered",

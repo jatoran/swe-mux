@@ -45,6 +45,7 @@ from swe_mux.voice import (
     streaming_segments,
 )
 from swe_mux.voice_audio import join_wav_files, wav_profile
+from tests.support.pty_sessions import recording_session
 from tests.support.settle import until
 
 
@@ -1277,13 +1278,7 @@ async def test_voice_submit_writes_prompt_and_enter_once_and_marks_human_input(
 ) -> None:
     service, events, emitted, record = make_service(tmp_path)
     writes: list[str] = []
-    session = SimpleNamespace(
-        record=record,
-        pty=SimpleNamespace(write=writes.append),
-        input_revision=0,
-        last_input_event_ts=0.0,
-        last_input_report_ts=0.0,
-    )
+    session = recording_session(record, writes)
 
     class Request:
         match_info = {"sid": "s1"}
@@ -1323,13 +1318,7 @@ async def test_voice_submit_pastes_a_multiline_draft_instead_of_submitting_early
     """
     service, events, emitted, record = make_service(tmp_path)
     writes: list[str] = []
-    session = SimpleNamespace(
-        record=record,
-        pty=SimpleNamespace(write=writes.append),
-        input_revision=0,
-        last_input_event_ts=0.0,
-        last_input_report_ts=0.0,
-    )
+    session = recording_session(record, writes)
 
     class Request:
         match_info = {"sid": "s1"}
@@ -1429,14 +1418,8 @@ async def test_voice_approval_requires_prepare_and_rechecks_the_screen(tmp_path:
         "Bash command\n  npm test\n\nDo you want to proceed?\n❯ 1. Yes\n  2. No".encode()
     )
     writes: list[str] = []
-    session = SimpleNamespace(
-        record=record,
-        pty=SimpleNamespace(write=writes.append),
-        scrollback=SimpleNamespace(tail_bytes=lambda _limit: bytes(tail)),
-        input_revision=0,
-        last_input_event_ts=0.0,
-        last_input_report_ts=0.0,
-    )
+    session = recording_session(record, writes)
+    session.scrollback.append(bytes(tail))
 
     class Request:
         match_info = {"sid": "s1"}

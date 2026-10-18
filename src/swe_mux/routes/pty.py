@@ -27,6 +27,7 @@ from ..observation import (
     cancel_pending_approval,
     note_interrupt_intent,
 )
+from ..operator_input import note_composer_write
 from ..session import (
     Session,
     note_remote_shell_submission,
@@ -75,12 +76,12 @@ class SessionTerminalHost:
         session = self.session
         cancel_pending_approval(session, "terminal_input")
         note_remote_shell_submission(session, data)
-        terminal._note_composer_write(self._events, session, data, "browser")
+        note_composer_write(self._events, session, data, "browser")
         note_interrupt_intent(session, data, source="terminal_input")
 
     def note_typed_bytes(self, data: bytes) -> None:
         note_remote_shell_submission(self.session, data)
-        terminal._note_composer_write(self._events, self.session, data, "browser")
+        note_composer_write(self._events, self.session, data, "browser")
 
     def note_owner_submit(self, data: str) -> None:
         session = self.session

@@ -227,16 +227,28 @@ without emitting `terminal_input`, and without an ended-session guard, so REST-d
 text — `swemux send`, note send-to-agent, the prompt library's delivery path — was invisible
 to these counters and every readiness report emitted `partial_input_absent` /
 `operator_quiet` as satisfied for text sitting undelivered in a composer. All operator
-input paths now share one accounting helper (`_record_operator_input` in `server.py`): the
+input paths now share one accounting helper (`operator_input.record_operator_input`): the
 HTTP route (`source="http"`, 409 for ended sessions), broadcast per-target
 (`source="broadcast"`, `input_owner=False`; ended targets skipped, and so are targets
 whose supervisor connection is unreachable, whose bytes would be discarded), voice
 (`source="voice"`), and — since Phase 4 — prompt-queue delivery (`source="queue"`,
 `input_owner=False`; both the paste and the submit write, see
-`features/prompt-queue.md`). Deliberately NOT counted: automation `write_pty`, the branch command
-write, and process interrupts — those are not *operator* input, and advancing the
+`features/prompt-queue.md`). Deliberately NOT counted: automation `write_pty` and
+process-action interrupts — those are not *operator* input, and advancing the
 operator-quiet clock for them would mask a different hole. The WS path keeps its own
 throttled accounting.
+
+**One writer, and a write that carries its verdict (2026-10-18, `DAEMON_LOAD_ISOLATION.md` item 25).**
+Every PTY write now goes through the session's terminal core (`TerminalCore.write`), the accounted ones included: `record_operator_input` calls `TerminalCore.write_operator_input`, which writes and then advances the revision and the last input's time, and the two unaccounted writers above call `TerminalCore.write` directly.
+`tests/test_pty_single_writer.py` fails on any `pty.write` or `pty.resize` outside the core and the PTY implementations under it.
+The reason is the race the terminal gateway will open.
+Readiness is judged and the paste written in two steps, and once keystrokes arrive in another process a keystroke can land between them, so the verdict the queue acted on is no longer the verdict for the composer it writes into.
+A delivery therefore passes a `WriteCondition` with its write: the `input_revision` the verdict saw, the operator-quiet window it relied on (`READINESS_DEBOUNCE_SECONDS`), and that no earlier delivery is still waiting for its submit.
+The core checks all three and writes with nothing able to run in between, or raises `WriteRefused` naming the part that moved and writes nothing.
+A refusal sends the queue back to judge again with the input it now sees, at most `DELIVERY_JUDGEMENT_ATTEMPTS` (3) times; input that keeps racing the write ends as `delivery_not_safe` with the refusal reasons, never as a paste over what the operator typed.
+The operator's quiet crosses as an age (`TerminalCore.last_input_age`) rather than as the monotonic stamp it is computed from, because a stamp means nothing in another process.
+A confirmed send carries no condition: the human override already says "write anyway", and a condition would only re-impose the check they overrode.
+The submit write that follows a paste carries none either, because it is part of the delivery already decided rather than a new one.
 
 Voice prompt submission is an explicit human send, but it may not override `NON_OVERRIDABLE_REASONS`.
 The handler evaluates current readiness and maps stabilized approval/question states to the same protected reason codes before it claims the utterance id or writes bytes.

@@ -16,6 +16,7 @@ from aiohttp import web
 from .. import (
     app_keys as keys,
 )
+from .. import operator_input
 from ..edge_tts_provider import EdgeTtsError
 from ..event_bus import EventBus
 from ..harness import (
@@ -44,7 +45,6 @@ from ..voice import (
     group_snapshot,
 )
 from ..voice_models import VoiceModelError
-from . import terminal
 
 log = logging.getLogger(__name__)
 
@@ -577,8 +577,8 @@ async def voice_submit(request: web.Request) -> web.Response:
         # delivery bytes instead: bracketed paste with newlines as CR, then a
         # separate Enter after the same settle delay. Single-line prompts keep the
         # one-write path they have always used.
-        payload = terminal._composer_insertion(session.record.backend, text)
-        terminal._record_operator_input(
+        payload = operator_input.composer_insertion_for(session.record.backend, text)
+        operator_input.record_operator_input(
             request.app[keys.EVENTS],
             session,
             payload,
@@ -595,11 +595,11 @@ async def voice_submit(request: web.Request) -> web.Response:
         )
         if session.record.state in {"exited", "crashed"}:
             return json_response({"error": "the agent session ended during delivery"}, 409)
-        terminal._record_operator_input(
+        operator_input.record_operator_input(
             request.app[keys.EVENTS], session, SUBMIT_SEQUENCE, source="voice"
         )
     else:
-        terminal._record_operator_input(
+        operator_input.record_operator_input(
             request.app[keys.EVENTS], session, f"{text}\r", source="voice"
         )
     await request.app[keys.EVENTS].emit(
@@ -665,7 +665,7 @@ async def voice_approval(request: web.Request) -> web.Response:
         challenge = voice.consume_approval(session.record.id, confirmation_id, run_id, fingerprint)
     except VoiceError as exc:
         return json_response({"error": str(exc)}, 409)
-    terminal._record_operator_input(request.app[keys.EVENTS], session, "\r", source="voice")
+    operator_input.record_operator_input(request.app[keys.EVENTS], session, "\r", source="voice")
     await request.app[keys.EVENTS].emit(
         "voice_approval_confirmed",
         session_id=session.record.id,
@@ -681,7 +681,7 @@ async def voice_interrupt(request: web.Request) -> web.Response:
         return json_response({"error": "conversation mode requires an agent session"}, 409)
     if session.record.state in {"exited", "crashed"}:
         return json_response({"ok": True, "already_ended": True})
-    terminal._record_operator_input(request.app[keys.EVENTS], session, "\x03", source="voice")
+    operator_input.record_operator_input(request.app[keys.EVENTS], session, "\x03", source="voice")
     await request.app[keys.EVENTS].emit(
         "voice_agent_interrupted", session_id=session.record.id, source="voice"
     )

@@ -350,8 +350,8 @@ half-typed in it, from any device (`features/ui.md`).
   corrupted one, and a false *safe* is the dangerous direction.
 - **Every operator write is counted.**
   Text inserted by a voice append, a send-to-agent, or a mobile draft is as unsent as text
-  someone typed, so `_note_composer_write` sits on both the WebSocket path and
-  `_record_operator_input`, exactly where `input_revision` is advanced.
+  someone typed, so `operator_input.note_composer_write` sits on both the WebSocket path and
+  `operator_input.record_operator_input`, exactly where `input_revision` is advanced.
 - **Only the crossing is announced.**
   `composer_input_changed` fires when the composer goes empty ↔ non-empty, never per keystroke,
   and the same two moments are the only `kind: "composer"` entries in the transition ledger.

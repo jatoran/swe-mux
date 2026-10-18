@@ -94,7 +94,7 @@ class Harness:
             self.manager,
             self.events,
             ReadinessStub(),
-            lambda session, data: self.writes.append((session.record.id, data)),
+            lambda session, data, condition=None: self.writes.append((session.record.id, data)),
             submit_delay=0.0,
             # A CLI that never opens a turn is what the submit ladder is for;
             # these suites are about the layers above it, so they pay none of

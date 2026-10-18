@@ -224,7 +224,7 @@ makes an ended session's pane survive.
   already, and swapping its retained scrollback for a splash would take the readable post-mortem
   away for exactly the seconds the operator is waiting.
 - The pane is read-only on both sides.
-  The daemon refuses input for a terminal-state session (`server.session_accepts_input`) rather than
+  The daemon refuses input for a terminal-state session (`operator_input.session_accepts_input`) rather than
   letting `PtyHost.write` raise into a 500 or a dropped socket; the client stops sending it, and does
   not claim the keyboard away from a live pane on another device while doing it.
 - Dismissing an ended session needs no kill confirmation: confirmation guards against destroying
@@ -235,7 +235,8 @@ makes an ended session's pane survive.
 - `src/swe_mux/session_recovery.py` (store, framed log codec, checkpoint reader)
 - `src/swe_mux/session.py` (`restore_cold_sessions`, `_build_cold_session`, `_attach_recovery`)
 - `src/swe_mux/history.py` (`close_orphaned_runs`)
-- `src/swe_mux/server.py` (boot restore, `session_accepts_input`, relaunch widening)
+- `src/swe_mux/server.py` (boot restore, relaunch widening)
+- `src/swe_mux/operator_input.py` (`session_accepts_input`)
 - `src/swe_mux/routes/sessions.py` (stand-down and in-place resume endpoints)
 - `frontend/src/coldSession.ts`, `frontend/src/EndedPaneBanner.tsx`
 
