@@ -370,6 +370,7 @@ uv run python tools/fleet_load_harness.py --set gil_switch_interval_ms=1
 - `--burn N` adds below-normal CPU-bound processes for agents' builds. A saturated host is what turned
   sub-second lag into multi-second stalls before the load-isolation work; since then the incident
   shape at `--burn 32` produces none.
+  `--burn-priority normal` runs them at normal instead, standing in for a hog the daemon did not start - a build in a terminal outside swe-mux, a game - which outranks every session tree, including the shell that echoes the probe.
 - `--gateway` turns the terminal gateway on, on an OS-allocated port of its own, and attaches every
   terminal through it, the timed probe included; the report says which process carried them and the
   gateway's restarts, counted ping misses, hung ends and handovers. Every run now also refuses to
@@ -409,6 +410,23 @@ Reference after the load-isolation plan (2026-10-18, this host, 36 `scroll` sess
 
 None of those runs had a loop stall or a lag sample of 100 ms or more, and no decision reached the 3 s
 hook timeout; the item 1 baseline for the `--burn 32` row was 316 / 1,254 / 3,502 ms with a 3.9 s stall.
+
+**A hog outside swe-mux is a different case, and the gateway does not cover it.**
+Measured 2026-10-18 on the same host and configuration, terminals on the gateway, with the operator's own sessions running beside the runs (the host was about 15% busy before them); one run each, taken back to back:
+
+| Burners | Sessions | Window | Echo p50 / p95 / max | `GET /api/sessions` p99 | Lag >= 100 ms |
+| --- | --- | --- | --- | --- | --- |
+| 32 below normal | below normal (default) | 90 s | 35 / 91 / 2,112 | 104 | 1 / 181 |
+| 32 normal | below normal (default) | 45 s | 905 / 6,904 / 6,904 | 52 | 0 / 141 |
+| 32 normal | `session_process_priority = "normal"` | 45 s | 145 / 655 / 1,024 | 59 | 0 / 101 |
+
+The daemon and the gateway stayed responsive in every run: no loop stall, no gateway ping miss, restart or hung end.
+What a normal-priority hog starves is the session itself.
+A keystroke's echo is drawn by the shell or agent in the pane, and session trees run below normal, so a hog at normal outranks them and the echo waits seconds for the scheduler.
+The probe got 16 answers in a 45 s window.
+Raising session trees to normal removes the starvation but leaves them sharing the CPU equally with the hog, which is the third row.
+The rest of the echo path (the supervisor and the pseudoconsole host, both at normal) shares the CPU with the hog in both normal-priority rows; which part of the remaining delay is theirs was not isolated.
+The first row's 2.1 s maximum was a single sample coinciding with a 1.5 s decision and a 2.9 s OTLP round trip, with nothing in the scratch logs, so read it as a host-wide hiccup and not the gateway; the item 35 run of that configuration had no such sample.
 
 ## Startup latency
 
