@@ -299,7 +299,8 @@ responsive controls.
   beside it at exactly the threshold people watch for.
 - The resource chip reports RAM rather than CPU, since a percentage that moves every sample is
   not worth a permanent glance, and abbreviates it (`3.2G`) to fit the strip.
-- The expanded sidebar resource trigger is one row: boxed terminal-window icon and live session count, boxed process-tree icon and count, CPU icon and rounded system CPU percentage, then RAM icon and swe-mux process-tree working set.
+- The expanded sidebar resource trigger is one row: boxed terminal-window icon and live session count, CPU icon and rounded system CPU percentage, then RAM icon and swe-mux process-tree working set.
+  The process count is not on the row (removed 2026-10-18); it is read in the popover the row opens.
   Its tooltip and accessible name expand the icon-only values and state that clicking opens usage details.
 - The session count leads the row, and is the only value in it with no unavailable fallback.
   It is the operator's own unit of work, so it reads before the machine's accounting of it; and it is counted from the fleet the sidebar already renders rather than from process inspection, so it stays truthful on a host where process inspection is refused and the rest of the row reads `—`.

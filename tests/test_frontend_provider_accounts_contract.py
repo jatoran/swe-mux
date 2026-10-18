@@ -238,8 +238,11 @@ def test_expanded_resource_summary_is_one_icon_led_row_with_full_hover_copy() ->
     )
     css = (ROOT / "frontend" / "src" / "style.css").read_text(encoding="utf-8")
 
-    assert 'class="resource-process-count"' in resources
-    assert "<ProcessesIcon/>" in resources
+    assert 'class="resource-session-count"' in resources
+    assert "<SessionsIcon/>" in resources
+    # The process count lives only in the popover: the closed row is sessions, CPU, RAM.
+    assert "resource-process-count" not in resources
+    assert "ProcessesIcon" not in resources
     assert "<CpuIcon/>" in resources
     assert "<RamIcon/>" in resources
     assert "click to see usage details" in resources

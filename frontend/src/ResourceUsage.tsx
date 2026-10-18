@@ -21,7 +21,7 @@ const resourceSummaryLabel=(snapshot:FleetSnapshot|null,liveSessions:number)=>{
   if(!snapshot.available)return `${sessions}, resource usage unavailable - click to see usage details`
   const total=combinedResourceTotals(snapshot)
   const cpu=typeof snapshot.system_cpu_pct==='number'?`${Math.round(snapshot.system_cpu_pct)}% cpu`:'cpu sampling'
-  return `${sessions}, ${total.processes} process${total.processes===1?'':'es'}, ${cpu}, ${memoryLabel(total.memory_bytes)} ram - click to see usage details`
+  return `${sessions}, ${cpu}, ${memoryLabel(total.memory_bytes)} ram - click to see usage details`
 }
 
 const CpuIcon=()=>
@@ -30,15 +30,9 @@ const CpuIcon=()=>
     <path d="M9 2v4m6-4v4M9 18v4m6-4v4M2 9h4m-4 6h4m12-6h4m-4 6h4"/>
   </svg>
 
-const ProcessesIcon=()=>
-  <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-    <circle cx="12" cy="5" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="18" r="2.5"/>
-    <path d="M12 7.5V12M6 15.5V12h12v3.5"/>
-  </svg>
-
 /** A terminal window with a shell prompt in it. The sessions this counts are panes the
- *  operator opens and types into, so the glyph is the pane rather than another abstract
- *  node diagram - the process tree next to it already owns that shape. */
+ *  operator opens and types into, so the glyph is the pane rather than an abstract
+ *  node diagram. */
 const SessionsIcon=()=>
   <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
     <rect x="2.5" y="4" width="19" height="16" rx="1.5"/>
@@ -116,12 +110,11 @@ export function ResourceUsageSummary({snapshot,sessions,compact=false,onRefresh,
         <span aria-hidden="true">ws</span><strong>{snapshot?.available?compactMemoryLabel(combined.memory_bytes):'—'}</strong>
       </button>
     : <button class="resource-usage-summary" onClick={toggle} aria-expanded={open} aria-label={summaryTitle} title={summaryTitle}>
-        {/* Sessions first, then the processes they add up to: the operator's own unit
-            of work leads, and the machine's reading of it follows. It carries no
-            em-dash fallback because it never needs one — nothing about it depends on
-            the process snapshot having arrived. */}
+        {/* Sessions first: the operator's own unit of work leads, and the machine's
+            reading of it follows. It carries no em-dash fallback because it never needs
+            one — nothing about it depends on the process snapshot having arrived. The
+            process count is left to the popover, which is where it is worth reading. */}
         <span class="resource-session-count" aria-hidden="true"><SessionsIcon/>{liveSessions}</span>
-        <span class="resource-process-count" aria-hidden="true"><ProcessesIcon/>{snapshot?.available?combined.processes:'—'}</span>
         <span class="resource-summary-metric" aria-hidden="true"><CpuIcon/><strong>{summaryCpu}</strong></span>
         <span class="resource-summary-metric" aria-hidden="true"><RamIcon/><strong>{snapshot?.available?memoryLabel(combined.memory_bytes):'—'}</strong></span>
       </button>}{popup&&createPortal(popup,document.body)}</div>
