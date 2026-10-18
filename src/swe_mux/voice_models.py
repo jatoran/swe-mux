@@ -530,6 +530,27 @@ class WhisperModelStore:
     def cached(self, name: str) -> bool:
         return self.local_path(name) is not None
 
+    def probed(self, *names: str) -> bool:
+        """Whether `status` for these names is memo reads only: no import, no disk read."""
+        if self._backend is None:
+            return False
+        if not self._backend:
+            return True
+        return all(name.strip() in self._cached for name in names if name.strip())
+
+    def probe(self, *names: str) -> None:
+        """Answer every probe `status` would make for these names. Run it in a thread.
+
+        The first answer imports ``faster_whisper`` and, through its resolver,
+        ``huggingface_hub``, then reads the hub cache: 3.4-3.9 s on the live daemon,
+        measured at two consecutive starts (`development/DAEMON_LOAD_ISOLATION.md`
+        item 21). On the event loop that was a stall every terminal felt, the first
+        time anything read voice status after a start.
+        """
+        if self.backend_installed():
+            for name in names:
+                self.local_path(name)
+
     def forget(self, name: str | None = None) -> None:
         """Drop a memoized probe so weights installed out of band are noticed."""
         if name is None:

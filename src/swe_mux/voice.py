@@ -3636,6 +3636,19 @@ class VoiceService:
             remedy=self._extra_remedy(),
         )
 
+    async def probe_whisper_models(self, *names: str) -> None:
+        """Answer the Whisper probes off the loop, so the status reads after it are memo reads.
+
+        Every async reader of `whisper_models` status awaits this first: the first
+        probe imports two large packages and reads the Hugging Face cache, which
+        on the loop was a 3.4-3.9 s stall at every daemon start
+        (`WhisperModelStore.probe`). Names default to the configured dictation and
+        routing models; a probe already answered costs one dictionary check.
+        """
+        wanted = names or (self.config.stt_whisper_model, self.decode_model(COMMAND_PROFILE))
+        if not self.whisper_models.probed(*wanted):
+            await asyncio.to_thread(self.whisper_models.probe, *wanted)
+
     def _stt_readiness(self) -> tuple[bool, str | None, list[dict[str, Any]]]:
         """Whether dictation can run *right now*, why not, and each model's state.
 
@@ -3790,6 +3803,8 @@ class VoiceService:
         ) or active.get("diagnostic")
         stats = await self.store.cache_stats()
         spend = await self.automation_store.spend(rule_id=VOICE_RULE_ID)
+        if self.config.stt_engine != "sapi":
+            await self.probe_whisper_models()
         stt_available, stt_diagnostic, stt_models = self._stt_readiness()
         return {
             "enabled": self.config.tts_enabled,

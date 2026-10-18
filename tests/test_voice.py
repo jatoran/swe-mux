@@ -5,6 +5,7 @@ import io
 import json
 import logging
 import sqlite3
+import threading
 import time
 import wave
 from datetime import datetime
@@ -947,6 +948,43 @@ def test_stt_readiness_separates_no_extra_from_no_weights(
         monkeypatch.setattr(service.whisper_models, "cached", lambda _name: True)
         available, diagnostic, _models = service._stt_readiness()
         assert available is True and "dictation turbo" in (diagnostic or "")
+    finally:
+        service.store.close()
+
+
+async def test_voice_status_answers_the_whisper_probes_off_the_event_loop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The first probe imports `faster_whisper` and `huggingface_hub`.
+
+    On the live daemon that was a 3.4-3.9 s loop stall at each start, the first
+    time anything read voice status, so every reader awaits the probe in a thread
+    and reads the memo afterwards; a second status read probes nothing.
+    """
+    from swe_mux.voice_models import WhisperModelStore
+
+    loop_thread = threading.get_ident()
+    probes: list[tuple[str, int]] = []
+
+    def import_backend() -> bool:
+        probes.append(("import", threading.get_ident()))
+        return True
+
+    def resolve_local(name: str) -> str | None:
+        probes.append((name, threading.get_ident()))
+        return None
+
+    monkeypatch.setattr(WhisperModelStore, "_import_backend", staticmethod(import_backend))
+    monkeypatch.setattr(WhisperModelStore, "_resolve_local", staticmethod(resolve_local))
+    service, _events, _emitted, _record = make_service(tmp_path)
+    try:
+        status = await service.status()
+        assert [entry["model"] for entry in status["stt_models"]] == ["turbo", "small.en"]
+        assert {name for name, _ in probes} == {"import", "turbo", "small.en"}
+        assert all(thread != loop_thread for _, thread in probes), probes
+        answered = len(probes)
+        await service.status()
+        assert len(probes) == answered, "a probe already answered is not asked again"
     finally:
         service.store.close()
 

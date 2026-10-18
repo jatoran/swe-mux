@@ -195,6 +195,7 @@ async def whisper_model_status(request: web.Request) -> web.Response:
         if requested
         else (voice.config.stt_whisper_model, voice.decode_model(COMMAND_PROFILE))
     )
+    await voice.probe_whisper_models(*names)
     models = voice.whisper_models.statuses(*names)
     return json_response({"models": models})
 
@@ -212,6 +213,7 @@ async def whisper_model_download(request: web.Request) -> web.Response:
     if not isinstance(body, dict):
         raise ValueError("whisper download body must be an object")
     name = str(body.get("model") or voice.config.stt_whisper_model).strip()
+    await voice.probe_whisper_models(name)
 
     async def progress(status: dict[str, Any]) -> None:
         # The label is the weights name rather than a store name: this panel

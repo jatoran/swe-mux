@@ -113,6 +113,9 @@ It hand-rolls the transfer, which is why it can report bytes.
 The cache is authoritative for `ready` - the hub writes atomically, and that resolver already understands every form `stt_whisper_model` accepts (a size alias, a bare repository id, a local directory), so a second state file here would only drift from it.
 It reports **no** byte progress: `faster_whisper.download_model` disables the hub's progress hook, so there is nothing to observe, and a proportion derived from an expected total would be an estimate presented as a reading.
 `WHISPER_APPROXIMATE_MB` gives the operator the rough cost before they press Download, labelled approximate, and an unlisted name reports no size rather than a guessed one.
+Its probes are memoized, and the first one is expensive: it imports `faster_whisper` and, through the resolver, `huggingface_hub`, then reads the hub cache.
+So no async reader calls `status` cold - `VoiceService.probe_whisper_models` answers the probes in a thread first (`probed`/`probe`), and `voice.status`, the Whisper status route and the download route all await it.
+Read on the loop, that first probe was a 3.4-3.9 s stall at every daemon start on the live host (`development/DAEMON_LOAD_ISOLATION.md`, item 22's re-measure).
 
 `SpacyModelStore` (the Kokoro G2P's spaCy model) is the newest of the three and is here for a **packaging** reason rather than a size one.
 `en-core-web-sm` is published as a GitHub release asset and exists on no index, so declaring it in the `voice-local` extra put a bare unresolvable `Requires-Dist` in the wheel and made `pip install "swe-mux[voice-local]"` fail outright for every downstream user of 0.1.0 (`development/DEPENDENCY_AUDIT_2026-08-28.md` § 4).
