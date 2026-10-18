@@ -847,7 +847,7 @@ Items are worked in order, and an item may reorder, split or remove later items 
     Each of five deliberate breaks - host equality off, 443 on any host, the origin's own host unchecked, any port, the middleware skipping the origin - failed the file.
     The gateway half of "both processes" is the install in item 28; the policy it will run is the one tested here.
 
-- [ ] **27. Gateway control protocol and the remote terminal hub.**
+- [x] **27. Gateway control protocol and the remote terminal hub.**
   - **Why:** the daemon must drive terminal cores in the gateway through the same interface it uses in process.
   - **Change:**
     - Typed messages over token-authenticated `framed_ipc`, with capability negotiation and a protocol version the daemon checks.
@@ -857,6 +857,26 @@ Items are worked in order, and an item may reorder, split or remove later items 
     - The daemon's `Session` views read the mirror when the hub is remote.
   - **Where:** `terminal_core` (the remote hub), `design/interfaces.md`.
   - **Done when:** the core's test suite runs against both the local and the remote hub.
+  - **Done (2026-10-18).** Three process-agnostic modules in `terminal_core`: `protocol.py` (the vocabulary, version 1), `gateway.py` (`GatewayHub` - a `framed_ipc` server for the daemon and one stream-plus-core per session it is sent, with `serve` for a browser and `feed_output` for the supervisor's bytes, which item 28 wires), and `remote.py` (`RemoteHub` and `RemoteTerminal`, the daemon's mirror, which stands on `Session.terminal` where a `TerminalCore` stands in process).
+    The message set is in `design/interfaces.md`; the decisions are below.
+  - **Keystrokes cross as writes, not as a summary of them.** The plan's "input summary" would have merged text, and two consumers cannot take that: interrupt intent matches a lone `\x03` or `\x1b`, and the composer estimate classifies each write on its own.
+    So a session's `state` carries the keystroke writes since the daemon's last acknowledgement, in order, and the daemon runs its own `TerminalHost` side effects on each - the same functions, in the same order, as in process, only later.
+    What coalesces is the sending: at most one `state` per session is unacknowledged, and everything that happens meanwhile folds into the next.
+    A stalled daemon therefore costs the gateway one pending summary per session - at most 1024 writes or 256 KiB, oldest dropped and read by the daemon as typed-in composer text - and not a queue in a socket buffer.
+  - **Exactly once per daemon.** The writes are numbered; a daemon applies each number once, so a summary resent after an acknowledgement lost to a reconnect changes nothing, while a new daemon applies everything outstanding and a new gateway (a new `gateway_id`) numbers from zero again.
+  - **Who owns what.** The gateway owns the input accounting, ownership, viewports, geometry and the terminal mode, because keystrokes arrive there; the daemon's mirror merges reports so a revision only grows and the last input only gets more recent, and a stale report never moves either backwards.
+    The daemon owns what typing means and `pending_submit`, which it sends the other way because the gateway needs it only as a write condition.
+  - **Writes are ordered notices with a request id**, not requests: `framed_ipc` runs a request's handler as a task but a notice inline, so mixing the two would let a later unconditional write overtake an earlier conditional one.
+    `write` and `write_operator_input` do not wait, so their callers keep their shape; the queue's conditional write is `write_when`, awaited on either terminal, so the queue's writer became async (`operator_input.deliver_operator_input`).
+  - **Deviations from the wording above, each for a reason.** Broadcast membership is not sent: the gateway forwards a broadcast keystroke to the daemon, which delivers it through `deliver_broadcast` exactly as in process, because target liveness and the accounting every operator write owes are the daemon's, and one implementation beats two.
+    Client diagnostics, repaint requests and attach and detach reach the daemon as the events the core already emits (`event`), rather than as messages of their own.
+    Metering counters wait for item 28, which has the sockets to meter.
+  - **`Session.attended` replaced `bool(session.subscribers)`** at all five readers (automation's attended checks, both of them, fleet intelligence, the Git monitor, and readiness evidence), because `subscribers` counts only browsers attached in this process.
+    `routes/pty.py` closes a `/pty` upgrade for a session whose terminal is remote with 4012, the first of item 32's handoff rules, so a terminal can never be served from two processes at once.
+  - **Measured: the in-process path pays nothing.** The core's mutations now call `on_change`, unset in process; the hot-path benchmark reads 3.02-3.08 us per output chunk and 51.3-51.6 us per keystroke frame against item 25's 3.06-3.21 and 51.6-59.2.
+  - **Tests:** `tests/test_terminal_hub.py`, 43: sixteen behaviours run against both a local and a remote hub (`tests/support/terminal_rig.py`, the remote one over a real loopback connection) - keystroke accounting, writes reaching the daemon once and in order, pointer clicks, a condition refused after a keystroke lands and accepted while it holds, accounted and unaccounted daemon writes, `pending_submit` as a condition, snapshot updates and output reaching browsers, the leader deciding a passive claim, ownership, geometry, mode and attachment reaching the daemon, a repaint, events, broadcast, and a `Session` reading either terminal through its views - plus the gateway's own contract: coalescing under a stalled daemon, a reconnect resyncing once, a resend after a lost acknowledgement applying once, a restarted daemon keeping the browsers' state, the sessions set, diagnostics, protocol and token refusal, a disconnected gateway refusing a conditional write, and the daemon refusing `/pty` for a remote terminal.
+    Ten deliberate breaks - sending while unacknowledged, applying writes without their numbers, ignoring a write's condition, ignoring the reported revision, a re-upsert forgetting the browsers' state, ignoring the sessions set, dropping the leader, dropping `pending_submit`, not reporting keystrokes, never sending the claim log - each failed the file.
+    The queue, auto-delivery and agent-messaging writer doubles became async; four attended doubles gained `attended`.
 
 - [ ] **28. The terminal gateway process.**
   - **Why:** this is the isolation itself.

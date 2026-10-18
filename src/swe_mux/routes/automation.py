@@ -249,7 +249,7 @@ async def automation_dry_run(request: web.Request) -> web.Response:
     normalized = normalize_event(
         event,
         session.record if session else None,
-        attended=bool(session and session.subscribers),
+        attended=bool(session and session.attended),
     )
     supplied = body.get("text")
     rules = parse_rules(str(supplied), source="dry-run") if supplied is not None else None

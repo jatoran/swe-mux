@@ -260,6 +260,19 @@ class TerminalStream:
             except asyncio.QueueFull:
                 self.schedule_resync(subscriber)
 
+    def feed(self, data: bytes) -> None:
+        """Take one chunk of PTY output: the standing-state parsers, the ring, and
+        every attached reader, in the order the daemon's own fanout uses.
+
+        For a host that reads output for the terminal alone (the gateway); the
+        daemon's fanout does the same three steps with its own parsers in between.
+        """
+        self.screen.feed(data)
+        self.bracketed_paste.feed(data)
+        self.sticky_modes.feed(data)
+        self.scrollback.append(data)
+        self.publish_output(data)
+
     def publish_output(self, data: bytes) -> None:
         for subscriber in tuple(self.subscribers):
             if subscriber.resync_pending:

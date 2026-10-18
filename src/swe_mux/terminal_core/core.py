@@ -170,10 +170,24 @@ class TerminalCore:
         # for the daemon's own reading of the stream (`TerminalStream.screen`).
         self.terminal_mode: str | None = None
         self.terminal_mode_updated_at = 0.0
+        # Told whenever something the daemon mirrors changes - the input accounting,
+        # ownership, geometry, viewports, the terminal mode, claims and refusals - so
+        # a gateway can send it (`gateway.GatewaySession.mark_dirty`). None in
+        # process, where the daemon reads this object directly.
+        self.on_change: Callable[[], None] | None = None
 
     @property
     def pty(self) -> PtySink:
         return self._pty()
+
+    @property
+    def attached_connections(self) -> int:
+        """Browser connections attached to this terminal now."""
+        return len(self.stream.subscribers)
+
+    def _changed(self) -> None:
+        if self.on_change is not None:
+            self.on_change()
 
     # --- writes -------------------------------------------------------------------
 
@@ -229,6 +243,62 @@ class TerminalCore:
         self.input_revision += 1
         self.last_input_event_ts = now
         self.last_input_report_ts = now
+        self._changed()
+
+    async def write_when(
+        self, data: str | bytes, *, condition: WriteCondition | None, accounted: bool
+    ) -> None:
+        """The daemon's conditional write, the same call wherever the core runs.
+
+        In process the check and the write happen now; a remote terminal sends both
+        to the gateway and waits for the answer (`remote.RemoteTerminal.write_when`).
+        Raises `WriteRefused` when the condition no longer holds.
+        """
+        if accounted:
+            if not isinstance(data, str):
+                raise TypeError("accounted input is text")
+            self.write_operator_input(data, condition=condition)
+        else:
+            self.write(data, condition=condition)
+
+    # --- browser input accounting ---------------------------------------------
+
+    def note_typed_input(self, now: float) -> None:
+        """A keystroke that puts text in the composer: the revision, the quiet clock,
+        and the owner's protection from passive claims all move."""
+        self.input_revision += 1
+        self.last_input_event_ts = now
+        self.input_owner_gesture_ts = now
+        self._changed()
+
+    def note_pointer_input(self, now: float) -> None:
+        """A click or a wheel notch: the human is here, but the composer is untouched,
+        so the quiet clock moves and the revision does not."""
+        self.last_input_event_ts = now
+        self.input_owner_gesture_ts = now
+        self._changed()
+
+    def set_terminal_mode(self, mode: str) -> bool:
+        """Record the owning browser's active buffer; True when it changed."""
+        changed = self.terminal_mode != mode
+        self.terminal_mode = mode
+        self.terminal_mode_updated_at = time.monotonic()
+        self._changed()
+        return changed
+
+    def record_claim(self, entry: dict[str, Any]) -> None:
+        self.claim_log.append(entry)
+        self._changed()
+
+    # --- frames from the hosting process ----------------------------------------
+
+    def publish_update(self, frame: dict[str, Any]) -> None:
+        """A snapshot `update` for every attached browser."""
+        self.stream.publish_update(frame)
+
+    def publish_exit(self, frame: dict[str, Any]) -> None:
+        """The `exit` frame for every attached browser."""
+        self.stream.publish_exit(frame)
 
     # --- input ownership (see terminal_arbitration) ---------------------------
 
@@ -245,6 +315,7 @@ class TerminalCore:
         self.input_owner_epoch = state.epoch
         self.input_owner_device = state.device
         self.input_owner_gesture_ts = state.last_gesture_at
+        self._changed()
 
     def note_owner_input(self, now: float) -> None:
         """Human keystrokes renew the owner's protection from passive claims."""
@@ -262,6 +333,7 @@ class TerminalCore:
         """Count input refused from a non-owner. Silent drops left this failure invisible:
         the user saw missing characters and there was nothing in telemetry to correlate."""
         self.input_rejections += 1
+        self._changed()
         now = time.monotonic()
         if now - self.last_input_reject_report_ts < 2:
             return
@@ -280,11 +352,13 @@ class TerminalCore:
         """Record (or, for a hidden client, forget) one client's fitted size."""
         if hidden:
             self.viewports.pop(connection_id, None)
-            return
-        self.viewports[connection_id] = (max(2, cols), max(1, rows))
+        else:
+            self.viewports[connection_id] = (max(2, cols), max(1, rows))
+        self._changed()
 
     def drop_viewport(self, connection_id: str) -> None:
-        self.viewports.pop(connection_id, None)
+        if self.viewports.pop(connection_id, None) is not None:
+            self._changed()
 
     def apply_geometry(self) -> bool:
         """Resize the PTY to the arbitrated size. True when it actually changed.
@@ -299,6 +373,7 @@ class TerminalCore:
         self.geometry = size
         self.pty.resize(size[0], size[1])
         self.stream.publish_control(self.geometry_frame())
+        self._changed()
         return True
 
     def geometry_frame(self) -> dict[str, Any]:

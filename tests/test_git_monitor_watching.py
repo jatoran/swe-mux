@@ -28,6 +28,7 @@ LAYOUT = CheckoutLayout(ROOT, f"{ROOT}/.git", f"{ROOT}/.git")
 class _Session:
     def __init__(self, cwd: str, attached: bool, state: str = "idle") -> None:
         self.subscribers = [object()] if attached else []
+        self.attended = attached
         self.record = SimpleNamespace(
             id=f"{cwd}:{attached}",
             git=GitState(),

@@ -668,6 +668,44 @@ to keep the old behaviour.
   the geometry the host applied, and `removed {sid}` goes to every subscriber but the remover
   before the session's output stops.
 
+## Terminal gateway control protocol (local only)
+
+The daemon drives the terminal cores the gateway hosts over `framed_ipc` (`DAEMON_LOAD_ISOLATION.md` item 27; `terminal_core/protocol.py` is the vocabulary).
+The gateway listens on loopback and the daemon connects with the gateway's token; `hello` carries `protocol` (`GATEWAY_PROTOCOL_VERSION`, 1), the daemon's `generation` and the `capabilities` it wants (`diagnostics`), and the reply adds the gateway's random `gateway_id`.
+A mismatched protocol is refused at `hello`; a second daemon connection supersedes the first.
+Process-local plumbing, not a public API, exactly like the supervisor's.
+
+Everything except one request is a notice, so it applies in the order it was sent; no notice carries `id` or `ok`, which `framed_ipc` reserves for requests and replies.
+
+Daemon to gateway:
+
+- `upsert {descriptor, snapshot, revision, max_scrollback, attach_replay_bytes, input_revision, pending_submit}` - host a session, or refresh one already hosted without disturbing what its browsers built (ownership, viewports, the revision, which becomes the larger of the two).
+  `descriptor` is `DescriptorState`: `session_id, backend, state, created_at, stopping, ended` and the four harness traits.
+- `remove {sid}` - stop hosting it; its browsers are closed with 4010 (use the daemon).
+- `sessions {sids}` - the complete set this daemon serves; anything else is removed.
+- `update {sid, frame, descriptor}` and `exit {sid, frame, descriptor}` - a snapshot frame for attached browsers, with the descriptor it implies.
+- `presence {leader}` - the leading device class, for passive claims.
+- `pending_submit {sid, pending_submit}` - the daemon-owned unsubmitted-delivery mark, which the gateway needs only as a write condition.
+- `write {sid, rid, text, accounted, condition}` with the bytes as payload - `condition` is `{input_revision, operator_quiet_seconds, no_pending_submit}` or null; `accounted` advances the input revision and the last input's time as operator input.
+- `repaint {sid, rid}` - the one-column pulse.
+- `state_ack {sid, upto}` - every keystroke write numbered below `upto` is applied.
+- `diagnostics {sid?}` - the one request; the reply carries each session's ownership, geometry, attachments, claims, accounting and pending writes.
+
+Gateway to daemon:
+
+- `state {sid, revision, age, first_write_seq, writes, mode, mode_age, owner_connection, owner_device, owner_epoch, geometry, viewports, attached, attachments_seen, rejections, denials, claims?}` - one per session, at most one unacknowledged; changes made meanwhile fold into the next.
+  `writes` are the keystroke writes whose side effects the daemon owes, oldest first and numbered from `first_write_seq`: `["t", text]` (typed text, with a third element `1` when it was also the owner's submit), `["o", text]` (an owner submit on its own), `["b", base64]` (binary input).
+  The daemon applies each number once, so a resend after a lost acknowledgement is harmless, and a gateway with a new `gateway_id` numbers from zero again.
+  At most 1024 writes or 256 KiB are held per session; the oldest are dropped past that, and the daemon reads a gap as typed-in composer text.
+  `claims` is the whole claim log, present when it changed.
+- `event {sid, kind, source, payload}` - for the event log; held, at most 512, while no daemon is attached.
+- `write_result {sid, rid, written, reason?, revision, age}` and `repaint_result {sid, rid, applied}`.
+  A refused write names the part of its condition that moved (`input_revision_moved`, `operator_recently_typed`, `unsubmitted_delivery_in_composer`); `not_hosted` and `write_failed:*` mean the gateway could not write at all.
+- `broadcast {sid, data}` - typed text the daemon delivers to the rest of the broadcast set (`routes/terminal.deliver_broadcast`).
+
+Ages are seconds since the event, never clock readings.
+Browser close codes: 4010 reconnect to the daemon, 4011 the gateway is restarting, 4012 (from the daemon's `/pty`) reconnect to the gateway, which holds this terminal.
+
 ## Canonical Projects and Groups
 
 ```text

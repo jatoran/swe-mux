@@ -138,7 +138,7 @@ class Harness:
         self.takes_submit_on = takes_submit_on
         self.submits = 0
 
-        def write(session: Any, data: str, *, condition: Any = None) -> None:
+        async def write(session: Any, data: str, *, condition: Any = None) -> None:
             self.writes.append((session.record.id, data))
             if data != SUBMIT_SEQUENCE:
                 return
@@ -448,7 +448,7 @@ async def test_the_screen_alone_can_confirm_a_submit(tmp_path: Path) -> None:
     session.screen = "idle"
     harness = Harness(tmp_path, session)
 
-    def take_the_submit(target: Any, data: str, *, condition: Any = None) -> None:
+    async def take_the_submit(target: Any, data: str, *, condition: Any = None) -> None:
         harness.writes.append((target.record.id, data))
         if data == SUBMIT_SEQUENCE:
             target.screen = "working"
@@ -676,7 +676,7 @@ async def test_approval_protection_is_never_overridable(tmp_path: Path) -> None:
 async def test_failed_write_marks_failed_not_sent(tmp_path: Path) -> None:
     harness = Harness(tmp_path, live_session("s1"))
 
-    def explode(session: Any, data: str, *, condition: Any = None) -> None:
+    async def explode(session: Any, data: str, *, condition: Any = None) -> None:
         raise OSError("pty write failed")
 
     harness.service._write = explode

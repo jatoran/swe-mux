@@ -44,7 +44,6 @@ AGENT_FIRST_PROMPT_SETTLE_SECONDS = 8.0
 class ReadinessSession(Protocol):
     record: Any
     observation_state: dict[str, Any]
-    subscribers: set[Any]
     input_owner: str | None
     input_revision: int
     last_input_event_ts: float
@@ -58,6 +57,12 @@ class ReadinessSession(Protocol):
     # was not seen to take (`composer_input.PendingSubmit`). Read through
     # ``getattr`` so a stand-in that predates it simply has none.
     pending_submit: Any
+
+    @property
+    def attended(self) -> bool:
+        """Whether a browser has the terminal open, wherever its core runs
+        (`Session.attended`). Read through ``getattr``."""
+        ...
 
 
 @dataclass(slots=True)
@@ -515,7 +520,7 @@ class DeliveryReadinessTracker:
         terminal_mode_updated_at = float(getattr(session, "terminal_mode_updated_at", 0.0))
         input_revision = int(getattr(session, "input_revision", 0))
         last_input_event_ts = float(getattr(session, "last_input_event_ts", 0.0))
-        terminal_observer_connected = bool(getattr(session, "subscribers", ()))
+        terminal_observer_connected = bool(getattr(session, "attended", False))
         exclusive_input_owner = bool(getattr(session, "input_owner", None))
         terminal_age = (
             max(0.0, now - terminal_mode_updated_at)

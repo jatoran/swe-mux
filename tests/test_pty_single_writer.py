@@ -19,7 +19,7 @@ import pytest
 
 from swe_mux.meta_hooks import MetaHookEngine
 from swe_mux.models import MuxEvent, SessionRecord
-from swe_mux.operator_input import record_operator_input
+from swe_mux.operator_input import deliver_operator_input, record_operator_input
 from swe_mux.prompt_queue import PromptQueueService, PromptQueueStore, QueueError, delivery_payload
 from swe_mux.session import Session
 from swe_mux.terminal_core import WriteCondition, WriteRefused
@@ -226,8 +226,10 @@ async def _queue(
 ) -> tuple[PromptQueueService, _Events]:
     events = _Events()
 
-    def write(target: Any, data: str, *, condition: WriteCondition | None = None) -> None:
-        record_operator_input(
+    async def write(
+        target: Any, data: str, *, condition: WriteCondition | None = None
+    ) -> None:
+        await deliver_operator_input(
             events, target, data, source="queue", input_owner=False, condition=condition
         )
 

@@ -343,7 +343,10 @@ newlines**. One message is unaccounted for entirely. The queue reported all seve
   judging again, at most `DELIVERY_JUDGEMENT_ATTEMPTS` (3) times, because the input
   that caused it is evidence the next verdict has to see; input that keeps racing
   the write ends as `delivery_not_safe` naming the refusals. A confirmed send and
-  the submit after a paste carry no condition (`delivery-readiness.md`).
+  the submit after a paste carry no condition (`delivery-readiness.md`). The
+  queue's writer (`OperatorWriter`) is awaited, because where the terminal
+  gateway holds the core only the gateway can give the verdict; a gateway that
+  cannot be reached fails the delivery rather than writing unchecked.
 
 ## Key files
 
@@ -351,7 +354,7 @@ newlines**. One message is unaccounted for entirely. The queue reported all seve
   per-store schema version `prompt_queue`), `PromptQueueService` (typed operations,
   event-driven stranding, startup reconcile), `stage_seed_argv`.
 - `src/swe_mux/server.py` — thin `queue_*` handlers, `QueueError` → typed JSON in
-  `error_middleware`, service wiring + `record_operator_input(source="queue")` injection,
+  `error_middleware`, service wiring + `deliver_operator_input(source="queue")` injection (`_queue_writer`),
   retention loop, `seed_text`/`stage_text` handling in `_spawn_from_body` +
   `_stage_spawn_text`.
 - `src/swe_mux/spawn_contract.py` — `SpawnRequest.seed_text` / `SpawnRequest.stage_text`

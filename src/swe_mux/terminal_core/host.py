@@ -86,9 +86,11 @@ class TerminalSocket(Protocol):
 class TerminalHost(Protocol):
     """The hosting process's side of one connection."""
 
-    #: Stamped on every snapshot frame, so a browser can order PTY snapshots
-    #: against the REST fleet snapshot (`_snapshot_generation`).
-    generation: str
+    @property
+    def generation(self) -> str:
+        """Stamped on every snapshot frame, so a browser can order PTY snapshots
+        against the REST fleet snapshot (`_snapshot_generation`)."""
+        ...
 
     def snapshot(self) -> tuple[dict[str, Any], int]:
         """The session's current record snapshot and its revision."""

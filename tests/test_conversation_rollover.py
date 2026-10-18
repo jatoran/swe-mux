@@ -1266,6 +1266,7 @@ async def test_a_record_on_the_followed_transcript_clears_staleness() -> None:
         SimpleNamespace(
             record=agent_record(),
             subscribers=(),
+            attended=False,
             meta_sink=None,
             observation_stale_reason="transcript_stale",
         ),
@@ -1285,6 +1286,7 @@ async def test_a_record_cannot_clear_an_explicit_conversation_mismatch() -> None
         SimpleNamespace(
             record=agent_record(),
             subscribers=(),
+            attended=False,
             meta_sink=None,
             observation_stale_reason="conversation_owned_elsewhere",
         ),

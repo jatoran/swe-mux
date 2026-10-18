@@ -66,13 +66,14 @@ T = TypeVar("T")
 
 
 class OperatorWriter(Protocol):
-    """How the queue writes into a target's terminal (`operator_input.record_operator_input`).
+    """How the queue writes into a target's terminal (`operator_input.deliver_operator_input`).
 
     ``condition`` is what the delivery's readiness verdict relied on; a writer that
-    finds it no longer holds writes nothing and raises `WriteRefused`.
+    finds it no longer holds writes nothing and raises `WriteRefused`. Awaited,
+    because where the terminal's core runs in the gateway only the gateway can say.
     """
 
-    def __call__(
+    async def __call__(
         self, session: Any, data: str, *, condition: WriteCondition | None = None
     ) -> None: ...
 
@@ -2230,9 +2231,9 @@ class PromptQueueService:
         """
         baseline = self._submit_baseline(session)
         if str(baseline["state"]) in TURN_OPEN_STATES:
-            self._write(session, SUBMIT_SEQUENCE)
+            await self._write(session, SUBMIT_SEQUENCE)
             return None
-        self._write(session, SUBMIT_SEQUENCE)
+        await self._write(session, SUBMIT_SEQUENCE)
         if await self._await_turn(session, baseline):
             return True
         for index, delay in enumerate(self._submit_retry_delays, start=2):
@@ -2249,7 +2250,7 @@ class PromptQueueService:
                 return True
             if str(getattr(session.record, "state", "")) in {"exited", "crashed"}:
                 raise RuntimeError("the target session ended during delivery")
-            self._write(session, SUBMIT_SEQUENCE)
+            await self._write(session, SUBMIT_SEQUENCE)
             if await self._await_turn(session, baseline):
                 return True
         return False
@@ -2651,7 +2652,7 @@ class PromptQueueService:
             # condition; a verdict carries what it relied on.
             condition = None if confirmed else delivery_condition(evaluation)
             try:
-                self._write(session, data, condition=condition)
+                await self._write(session, data, condition=condition)
             except WriteRefused as refused:
                 refusals.append(refused.reason)
                 log.info(

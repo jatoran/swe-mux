@@ -146,15 +146,27 @@ One session's terminal, independent of the process hosting it (`development/DAEM
 - `connection.py` - one browser connection from the 0.25 s attach handshake to detach: replay, the sender with its output credit (`flow.py`), claims, input frames and client frames.
 - `host.py` - the only things the core asks of its host: a live `TerminalDescriptor` (state, created and stopping flags, the four harness traits it acts on), the record snapshot and revision, the presence leader, an event sink, the side effects typed input owes, and broadcast.
 
+- `protocol.py` - the terminal gateway's control protocol (item 27): message names, `DescriptorState`, the wire forms of a `WriteCondition` and of a keystroke write, the browser close codes, and the bounds on what a gateway holds for a daemon that is not reading (`design/interfaces.md`).
+- `gateway.py` - `GatewayHub`, the gateway's side: a `framed_ipc` server for the daemon, one `GatewaySession` (stream, core, `MirroredDescriptor`, `GatewayTerminalHost`) per session it is sent, `serve` for a browser and `feed_output` for the supervisor's bytes.
+  Each session's `state` goes out at most one unacknowledged at a time, and the keystroke writes it carries are numbered so a resend applies once.
+- `remote.py` - `RemoteHub` and `RemoteTerminal`, the daemon's side: a mirror that stands on `Session.terminal` where a `TerminalCore` stands in process, answering the same attribute names from what the gateway reports and running the daemon's own `TerminalHost` side effects on each keystroke write.
+  The gateway owns the input accounting, ownership and geometry; the daemon owns what typing means and `pending_submit`.
+
 `Session` constructs its core and keeps every attribute it had as a view onto it (`_TerminalView`), so delivery readiness, automation's attended checks and every other reader are unchanged; the per-chunk fanout reaches the stream directly, because a view read costs a lookup on the hottest path in the daemon.
-`routes/pty.py` hosts the core in process (`SessionTerminalHost`).
+A `RemoteTerminal` keeps the daemon's own stream, so the same views and the fanout work unchanged when the core is in the gateway; only browser attachment moves, which is why "is anyone looking" is `Session.attended` (`attached_connections` on either terminal) rather than the local `subscribers`.
+`routes/pty.py` hosts the core in process (`SessionTerminalHost`), and closes a `/pty` upgrade for a session whose terminal is remote with 4012.
+The core's mutations of what the daemon mirrors call `on_change` (`note_typed_input`, `note_pointer_input`, `set_terminal_mode`, `record_claim`, geometry, viewports, ownership), which is how the gateway knows a session has something to send; in process it is unset.
 
 `TerminalCore.write` is the daemon's only PTY write (item 25), and `tests/test_pty_single_writer.py` fails on a `pty.write` or `pty.resize` anywhere outside the core and the PTY implementations under it.
+`write_when` is the daemon's conditional write, the same awaited call on a `TerminalCore` and on a `RemoteTerminal`, because only the process the keystrokes arrive in can judge a condition.
 One writer gives writes from every source a single order, and it is what lets a write carry a `WriteCondition` - the input revision, operator-quiet window and pending-submit state a delivery's readiness verdict relied on - checked with nothing able to run between the check and the write; a condition that no longer holds raises `WriteRefused` and writes nothing.
 `write_operator_input` is the accounted variant: it writes, then advances `input_revision` and the last input's time.
 `last_input_age` reports that time as an age, because a monotonic stamp means nothing in another process.
 
-**Not:** anything of the daemon's own. `tests/test_terminal_core_boundary.py` imports the package in a fresh interpreter and fails if it loads any `swe_mux` module beyond four leaf modules (`screen_mode`, `scrollback`, `composer_input`, `terminal_arbitration`), which is what lets the same core run in the terminal gateway process.
+**Not:** anything of the daemon's own.
+`tests/test_terminal_core_boundary.py` imports the package in a fresh interpreter and fails if it loads any `swe_mux` module beyond five leaf modules.
+They are `screen_mode`, `scrollback`, `composer_input`, `terminal_arbitration`, and the standard-library-only `framed_ipc` the control protocol rides on.
+That is what lets the same core run in the terminal gateway process.
 
 ## `console_contention.py`
 
@@ -190,7 +202,8 @@ The body is a bracketed paste with newlines as CR; a *leading* newline run is li
 ## `operator_input.py`
 
 Operator-class input: every write into a terminal that is not a browser keystroke - the HTTP input route, broadcast, voice, approvals, the prompt queue, staged spawn text, and the interrupt and graceful-end operations.
-`record_operator_input` writes through `TerminalCore.write_operator_input` (passing through any `WriteCondition`), then does what such a write owes: the remote-shell submit note, the composer estimate (`note_composer_write`), the interrupt intent, and the `terminal_input` event.
+`record_operator_input` writes through the terminal's `write_operator_input` without waiting, then does what such a write owes: the remote-shell submit note, the composer estimate (`note_composer_write`), the interrupt intent, and the `terminal_input` event.
+`deliver_operator_input` is the same for a write carrying a `WriteCondition` - the prompt queue's - and is awaited, since in the gateway the verdict is the gateway's to give.
 `session_accepts_input` is the ended-session refusal and `composer_insertion_for` builds a harness's insertion bytes.
 
 **Not:** the browser path, which accounts per keystroke kind in `terminal_core/connection.py`; or the two deliberately unaccounted writers, automation `write_pty` (`meta_hooks.py`) and process-action interrupts (`processes.py`), which call `TerminalCore.write` because they are not operator input (`design/features/delivery-readiness.md`).

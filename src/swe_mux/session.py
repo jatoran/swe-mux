@@ -94,7 +94,7 @@ from .supervisor_client import (
     liveness_of,
 )
 from .telemetry_otlp import provider_otel_args, provider_otel_env
-from .terminal_core import PtySubscriber, TerminalCore, TerminalStream
+from .terminal_core import PtySubscriber, RemoteTerminal, TerminalCore, TerminalStream
 from .transcript_repair import resolve_row_transcript
 from .transcript_scan import (
     TranscriptScanCache,
@@ -2491,7 +2491,9 @@ class Session:
         # and input accounting. The stream id is minted per Session object, so a
         # respawned id, a cold or inactive session rebuilt from disk, and an
         # in-process pane after a restart can never share one (`stream_id`).
-        self.terminal = TerminalCore(
+        # A `RemoteTerminal` takes its place when the terminal gateway runs the
+        # core; it keeps this stream and answers the same names from a mirror.
+        self.terminal: TerminalCore | RemoteTerminal = TerminalCore(
             TerminalStream(
                 max_scrollback,
                 attach_replay_bytes=attach_replay_bytes,
@@ -2749,6 +2751,16 @@ class Session:
         """The record snapshot and revision a terminal frame carries."""
         return self.record.snapshot(), self.revision
 
+    @property
+    def attended(self) -> bool:
+        """Whether a browser has this session's terminal open right now.
+
+        Asked of the terminal rather than of `subscribers`, which counts only the
+        browsers attached in this process: a session served by the terminal gateway
+        has its browsers there (`RemoteTerminal.attached_connections`).
+        """
+        return self.terminal.attached_connections > 0
+
     def subscribe(self, maxsize: int = 1024) -> PtySubscriber:
         return self.terminal.stream.subscribe(maxsize)
 
@@ -2806,7 +2818,7 @@ class Session:
 
     def publish_update(self) -> None:
         self.revision += 1
-        self.terminal.stream.publish_update(
+        self.terminal.publish_update(
             {
                 "type": "update",
                 "snapshot": self.record.snapshot(),
@@ -2824,7 +2836,7 @@ class Session:
 
     def publish_exit(self, reason: str) -> None:
         self.revision += 1
-        self.terminal.stream.publish_exit(
+        self.terminal.publish_exit(
             {
                 "type": "exit",
                 "snapshot": self.record.snapshot(),

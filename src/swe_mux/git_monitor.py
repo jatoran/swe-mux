@@ -1192,7 +1192,7 @@ class GitMonitor:
             target = (session.record.git_cwd, self._override_for(session))
             members, attached = groups.get(target, ([], False))
             members.append(session)
-            groups[target] = (members, attached or bool(session.subscribers))
+            groups[target] = (members, attached or session.attended)
         return groups
 
     def _due_cause(self, state: _TargetState, attached: bool, now: float) -> str | None:

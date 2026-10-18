@@ -250,6 +250,12 @@ The operator's quiet crosses as an age (`TerminalCore.last_input_age`) rather th
 A confirmed send carries no condition: the human override already says "write anyway", and a condition would only re-impose the check they overrode.
 The submit write that follows a paste carries none either, because it is part of the delivery already decided rather than a new one.
 
+**Where the terminal gateway holds the core (item 27)**, the condition travels with the write and the gateway judges it, because that is where the keystrokes arrive; the queue's write is `operator_input.deliver_operator_input`, awaited (`write_when`).
+The daemon's readiness reads a mirror (`terminal_core.remote.RemoteTerminal`) of the gateway's accounting, which can lag the gateway by one message - the lag the condition exists to make harmless rather than something readiness has to close.
+Each keystroke still reaches the same daemon-side effects (approval cancellation, the composer estimate, interrupt intent), in order and exactly once, so evidence that was correct in process stays correct.
+`pending_submit` is set and cleared by the daemon and sent to the gateway, which needs it only as a condition.
+`terminal_observer_connected` reads `Session.attended`, which counts the browsers wherever they are attached.
+
 Voice prompt submission is an explicit human send, but it may not override `NON_OVERRIDABLE_REASONS`.
 The handler evaluates current readiness and maps stabilized approval/question states to the same protected reason codes before it claims the utterance id or writes bytes.
 Approval answering is a separate guarded route and rechecks the current PTY screen immediately before its one Enter write.

@@ -33,7 +33,8 @@ from ..session import (
     note_remote_shell_submission,
     session_is_unwitnessed,
 )
-from ..terminal_core import serve_connection
+from ..terminal_core import TerminalCore, serve_connection
+from ..terminal_core.protocol import CLOSE_USE_GATEWAY
 from ..ui_build import ui_build_id_cached
 from . import terminal
 
@@ -122,9 +123,15 @@ async def pty_ws(request: web.Request) -> web.WebSocketResponse:
     connection_id = secrets.token_urlsafe(12)
     ws = metered_websocket(request, "pty", heartbeat=20, max_msg_size=2 * 1024 * 1024)
     await ws.prepare(request)
+    core = session.terminal
+    if not isinstance(core, TerminalCore):
+        # The terminal gateway holds this session's core, and a terminal served from
+        # two processes would split its ownership and its accounting between them.
+        await ws.close(code=CLOSE_USE_GATEWAY, message=b"served by the terminal gateway")
+        return ws
     await serve_connection(
         ws,
-        session.terminal,
+        core,
         SessionTerminalHost(request.app, session, generation),
         connection_id=connection_id,
     )

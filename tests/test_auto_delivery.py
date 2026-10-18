@@ -93,6 +93,9 @@ class ReadinessStub:
 
 
 class Harness:
+    async def _write(self, session: Any, data: str, *, condition: Any = None) -> None:
+        self.writes.append((session.record.id, data))
+
     def __init__(self, tmp_path: Path, *sessions: Any, **config_overrides: Any) -> None:
         self.store = PromptQueueStore(tmp_path / "queue.db")
         self.events = EventsStub()
@@ -106,7 +109,7 @@ class Harness:
             self.manager,
             self.events,
             self.readiness,
-            lambda session, data, condition=None: self.writes.append((session.record.id, data)),
+            self._write,
             submit_delay=0.0,
             # A CLI that never opens a turn is what the submit ladder is for;
             # these suites are about the layers above it, so they pay none of
@@ -1127,7 +1130,7 @@ async def test_a_failed_delivery_disables_the_opt_in(tmp_path: Path) -> None:
     session = live_session("s1")
     harness = Harness(tmp_path, session)
 
-    def explode(target: Any, data: str, *, condition: Any = None) -> None:
+    async def explode(target: Any, data: str, *, condition: Any = None) -> None:
         raise OSError("the pipe is gone")
 
     harness.service._write = explode

@@ -81,6 +81,9 @@ class SessionsStub:
 
 
 class Harness:
+    async def _write(self, session: Any, data: str, *, condition: Any = None) -> None:
+        self.writes.append((session.record.id, data))
+
     def __init__(self, tmp_path: Path, *sessions: Any, **config_overrides: Any) -> None:
         self.root = tmp_path / "project"
         self.root.mkdir(parents=True, exist_ok=True)
@@ -94,7 +97,7 @@ class Harness:
             self.manager,
             self.events,
             ReadinessStub(),
-            lambda session, data, condition=None: self.writes.append((session.record.id, data)),
+            self._write,
             submit_delay=0.0,
             # A CLI that never opens a turn is what the submit ladder is for;
             # these suites are about the layers above it, so they pay none of

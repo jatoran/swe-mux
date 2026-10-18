@@ -34,6 +34,7 @@ def session(identity: str, *, scope: str, branch: str) -> Any:
         record=record,
         transcript_path=None,
         subscribers=set(),
+        attended=False,
         output_window=deque(),
         last_input_event_ts=0.0,
         input_owner=None,

@@ -370,7 +370,7 @@ class FleetIntelligence:
         cpu = sum(item.cpu_pct for item in process_rows)
         if (
             record.state == "awaiting"
-            and not session.subscribers
+            and not session.attended
             and now - record.last_activity_ts >= UNATTENDED_SECONDS
         ):
             await self._emit_once(

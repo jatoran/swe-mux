@@ -18,11 +18,13 @@ import subprocess
 import sys
 
 #: The leaf modules the core may load: parsers and pure decisions with no state of
-#: the daemon's behind them.
+#: the daemon's behind them, and the standard-library-only framing the gateway's
+#: control protocol rides on.
 ALLOWED = frozenset(
     {
         "swe_mux",
         "swe_mux.composer_input",
+        "swe_mux.framed_ipc",
         "swe_mux.screen_mode",
         "swe_mux.scrollback",
         "swe_mux.terminal_arbitration",

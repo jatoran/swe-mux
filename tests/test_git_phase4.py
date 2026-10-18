@@ -756,6 +756,7 @@ class _FakeSession:
         state: str = "idle",
     ) -> None:
         self.subscribers = [object()] if attached else []
+        self.attended = attached
         # `project_id` rides every `git_changed`: it is what lets the Git tab tell a
         # poll about *its* repository from one about somebody else's.
         self.record = SimpleNamespace(

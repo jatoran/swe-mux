@@ -95,6 +95,11 @@ class ReplaySession:
     between production and the golden corpus.
     """
 
+    @property
+    def attended(self) -> bool:
+        """`Session.attended`, derived from the attachments as a live session's is."""
+        return bool(self.subscribers)
+
     def __init__(
         self,
         backend: str,

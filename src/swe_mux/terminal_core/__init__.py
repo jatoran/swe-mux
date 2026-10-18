@@ -13,6 +13,11 @@ the rest of the daemon. The daemon hosts it in process (`routes/pty.py`), and a
 moved here. Keeping the host interface this narrow is what lets the same core run
 in a terminal gateway process (`development/DAEMON_LOAD_ISOLATION.md`).
 
+The gateway half is here too, process-agnostic: `protocol.py` is what the daemon
+and the gateway say, `gateway.py` hosts cores for the daemon's sessions, and
+`remote.py` is the daemon's mirror of a terminal the gateway holds, which stands
+on `Session.terminal` where a `TerminalCore` stands in process.
+
 Nothing here may import the daemon's session, observation or route modules.
 """
 
@@ -28,25 +33,35 @@ from .core import (
     WriteRefused,
 )
 from .flow import PTY_OUTPUT_BATCH_BYTES, PTY_OUTPUT_HIGH_WATER_BYTES, PtyOutputFlow
+from .gateway import GatewayHub, GatewaySession
 from .host import PtySink, TerminalDescriptor, TerminalHost, TerminalSocket
 from .input import is_default_color_response, pointer_report_kind
+from .protocol import GATEWAY_PROTOCOL_VERSION, DescriptorState
+from .remote import RemoteHub, RemoteTerminal, TerminalUnavailable
 from .stream import PtySubscriber, TerminalStream
 
 __all__ = [
     "CLAIM_LOG_LIMIT",
     "CLIENT_REPAINT_MIN_INTERVAL_SECONDS",
+    "GATEWAY_PROTOCOL_VERSION",
     "PTY_ATTACH_READY_TIMEOUT_SECONDS",
     "PTY_OUTPUT_BATCH_BYTES",
     "PTY_OUTPUT_HIGH_WATER_BYTES",
     "RESIZE_REPAINT_SETTLE_SECONDS",
+    "DescriptorState",
+    "GatewayHub",
+    "GatewaySession",
     "PtyOutputFlow",
     "PtySink",
     "PtySubscriber",
+    "RemoteHub",
+    "RemoteTerminal",
     "TerminalCore",
     "TerminalDescriptor",
     "TerminalHost",
     "TerminalSocket",
     "TerminalStream",
+    "TerminalUnavailable",
     "WriteCondition",
     "WriteRefused",
     "is_default_color_response",

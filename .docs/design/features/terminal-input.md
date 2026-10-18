@@ -462,6 +462,10 @@ None user-facing.
   (`serve_connection`, `_claim_input`, `_handle_text_input`, `_apply_client_viewport`)
 - The daemon's side of a connection (record, events, presence, what typing means to
   approvals, status and the composer): `src/swe_mux/routes/pty.py` (`SessionTerminalHost`)
+- The same core hosted in the terminal gateway, and the daemon's mirror of it - one
+  protocol to the browser either way, so every rule above holds unchanged there:
+  `src/swe_mux/terminal_core/gateway.py`, `remote.py`, `protocol.py`
+  (`development/DAEMON_LOAD_ISOLATION.md` item 27, `design/interfaces.md`)
 - Client ownership model (pure): `frontend/src/inputOwnership.ts`
 - Letterbox math and the reveal-adoption rule (pure): `frontend/src/terminalLetterbox.ts`
 - Wheel-report pacing to an application-owned viewport (pure): `frontend/src/terminalWheelPacing.ts`

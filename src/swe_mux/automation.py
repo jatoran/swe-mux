@@ -1119,7 +1119,7 @@ class AutomationEngine:
         normalized = normalize_event(
             event,
             session.record if session else None,
-            attended=bool(session and session.subscribers),
+            attended=bool(session and session.attended),
         )
         if normalized.chain_depth > MAX_CHAIN_DEPTH:
             return

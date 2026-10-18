@@ -126,7 +126,6 @@ def record_operator_input(
     *,
     source: str,
     input_owner: bool = True,
-    condition: WriteCondition | None = None,
 ) -> None:
     """Write operator-originated text to a PTY with full evidence accounting.
 
@@ -137,12 +136,41 @@ def record_operator_input(
     validated against. The browser path does its own (throttled) accounting; this
     is the shared path for everything else.
 
-    ``condition`` is what a delivery decided on; when it no longer holds the core
-    writes nothing and raises `WriteRefused`, and so does nothing here.
+    Does not wait, wherever the terminal's core runs: a write to the terminal
+    gateway is sent in order with every other one (`remote.RemoteTerminal`).
     """
     if not session_accepts_input(session):
         raise ValueError("session has ended and cannot accept input")
-    session.terminal.write_operator_input(data, condition=condition)
+    session.terminal.write_operator_input(data)
+    _account_operator_input(events, session, data, source=source, input_owner=input_owner)
+
+
+async def deliver_operator_input(
+    events: EventBus,
+    session: Any,
+    data: str,
+    *,
+    source: str,
+    input_owner: bool = True,
+    condition: WriteCondition | None = None,
+) -> None:
+    """`record_operator_input` for a write that carries the verdict it was decided on.
+
+    The condition is checked where the keystrokes arrive - in process, or in the
+    terminal gateway - with nothing able to land between the check and the
+    write; when it no longer holds nothing is written, `WriteRefused` is raised,
+    and none of the accounting happens.
+    """
+    if not session_accepts_input(session):
+        raise ValueError("session has ended and cannot accept input")
+    await session.terminal.write_when(data, condition=condition, accounted=True)
+    _account_operator_input(events, session, data, source=source, input_owner=input_owner)
+
+
+def _account_operator_input(
+    events: EventBus, session: Any, data: str, *, source: str, input_owner: bool
+) -> None:
+    """What every operator write owes after it is written."""
     note_remote_shell_submission(session, data)
     note_composer_write(events, session, data, source)
     note_interrupt_intent(session, data, source=source)

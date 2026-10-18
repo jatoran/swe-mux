@@ -382,7 +382,7 @@ async def _claim_input(
             this_device_in_use=leader == device,
         ),
     )
-    core.claim_log.append(
+    core.record_claim(
         {
             "ts": time.time(),
             "device": device,
@@ -484,18 +484,15 @@ async def _handle_text_input(
     now = time.monotonic()
     pointer = pointer_report_kind(data)
     if not is_terminal_response and pointer is None:
-        core.input_revision += 1
+        # Typing is the strongest evidence of where the human is; it also renews
+        # this connection's protection from a background pane's passive re-claim.
+        core.note_typed_input(now)
         host.note_typed_text(data)
-        core.last_input_event_ts = now
-        # Typing is the strongest evidence of where the human is; it renews this
-        # connection's protection from a background pane's passive re-claim.
-        core.note_owner_input(now)
         host.note_owner_submit(data)
     elif pointer == "button":
         # A click or a wheel notch is the human being here, but it puts no text in
         # the composer, so it moves the presence clock and not the input revision.
-        core.last_input_event_ts = now
-        core.note_owner_input(now)
+        core.note_pointer_input(now)
     if not is_terminal_response and pointer is None and now - core.last_input_report_ts >= 2:
         core.last_input_report_ts = now
         input_diagnostic: dict[str, Any] = {}
@@ -554,10 +551,8 @@ async def _handle_binary_input(
         return
     core.write(data)
     now = time.monotonic()
-    core.input_revision += 1
+    core.note_typed_input(now)
     host.note_typed_bytes(data)
-    core.last_input_event_ts = now
-    core.note_owner_input(now)
     if now - core.last_input_report_ts >= 2:
         core.last_input_report_ts = now
         host.emit("terminal_input", source="daemon", input_owner=True, bytes=len(data))
@@ -583,10 +578,7 @@ async def _handle_client_message(
             mode = str(frame.get("mode") or "")
             if mode not in {"normal", "alternate"}:
                 raise ValueError("terminal mode must be normal or alternate")
-            changed = core.terminal_mode != mode
-            core.terminal_mode = mode
-            core.terminal_mode_updated_at = time.monotonic()
-            if changed:
+            if core.set_terminal_mode(mode):
                 host.emit("terminal_mode_changed", source="browser", mode=mode)
         elif frame.get("type") in {"attach_ready", "resize"}:
             if _apply_client_viewport(core, connection_id, frame):

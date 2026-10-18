@@ -143,7 +143,7 @@ from .network_usage import (
 )
 from .openrouter import OpenRouterClient
 from .operational_telemetry import OperationalTelemetryStore
-from .operator_input import record_operator_input
+from .operator_input import deliver_operator_input, record_operator_input
 from .path_identity import same_path
 from .plugins import PluginManager
 from .preview_store import PreviewStore
@@ -175,6 +175,7 @@ from .project_watcher import ProjectFileWatcher
 from .projects import ProjectManager
 from .prompt_library import PromptLibrary
 from .prompt_queue import (
+    OperatorWriter,
     PromptQueueService,
     PromptQueueStore,
     QueueError,
@@ -235,6 +236,7 @@ from .status_timeline import StatusTimelineStore
 from .storage_usage import ProjectFootprintTarget, StorageUsage
 from .supervisor_client import SupervisorClient, SupervisorUnavailable
 from .telemetry_service import CanonicalTelemetryService
+from .terminal_core import WriteCondition
 from .tier0_store import Tier0Context, Tier0Store
 from .transcript_discovery import TranscriptScanner
 from .update_check import UPDATE_CHECK_LOOP, UpdateChecker
@@ -1385,6 +1387,21 @@ async def _startup_history_reconcile(
     return await reconcile_external_history(history, backends=backends, scan=scanner.scan)
 
 
+def _queue_writer(events: EventBus) -> OperatorWriter:
+    """How the prompt queue writes: operator input through the single accounting
+    helper, carrying the verdict a delivery was decided on (input_owner=False: the
+    sender holds no ownership claim on the target's PTY, same as broadcast)."""
+
+    async def write(
+        session: Session, data: str, *, condition: WriteCondition | None = None
+    ) -> None:
+        await deliver_operator_input(
+            events, session, data, source="queue", input_owner=False, condition=condition
+        )
+
+    return write
+
+
 async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase by phase
     app: web.Application, timeline: StartupTimeline, predecessor_died_uncleanly: bool = False
 ) -> None:
@@ -1887,16 +1904,7 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
     voice = VoiceService(config, events, sessions, voice_store, automation_store, openrouter)
     prompt_queue_store = PromptQueueStore(config.database_path)
     prompt_queue = PromptQueueService(
-        prompt_queue_store,
-        sessions,
-        events,
-        fleet.readiness,
-        # Queue delivery is operator input and must share the single accounting
-        # helper (input_owner=False: the sender holds no ownership claim on the
-        # target's PTY, same as broadcast).
-        lambda session, data, *, condition=None: record_operator_input(
-            events, session, data, source="queue", input_owner=False, condition=condition
-        ),
+        prompt_queue_store, sessions, events, fleet.readiness, _queue_writer(events)
     )
     # Phase 5: the one non-human caller of send_next, and the relay policy over
     # enqueue. Neither is a second delivery path — both call the typed queue
