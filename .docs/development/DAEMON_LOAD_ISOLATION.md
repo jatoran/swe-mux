@@ -548,11 +548,25 @@ Items are worked in order, and an item may reorder, split or remove later items 
     - The split form ran: `--supervisor-only`, a relaunch of the old app (old daemon on the new supervisor), then `redeploy_desktop.py`, which staged, swapped and came up healthy.
     Checked afterwards: `supervisor_bundle_current()` is `True` from the primary venv; `supervisor_link` reports revision 1 with `notices`, `output_gap`, `subscribe_since` and `terminal_scope`; and `swemux doctor` is 26 ok, 0 warn, 0 fail, with no `daemon.supervisor_revision` check.
 
-- [ ] **18. Shared framed IPC module.**
+- [x] **18. Shared framed IPC module.**
   - **Why:** the worker and the gateway need the supervisor's framing without importing `supervisor.py`, which drags in the PTY stack.
   - **Change:** a stdlib-only `framed_ipc.py` with wire-identical framing (`supervisor.py:99-137`), a token `hello` with a deadline and a capability list, request ids, unsolicited frames, bounded inbound sizes, and a test asserting byte equality with `supervisor.encode_frame`.
     Frames stay small, because the receiving loop decodes every header as JSON.
   - **Done when:** the module and its tests exist and the supervisor is unchanged.
+  - **Done (2026-10-17).**
+    - The message conventions are the supervisor's as well as its framing: a request carries `t` and `id`, a reply the `id` and `ok`, a notice no `id`.
+      `ok` is what tells a reply from a request, so ids are per direction and both ends may ask on one connection, and a `FramedPeer` can hold the gateway's terminal-scope conversation with the supervisor as it is today - a test does exactly that against a real `SupervisorServer`.
+    - The handshake checks the token by constant-time compare and the protocol by equality, and a `hello_reply` hook may add fields or refuse (a scope the server does not grant); a hook that fails rather than refuses is an internal error, logged with its traceback.
+      Before `hello` a connection gets a 64 KiB header, no payload and 15 s; afterwards a 1 MiB header and a 64 MiB payload.
+      The caller's extra `hello` fields go in first, so they cannot override the token or protocol.
+    - A peer's requests run as tasks created in arrival order, so whatever a handler does before its first await happens in that order, and a slow one never delays the replies its own side is waiting for; past 64 in flight a request is answered `busy`.
+      Notices and reply hooks run inside the read loop, the item 14 lesson: a reply that positions state must be applied before the frames behind it are dispatched.
+    - A request's timeout covers the transport taking it as well as the reply, and a late reply is dropped.
+      A peer that stops reading is dropped once 16 MiB is unwritten, and `FramedServer.close` closes its peers before awaiting the listener, for the Python 3.12.1 `wait_closed` reason item 12 found in the supervisor.
+    - Every connect, accept, refusal (with its reason, never the token), protocol error and close (with the connection's counters) is logged, and `stats()` on a peer and a server is ready for a diagnostics endpoint.
+    - The supervisor is unchanged: it keeps its own encoder, the closure digest test still matches revision 1, and the new module is outside the closure.
+  - **Tests:** `tests/test_framed_ipc.py`, 40: byte equality with `supervisor.encode_frame` and each side reading the other's frames; every length refused before it is honoured; the handshake's capability agreement and its refusals (token, a non-string token, protocol, a first frame that is not `hello`, a payload, an oversized header, silence past the deadline, a declined scope, a failing check, and extra fields trying to override the token); requests with payloads, deliberate refusals that are not logged as failures, handler crashes that are; an end with no handler; requests and notices in both directions; start order; a reply hook before the next frame; `busy`; a timeout and its late reply; an oversized frame closing the connection; a peer that stops reading; closing failing what is pending and reporting once; a server closing with clients connected; stats; the supervisor conversation; and an import in a fresh `-S` interpreter loading nothing outside the standard library.
+    Three mutations - skipping the reply hook, letting extra fields override the token, and a server close that leaves its peers open - each fail exactly one test.
 
 - [ ] **19. Worker host.**
   - **Why:** bulk work needs its own GIL without a new lifecycle model for each job.

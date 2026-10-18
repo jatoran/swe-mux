@@ -63,6 +63,16 @@ Its own module because `timer_resolution.py`, the natural neighbour, is in the s
 
 **Not:** the supervisor's interval, which stays at CPython's default.
 
+### `framed_ipc.py`
+
+Token-authenticated framed IPC between swe-mux's own processes: the worker and the terminal gateway (`development/DAEMON_LOAD_ISOLATION.md` items 18-28).
+The framing is byte-identical to the supervisor's, and the conventions are its too (requests carry `t` and `id`, replies the `id` and `ok`, notices no `id`), so one `FramedPeer` speaks to a supervisor and to the new processes alike.
+`FramedServer` checks the `hello` (token by constant-time compare, exact protocol, a `hello_reply` hook that may refuse) under a small header cap, no payload allowance and a deadline, and `connect` is the client half.
+A peer handles the other end's requests as tasks started in arrival order, answers `busy` past `MAX_INFLIGHT_REQUESTS`, runs notices and reply hooks inside its read loop, and drops a peer whose unwritten bytes pass `WRITE_BUFFER_LIMIT`.
+Standard library only, which `tests/test_framed_ipc.py` checks in a fresh interpreter, beside byte equality with `supervisor.encode_frame` and a terminal-scope conversation with a real `SupervisorServer`.
+
+**Not:** the supervisor's own framing, which stays in `supervisor.py` because sharing this module would make it a supervisor revision; and not any message vocabulary, which belongs to each protocol built on it.
+
 ### `stall_watchdog.py`
 
 Bounded sampling through owned Python frame references, canary starvation measurements, and rotating `loop-stalls.log` output.
