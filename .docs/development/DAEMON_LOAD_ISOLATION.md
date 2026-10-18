@@ -524,6 +524,20 @@ Items are worked in order, and an item may reorder, split or remove later items 
   - **Change:** none in code.
     The operator schedules the reap and runs the documented sequence from a terminal outside swe-mux: `swemuxd --shutdown`, confirm no `swe-mux` or `swe-mux-supervisor` process remains, `packaging/build_desktop.py --supervisor-only`, relaunch.
   - **Done when:** `supervisor_bundle_current()` is true, the daemon reports the new capabilities, and a harness run with a stalled subscriber leaves the agents unthrottled.
+  - **Status (2026-10-17): ready for the operator, and the one item in this plan an agent must not run.**
+    The harness half is already answered: the harness starts its own daemon and supervisor from source on scratch ports, and item 12 recorded a stalled `output_gap` subscriber leaving echo unchanged where a stalled direct one stopped it.
+    What remains is the live machine, and every step of it ends or depends on ending every session.
+    The exact sequence, from a terminal **outside** swe-mux, in the primary checkout, after this branch has landed on `master`:
+    1. `uv run swemuxd --shutdown` - ends every session and stops the supervisor.
+    2. `Get-Process swe-mux, swe-mux-supervisor -ErrorAction SilentlyContinue` - expect nothing; do not relaunch before step 3.
+    3. `uv run python packaging/build_desktop.py` - with no supervisor alive the full build rebuilds the stale supervisor bundle as well as the app and the console client, so the daemon-side changes (items 1-16) ship in the same reap.
+       `--supervisor-only` followed later by `packaging/redeploy_desktop.py` is equivalent and splits the wait: an old daemon drives the new supervisor correctly, which is what `tests/test_pty_supervisor.py` runs.
+    4. Relaunch the app.
+    Then check, all read-only:
+    - `uv run python -c "import sys; sys.path.insert(0, 'packaging'); import build_desktop; print(build_desktop.supervisor_bundle_current())"` prints `True`.
+    - `curl -s http://127.0.0.1:8765/api/diagnostics/background` shows `supervisor_link` with `output_gap`, `subscribe_since`, `terminal_scope` and `notices` among its capabilities and `supervisor_revision` 1.
+    - `swemux doctor` has no `daemon.supervisor_revision` warning.
+    Until it runs, items 12-14 are inert on this machine and harmless: the daemon logs the older supervisor once and works as it did, and the doctor warns.
 
 - [ ] **18. Shared framed IPC module.**
   - **Why:** the worker and the gateway need the supervisor's framing without importing `supervisor.py`, which drags in the PTY stack.
