@@ -973,7 +973,14 @@ class ProcessInspector:
         While the daemon sheds load the background pass waits (`background.pace`), and a
         read must not quietly take its place: a stale sample stays good enough, inside
         the same bounded allowance, unless ``force`` asks for live state.
+
+        With passes running in the worker a read never waits on one: the loop keeps
+        the mirror within a cadence of the live tree, and a read that queued behind a
+        pass in another process paid that pass's whole latency under load (measured,
+        `DAEMON_LOAD_ISOLATION.md` item 20). ``force`` still samples.
         """
+        if not force and self._worker_usable() and self._synced_generation is not None:
+            return
         due = force or self._sample_due()
         if due:
             await self._refresh_job_pids()

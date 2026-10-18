@@ -23,6 +23,8 @@ pass after a restart reads 0% CPU, as the daemon's first pass after a start does
 **One lock serialises every inspector operation.** The pass runs in a thread so
 the worker's loop keeps answering; a port-conflict description or an action that
 read `owned` while that thread rebuilt it would see a dictionary changing size.
+Once the service is started it is the worker's `host_scan_lock`, shared with the
+ghost-window sweep, because two host walks on two threads convoy on one GIL.
 """
 
 from __future__ import annotations
@@ -148,6 +150,8 @@ class ProcessService:
 
     async def start(self, worker: Worker) -> None:
         self._worker = worker
+        # Shared with every other service that walks the host (`Worker.host_scan_lock`).
+        self._lock = worker.host_scan_lock
 
     async def stop(self) -> None:
         self._worker = None

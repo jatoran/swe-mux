@@ -38,6 +38,8 @@ The process inspector is the pattern, and each rule in it answers a way the move
 - **A restarted worker is reloaded before it is trusted.**
   `WorkerHost.generation` counts connected workers; a service compares it with the generation it last pushed its state to, and a worker that has not been loaded refuses to answer rather than answering from empty state.
 - **Every failure falls back to the daemon for that call**, and the next call reloads the worker first.
+- **Host walks share one lock.**
+  The worker is one interpreter with one GIL, so two services walking the host on two threads convoy on it exactly as they did in the daemon; services that walk the host hold `Worker.host_scan_lock` (the process pass and the ghost-window sweep do).
 - **What only the daemon holds stays in the daemon.**
   A session root is interrupted through its PTY, so the worker verifies and answers "this is the root" and the daemon writes the byte; evidence is persisted by the daemon from its mirror.
 

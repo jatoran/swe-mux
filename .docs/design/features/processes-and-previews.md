@@ -377,6 +377,11 @@ So while the worker process is ready (`design/features/worker-process.md`), the 
 - **The worker is loaded before it samples.**
   The daemon sends its whole mirror to a worker it has not loaded (`WorkerHost.generation` says which worker that is), and a worker that has not been loaded refuses to sample rather than answering with a delta that forgets everything.
   A patch for a process the mirror lacks means the two copies diverged, and the next pass loads the worker again.
+- **A read never waits on a pass in the worker.**
+  The background loop keeps the mirror within a cadence of the live tree, so a non-forced read answers from it; only an action (and a forced Preview registration) asks for a fresh pass.
+  In-process, where a pass costs the reader no IPC round trip, a stale read still samples as it always did.
+- **Host walks in the worker run one at a time.**
+  The pass and the ghost-window sweep share the worker's `host_scan_lock`: on two threads they took one GIL in turn, and the sweep needs it once per top-level window, so under load a 4 ms sweep took 290 ms and a pass about 0.6 s.
 - **Any failure samples here.**
   A worker that is not ready, a pass that fails or times out, or a refusal runs the pass in the daemon exactly as it ran before the worker existed, and marks the worker for a reload.
   The startup pass waits up to 30 s for the worker first, because it is the cold one (20.7 s measured on a 482-process host) and it runs in a deferred task where waiting costs the start nothing.

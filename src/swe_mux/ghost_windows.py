@@ -350,7 +350,10 @@ class GhostWindowService:
         self._lock = asyncio.Lock()
 
     async def start(self, worker: Any) -> None:
-        return None
+        # The sweep calls back into Python once per top-level window; beside the
+        # process pass on another thread each callback waits for the GIL, so the two
+        # share the worker's host-scan lock (`Worker.host_scan_lock`).
+        self._lock = worker.host_scan_lock
 
     async def stop(self) -> None:
         return None

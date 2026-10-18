@@ -146,6 +146,12 @@ class Worker:
     def __init__(self, services: Mapping[str, Callable[[], WorkerService]] | None = None) -> None:
         factories = SERVICES if services is None else services
         self.services: dict[str, WorkerService] = {name: make() for name, make in factories.items()}
+        #: Held by every service while it walks the host (the process pass, the
+        #: ghost-window sweep). Two such threads take this interpreter's one GIL in
+        #: turn, and the sweep needs it once per top-level window: run together under
+        #: load, a 4 ms sweep took 290 ms and a pass 0.6 s (`DAEMON_LOAD_ISOLATION.md`
+        #: item 20). One at a time, neither waits on the other's GIL.
+        self.host_scan_lock = asyncio.Lock()
         self.started_at = time.monotonic()
         self.peer: FramedPeer | None = None
         self._stop = asyncio.Event()

@@ -33,6 +33,7 @@ import pytest
 
 from swe_mux.event_bus import EventBus
 from swe_mux.framed_ipc import RemoteError, RequestRefused
+from swe_mux.ghost_windows import GhostWindowService
 from swe_mux.models import SessionRecord
 from swe_mux.process_service import DeltaEncoder, ProcessService, SampledSessions
 from swe_mux.processes import (
@@ -237,6 +238,64 @@ async def test_a_failing_worker_pass_falls_back_to_a_pass_here(
     assert stats["remote_failures"] == 1 and stats["local_passes"] == 1
     assert "worker exploded" in stats["last_failure"]
     assert stats["in_worker"] is False
+
+
+@dataclass
+class CountingWorker:
+    """A ready worker that answers every pass with an empty delta and counts them."""
+
+    ready: bool = True
+    enabled: bool = True
+    generation: int = 1
+    calls: list[str] = field(default_factory=list)
+
+    async def call(self, service: str, method: str, *_: Any, **__: Any) -> Any:
+        self.calls.append(method)
+        if method == "sample":
+            return {}, json.dumps({"upserts": [], "patches": [], "removed": []}).encode()
+        return {}, b""
+
+
+async def test_a_read_never_waits_on_a_pass_in_the_worker(monkeypatch: pytest.MonkeyPatch) -> None:
+    sessions = SimpleNamespace(sessions={})
+    inspector = ProcessInspector(cast(Any, sessions), EventBus())
+    monkeypatch.setattr(
+        inspector, "_collect_all", lambda *_: pytest.fail("a read sampled in the daemon")
+    )
+    worker = CountingWorker()
+    inspector.attach_worker(worker)
+    inspector._synced_generation = worker.generation
+    inspector._last_collect = 0.0  # as stale as a sample can be
+
+    await inspector.snapshot_all()
+    await inspector.snapshot_summary_all()
+    assert worker.calls == [], "the mirror answers a read; the loop keeps it fresh"
+
+    await inspector._ensure_sampled(force=True)
+    assert worker.calls == ["sample"], "an action's forced read still samples"
+
+
+async def test_host_walks_in_the_worker_share_one_lock() -> None:
+    from swe_mux import worker as worker_module
+
+    instance = worker_module.Worker()
+    for service in instance.services.values():
+        await service.start(instance)
+    processes = cast(ProcessService, instance.services["processes"])
+    ghosts = cast(GhostWindowService, instance.services["ghost_windows"])
+    assert processes._lock is instance.host_scan_lock
+    assert ghosts._lock is instance.host_scan_lock
+
+    async with instance.host_scan_lock:
+        loading = asyncio.create_task(
+            processes.handle("load", {}, json.dumps({"owned": []}).encode())
+        )
+        # A quiet window: the request must still be waiting for the lock.
+        await asyncio.sleep(0.05)
+        assert not loading.done(), "the sampler waits while another host walk holds the lock"
+    assert await loading == {"retained": 0}
+    for service in instance.services.values():
+        await service.stop()
 
 
 # --- a real worker, a real tree --------------------------------------------------------------
