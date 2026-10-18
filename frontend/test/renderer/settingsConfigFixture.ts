@@ -196,6 +196,7 @@ export const SETTINGS_CONFIG_FIXTURE = {
   "session_process_priority": "below_normal",
   "daemon_process_priority": "above_normal",
   "gil_switch_interval_ms": 5.0,
+  "worker_process_enabled": true,
   "project_card_daily_budget": {
     "mode": "usd",
     "tokens": null,

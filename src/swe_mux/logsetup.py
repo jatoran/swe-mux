@@ -67,6 +67,11 @@ ACCESS_LOG_BYTES = 10 * 1024 * 1024
 #: requests behind an evening's stalls were gone by the next afternoon; twenty hold
 #: about 64 hours of ordinary traffic and 33 at the incident rate, in at most 210 MB.
 ACCESS_LOG_BACKUPS = 20
+#: The worker process's own log (`worker.py`): one process at a time writes it, and
+#: each start says which pid it is, so a restart is readable as a boundary.
+WORKER_LOG_NAME = "worker.log"
+WORKER_LOG_BYTES = 10 * 1024 * 1024
+WORKER_LOG_BACKUPS = 3
 
 #: A single rendered `extra` value is truncated here. Bounded because one
 #: oversized field must not be able to push a whole rotation's worth of real
@@ -502,6 +507,31 @@ def setup_daemon_logging(data_dir: Path, level: str = "INFO") -> None:
             structured=False,
         )
     )
+
+
+def setup_worker_logging(data_dir: Path, level: str = "INFO") -> None:
+    """Configure the worker process's logging: its own rotating `worker.log`.
+
+    No console handler: the daemon points the worker's stderr at
+    `worker-console.log`, which is for what the interpreter says before this runs
+    and for native crashes, not for every line.
+    """
+    data_dir.mkdir(parents=True, exist_ok=True)
+    root = logging.getLogger()
+    root.setLevel(normalize_level(level))
+    quiet_library_loggers()
+    root.addHandler(
+        rotating_handler(
+            data_dir / WORKER_LOG_NAME,
+            max_bytes=WORKER_LOG_BYTES,
+            backups=WORKER_LOG_BACKUPS,
+        )
+    )
+
+
+def flush_logs() -> None:
+    """Write every queued line now, for a process about to exit."""
+    _WRITER.flush()
 
 
 def set_log_level(level: str) -> str:

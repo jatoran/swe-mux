@@ -73,6 +73,21 @@ Standard library only, which `tests/test_framed_ipc.py` checks in a fresh interp
 
 **Not:** the supervisor's own framing, which stays in `supervisor.py` because sharing this module would make it a supervisor revision; and not any message vocabulary, which belongs to each protocol built on it.
 
+### `worker_host.py`
+
+The daemon's side of the worker process (`../../../design/features/worker-process.md`): the `framed_ipc` listener, the spawn in a thread with the token on stdin, and the worker's own kill-on-close reaper.
+It runs the supervised `worker-host` loop, incarnation after incarnation with capped backoff, with ready hooks that push each service its state, notice routing, and `health()` for `/api/diagnostics/background`.
+`call` raises `WorkerUnavailable` rather than waiting for a restart, so every caller keeps a daemon fallback.
+
+**Not:** any service's work, which lives in `worker.py`'s services; and not `mux.db`, which only the daemon writes.
+
+### `worker.py`
+
+The worker process itself: reads its token from stdin, sets the switch interval and timer period, logs to `worker.log`, connects to its daemon, routes `<service>.<method>` requests to the services in `SERVICES`, and exits on the connection's EOF or its daemon's pid disappearing.
+Frozen it runs as `swe-mux.exe --worker-child`; from source as `python -m swe_mux.worker`.
+
+**Not:** a place for state the daemon cannot push back after a restart.
+
 ### `stall_watchdog.py`
 
 Bounded sampling through owned Python frame references, canary starvation measurements, and rotating `loop-stalls.log` output.

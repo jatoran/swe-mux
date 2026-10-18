@@ -240,6 +240,7 @@ from .voice import (
     VoiceService,
     VoiceStore,
 )
+from .worker_host import WorkerHost
 from .worktree_mutation import sweep_graveyards
 from .worktree_verify import (
     VerifyApprovalStore,
@@ -1776,6 +1777,13 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
         log.exception("could not close orphaned history runs")
 
     timeline.mark("services")
+    # The worker process (`worker_host.py`): bulk work in an interpreter of its own.
+    # Started first among the services and never awaited past its listener - the
+    # spawn runs in a thread inside a supervised loop - so a slow or failing worker
+    # costs this start nothing, and every caller of it falls back while it is away.
+    worker_host = WorkerHost(config)
+    await worker_host.start()
+    publish(app, {keys.WORKER: worker_host})
 
     # The monitor's branch-scoped diff is measured against the same base the Git
     # drawer uses, so the sidebar and the drawer cannot report a session's branch
@@ -3089,6 +3097,9 @@ async def _teardown_runtime(app: web.Application) -> None:  # noqa: PLR0912, PLR
         keys.GIT_MONITOR,
         keys.GIT_PROVENANCE,
         keys.STALL_WATCHDOG,
+        # After every service that calls it, so none of them loses its worker
+        # part-way through stopping.
+        keys.WORKER,
     ):
         await _stop_handle(app, key)
     # Shutdown intent (SESSION_PRESERVING_RELOAD §5.3): "quit" reaps everything

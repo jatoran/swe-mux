@@ -98,6 +98,7 @@ if TYPE_CHECKING:
     from .update_install import UpdateInstaller
     from .usage import UsageManager
     from .voice import VoiceService, VoiceStore
+    from .worker_host import WorkerHost
     from .worktree_verify import VerifyApprovalStore
 
 # --- process-level identity and configuration -------------------------------
@@ -223,6 +224,9 @@ USAGE: web.AppKey[UsageManager] = web.AppKey("usage")
 VERIFY_APPROVALS: web.AppKey[VerifyApprovalStore] = web.AppKey("verify_approvals")
 VOICE: web.AppKey[VoiceService] = web.AppKey("voice")
 VOICE_STORE: web.AppKey[VoiceStore] = web.AppKey("voice_store")
+#: The worker process host (`worker_host.py`). Present whenever the runtime is,
+#: whether or not the worker is enabled; `health()` says which.
+WORKER: web.AppKey[WorkerHost] = web.AppKey("worker")
 
 # --- gate closures and their caches ------------------------------------------
 

@@ -2356,6 +2356,13 @@ in the config, applied at start and live on change).
 the sessions `recovering` right now, `consumer_overflows` (a session's own consumer fell behind
 its staging budget) and `output_dropped_bytes` (bytes discarded and asked for again, not lost).
 
+`worker` is the worker process (`design/features/worker-process.md`): `enabled`
+(`worker_process_enabled`), `state` (`disabled`, `stopped`, `starting`, `running`, `backoff`),
+`ready`, `pid` (the worker's own) and `launcher_pid` (the spawned process when it is a Windows
+venv launcher, else `null`), `port`, `spawns`, `restarts`, `last_exit_code`, `last_error`,
+`uptime_seconds`, the `services` it hosts, its `build`, `notices_unrouted`, and `connection` (the
+framed IPC connection's counters, or `null`).
+
 `governor` is load shedding (`background.pace` / `background.defer`): `attached`, whether the
 loop's recent lag puts it in `shedding` (`recent_max_lag_seconds` over `window_seconds`, against
 `lag_threshold_seconds`), the bounds (`max_stretch` cadences, `max_extra_seconds`), `deferrals`

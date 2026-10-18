@@ -705,7 +705,8 @@ person with no shortcut, no tray, and no idea where anything went.
   Three decisions, each one a refutation of the obvious version:
   - **`{app}` itself could not be put on `PATH`.** `swe-mux.exe` is a GUI-subsystem process
     with no stdout and no stderr at all (which is why `desktop.redirect_gui_streams` exists),
-    and `desktop.main` dispatches only `--daemon-child`, `--supervisor-child` and two
+    and `desktop.main` dispatches only `--daemon-child`, `--supervisor-child`,
+    `--worker-child` (the daemon's worker process, `design/features/worker-process.md`) and two
     allowlisted `-m` modules. That would publish a window opener under a name someone types
     expecting a session table.
   - **The client could not live in the app bundle.** A `swemux` sitting in a task terminal is

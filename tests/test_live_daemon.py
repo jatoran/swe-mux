@@ -293,10 +293,20 @@ async def test_the_muxd_entry_point_starts_serves_and_stops_without_orphans(
         assert discovery is not None, "the supervisor wrote no discovery file"
         assert int(discovery["pid"]) == supervisor_pid, (health, discovery)
 
+        # The worker process (`DAEMON_LOAD_ISOLATION.md` item 19) is on by default
+        # too, spawned after the listener opens; waited for here so the survivor
+        # check below covers it, because a worker outliving `quit` is exactly the
+        # orphan its kill-on-close reaper exists to prevent.
+        worker_pids = await daemon.worker_pids()
+        assert worker_pids and all(alive(pid) for pid in worker_pids), worker_pids
+
         descendants = [child.pid for child in daemon.descendants()]
         assert supervisor_pid in descendants, (
             f"the supervisor pid {supervisor_pid} is not among this daemon's children "
             f"{descendants}, so the survivor check below would never have seen it"
+        )
+        assert set(worker_pids) <= set(descendants), (
+            f"the worker {worker_pids} is not among this daemon's children {descendants}"
         )
 
         assert await daemon.request_shutdown("quit") == 202, daemon.diagnostics()
@@ -392,6 +402,7 @@ async def test_a_supervised_shell_outlives_its_daemon_and_the_successor_adopts_i
             ]
             assert session_tree, "the supervisor owns no child processes for the live shell"
 
+            worker_pids = await daemon.worker_pids()
             daemon_descendants = [child.pid for child in daemon.descendants()]
 
             # "restart" is the detach intent: this daemon goes away and the
@@ -399,6 +410,13 @@ async def test_a_supervised_shell_outlives_its_daemon_and_the_successor_adopts_i
             assert await daemon.request_shutdown("restart") == 202, daemon.diagnostics()
             assert await daemon.wait_for_exit() == 0, daemon.diagnostics()
             assert not alive(daemon.pid), "the daemon outlived its own shutdown"
+            # Unlike the supervisor, the worker is the daemon's own and does not
+            # survive a detach: the successor starts a fresh one.
+            await until(
+                lambda: not any(alive(pid) for pid in worker_pids),
+                seconds=30.0,
+                what=f"the detached daemon's worker {worker_pids} ended with it",
+            )
 
         assert alive(supervisor_pid), (
             "the supervisor did not survive a detaching shutdown, which is the "

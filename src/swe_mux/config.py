@@ -199,6 +199,8 @@ RESTART_FIELDS = {
     "automation_queue_size",
     "openrouter_request_timeout_seconds",
     "pty_supervisor_enabled",
+    # The worker process is spawned once at daemon start (`worker_host.py`).
+    "worker_process_enabled",
     # Unexpected-loss restoration and checkpoint capture are selected once at
     # daemon start. The durable registry itself remains present for inactive
     # sessions, so this switch never controls explicit Stand down persistence.
@@ -863,6 +865,12 @@ class Config:
     # not be told apart at 36 sessions and 0.5 ms was worse (`DAEMON_LOAD_ISOLATION.md`
     # item 5), so the knob is for measuring a fleet that differs, not a tuned value.
     gil_switch_interval_ms: float = 5.0
+    # Bulk work in a second process with its own interpreter and GIL
+    # (`worker_host.py`, `DAEMON_LOAD_ISOLATION.md` items 19-22), so it cannot stall
+    # the event loop that serves terminals. The daemon owns it: it dies with the
+    # daemon and restarts with backoff. Off runs the same work in the daemon, as
+    # before the worker existed. Applies at the next daemon start.
+    worker_process_enabled: bool = True
     # Windows-only sweep for headless-browser windows that DWM composites even
     # though Win32 reports them hidden (ghost_windows.py). Off by config only
     # when an operator deliberately wants such a window left on screen.

@@ -546,6 +546,28 @@ class DaemonProcess:
         async with self.session.get(f"{self.base_url}/api/health") as response:
             return response.status, dict(await response.json())
 
+    async def background(self) -> dict[str, Any]:
+        """`/api/diagnostics/background`: the loops, the supervisor link, the worker."""
+        async with self.session.get(f"{self.base_url}/api/diagnostics/background") as response:
+            assert response.status == 200, f"{response.status}\n{self.diagnostics()}"
+            return dict(await response.json())
+
+    async def worker_pids(self, seconds: float = DAEMON_READY_TIMEOUT_SECONDS) -> list[int]:
+        """Wait for the worker process to be ready; its pid and any launcher's."""
+        last: dict[str, Any] = {}
+        try:
+            async with asyncio.timeout(seconds):
+                while True:
+                    last = (await self.background()).get("worker") or {}
+                    if last.get("ready"):
+                        return [pid for pid in (last.get("pid"), last.get("launcher_pid")) if pid]
+                    await asyncio.sleep(0.2)
+        except TimeoutError:
+            raise AssertionError(
+                f"the worker was never ready in {seconds:.0f}s; last report {last}\n"
+                f"{self.diagnostics()}"
+            ) from None
+
     async def wait_ready(self, seconds: float = DAEMON_READY_TIMEOUT_SECONDS) -> dict[str, Any]:
         """Poll health until the runtime is built, or say which phase it died in.
 

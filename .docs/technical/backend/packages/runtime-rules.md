@@ -235,6 +235,10 @@ Add the message, let an older supervisor answer "unknown message type", and degr
 `multiprocessing` is unsafe in the frozen app: no entry point calls `freeze_support()`, and a spawned child would land in the desktop argument parser.
 A process is a frozen entry flag plus a `FramedServer`/`connect` pair on loopback with a fresh `new_token()`, and bulk bytes go in the payload, because every header is decoded as JSON on the receiving loop.
 
+**Work that moves into the worker process keeps a daemon fallback, and never writes `mux.db` from there** (`design/features/worker-process.md`).
+`WorkerHost.call` raises `WorkerUnavailable` instead of waiting for a restart, so a caller either runs the work in the daemon as it did before or reports that it could not, and a service's state is something the daemon pushes in an `on_ready` hook, because a restarted worker remembers nothing.
+The worker is the daemon's own child and must never be spawned to break away: it dies with the daemon, unlike the supervisor.
+
 **Any change to the supervisor's source closure bumps `SUPERVISOR_REVISION`** (`development/DAEMON_LOAD_ISOLATION.md` item 16).
 The protocol stays put for a compatible change, so the revision is the only thing that tells an installed copy a better supervisor exists; the updater offers it, and only an explicit `with_supervisor_update` installs it, because that ends every session.
 Bump the number in `supervisor.py` and append its `build_desktop.supervisor_content_digest()` to `packaging/supervisor_revisions.json`; `tests/test_supervisor_revision.py` fails with both values spelled out when you forget, and never rewrite an existing pin.
@@ -286,8 +290,8 @@ Nothing in-process can observe an external TerminateProcess, so death forensics 
 `lifecycle.py` keeps `daemon-heartbeat.json` fresh (~10 s) and marks clean exits with their intent, and the next daemon reports a predecessor whose record has no clean exit and a dead pid.
 The tray, which holds the daemon's process handle, ledgers the observed exit code.
 
-Rotating logs are per-process-owned files: `daemon.log`, `access.log`, and `supervisor.log` via stdlib handlers.
-Console redirects (`desktop-daemon.log`, `supervisor-console.log`, `daemon-relaunch.log`) stay append-only crash catchers and are never shared with a rotating handler, because the child holds the redirect handle for life and rotation of the same file can never succeed.
+Rotating logs are per-process-owned files: `daemon.log`, `access.log`, `supervisor.log`, and `worker.log` via stdlib handlers.
+Console redirects (`desktop-daemon.log`, `supervisor-console.log`, `worker-console.log`, `daemon-relaunch.log`) stay append-only crash catchers and are never shared with a rotating handler, because the child holds the redirect handle for life and rotation of the same file can never succeed.
 
 ## Desktop lifetime
 

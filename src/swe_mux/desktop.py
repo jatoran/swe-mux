@@ -1222,6 +1222,12 @@ def main(argv: Sequence[str] | None = None) -> None:
 
         supervisor_main(arguments[1:])
         return
+    if arguments[:1] == ["--worker-child"]:
+        # The daemon's worker process (`worker_host.py`), as the frozen app runs it.
+        from .worker import main as worker_main
+
+        worker_main(arguments[1:])
+        return
     _run_desktop_shell(arguments)
 
 

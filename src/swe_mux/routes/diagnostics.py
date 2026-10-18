@@ -454,6 +454,11 @@ async def get_background_health(request: web.Request) -> web.Response:
                 if (supervisor := request.app.get(keys.SUPERVISOR)) is not None
                 else None
             ),
+            # The worker process (`worker_host.py`): whether it is up, which pid, how
+            # often it has been restarted and why the last one ended.
+            "worker": (
+                worker.health() if (worker := request.app.get(keys.WORKER)) is not None else None
+            ),
             # Where the loop was during each stall the monitor counted, from the
             # GIL-free dump the loop arms itself. `loop_lag` says how long; this says
             # what, and whether a starved canary thread makes it a native-code stall.
