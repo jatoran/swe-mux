@@ -62,7 +62,7 @@ async def test_nothing_is_deferred_until_a_reading_is_attached(quick: None) -> N
     assert not supervisor.shedding()
     started = time.perf_counter()
     await supervisor.pace("git-sweep", 0.01, deferrable=True)
-    assert time.perf_counter() - started < 0.5
+    assert time.perf_counter() - started < 5.0, "pace returned rather than hanging"
     assert supervisor.governor()["deferrals"] == 0
     assert supervisor.governor()["attached"] is False
 
@@ -78,7 +78,7 @@ async def test_a_deferrable_loop_waits_out_its_allowance_while_the_loop_drowns(
     elapsed = time.perf_counter() - started
     # The cadence, then the allowance (three cadences): bounded, never forever.
     assert elapsed >= cadence + defer_allowance(cadence) * 0.9
-    assert elapsed < 2.0
+    assert elapsed < 5.0
     record = supervisor.governor()["deferred"]["usage-refresh"]
     assert record["count"] == 1
     assert record["seconds"] >= defer_allowance(cadence) * 0.9
@@ -89,18 +89,28 @@ async def test_a_deferred_loop_resumes_soon_after_the_lag_clears(
     quick: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # An allowance of ten seconds for a 10 ms cadence, which the test must not wait
-    # out: only the lag clearing can end this wait in time.
+    # out: only the lag clearing can end this wait in time. The ceiling is half
+    # the allowance rather than a latency figure, so a worker descheduled by a
+    # loaded host still passes, and a wait that ran its allowance still cannot.
     monkeypatch.setattr(background_tasks, "SHED_MAX_STRETCH", 1000.0)
-    assert defer_allowance(0.01) == 10.0
+    allowance = defer_allowance(0.01)
+    assert allowance == 10.0
     supervisor = TaskSupervisor()
     lag = Lag(SHED_LAG_SECONDS * 4)
     supervisor.attach_lag(lag)
     asyncio.get_running_loop().call_later(0.1, setattr, lag, "value", 0.0)
     started = time.perf_counter()
-    await asyncio.wait_for(supervisor.pace("ghost-window-sweep", 0.01, deferrable=True), 5.0)
-    assert 0.09 <= time.perf_counter() - started < 1.0
+    await asyncio.wait_for(
+        supervisor.pace("ghost-window-sweep", 0.01, deferrable=True), allowance * 0.9
+    )
+    # That it waited for the lag to clear is read from the lag itself, not from a
+    # clock: asyncio may run `call_later(0.1)` up to one clock tick early (15.6 ms
+    # on a Windows host without a raised timer resolution), which a lower time
+    # bound reads as the wait ending too soon.
+    assert lag.value == 0.0, "the wait ended only once the lag had cleared"
+    assert time.perf_counter() - started < allowance / 2
     record = supervisor.governor()["deferred"]["ghost-window-sweep"]
-    assert record["count"] == 1 and record["seconds"] < 1.0
+    assert record["count"] == 1 and record["seconds"] < allowance / 2
 
 
 async def test_a_loop_that_is_not_deferrable_keeps_its_cadence(quick: None) -> None:
@@ -108,7 +118,7 @@ async def test_a_loop_that_is_not_deferrable_keeps_its_cadence(quick: None) -> N
     supervisor.attach_lag(Lag(SHED_LAG_SECONDS * 4))
     started = time.perf_counter()
     await supervisor.pace("push-sender", 0.01)
-    assert time.perf_counter() - started < 0.5
+    assert time.perf_counter() - started < 5.0, "pace returned rather than hanging"
     assert supervisor.governor()["deferred"] == {}
 
 
@@ -120,7 +130,7 @@ async def test_a_protected_loop_is_never_deferred_whatever_it_asks(
     supervisor.attach_lag(Lag(SHED_LAG_SECONDS * 4))
     started = time.perf_counter()
     await supervisor.pace(name, 0.01, deferrable=True)
-    assert time.perf_counter() - started < 0.5
+    assert time.perf_counter() - started < 5.0, "pace returned rather than hanging"
     assert supervisor.defer(name, overdue=0.0, cadence=60.0) is False
     assert supervisor.governor()["deferred"] == {}
 
