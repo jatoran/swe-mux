@@ -442,7 +442,7 @@ Opt-in terminal diagnostics also record `caret_placement_started` and `caret_pla
 ## Configuration
 
 `PASSIVE_CLAIM_HOLD_SECONDS` (10) in `src/swe_mux/terminal_arbitration.py`,
-`REFUSED_CLAIM_COOLDOWN_SECONDS` (1) in `src/swe_mux/server.py`, `RECLAIM_COOLDOWN_MS`
+`REFUSED_CLAIM_COOLDOWN_SECONDS` (1) in `src/swe_mux/terminal_core/connection.py`, `RECLAIM_COOLDOWN_MS`
 (5000) and `GESTURE_WINDOW_MS` (1500) in `frontend/src/inputOwnership.ts`,
 `MIN_LETTERBOX_FONT_PX` (4) in `frontend/src/terminalLetterbox.ts`,
 `LETTERBOX_NOTICE_DELAY_MS` (1500) in `frontend/src/TerminalPane.tsx` — every ordinary
@@ -456,9 +456,12 @@ None user-facing.
 - Unsent-composer estimate (pure): `src/swe_mux/composer_input.py`
 - Composer text assembly from the cell grid (pure): `frontend/src/composerText.ts`;
   the per-harness rectangles it reads: `frontend/src/terminalCaretPlacement.ts`
-- Ownership/viewport state, geometry fanout: `src/swe_mux/session.py`
-- Frame handling, claim decisions, decision log: `src/swe_mux/server.py` (`pty_ws`,
-  `_claim_terminal_input`, `_handle_terminal_input`, `_apply_client_viewport`)
+- Ownership/viewport state, geometry fanout, input accounting: `src/swe_mux/terminal_core/core.py`
+  (`TerminalCore`; `Session` keeps the same attribute names as views onto it)
+- Frame handling, claim decisions, decision log: `src/swe_mux/terminal_core/connection.py`
+  (`serve_connection`, `_claim_input`, `_handle_text_input`, `_apply_client_viewport`)
+- The daemon's side of a connection (record, events, presence, what typing means to
+  approvals, status and the composer): `src/swe_mux/routes/pty.py` (`SessionTerminalHost`)
 - Client ownership model (pure): `frontend/src/inputOwnership.ts`
 - Letterbox math and the reveal-adoption rule (pure): `frontend/src/terminalLetterbox.ts`
 - Wheel-report pacing to an application-owned viewport (pure): `frontend/src/terminalWheelPacing.ts`

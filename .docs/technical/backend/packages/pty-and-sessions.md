@@ -133,9 +133,23 @@ Pure multi-device rules for one shared PTY.
 - Epoch and release bookkeeping.
 - The arbitrated geometry: the owner's viewport, else the smallest visible one.
 
-`routes/pty.py` records every decision in the session's bounded claim log and stops answering a connection's repeated passive claims for a second after refusing one.
+`terminal_core/connection.py` records every decision in the session's bounded claim log and stops answering a connection's repeated passive claims for a second after refusing one.
 
-**Not:** sockets, PTYs, telemetry, or *which* device is in use - `device_presence.py` answers that, `session.py` holds the state, and `routes/pty.py` applies the decisions.
+**Not:** sockets, PTYs, telemetry, or *which* device is in use - `device_presence.py` answers that, `terminal_core` holds the state and applies the decisions.
+
+## `terminal_core/`
+
+One session's terminal, independent of the process hosting it (`development/DAEMON_LOAD_ISOLATION.md` item 24).
+
+- `stream.py` - `TerminalStream`: the retained ring and the replay-prefix parsers (screen mode, bracketed paste, sticky modes), what an attach replays, deltas and resyncs, and the `PtySubscriber` queues every byte fans out to.
+- `core.py` - `TerminalCore`: input ownership and the claim log, viewports and the arbitrated geometry, the repaint pulse and the resize-settle scheduler, client-diagnostic rate limits, and the input accounting delivery readiness reads (`input_revision`, the last input's time, the composer estimate).
+- `connection.py` - one browser connection from the 0.25 s attach handshake to detach: replay, the sender with its output credit (`flow.py`), claims, input frames and client frames.
+- `host.py` - the only things the core asks of its host: a live `TerminalDescriptor` (state, created and stopping flags, the four harness traits it acts on), the record snapshot and revision, the presence leader, an event sink, the side effects typed input owes, and broadcast.
+
+`Session` constructs its core and keeps every attribute it had as a view onto it (`_TerminalView`), so delivery readiness, automation's attended checks and every other reader are unchanged; the per-chunk fanout reaches the stream directly, because a view read costs a lookup on the hottest path in the daemon.
+`routes/pty.py` hosts the core in process (`SessionTerminalHost`).
+
+**Not:** anything of the daemon's own. `tests/test_terminal_core_boundary.py` imports the package in a fresh interpreter and fails if it loads any `swe_mux` module beyond four leaf modules (`screen_mode`, `scrollback`, `composer_input`, `terminal_arbitration`), which is what lets the same core run in the terminal gateway process.
 
 ## `console_contention.py`
 
@@ -166,7 +180,7 @@ It also **builds** an insertion (`composer_insertion`), not only classifies one,
 The body is a bracketed paste with newlines as CR; a *leading* newline run is lifted out and emitted as `newline_keys` presses ahead of it when the harness declares `paste_leading_newline_submits`, because Codex reads a paste's first newline as Enter and submits whatever the composer held (measured 2026-08-22 against v0.149.0).
 `harness.composer_insertion_rules(backend)` resolves the pair, `server._composer_insertion` is the daemon's one caller-facing wrapper, and `composerInsertion.ts` is the browser's mirror.
 
-`routes/pty.py` and `routes/terminal.py` call it wherever `input_revision` is advanced, and `session.py` clears it when a turn opens or the session ends.
+`routes/pty.py` (for the terminal core's typed input) and `routes/terminal.py` call it wherever `input_revision` is advanced, and `session.py` clears it when a turn opens or the session ends.
 
 **Not:** reading the composer, which nothing can, or authorizing anything - `delivery_readiness.py` keeps its own coarse boundary and never consults this.
 Not the queue's delivery bytes either: `prompt_queue.delivery_payload` builds those on top of this, and *drops* a leading newline rather than lifting it, because a delivery has passed the readiness gate and is about to submit.

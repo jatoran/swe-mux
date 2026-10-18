@@ -303,9 +303,9 @@ Also holds hook-event payload normalisation, the transcript-backed hook-event se
 ### `routes/pty.py`
 
 `/pty/{sid}` and `/events`.
-Also holds `PtyOutputFlow` credit accounting, terminal-input arbitration and its claim log, repaint scheduling, and client diagnostics.
+The terminal socket is an adapter over `terminal_core` (`pty-and-sessions.md`): this module holds only `SessionTerminalHost`, the daemon's side of a connection - the record snapshot, the event log, the presence leader, and what typed input means to approvals, status detection, the composer estimate and broadcast.
 
-**Not:** the PTY itself (`pty_host.py`, `supervisor_client.py`) or durable event storage (`history.py`).
+**Not:** the terminal protocol, output credit, arbitration, geometry or repaint scheduling (`terminal_core`), the PTY itself (`pty_host.py`, `supervisor_client.py`), or durable event storage (`history.py`).
 
 ## Related
 
