@@ -40,6 +40,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
+import functools
 import json
 import os
 import re
@@ -108,6 +109,7 @@ class Options:
     settings: dict[str, str]
     git: bool
     burn: int
+    burn_priority: str = "below_normal"
     stall_profiler: str = ""
     stall_threshold: float = 0.0
     hook_client: str = "bounded"
@@ -499,13 +501,22 @@ class Harness:
         """CPU-bound processes standing in for the builds and tools real agents run.
 
         The scratch sessions' own load is light on CPU next to a fleet compiling and
-        testing, and a saturated host is part of what 2026-10-16 looked like. They
-        run below normal priority, which is where the daemon puts session trees.
+        testing, and a saturated host is part of what 2026-10-16 looked like. By
+        default they run below normal priority, which is where the daemon puts session
+        trees. `--burn-priority normal` stands in for a hog the daemon did not start
+        - a build in a terminal outside swe-mux, a game - which outranks every session
+        tree on the host, the scratch ones and the shell that echoes the probe included.
         """
         burners: list[subprocess.Popen[bytes]] = []
+        below = self.options.burn_priority == "below_normal"
         flags = 0
+        preexec: functools.partial[int] | None = None
         if sys.platform == "win32":
-            flags = 0x00004000  # BELOW_NORMAL_PRIORITY_CLASS
+            if below:
+                flags = 0x00004000  # BELOW_NORMAL_PRIORITY_CLASS
+        elif below:
+            # The nice the daemon gives a below-normal session tree (`process_priority`).
+            preexec = functools.partial(os.nice, 5)
         for _ in range(self.options.burn):
             burners.append(
                 subprocess.Popen(
@@ -514,6 +525,7 @@ class Harness:
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                     creationflags=flags,
+                    preexec_fn=preexec,
                 )
             )
         return burners
@@ -938,6 +950,8 @@ def render(report: dict[str, Any]) -> None:
             f"{compression.get('negotiated')} of {compression.get('sockets')} sockets"
         )
     print(f"  generators reported: {report['generators_reported']}/{options['sessions']}")
+    if options.get("burn"):
+        print(f"  burners: {options['burn']} at {options.get('burn_priority', 'below_normal')}")
     gateway = report.get("terminal_gateway")
     print(f"  terminals on the {report.get('terminal_transport', 'daemon')}", end="")
     print(f": {gateway}" if gateway else "")
@@ -1238,8 +1252,12 @@ def main() -> int:
     parser.add_argument(
         "--no-git", action="store_true", help="do not make the scratch project a git repo"
     )
+    parser.add_argument("--burn", type=int, default=0, help="CPU-bound processes during the window")
     parser.add_argument(
-        "--burn", type=int, default=0, help="CPU-bound below-normal processes during the window"
+        "--burn-priority",
+        choices=("below_normal", "normal"),
+        default="below_normal",
+        help="the burners' class: a session tree's (default), or a hog outside swe-mux",
     )
     parser.add_argument(
         "--stall-profiler",
@@ -1290,6 +1308,7 @@ def main() -> int:
         settings=parse_settings(args.set),
         git=not args.no_git,
         burn=args.burn,
+        burn_priority=args.burn_priority,
         stall_profiler=args.stall_profiler,
         stall_threshold=args.stall_threshold,
     )
