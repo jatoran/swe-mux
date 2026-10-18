@@ -23,7 +23,7 @@ from collections import OrderedDict, deque
 from collections.abc import Callable, Coroutine, Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import Any, Literal, cast, overload
 
 from . import process_priority
 from .adapters import BackendAdapter, SpawnOptions, SpawnSpec
@@ -49,9 +49,13 @@ from .harness import (
     has_observable_transcript,
     native_id_from_args,
     native_id_matches,
+    needs_resize_repaint,
     publishes_cli_state,
+    repaints_scrollback,
+    replay_needs_repaint,
     reports_lifecycle_hooks,
     require_backend,
+    suppresses_late_color_response,
 )
 from .history import HistoryIndex
 from .models import (
@@ -68,13 +72,7 @@ from .models import (
 from .process_reaper import ProcessReaper
 from .pty_host import PtyHost, merge_environment
 from .runtime_cwd import Osc7Parser, Osc133Parser, OscSignalParser, classify_osc7_location
-from .screen_mode import (
-    BRACKETED_PASTE_TOGGLE,
-    SCREEN_TOGGLE,
-    BracketedPasteParser,
-    ScreenModeParser,
-    StickyModeParser,
-)
+from .screen_mode import BracketedPasteParser, ScreenModeParser, StickyModeParser
 from .scrollback import SCREEN_TAIL_BYTES, ScrollbackBuffer
 from .session_recovery import RecoveredSession, SessionRecoveryStore
 from .spawn_contract import (
@@ -96,7 +94,7 @@ from .supervisor_client import (
     liveness_of,
 )
 from .telemetry_otlp import provider_otel_args, provider_otel_env
-from .terminal_arbitration import OwnerState, effective_geometry, release_owner
+from .terminal_core import PtySubscriber, TerminalCore, TerminalDescriptor, TerminalStream
 from .transcript_repair import resolve_row_transcript
 from .transcript_scan import (
     TranscriptScanCache,
@@ -258,9 +256,6 @@ STATE_TRANSITION_LOG_LIMIT = 64
 # detail updates ("working · Read" → "working · Bash"), which would otherwise
 # evict the transitions that actually explain how a session reached its state.
 STATE_CHANGE_LOG_LIMIT = 64
-# Terminal-input claims, for diagnosing which device ended up owning a session and
-# why. Small: only the last few decisions matter, and they are read by hand.
-CLAIM_LOG_LIMIT = 24
 
 # Status contract: which observation sources may set each user-visible state.
 # Positive evidence only — ambiguity resolves to the conservative prior, never a
@@ -2276,13 +2271,42 @@ async def apply_watchdog_recovery(
         )
 
 
-@dataclass(eq=False, slots=True)
-class PtySubscriber:
-    queue: asyncio.Queue[bytes | dict[str, Any]]
-    resync_pending: bool = False
-    dropped_bytes: int = 0
-    dropped_chunks: int = 0
-    exit_pending: dict[str, Any] | None = None
+class _TerminalView[T]:
+    """A `Session` attribute that lives on the session's terminal core.
+
+    The terminal moved into `terminal_core`, and every reader of these names -
+    delivery readiness, automation's attended checks, the diagnostics, the tests -
+    kept reading and writing them on the session. ``on_stream`` names the ones that
+    live on the core's output stream rather than on the core itself.
+    """
+
+    def __init__(self, *, on_stream: bool = False) -> None:
+        self.on_stream = on_stream
+        self.name = ""
+
+    def __set_name__(self, owner: type, name: str) -> None:
+        self.name = name
+
+    def _target(self, session: Session) -> Any:
+        core = session.terminal
+        return core.stream if self.on_stream else core
+
+    @overload
+    def __get__(self, session: None, owner: type | None = None) -> _TerminalView[T]: ...
+
+    @overload
+    def __get__(self, session: Session, owner: type | None = None) -> T: ...
+
+    def __get__(
+        self, session: Session | None, owner: type | None = None
+    ) -> T | _TerminalView[T]:
+        if session is None:
+            return self
+        value: T = getattr(self._target(session), self.name)
+        return value
+
+    def __set__(self, session: Session, value: T) -> None:
+        setattr(self._target(session), self.name, value)
 
 
 def reset_session_observation_state(session: Any, evidence: str) -> None:
@@ -2365,6 +2389,38 @@ def note_supervisor_reachable(session: Session) -> None:
 
 
 class Session:
+    # The terminal's state lives on `self.terminal` (`terminal_core`); these keep the
+    # names every reader used before it moved there.
+    scrollback: _TerminalView[ScrollbackBuffer] = _TerminalView(on_stream=True)
+    attach_replay_bytes: _TerminalView[int | None] = _TerminalView(on_stream=True)
+    subscribers: _TerminalView[set[PtySubscriber]] = _TerminalView(on_stream=True)
+    screen: _TerminalView[ScreenModeParser] = _TerminalView(on_stream=True)
+    bracketed_paste: _TerminalView[BracketedPasteParser] = _TerminalView(on_stream=True)
+    sticky_modes: _TerminalView[StickyModeParser] = _TerminalView(on_stream=True)
+    attachments_seen: _TerminalView[int] = _TerminalView()
+    input_owner: _TerminalView[str | None] = _TerminalView()
+    input_owner_socket: _TerminalView[Any] = _TerminalView()
+    input_owner_epoch: _TerminalView[int] = _TerminalView()
+    input_owner_device: _TerminalView[str | None] = _TerminalView()
+    input_owner_gesture_ts: _TerminalView[float | None] = _TerminalView()
+    input_rejections: _TerminalView[int] = _TerminalView()
+    last_input_reject_report_ts: _TerminalView[float] = _TerminalView()
+    last_client_repaint_ts: _TerminalView[float] = _TerminalView()
+    client_diagnostic_timestamps: _TerminalView[dict[str, float]] = _TerminalView()
+    resize_repaint_deadline: _TerminalView[float] = _TerminalView()
+    resize_repaint_task: _TerminalView[asyncio.Task[None] | None] = _TerminalView()
+    input_claim_denials: _TerminalView[int] = _TerminalView()
+    claim_refusals: _TerminalView[dict[str, float]] = _TerminalView()
+    claim_log: _TerminalView[deque[dict[str, Any]]] = _TerminalView()
+    viewports: _TerminalView[dict[str, tuple[int, int]]] = _TerminalView()
+    geometry: _TerminalView[tuple[int, int] | None] = _TerminalView()
+    last_input_event_ts: _TerminalView[float] = _TerminalView()
+    last_input_report_ts: _TerminalView[float] = _TerminalView()
+    input_revision: _TerminalView[int] = _TerminalView()
+    composer: _TerminalView[ComposerState] = _TerminalView()
+    terminal_mode: _TerminalView[str | None] = _TerminalView()
+    terminal_mode_updated_at: _TerminalView[float] = _TerminalView()
+
     def __init__(
         self,
         record: SessionRecord,
@@ -2379,24 +2435,30 @@ class Session:
         attach_replay_bytes: int | None = None,
     ) -> None:
         self.record, self.pty, self.adapter = record, pty, adapter
-        self.scrollback = ScrollbackBuffer(max_scrollback)
+        self.tasks: set[asyncio.Task[Any]] = set()
+        self.stopping = False
+        # The terminal: ring, replay, subscribers, input ownership, geometry, repaint
+        # and input accounting. The stream id is minted per Session object, so a
+        # respawned id, a cold or inactive session rebuilt from disk, and an
+        # in-process pane after a restart can never share one (`stream_id`).
+        self.terminal = TerminalCore(
+            TerminalStream(
+                max_scrollback,
+                attach_replay_bytes=attach_replay_bytes,
+                stream_id=f"{record.id}@daemon.{secrets.token_hex(6)}",
+                remote_stream=lambda: getattr(self.pty, "stream", ""),
+                rebuilt=lambda: bool(
+                    self.record.cold or getattr(self.record, "inactive", False)
+                ),
+            ),
+            pty=lambda: self.pty,
+            descriptor=self.terminal_descriptor,
+            tasks=self.tasks,
+        )
         # The last screen explanation and every input it was derived from, so the
         # several readers that ask per status pass share one regex pass over the
         # tail (`SessionManager._pty_tail_explanation`).
         self._pty_tail_explanation_cache: tuple[tuple[Any, ...], dict[str, Any]] | None = None
-        # What a fresh attach or a resync replays, as distinct from what is
-        # retained above. Carried on the session rather than read per-request so
-        # every attach path (browser, adopted supervisor session, tests) is bound
-        # by the same policy. ``None`` replays everything retained.
-        self.attach_replay_bytes = attach_replay_bytes
-        # The stream this ring's positions count when no supervisor names one
-        # (`stream_id`). Minted per Session object, so a respawned id, a cold or
-        # inactive session rebuilt from disk, and an in-process pane after a
-        # restart can never share it.
-        self._stream_id = f"{record.id}@daemon.{secrets.token_hex(6)}"
-        self.subscribers: set[PtySubscriber] = set()
-        self.tasks: set[asyncio.Task[Any]] = set()
-        self.stopping = False
         self.stop_event = asyncio.Event()
         self.hook_secret = hook_secret
         # MCP caller identity (CP §7.4): minted at spawn, injected into the
@@ -2407,65 +2469,12 @@ class Session:
         self.startup_started_at = startup_started_at or time.perf_counter()
         self.startup_measurement_task: asyncio.Task[Any] | None = None
         self.registration_task: asyncio.Task[Any] | None = None
-        self.attachments_seen = 0
         # The observed model this session has already been reported as diverging
         # from its launch flag on. A guard rather than a fact: the divergence
         # itself is derived on every read (`harness.model_agreement`), and this
         # only stops one wrong model from writing a log line per observation
         # update for the life of the pane.
         self.model_divergence_noted = ""
-        # Exactly one browser connection may write terminal-generated responses
-        # and user keystrokes. Without this, two attached xterms both answer
-        # device-status queries and the duplicate response appears at the prompt.
-        self.input_owner: str | None = None
-        # The owner's socket, so a displaced owner can be told it lost the claim.
-        # Silent displacement left the previous client typing into a void.
-        self.input_owner_socket: Any = None
-        # Transfer counter and the owning device's label, carried on every
-        # `input_owner` frame so a client can discard an ownership notification that
-        # lost a race with a newer one. See terminal_arbitration.
-        self.input_owner_epoch = 0
-        self.input_owner_device: str | None = None
-        # Monotonic time of the last gesture-backed claim or keystroke by the owner:
-        # what protects an actively typed-in device from a passive re-claim by a
-        # background pane on another device.
-        self.input_owner_gesture_ts: float | None = None
-        # Non-owner input is refused rather than silently dropped; these make the
-        # refusals visible in telemetry instead of leaving the user to notice
-        # missing characters by feel.
-        self.input_rejections = 0
-        self.last_input_reject_report_ts = 0.0
-        # Monotonic stamps bounding client-requested work: a `repaint` frame makes the
-        # child restate its whole transcript, and `client_diagnostic` frames are
-        # persisted to the durable event log, so neither may be driven at frame rate
-        # by a misbehaving or malicious page. The repaint stamp also covers the pulse
-        # an alternate-screen session takes after a windowed replay, so a reconnect
-        # storm across devices costs the session one restatement rather than one each.
-        self.last_client_repaint_ts = 0.0
-        self.client_diagnostic_timestamps: dict[str, float] = {}
-        # A drag emits geometry changes continuously, and an alternate-screen child
-        # cannot repair its own screen after one (`needs_resize_repaint`). These carry
-        # the trailing-edge debounce that pulses it once the size stops moving: the
-        # deadline is pushed forward by every change, and one task waits it out, so a
-        # gesture of any length costs exactly one pulse after the user lets go.
-        self.resize_repaint_deadline = 0.0
-        self.resize_repaint_task: asyncio.Task[None] | None = None
-        # Passive claims refused because another device is actively being typed into:
-        # the direct measure of how often a background pane tried to steal the keyboard.
-        self.input_claim_denials = 0
-        # Last refusal per connection, so a client that re-claims on its own refusal
-        # stops being answered instead of looping. Cleared when the connection ends.
-        self.claim_refusals: dict[str, float] = {}
-        # Recent claim decisions, newest last. Ownership disputes are otherwise only
-        # visible as a counter going up, which says a claim was refused but never
-        # which device asked, what it reported about itself, or what the daemon
-        # believed at the time — the three things any diagnosis actually needs.
-        self.claim_log: deque[dict[str, Any]] = deque(maxlen=CLAIM_LOG_LIMIT)
-        # Per-connection fitted terminal size for every attached client that reports
-        # itself visible. Hidden panes deregister, so a minimized window can no longer
-        # reshape ConPTY for the device a human is actually using.
-        self.viewports: dict[str, tuple[int, int]] = {}
-        self.geometry: tuple[int, int] | None = None
         self.revision = 0
         self.state_source_priority = -1
         # Diagnostics for end-detection health: when the state last changed, when a
@@ -2624,26 +2633,6 @@ class Session:
         # nothing about it is durable, because nothing about it is an ending.
         self.supervisor_unreachable_since: float | None = None
         self.supervisor_unreachable_logged_at = 0.0
-        self.last_input_event_ts = 0.0
-        self.last_input_report_ts = 0.0
-        self.input_revision = 0
-        # Estimated unsent composer contents, kept from the bytes written to this
-        # PTY (`composer_input.py`). Display evidence only: the delivery gate has
-        # its own `input_revision` boundary and never reads this.
-        self.composer = ComposerState()
-        # Two sources for the same fact, deliberately kept apart. The daemon reads
-        # the child's own screen switch off the PTY and so has it for every
-        # session; the browser reports xterm's active buffer only while a pane is
-        # attached and owns input, which makes it corroboration rather than the
-        # source of record (`delivery-readiness.md`).
-        self.screen = ScreenModeParser()
-        self.bracketed_paste = BracketedPasteParser()
-        # The reporting modes an attach has to hand back, for the same reason bracketed
-        # paste is handed back: set once at startup, never restated, and cleared by the
-        # terminal reset a reconnecting pane performs. See `STICKY_PRIVATE_MODES`.
-        self.sticky_modes = StickyModeParser()
-        self.terminal_mode: str | None = None
-        self.terminal_mode_updated_at = 0.0
         self.observation_state: dict[str, Any] = {
             "root_turn_active": False,
             "root_completion_seen": False,
@@ -2714,313 +2703,90 @@ class Session:
         # binding. Sync: it schedules its own task rather than blocking the hook.
         self.provisional_binding_sink: Callable[[], None] | None = None
 
+    def terminal_descriptor(self) -> TerminalDescriptor:
+        """What the terminal core reads about this session, at the moment it asks."""
+        record = self.record
+        backend = record.backend
+        return TerminalDescriptor(
+            session_id=record.id,
+            backend=str(backend),
+            state=str(record.state),
+            created_at=record.created_at,
+            stopping=self.stopping,
+            needs_resize_repaint=needs_resize_repaint(backend),
+            repaints_scrollback=repaints_scrollback(backend),
+            replay_needs_repaint=replay_needs_repaint(backend),
+            suppresses_late_color_response=suppresses_late_color_response(backend),
+        )
+
+    def terminal_snapshot(self) -> tuple[dict[str, Any], int]:
+        """The record snapshot and revision a terminal frame carries."""
+        return self.record.snapshot(), self.revision
+
     def subscribe(self, maxsize: int = 1024) -> PtySubscriber:
-        subscriber = PtySubscriber(asyncio.Queue(maxsize=maxsize))
-        self.subscribers.add(subscriber)
-        return subscriber
+        return self.terminal.stream.subscribe(maxsize)
+
+    def unsubscribe(self, subscriber: PtySubscriber) -> None:
+        self.terminal.stream.unsubscribe(subscriber)
 
     def replay_and_subscribe(self) -> tuple[dict[str, Any], int, bytes, PtySubscriber]:
         """Atomically snapshot replay bytes and register for subsequent output.
 
-        This method has no await points, so the single event-loop fanout task cannot
-        append output between the snapshot and subscription. A new attachment therefore
-        neither misses nor duplicates the boundary chunk.
-
-        `attach_replay_bytes` bounds only what this attach replays
-        (`ScrollbackBuffer.tail`); retention is untouched and later output is
-        unaffected.
+        An attach with no position (`attach_and_subscribe`): a new attachment
+        neither misses nor duplicates the boundary chunk, and `attach_replay_bytes`
+        bounds only what it replays.
         """
         snapshot, revision, _kind, payload, _position, subscriber = self.attach_and_subscribe(None)
         return snapshot, revision, payload, subscriber
 
     @property
     def stream_id(self) -> str:
-        """Which byte stream this session's ring positions count.
-
-        A client's ``since`` means something only in the stream it was taken from,
-        and the cold check alone could not tell streams apart. A supervisor-backed
-        session uses the supervisor's ``stream``, which survives a daemon restart
-        together with the positions (an adopted ring is seeded at the supervisor's
-        position), so a browser's cursor stays good across a reload. Anything
-        else - an in-process pane, a session rebuilt from disk, or one under a
-        supervisor too old to name its stream - uses the id this Session minted.
-        """
-        remote = getattr(self.pty, "stream", "")
-        if isinstance(remote, str) and remote:
-            return remote
-        return self._stream_id
+        """Which byte stream this session's ring positions count (`TerminalStream`)."""
+        return self.terminal.stream.stream_id
 
     def attach_and_subscribe(
         self, since: int | None, stream: str | None = None
     ) -> tuple[dict[str, Any], int, str, bytes, int, PtySubscriber]:
         """One atomic attach decision: what this client gets, and from where.
 
-        ``since`` is the ring position the client has already parsed up to — the
-        position a previous attach's ``replay_end`` reported plus every live byte
-        it received since. When the ring still holds everything after it, the
-        attach is a **delta** (kind ``"delta"``): exactly the missed bytes, into a
-        terminal the client did *not* reset. That is what makes a reconnect
-        lossless — the scrollback the client spent a session parsing survives a
-        tab switch, a minimize, or a phone freeze, instead of being discarded and
-        rebuilt from a bounded window that reconstructs roughly one screen.
-
-        Everything else — no ``since``, a ``stream`` other than this ring's
-        (`stream_id`) or none at all, a gap the ring no longer covers, a gap
-        larger than the attach budget (continuity would cost more parse than a
-        fresh window) — falls back to the full bounded replay (kind
-        ``"attach"``), which is exactly the previous behaviour. The validation is
-        what makes offering ``since`` always safe for the client: a wrong answer
-        here corrupts a terminal silently, so nothing but a provably-covered gap
-        in the same stream is served as a delta. A position check alone could not
-        promise that: a respawn restarts positions under the same session id, and
-        a cursor from the old stream can land inside the new range by chance.
-
-        Like ``replay_and_subscribe`` this has no await points, so the payload,
-        the returned ring ``position`` and the subscription describe one instant;
-        a caller reads `stream_id` before its next await to describe it too.
+        A delta when the ring provably holds every byte after ``since`` in the
+        same ``stream``, the bounded replay otherwise (`TerminalStream.attach`).
         """
-        subscriber = self.subscribe()
-        position = self.scrollback.position
-        snapshot = self.record.snapshot()
-        if (
-            since is not None
-            and stream is not None
-            and stream == self.stream_id
-            and self._delta_covers(since, position)
-        ):
-            payload = self.scrollback.bytes_since(since)
-            return snapshot, self.revision, "delta", payload, position, subscriber
-        return snapshot, self.revision, "attach", self.replay_bytes(), position, subscriber
-
-    def _delta_covers(self, since: int | None, position: int) -> bool:
-        """Whether the ring provably holds every byte after ``since``.
-
-        The strict-retention check matters because ``bytes_since`` answers an
-        uncovered position with the whole buffer — correct for detection cursors,
-        catastrophic for a client that would append it after a hole.
-        """
-        if self.record.cold or getattr(self.record, "inactive", False):
-            # A cold session's ring was rebuilt from disk, so its positions
-            # describe a *different* stream from the one any client parsed before
-            # the crash. A `since` from that stream can still land inside this
-            # range by coincidence, and a delta served across the boundary is
-            # appended to a terminal that was never reset - silent corruption, in
-            # the one case where the operator is reading the pane for evidence.
-            return False
-        if since is None or not 0 <= since <= position:
-            return False
-        gap = position - since
-        if gap > self.scrollback.size:
-            return False
-        budget = self.attach_replay_bytes
-        return budget is None or budget <= 0 or gap <= budget
+        return self.terminal.stream.attach(since, stream, self.terminal_snapshot)
 
     def replay_bytes(self) -> bytes:
-        """Retained output for a fresh attach, bounded and self-contained.
-
-        A bounded window can begin after the child selected the alternate screen,
-        which would leave the client painting a full-screen TUI into its *normal*
-        buffer - every repaint growing scrollback instead of overwriting one
-        screen, which is precisely the cost the bound exists to remove. The daemon
-        tracks the mode from the stream itself (`screen_mode.py`), so it can
-        restate it.
-
-        Only restated when the window carries no toggle of its own. A window that
-        contains its own answer, and prefixing would override a child that
-        deliberately left the alternate screen inside it.
-        """
-        replay = self.scrollback.tail(self.attach_replay_bytes)
-        suffix = b""
-        # Boundary guard, not a diagnosis: the 2026-08-06 black OMP panes were an
-        # xterm bundling defect crashing on DECRQM (see
-        # frontend/scripts/patch-xterm-requestmode.mjs), not an unmatched paint
-        # bracket. The guard stays because the hazard it names is real for any
-        # harness that brackets paints: the replay snapshot may land between a
-        # DEC 2026 begin/end or an autowrap off/on pair, and a window ending on
-        # the open half leaves a fresh client withholding (2026) or mis-wrapping
-        # (autowrap) everything after it until the live stream happens to close
-        # the bracket - forever, if the child stops painting. Close only modes
-        # whose complete opening sequence is newer than their complete closing
-        # sequence; this does not splice bytes into a partial CSI at the
-        # snapshot boundary.
-        if replay.rfind(b"\x1b[?2026h") > replay.rfind(b"\x1b[?2026l"):
-            suffix += b"\x1b[?2026l"
-        if replay.rfind(b"\x1b[?7l") > replay.rfind(b"\x1b[?7h"):
-            suffix += b"\x1b[?7h"
-        if len(replay) == self.scrollback.size:
-            return replay + suffix
-        preamble = b""
-        # Agent CLIs enable bracketed paste once at startup and never restate it, so
-        # a bounded window over a long session never carries it. A reconnecting pane
-        # resets its terminal, and without this it pastes unwrapped: xterm turns each
-        # newline into Enter, and the CLI submits the paste a line at a time.
-        if self.bracketed_paste.enabled and not BRACKETED_PASTE_TOGGLE.search(replay):
-            preamble += b"\x1b[?2004h"
-        if self.screen.mode == "alternate" and not SCREEN_TOGGLE.search(replay):
-            preamble += b"\x1b[?1049h"
-        # The rest of the same family, and for the same reason. Losing the mouse group
-        # here is what made a phone swipe do nothing on any session deep enough to
-        # outgrow this window: with no mouse modes the browser reports no mouse, so the
-        # drag has nothing to forward and falls back to scrolling an alternate screen
-        # that has no scrollback to scroll.
-        preamble += self.sticky_modes.preamble(replay)
-        return preamble + replay + suffix
+        return self.terminal.stream.replay_bytes()
 
     def replay_window_truncated(self) -> bool:
-        """Whether retention outgrew the replay budget, so an attach gets a window.
-
-        The mirror of the `len(replay) == self.scrollback.size` branch above, asked
-        without materializing the bytes. `False` means an attach replays everything the
-        daemon holds, which is self-contained by construction; `True` means the client
-        is handed a slice, which for an alternate-screen child is a slice of a
-        differential frame stream (`harness.replay_needs_repaint`).
-        """
-        limit = self.attach_replay_bytes
-        return limit is not None and limit > 0 and self.scrollback.size > limit
-
-    def _schedule_resync(self, subscriber: PtySubscriber, rejected: bytes | None = None) -> None:
-        if rejected is not None:
-            subscriber.dropped_bytes += len(rejected)
-            subscriber.dropped_chunks += 1
-        while not subscriber.queue.empty():
-            queued = subscriber.queue.get_nowait()
-            if isinstance(queued, bytes):
-                subscriber.dropped_bytes += len(queued)
-                subscriber.dropped_chunks += 1
-        if not subscriber.resync_pending:
-            subscriber.resync_pending = True
-            subscriber.queue.put_nowait({"type": "resync"})
-
-    # --- terminal input ownership and shared geometry (see terminal_arbitration) ---
-
-    def owner_state(self) -> OwnerState:
-        return OwnerState(
-            connection_id=self.input_owner,
-            epoch=self.input_owner_epoch,
-            device=self.input_owner_device,
-            last_gesture_at=self.input_owner_gesture_ts,
-        )
-
-    def apply_owner_state(self, state: OwnerState) -> None:
-        self.input_owner = state.connection_id
-        self.input_owner_epoch = state.epoch
-        self.input_owner_device = state.device
-        self.input_owner_gesture_ts = state.last_gesture_at
-
-    def note_owner_input(self, now: float) -> None:
-        """Human keystrokes renew the owner's protection from passive claims."""
-        self.input_owner_gesture_ts = now
-
-    def release_input_owner(self, connection_id: str) -> bool:
-        """Drop ownership held by a detaching connection. True when it held it."""
-        if self.input_owner != connection_id:
-            return False
-        self.apply_owner_state(release_owner(self.owner_state(), connection_id))
-        self.input_owner_socket = None
-        return True
+        return self.terminal.stream.replay_window_truncated()
 
     def set_viewport(self, connection_id: str, cols: int, rows: int, *, hidden: bool) -> None:
-        """Record (or, for a hidden client, forget) one client's fitted size."""
-        if hidden:
-            self.viewports.pop(connection_id, None)
-            return
-        self.viewports[connection_id] = (max(2, cols), max(1, rows))
-
-    def drop_viewport(self, connection_id: str) -> None:
-        self.viewports.pop(connection_id, None)
+        self.terminal.set_viewport(connection_id, cols, rows, hidden=hidden)
 
     def apply_geometry(self) -> bool:
-        """Resize the PTY to the arbitrated size. True when it actually changed.
-
-        Called after every viewport update, ownership transfer and detach. Resizing is
-        gated on a real change because each one is a SIGWINCH that makes an agent TUI
-        repaint its whole screen.
-        """
-        size = effective_geometry(self.viewports, self.input_owner)
-        if size is None or size == self.geometry:
-            return False
-        self.geometry = size
-        self.pty.resize(size[0], size[1])
-        self.publish_control(self.geometry_frame())
-        return True
+        return self.terminal.apply_geometry()
 
     async def repaint_current_geometry(self) -> bool:
-        """Make a full-screen child repaint without changing canonical geometry.
-
-        A repaint-heavy TUI (OMP's spinner alone emits kilobytes per second) wraps the
-        retained ring until a bounded replay holds only live-region repaint traffic,
-        which parses to a single screen with no scrollback. The child holds the full
-        transcript and restates it in response to a real width change (measured
-        2026-08-07: one pulse elicited a ~460-line transcript re-render), so pulse one
-        column and restore it after the child has had a scheduler turn. Triggered by a
-        client `repaint` frame when its parsed replay produced no scrollback; the
-        restated bytes also repopulate the ring for every later attach.
-
-        Another client may resize during the yield. In that case its new canonical
-        geometry has already won, so never restore the stale size over it.
-        """
-        size = self.geometry
-        if size is None or self.record.state in {"exited", "crashed"}:
-            return False
-        cols, rows = size
-        pulse_cols = cols - 1 if cols > 2 else cols + 1
-        self.pty.resize(pulse_cols, rows)
-        await asyncio.sleep(0.02)
-        if self.geometry != size:
-            return False
-        self.pty.resize(cols, rows)
-        return True
+        return await self.terminal.repaint_current_geometry()
 
     def geometry_frame(self) -> dict[str, Any]:
-        # getattr-guarded for the lightweight PTY stubs used by protocol tests, which
-        # implement resize/write but carry no dimensions of their own.
-        cols, rows = self.geometry or (
-            int(getattr(self.pty, "cols", 80)),
-            int(getattr(self.pty, "rows", 24)),
-        )
-        return {
-            "type": "geometry",
-            "cols": cols,
-            "rows": rows,
-            "owner_device": self.input_owner_device,
-        }
+        return self.terminal.geometry_frame()
 
     def publish_control(self, frame: dict[str, Any]) -> None:
-        """Fan out a small control frame. Unlike output it is never worth a resync:
-        a client mid-resync gets the current geometry with its resync `update`."""
-        for subscriber in tuple(self.subscribers):
-            if subscriber.resync_pending:
-                continue
-            try:
-                subscriber.queue.put_nowait(frame)
-            except asyncio.QueueFull:
-                self._schedule_resync(subscriber)
+        self.terminal.stream.publish_control(frame)
 
     def publish_output(self, data: bytes) -> None:
-        for subscriber in tuple(self.subscribers):
-            if subscriber.resync_pending:
-                subscriber.dropped_bytes += len(data)
-                subscriber.dropped_chunks += 1
-                continue
-            try:
-                subscriber.queue.put_nowait(data)
-            except asyncio.QueueFull:
-                self._schedule_resync(subscriber, data)
+        self.terminal.stream.publish_output(data)
 
     def publish_update(self) -> None:
         self.revision += 1
-        frame = {
-            "type": "update",
-            "snapshot": self.record.snapshot(),
-            "revision": self.revision,
-        }
-        for subscriber in tuple(self.subscribers):
-            if subscriber.resync_pending:
-                continue
-            try:
-                subscriber.queue.put_nowait(frame)
-            except asyncio.QueueFull:
-                self._schedule_resync(subscriber)
+        self.terminal.stream.publish_update(
+            {
+                "type": "update",
+                "snapshot": self.record.snapshot(),
+                "revision": self.revision,
+            }
+        )
         # getattr-guarded so publish_update stays callable from lightweight
         # stubs that exercise transition() as a pure arbitration contract.
         meta_sink = getattr(self, "meta_sink", None)
@@ -3032,21 +2798,14 @@ class Session:
 
     def publish_exit(self, reason: str) -> None:
         self.revision += 1
-        frame = {
-            "type": "exit",
-            "snapshot": self.record.snapshot(),
-            "revision": self.revision,
-            "reason": reason,
-        }
-        for subscriber in tuple(self.subscribers):
-            if subscriber.resync_pending:
-                subscriber.exit_pending = frame
-                continue
-            try:
-                subscriber.queue.put_nowait(frame)
-            except asyncio.QueueFull:
-                self._schedule_resync(subscriber)
-                subscriber.exit_pending = frame
+        self.terminal.stream.publish_exit(
+            {
+                "type": "exit",
+                "snapshot": self.record.snapshot(),
+                "revision": self.revision,
+                "reason": reason,
+            }
+        )
 
     def transition(
         self,
@@ -3142,34 +2901,8 @@ class Session:
     def take_resync(
         self, subscriber: PtySubscriber
     ) -> tuple[int, int, bytes, dict[str, Any], int, int, dict[str, Any] | None]:
-        """Capture a deterministic recovery boundary without yielding the event loop.
-
-        Bounded by the same budget as a fresh attach, and for the same reason: the
-        client resets its terminal on a resync, so what it receives is a complete
-        replay into an empty buffer rather than a patch. A resync is also triggered
-        by a client that could not keep up, which is the worst moment to hand one
-        the largest possible payload. Deliberately never a delta even though the
-        ring may still cover the drop, for that same reason.
-
-        The returned ring position re-anchors the client's byte cursor: the drop
-        broke its count, and without a fresh anchor every later reconnect would
-        offer a stale ``since`` and pay a full replay it did not need.
-        """
-        dropped_bytes = subscriber.dropped_bytes
-        dropped_chunks = subscriber.dropped_chunks
-        replay = self.replay_bytes()
-        position = self.scrollback.position
-        snapshot = self.record.snapshot()
-        revision = self.revision
-        exit_frame = subscriber.exit_pending
-        subscriber.resync_pending = False
-        subscriber.dropped_bytes = 0
-        subscriber.dropped_chunks = 0
-        subscriber.exit_pending = None
-        return dropped_bytes, dropped_chunks, replay, snapshot, revision, position, exit_frame
-
-    def unsubscribe(self, subscriber: PtySubscriber) -> None:
-        self.subscribers.discard(subscriber)
+        """Capture a deterministic recovery boundary (`TerminalStream.take_resync`)."""
+        return self.terminal.stream.take_resync(subscriber, self.terminal_snapshot)
 
     def reseed_from_supervisor(self, reseed: OutputReseed) -> None:
         """Adopt the supervisor's buffer after a stretch of output was lost on the way.
@@ -3183,19 +2916,11 @@ class Session:
         Every attached terminal is resynced, since its cursor is in the old ring.
         """
         previous = self.scrollback.position
-        self.scrollback.seed(reseed.data, reseed.position)
-        self.screen = ScreenModeParser()
-        self.bracketed_paste = BracketedPasteParser()
-        self.sticky_modes = StickyModeParser()
+        self.terminal.stream.reseed(reseed.data, reseed.position)
         self.osc_signals = OscSignalParser()
-        self.screen.feed(reseed.data)
-        self.bracketed_paste.feed(reseed.data)
-        self.sticky_modes.feed(reseed.data)
         self.osc_signals.feed(reseed.data)
         self.osc7 = Osc7Parser()
         self.osc133 = Osc133Parser()
-        for subscriber in tuple(self.subscribers):
-            self._schedule_resync(subscriber)
         log.warning(
             "session %s (%s): output from the supervisor had a hole it no longer retained; "
             "re-seeded the ring from its %d byte(s) at position %d (was %d) and resynced %d "

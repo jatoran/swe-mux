@@ -23,32 +23,19 @@ STREAM = "s1@daemon.test"
 
 
 def _fake_session(max_bytes: int = 32) -> Any:
-    fake = cast(Any, Session.__new__(Session))
-    fake.scrollback = ScrollbackBuffer(max_bytes)
-    fake.subscribers = set()
-    fake.record = cast(
-        Any,
-        type(
-            "Record",
-            (),
-            # `cold` is read by the delta-attach decision: a recovered session's
-            # ring was rebuilt from disk, so its positions describe a different
-            # stream and a delta across that boundary would corrupt the terminal.
-            # These fixtures are all live sessions.
-            {"snapshot": lambda self: {"state": "running"}, "cold": False},
-        )(),
-    )
-    fake.revision = 0
+    """A live session over a PTY that is not there.
+
+    Live, not recovered: the delta-attach decision refuses a cold session's ring,
+    whose positions describe a different stream.
+    """
+    record = SessionRecord("s1", "pane", "default", "shell", "native", ".", "cmd.exe", [])
+    fake = Session(record, cast(Any, SimpleNamespace()), ShellAdapter(), max_bytes, "secret")
     # An in-process pane: no supervisor stream, so the ring's stream is the one this
-    # Session minted.
-    fake.pty = SimpleNamespace()
-    fake._stream_id = STREAM
+    # Session minted - pinned, so the assertions can name it.
+    fake.terminal.stream.local_stream_id = STREAM
     # Replay is exact here: these fixtures pin the *retention* contract, and a
     # replay budget would silently trim the very boundaries they assert on.
     fake.attach_replay_bytes = None
-    fake.screen = ScreenModeParser()
-    fake.bracketed_paste = BracketedPasteParser()
-    fake.sticky_modes = StickyModeParser()
     return fake
 
 
@@ -378,7 +365,7 @@ def test_replay_subscription_boundary_is_atomic() -> None:
     fake.scrollback.append(b"past")
 
     snapshot, revision, replay, queue = Session.replay_and_subscribe(fake)
-    assert snapshot == {"state": "running"}
+    assert snapshot == fake.record.snapshot()
     assert revision == 0
     assert replay == b"past"
     assert queue in fake.subscribers
@@ -404,7 +391,7 @@ def test_a_covered_gap_is_answered_with_exactly_the_missed_bytes() -> None:
 
     assert (kind, payload) == ("delta", b"missed while away")
     assert position == fake.scrollback.position
-    assert snapshot == {"state": "running"}
+    assert snapshot == fake.record.snapshot()
     assert revision == 0
     assert queue in fake.subscribers
 
@@ -511,7 +498,7 @@ def test_subscriber_overflow_coalesces_into_one_resync() -> None:
     dropped_bytes, dropped_chunks, replay, snapshot, revision, position, exit_frame = result
     assert (dropped_bytes, dropped_chunks) == (8, 4)
     assert replay == b"345678"
-    assert snapshot == {"state": "running"}
+    assert snapshot == fake.record.snapshot()
     assert revision == 0
     # The drop broke the client's byte count; this position is its new anchor.
     assert position == fake.scrollback.position
