@@ -1027,6 +1027,11 @@ Items are worked in order, and an item may reorder, split or remove later items 
     Spawn-time placement is exercised end to end by item 33's live tier rather than here: `SessionManager.spawn` has no unit seam short of a whole spawn.
     Twenty-one deliberate breaks - the per-message retired check removed, a retired core still writing or resizing, the handover not retiring, an ended session coming back before its exit frame, the revision not moved on, stale terminals never released, placement on a disconnected gateway, in-process sessions handed over, a dead gateway's terminals not taken back, the health check skipped, late timers counted, `settle` not waiting or the route not settling, `connect` skipping the handover, a reset or an older gateway counting traffic from before the window, the gauge subtracted, the gateway routes left out of the digest, an ended session never placed, and the ping capability unchecked - each failed the suite.
     One survived at first: a dead gateway's terminals came back anyway at the next incarnation's start, after the restart backoff, so the test now uses a five-second backoff and requires them back within three.
+  - **The first redeploy rolled back, and the gate could not have said why.** The new daemon's runtime build failed in the `services` phase with a `KeyError` on `keys.SESSIONS`: `_start_terminal_gateway` read the session manager from the app, which the composition root publishes far later, and it did so only with a supervisor attached - so every supervised start failed, gateway enabled or not.
+    The redeploy waited out its 600 s budget on a tray whose daemon had exited, rolled back to the previous bundle, and every session survived.
+    The wiring test passed because it set `keys.SESSIONS` on its app itself; it no longer does, and the manager is now passed in.
+    The one test that starts a supervised daemon end to end is the `live_daemon` tier, which `.worktree-verify` deselects, and it failed on the broken build in five seconds.
+    So from here on a change to the composition root or to anything a daemon builds at startup runs `uv run pytest tests/test_live_daemon.py -m live_daemon` before it lands.
 
 - [ ] **33. Packaging, redeploy, update and the live tier.**
   - **Why:** the gateway is a new long-lived `swe-mux.exe` that holds the bundle image.

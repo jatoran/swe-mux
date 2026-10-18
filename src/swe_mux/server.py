@@ -1406,12 +1406,20 @@ def _queue_writer(events: EventBus) -> OperatorWriter:
 
 
 async def _start_terminal_gateway(
-    app: web.Application, config: Config, supervisor_client: SupervisorClient | None
+    app: web.Application,
+    config: Config,
+    supervisor_client: SupervisorClient | None,
+    sessions: SessionManager,
 ) -> GatewayHost:
     """Build the terminal gateway host, publish it, and start it when it can run.
 
     The gateway carries terminals from the PTY supervisor, so without one there is
     nothing for it to carry and terminals stay on this daemon.
+
+    `sessions` is passed rather than read from the app: this runs in the `services`
+    phase, long before the composition root publishes `keys.SESSIONS`, and reading
+    it here failed every supervised start (2026-10-18, caught by the redeploy's
+    rollback and then by the `live_daemon` tier).
     """
     generation = app[keys.DAEMON_GENERATION]
     gateway_host = GatewayHost(config, generation=generation)
@@ -1419,7 +1427,6 @@ async def _start_terminal_gateway(
     if supervisor_client is None:
         gateway_host.mark_unavailable("no PTY supervisor is attached")
         return gateway_host
-    sessions: SessionManager = app[keys.SESSIONS]
     placement = TerminalPlacement(
         gateway_host.hub,
         sessions=lambda: sessions.sessions,
@@ -1855,7 +1862,7 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
     # The terminal gateway (`gateway_host.py`): found or started the same way, never
     # awaited past that, so a slow or failing gateway costs this start nothing and
     # terminals stay on this daemon until it is up.
-    gateway_host = await _start_terminal_gateway(app, config, supervisor_client)
+    gateway_host = await _start_terminal_gateway(app, config, supervisor_client, sessions)
 
     # The monitor's branch-scoped diff is measured against the same base the Git
     # drawer uses, so the sidebar and the drawer cannot report a session's branch

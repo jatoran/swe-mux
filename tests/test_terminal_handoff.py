@@ -498,12 +498,14 @@ async def test_the_composition_root_installs_the_placement_and_the_metering(
     sessions = SimpleNamespace(sessions={}, terminal_placement=None)
     usage = NetworkUsage()
     app = web.Application()
+    # Only what `create_app` has published by the `services` phase. `keys.SESSIONS`
+    # is deliberately absent: the composition root publishes it much later, and
+    # this test once set it here and so passed while every supervised start failed.
     app[keys.DAEMON_GENERATION] = "gen-1"
-    app[keys.SESSIONS] = cast(Any, sessions)
     app[keys.NETWORK_USAGE] = usage
     config = Config(data_dir=tmp_path, terminal_gateway_enabled=True)
 
-    host = await _start_terminal_gateway(app, config, cast(Any, object()))
+    host = await _start_terminal_gateway(app, config, cast(Any, object()), cast(Any, sessions))
 
     assert app[keys.TERMINAL_GATEWAY] is host
     assert host.placement is not None
@@ -514,6 +516,5 @@ async def test_the_composition_root_installs_the_placement_and_the_metering(
     bare = SimpleNamespace(sessions={}, terminal_placement=None)
     app2 = web.Application()
     app2[keys.DAEMON_GENERATION] = "gen-1"
-    app2[keys.SESSIONS] = cast(Any, bare)
-    unsupervised = await _start_terminal_gateway(app2, config, None)
+    unsupervised = await _start_terminal_gateway(app2, config, None, cast(Any, bare))
     assert unsupervised.placement is None and bare.terminal_placement is None
