@@ -1675,6 +1675,11 @@ class Config:
         """The port the terminal gateway is started on: the set one, or the daemon's plus one."""
         return self.terminal_gateway_port or self.port + 1
 
+    def active_terminal_gateway_port(self) -> int | None:
+        """The gateway's port while it is enabled, for what must also admit or route
+        it (the firewall rule, the Tailscale Serve mount); None while it is off."""
+        return self.terminal_gateway_listen_port() if self.terminal_gateway_enabled else None
+
     def public_dict(self) -> dict[str, object]:
         result = asdict(self)
         result["data_dir"] = str(self.data_dir)

@@ -2036,17 +2036,26 @@ silently widen the rule beyond what the user agreed to.
 The mobile-voice request is accepted only while the Tailscale listener is enabled and only from
 the explicit Talk/Settings action. It returns a secure URL only when the daemon has a verified
 secure endpoint; otherwise it returns `error` without changing the working direct HTTP listener.
+A `ready` response also carries `gateway_mount` - `{status, mount_port, diagnostic}`, where
+`status` is `added`, `updated`, `removed`, `unchanged`, `skipped` or `error` - for the terminal
+gateway's `/gateway` Serve mount beside the root route (`design/features/remote-access.md`); its
+failure leaves the response `ready`.
 
 `remote/status` adds the Tailscale connection state (`connection_state`, `device_name`,
 `connection_command`, `connection_detail`) read from `tailscale status --json`, distinct from
-`available` (CLI on PATH).
+`available` (CLI on PATH), and `gateway_mount_port`, the loopback port the `/gateway` mount on 443
+proxies to, or null.
 `remote/firewall` reports whether Windows Defender Firewall admits phone connections on the
 Private profile (`supported`, `needs_repair`, `blocking_rule_detected`, `rule_allowed`,
 `private_firewall_enabled`, `network_category`, `detail`); it reports `supported: false` off a
 frozen Windows build.
+While the terminal gateway is enabled it judges the gateway's port by the same rules and reports
+`gateway_port` and `gateway_rule_allowed` (null while the gateway is off), with
+`rule_allowed`, `blocking_rule_detected` and `needs_repair` covering both ports; on POSIX the
+probe reports `gateway_port` and `gateway_reachable` the same way.
 `remote/firewall/repair` requires the explicit-action header, runs an elevated PowerShell repair,
 and returns `{ok, reason}` where `reason` is `cancelled` (UAC declined), `unsupported`, or
-`failed`.
+`failed`; with the gateway enabled its one rule admits both ports.
 It does not change tailnet policy or make swe-mux public.
 
 ```text

@@ -24,7 +24,7 @@ from .logsetup import enable_crash_tracebacks, setup_daemon_logging
 from .proactor_accept import resilient_event_loop
 from .process_reaper import process_in_job
 from .server import create_app, wait_runtime_ready
-from .tailscale import enable_mobile_voice_serve, listener_hosts
+from .tailscale import enable_mobile_voice_serve, listener_hosts, reconcile_gateway_serve
 from .timer_resolution import raise_timer_resolution
 
 #: The launcher names `[project.scripts]` declares for the daemon. Same rule as
@@ -223,7 +223,11 @@ async def serve(
         guard_task = asyncio.create_task(guard.run(shutdown_event), name="listener-guard")
         _announce(config, browser=browser)
         if config.tailnet_enabled:
-            asyncio.create_task(_auto_enable_mobile_voice(app, config.port))
+            asyncio.create_task(
+                _auto_enable_mobile_voice(
+                    app, config.port, config.active_terminal_gateway_port()
+                )
+            )
         await shutdown_event.wait()
     finally:
         if guard_task is not None:
@@ -262,13 +266,19 @@ def _announce(config: Config, *, browser: bool) -> None:
     logging.getLogger(__name__).info("swe-mux is serving %s", url)
 
 
-async def _auto_enable_mobile_voice(app: web.Application, port: int) -> None:
+async def _auto_enable_mobile_voice(
+    app: web.Application, port: int, gateway_port: int | None = None
+) -> None:
     """Bring up the private HTTPS mobile-voice proxy in the background.
 
     Tailscale Serve on 443 gives phones a secure-context origin for microphone
     capture while the direct 100.x HTTP listener stays as a fallback. This is
     best-effort: the daemon still runs if Tailscale is absent or HTTPS is not
     yet approved for the tailnet, and Settings exposes the same one-tap setup.
+
+    Once the root route is this daemon's, the terminal gateway's `/gateway` mount
+    beside it is made to match ``gateway_port`` (None removes it), because a page
+    on the HTTPS address can reach the gateway no other way.
 
     Waits for the runtime first. The listeners now bind before the runtime is
     built, and Serve reclamation decides whether an existing route is abandoned
@@ -289,6 +299,7 @@ async def _auto_enable_mobile_voice(app: web.Application, port: int) -> None:
     status = result.get("status")
     if status == "ready":
         log.info("mobile-voice HTTPS ready at %s", result.get("url"))
+        await _reconcile_gateway_mount(port, gateway_port)
     elif status == "authorization_required":
         log.warning(
             "mobile-voice HTTPS needs a one-time Tailscale approval; enable it from "
@@ -297,6 +308,22 @@ async def _auto_enable_mobile_voice(app: web.Application, port: int) -> None:
         )
     else:
         log.info("mobile-voice HTTPS not configured: %s", result.get("diagnostic"))
+
+
+async def _reconcile_gateway_mount(port: int, gateway_port: int | None) -> None:
+    log = logging.getLogger(__name__)
+    try:
+        mount = await reconcile_gateway_serve(port, gateway_port)
+    except Exception:  # noqa: BLE001 - startup helper must never crash the daemon
+        log.exception("terminal gateway Serve mount reconcile raised")
+        return
+    level = logging.WARNING if mount.get("status") == "error" else logging.INFO
+    log.log(
+        level,
+        "terminal gateway Serve mount %s: %s",
+        mount.get("status"),
+        mount.get("diagnostic"),
+    )
 
 
 def relaunch_command_for(config: Config, args: argparse.Namespace) -> list[str]:

@@ -124,6 +124,7 @@ DPAPI protect and unprotect, isolated so `ctypes.wintypes` is imported nowhere e
 ## `posix_firewall.py`
 
 The POSIX answer to "can a peer reach this daemon": a bounded TCP reachability probe, which host firewall front-end is installed (`ufw`/`firewall-cmd`/`nft`/`iptables`), and the exact command that would open the port - as advice, never executed, because opening a port needs root and is the user's decision.
+With the terminal gateway enabled it probes the gateway's port too (`gateway_port`), and the advice names whichever port failed.
 
 **Not:** reading firewall rules, since there is no single POSIX firewall to read and a probe is both simpler and better evidence; and any mutation at all.
 

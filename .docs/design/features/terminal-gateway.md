@@ -80,8 +80,11 @@ The last report is remembered for ten minutes in `localStorage`, because a recon
 - **The daemon is same-origin `/pty/<id>` on every access path**, and stays the fallback for everything.
 - **An `http:` page reaches the gateway on its own port**, `ws://<host>:<port>/pty/<id>`: loopback, the tailnet address, the WSL bridge.
 - **An `https:` page goes through the proxy in front of it**, `wss://<host>/gateway/pty/<id>`, because a page served over TLS cannot open `ws:` to another port.
-  Tailscale Serve mounts the gateway at `/gateway` (item 31), and the gateway answers under that prefix as well as without it, so it works whether the proxy strips the prefix or not.
+  Tailscale Serve mounts the gateway at `/gateway` beside the daemon's root route, and the gateway answers under that prefix as well as without it, so it works whether the proxy strips the prefix or not; Serve does strip it (measured on 1.102.2), so a Serve request arrives as `/pty/<id>`.
   The plan had the mount at `/pty` itself, which would have taken the daemon's `/pty` away from an `https:` page - the very route a down gateway has to fall back to.
+  The daemon keeps the mount equal to the gateway's port and removes it while the gateway is disabled, touching it only while the root route is its own (`tailscale.reconcile_gateway_serve`, `design/features/remote-access.md`).
+  The mount follows config rather than the gateway's state: a gateway that is down leaves a mount answering 502, which the page treats as a gateway that never opened and falls back from, while a mount that came and went with each restart would churn the operator's Serve config.
+- **The direct tailnet address needs the gateway's port admitted** as well as the daemon's, so the Windows firewall inspection judges both and its repair writes one rule with both ports, and the POSIX probe tries both (`design/features/remote-access.md`).
 - **The Vite dev server proxies `/gateway` the same way**, so development is the `https:` shape over plain HTTP.
 
 A close says where to go next, and the pane reconnects at once rather than after its backoff: 4010 from the gateway (the session is the daemon's - in-process or cold) holds that one session on the daemon for a minute; 4011 (the gateway is going away) holds the gateway off for two seconds; a gateway that never opened is backed off from, five seconds doubling to a minute, while the daemon serves; and 4012 from the daemon (the session is the gateway's) sends the pane back at once, even ahead of the next health report.

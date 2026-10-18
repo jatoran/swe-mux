@@ -127,7 +127,7 @@ def gateway_origin_allowed(
     allowed; its port may be the daemon's (the page the daemon serves directly),
     the gateway's own, or 443 on a `*.ts.net` name (the page Tailscale Serve
     serves). The daemon's exact same-origin rule is accepted too, which is what a
-    reverse proxy in front of the gateway - Serve's `/pty` mount, or Vite in
+    reverse proxy in front of the gateway - Serve's `/gateway` mount, or Vite in
     development - presents.
     """
     try:

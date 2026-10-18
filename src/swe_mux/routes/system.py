@@ -54,6 +54,7 @@ from ..subprocess_flags import background_creation_flags, popen_outside_job
 from ..tailscale import clear_status_cache as clear_tailscale_status_cache
 from ..tailscale import (
     enable_mobile_voice_serve,
+    reconcile_gateway_serve,
     tailscale_ipv4,
     tailscale_status,
 )
@@ -828,6 +829,12 @@ async def enable_mobile_voice(request: web.Request) -> web.Response:
             {"error": "Enable the Tailscale listener in Settings before mobile voice."}, 409
         )
     result = await enable_mobile_voice_serve(config.port)
+    if result.get("status") == "ready":
+        # The terminal gateway rides on the same address, so the one-tap repair
+        # repairs its mount too; a failure there leaves mobile voice ready.
+        result["gateway_mount"] = await reconcile_gateway_serve(
+            config.port, config.active_terminal_gateway_port()
+        )
     return json_response(result, 200 if result.get("status") == "ready" else 409)
 
 
@@ -892,7 +899,12 @@ async def firewall_status(request: web.Request) -> web.Response:
     serve_active = bool(status.get("serve_configured") or status.get("mobile_voice_configured"))
     address = await tailscale_ipv4()
     return json_response(
-        await inspect_firewall(config.port, address, serve_active=serve_active)
+        await inspect_firewall(
+            config.port,
+            address,
+            serve_active=serve_active,
+            gateway_port=config.active_terminal_gateway_port(),
+        )
     )
 
 
@@ -907,7 +919,7 @@ async def firewall_repair(request: web.Request) -> web.Response:
         return json_response({"error": "firewall repair requires an explicit user action"}, 400)
     if not firewall_supported():
         return json_response({"ok": False, "reason": "unsupported"}, 409)
-    result = await repair_firewall(config.port)
+    result = await repair_firewall(config.port, gateway_port=config.active_terminal_gateway_port())
     return json_response(result, 200 if result.get("ok") else 409)
 
 

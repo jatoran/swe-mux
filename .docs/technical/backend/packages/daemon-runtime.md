@@ -446,12 +446,15 @@ Contracts: `../../../design/features/desktop-shell.md` § Renderer isolation and
 ### `tailscale.py`
 
 Direct-tailnet discovery and status, ephemeral certificate preparation for the daemon's direct private HTTPS listener, and the pure connection-state classifier `classify_tailscale_connection` (not-installed, logged-out, or connected-as-`<device>`, from `BackendState` plus `Self.DNSName`).
+The private Serve listener on 443: `enable_mobile_voice_serve` takes the root route under the ownership rule (`design/features/remote-access.md`, "One Serve route, several daemons"), and `reconcile_gateway_serve` keeps the terminal gateway's `/gateway` mount beside it equal to the gateway's port.
+Every ownership read goes through `_mount_loopback_port`, which reads one handler by its path, so the gateway's mount is never mistaken for the daemon's root.
 
-**Not:** ACL or policy changes, Serve or Funnel enablement, or browser permission; `is_tailscale_ip` lives in `http_origin_policy.py`, which the Host allowlist needs without this module's subprocess machinery.
+**Not:** ACL or policy changes, Funnel enablement, or browser permission; `is_tailscale_ip` lives in `http_origin_policy.py`, which the Host allowlist needs without this module's subprocess machinery.
 
 ### `windows_firewall.py`
 
 Windows-only, frozen-build-gated Defender Firewall inspect and repair for the tailnet listener: the tailnet-scope sufficiency check (`100.64.0.0/10`), the pure `interpret_inspection`, the PowerShell inspect, repair, and elevation script builders, and the injectable runner.
+Each takes an optional `gateway_port`, the terminal gateway's port while it is enabled, which the inspection judges beside the daemon's and the repair admits in the same rule.
 
 **Not:** non-Windows and source-build behavior (`firewall_supported` gates it off), any rule not owned by swe-mux's own program path, or the phone's own firewall.
 

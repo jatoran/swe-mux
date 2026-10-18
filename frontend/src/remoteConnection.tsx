@@ -11,6 +11,7 @@ export type RemoteStatus = {
   serve_url?:string|null;funnel_detected:boolean;setup_command:string;diagnostic:string
   tailnet_enabled:boolean;tailnet_ip?:string|null;tailnet_urls:string[];direct_available:boolean
   mobile_voice_configured:boolean;mobile_voice_url?:string|null;mobile_voice_https_port:number
+  gateway_mount_port?:number|null
   connection_state:TailscaleConnectionState;device_name?:string|null
   connection_command?:string|null;connection_detail:string
 }

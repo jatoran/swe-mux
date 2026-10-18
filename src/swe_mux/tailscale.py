@@ -88,9 +88,52 @@ def _targets_local_port(value: Any, port: int) -> bool:
     )
 
 
+#: Where Serve mounts the terminal gateway beside the daemon's root route. Serve strips
+#: the mount from the path it forwards (measured on 1.102.2: `/gateway/pty/x` arrives as
+#: `/pty/x`), and the gateway answers under both, so either behaviour reaches it.
+GATEWAY_SERVE_PATH = "/gateway"
+_LOOPBACK_PROXY_RE = re.compile(r"^https?://(?:127\.0\.0\.1|localhost|\[::1\]):(\d{1,5})(?:/|$)")
+
+
+def _handlers_on(value: Any, https_port: int) -> dict[str, Any] | None:
+    """The Serve handlers on ``https_port`` (path -> handler), or None when the
+    config has no such listener or is not shaped like `serve status --json`."""
+    if not isinstance(value, dict) or not isinstance(value.get("Web"), dict):
+        return None
+    for authority, config in value["Web"].items():
+        if not isinstance(authority, str):
+            continue
+        candidate = authority if authority.startswith("https://") else f"https://{authority}"
+        if not _url_on_port(candidate, https_port):
+            continue
+        handlers = config.get("Handlers") if isinstance(config, dict) else None
+        if isinstance(handlers, dict):
+            return handlers
+    return None
+
+
+def _mount_loopback_port(value: Any, https_port: int, path: str) -> int | None:
+    """The loopback port the handler mounted at ``path`` on ``https_port`` proxies to.
+
+    One handler, read by its path: the 443 listener carries the daemon's root route
+    *and* the terminal gateway's mount, and a search over the whole listener would
+    answer with whichever came first.
+    """
+    handlers = _handlers_on(value, https_port)
+    if handlers is None:
+        return None
+    handler = handlers.get(path)
+    proxy = handler.get("Proxy") if isinstance(handler, dict) else None
+    match = _LOOPBACK_PROXY_RE.match(proxy) if isinstance(proxy, str) else None
+    return int(match.group(1)) if match else None
+
+
 def _web_target_matches(value: Any, https_port: int, target_port: int) -> bool:
     if not isinstance(value, dict) or not isinstance(value.get("Web"), dict):
         return False
+    if _handlers_on(value, https_port) is not None:
+        # The root route is the daemon's; the gateway's mount beside it is not.
+        return _mount_loopback_port(value, https_port, "/") == target_port
     for authority, config in value["Web"].items():
         if not isinstance(authority, str):
             continue
@@ -128,9 +171,15 @@ def _loopback_target_port(value: Any, https_port: int) -> int | None:
     Extracted rather than merely detected, because "is this loopback" is not
     enough to decide whether taking the route is safe: what matters is *which*
     daemon is on the other end and whether it is still running.
+
+    The root handler's port, when the listener has handlers: the terminal gateway's
+    mount on the same listener points at the gateway, whose health is not a daemon's,
+    and reading it would call a live daemon's route abandoned.
     """
     if not isinstance(value, dict) or not isinstance(value.get("Web"), dict):
         return None
+    if _handlers_on(value, https_port) is not None:
+        return _mount_loopback_port(value, https_port, "/")
     for authority, config in value["Web"].items():
         if not isinstance(authority, str):
             continue
@@ -518,6 +567,9 @@ async def _probe_tailscale_status(port: int, *, tailnet_enabled: bool = True) ->
         "mobile_voice_configured": False,
         "mobile_voice_url": None,
         "mobile_voice_https_port": MOBILE_VOICE_HTTPS_PORT,
+        # The loopback port Serve's `/gateway` mount proxies to beside the root route,
+        # or None; `reconcile_gateway_serve` keeps it equal to the terminal gateway's.
+        "gateway_mount_port": None,
         "funnel_detected": False,
         "setup_command": (
             f"tailscale serve --bg --https={MOBILE_VOICE_HTTPS_PORT} "
@@ -560,6 +612,9 @@ async def _probe_tailscale_status(port: int, *, tailnet_enabled: bool = True) ->
         voice_url and _web_target_matches(payload, MOBILE_VOICE_HTTPS_PORT, port)
     )
     result["mobile_voice_url"] = voice_url
+    result["gateway_mount_port"] = _mount_loopback_port(
+        payload, MOBILE_VOICE_HTTPS_PORT, GATEWAY_SERVE_PATH
+    )
     result["diagnostic"] = (
         "Tailscale Serve is configured for swe-mux."
         if urls and target_ok
@@ -703,3 +758,134 @@ async def enable_mobile_voice_serve(
         "diagnostic": "Private HTTPS mobile voice address is ready.",
         "https_port": https_port,
     }
+
+
+async def _run_serve(executable: str, args: list[str]) -> tuple[bool, str]:
+    """Run one `tailscale serve` mutation; (succeeded, combined output or reason)."""
+    try:
+        outcome = await run_bounded(
+            [executable, "serve", *args],
+            label="tailscale-serve",
+            timeout_seconds=30,
+            output_limit=_OUTPUT_LIMIT,
+            stderr_limit=_STDERR_LIMIT,
+        )
+    except OSError as exc:
+        return False, str(exc)
+    if outcome.timed_out:
+        return False, "the serve command timed out"
+    output = "\n".join(
+        part.decode("utf-8", "replace").strip()
+        for part in (outcome.stdout, outcome.stderr)
+        if part
+    ).strip()
+    return outcome.exit_code == 0, output
+
+
+def _gateway_mount_result(
+    status: str, mount_port: int | None, diagnostic: str
+) -> dict[str, object]:
+    return {"status": status, "mount_port": mount_port, "diagnostic": diagnostic}
+
+
+async def reconcile_gateway_serve(
+    daemon_port: int,
+    gateway_port: int | None,
+    *,
+    https_port: int = MOBILE_VOICE_HTTPS_PORT,
+) -> dict[str, object]:
+    """Make the Serve mount at ``/gateway`` match the terminal gateway's port.
+
+    A browser on the HTTPS address cannot reach the gateway's own port - the
+    page is secure and the port is plain - so Serve carries it at a path beside
+    the daemon's root route (`.docs/design/features/terminal-gateway.md`).
+
+    The mount follows the root route: it is touched only while ``/`` on
+    ``https_port`` proxies to *this* daemon, so a test daemon that does not own
+    the address never moves it, and a daemon that reclaims the address takes the
+    mount with it. ``gateway_port`` None means the gateway is disabled, and a
+    loopback mount left by an earlier configuration is removed. A non-loopback
+    handler at the path is somebody else's and is left alone, and so is a
+    listener Funnel exposes: the gateway is a private surface and must not
+    become a public one by riding along.
+
+    The status is ``added``, ``updated``, ``removed``, ``unchanged``,
+    ``skipped`` (nothing here is this daemon's to change) or ``error``.
+    """
+    executable = tailscale_executable()
+    if not executable:
+        return _gateway_mount_result("skipped", None, "Tailscale CLI is not installed.")
+    existing, error = await _status(executable, "serve")
+    if existing is None:
+        if error and "not configured" not in error.casefold():
+            return _gateway_mount_result(
+                "error", None, f"Could not inspect Tailscale Serve: {error}"
+            )
+        return _gateway_mount_result("skipped", None, "Tailscale Serve is not configured.")
+    if _mount_loopback_port(existing, https_port, "/") != daemon_port:
+        return _gateway_mount_result(
+            "skipped",
+            None,
+            f"Port {https_port} does not serve this daemon; the gateway mount follows "
+            "the root route.",
+        )
+    handlers = _handlers_on(existing, https_port) or {}
+    current = _mount_loopback_port(existing, https_port, GATEWAY_SERVE_PATH)
+    if GATEWAY_SERVE_PATH in handlers and current is None:
+        return _gateway_mount_result(
+            "skipped",
+            None,
+            f"{GATEWAY_SERVE_PATH} on port {https_port} serves another route; swe-mux "
+            "will not replace it.",
+        )
+    if current == gateway_port:
+        return _gateway_mount_result(
+            "unchanged", current, "The terminal gateway mount is already correct."
+        )
+    if gateway_port is None:
+        ok, output = await _run_serve(
+            executable, [f"--https={https_port}", f"--set-path={GATEWAY_SERVE_PATH}", "off"]
+        )
+        _clear_status_cache()
+        if not ok:
+            return _gateway_mount_result(
+                "error", current, f"Could not remove the terminal gateway mount: {output}"
+            )
+        return _gateway_mount_result(
+            "removed", None, "The terminal gateway is disabled; its mount was removed."
+        )
+    funnel, _ = await _status(executable, "funnel")
+    if funnel and mobile_voice_url(_funnel_urls(funnel), https_port):
+        return _gateway_mount_result(
+            "skipped",
+            current,
+            f"Port {https_port} is exposed by Tailscale Funnel; the terminal gateway "
+            "stays off it.",
+        )
+    ok, output = await _run_serve(
+        executable,
+        [
+            "--bg",
+            f"--https={https_port}",
+            f"--set-path={GATEWAY_SERVE_PATH}",
+            f"http://127.0.0.1:{gateway_port}",
+        ],
+    )
+    _clear_status_cache()
+    if not ok:
+        return _gateway_mount_result(
+            "error", current, f"Could not mount the terminal gateway: {output}"
+        )
+    payload, status_error = await _status(executable, "serve")
+    mounted = _mount_loopback_port(payload, https_port, GATEWAY_SERVE_PATH)
+    if mounted != gateway_port:
+        return _gateway_mount_result(
+            "error",
+            mounted,
+            status_error or "Tailscale did not retain the terminal gateway mount.",
+        )
+    return _gateway_mount_result(
+        "added" if current is None else "updated",
+        mounted,
+        f"The terminal gateway is mounted at {GATEWAY_SERVE_PATH}.",
+    )

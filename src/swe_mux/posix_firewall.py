@@ -104,39 +104,55 @@ def allow_command(port: int) -> str | None:
     return None
 
 
-async def inspect_posix_firewall(port: int, address: str | None = None) -> dict[str, object]:
+async def inspect_posix_firewall(
+    port: int, address: str | None = None, *, gateway_port: int | None = None
+) -> dict[str, object]:
     """A status payload shaped like the Windows one, so callers stay platform-free.
 
     `needs_repair` stays False even when the probe fails, because this module
     cannot repair anything and the field means "swe-mux can fix this for you". The
     actionable part is `remedy`.
+
+    `gateway_port` is the terminal gateway's port while it is enabled: a peer on the
+    direct address opens its terminals there, so it is probed too and named in the
+    remedy when it is the one that cannot be reached.
     """
     if not posix_firewall_supported():
         return {"supported": False, "inspection_available": False, "needs_repair": False}
     target = address or "127.0.0.1"
     reachable = await probe_reachable(target, port)
+    gateway_reachable = (
+        await probe_reachable(target, gateway_port) if gateway_port is not None else None
+    )
     tool = firewall_tool()
+    blocked = [port] if not reachable else []
+    if gateway_port is not None and gateway_reachable is False:
+        blocked.append(gateway_port)
     remedy = None
-    if not reachable:
-        remedy = allow_command(port) or (
+    if blocked:
+        commands = [command for item in blocked if (command := allow_command(item))]
+        remedy = " ; ".join(commands) if commands else (
             "no host firewall tool was found; the block may be upstream of this "
             "machine (a cloud security group, a router, or a container network)"
         )
+    unreachable = ", ".join(f"{target}:{item}" for item in blocked)
     return {
         "supported": True,
         "inspection_available": True,
         "port": port,
         "address": target,
-        "reachable": reachable,
+        "reachable": reachable and gateway_reachable is not False,
+        "gateway_port": gateway_port,
+        "gateway_reachable": gateway_reachable,
         "firewall_tool": tool,
         # Deliberately never True: repairing needs root and is the user's decision.
         "needs_repair": False,
         "repair_supported": False,
         "remedy": remedy,
         "detail": (
-            f"{target}:{port} is reachable from this host."
-            if reachable
-            else f"{target}:{port} could not be reached from this host."
+            f"{unreachable} could not be reached from this host."
+            if blocked
+            else f"{target}:{port} is reachable from this host."
         ),
     }
 

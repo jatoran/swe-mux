@@ -7,7 +7,9 @@ one-click diagnostics export endpoint.
 
 from __future__ import annotations
 
+import base64
 import json
+import re
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -344,6 +346,148 @@ async def test_repair_firewall_success(monkeypatch: pytest.MonkeyPatch) -> None:
 
     result = await firewall.repair_firewall(8765, program_path=r"C:\swe-mux.exe", runner=ok_runner)
     assert result["ok"] is True
+
+
+# The terminal gateway (`.docs/design/features/terminal-gateway.md`): a phone on the
+# direct 100.x address opens its terminals on the gateway's own port, so the
+# inspection judges that port by the same rules and the repair admits both.
+
+
+def _parsed(daemon_scopes: list[Any], gateway: dict[str, Any] | None) -> dict[str, Any]:
+    parsed: dict[str, Any] = {
+        "blockingRuleDetected": False,
+        "privateFirewallEnabled": True,
+        "matchingRuleScopes": daemon_scopes,
+    }
+    if gateway is not None:
+        parsed["gateway"] = gateway
+    return parsed
+
+
+def test_an_unadmitted_gateway_port_needs_repair_and_says_which() -> None:
+    parsed = _parsed(
+        [{"remoteAddresses": ["Any"]}],
+        {"matchingRuleScopes": [], "blockingRuleDetected": False},
+    )
+    result = firewall.interpret_inspection(8765, r"C:\swe-mux.exe", parsed, gateway_port=8766)
+    assert result["needs_repair"] is True
+    assert result["rule_allowed"] is False
+    assert result["gateway_rule_allowed"] is False
+    assert result["gateway_port"] == 8766
+    assert "8766" in str(result["detail"])
+
+
+def test_a_blocked_gateway_port_counts_as_blocking() -> None:
+    parsed = _parsed(
+        [{"remoteAddresses": ["Any"]}],
+        {"matchingRuleScopes": [{"remoteAddresses": ["Any"]}], "blockingRuleDetected": True},
+    )
+    result = firewall.interpret_inspection(8765, r"C:\swe-mux.exe", parsed, gateway_port=8766)
+    assert result["blocking_rule_detected"] is True
+    assert result["needs_repair"] is True
+    # Serve carries the gateway too, so the same downgrade to a note applies.
+    serve_up = firewall.interpret_inspection(
+        8765, r"C:\swe-mux.exe", parsed, serve_active=True, gateway_port=8766
+    )
+    assert serve_up["needs_repair"] is False
+    assert serve_up["direct_path_blocked"] is True
+
+
+def test_both_ports_admitted_is_clean() -> None:
+    parsed = _parsed(
+        [{"remoteAddresses": ["Any"]}],
+        {
+            "matchingRuleScopes": [{"remoteAddresses": ["100.64.0.0/10"]}],
+            "blockingRuleDetected": False,
+        },
+    )
+    result = firewall.interpret_inspection(8765, r"C:\swe-mux.exe", parsed, gateway_port=8766)
+    assert result["needs_repair"] is False
+    assert result["rule_allowed"] is True
+    assert result["gateway_rule_allowed"] is True
+
+
+def test_a_disabled_gateway_is_not_judged() -> None:
+    """Its absence from the parse must not read as a missing rule while it is off."""
+    parsed = _parsed([{"remoteAddresses": ["Any"]}], None)
+    result = firewall.interpret_inspection(8765, r"C:\swe-mux.exe", parsed)
+    assert result["needs_repair"] is False
+    assert result["gateway_rule_allowed"] is None
+    assert result["gateway_port"] is None
+
+
+def test_the_inspection_script_judges_the_gateway_port_only_when_given() -> None:
+    plain = firewall.build_inspection_script(8765, r"C:\swe-mux.exe")
+    assert "gateway" not in plain
+    both = firewall.build_inspection_script(8765, r"C:\swe-mux.exe", gateway_port=8766)
+    assert "'8766'" in both
+    assert "gateway = [pscustomobject]" in both
+
+
+def test_the_repair_admits_both_ports_in_one_rule() -> None:
+    script = firewall.build_repair_script(8765, r"C:\swe-mux.exe", gateway_port=8766)
+    assert "-LocalPort 8765,8766" in script
+    # A Block rule on either port would beat the Allow, so either is removed.
+    assert "[string]$_ -eq '8765' -or [string]$_ -eq '8766'" in script
+    assert script.count("New-NetFirewallRule") == 1
+
+
+async def test_inspect_and_repair_pass_the_gateway_port(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(firewall, "firewall_supported", lambda: True)
+    scripts: list[str] = []
+
+    async def inspect_runner(script: str, _timeout: float) -> str:
+        scripts.append(script)
+        return json.dumps(
+            _parsed(
+                [{"remoteAddresses": ["Any"]}],
+                {"matchingRuleScopes": [], "blockingRuleDetected": False},
+            )
+        )
+
+    result = await firewall.inspect_firewall(
+        8765, gateway_port=8766, program_path=r"C:\swe-mux.exe", runner=inspect_runner
+    )
+    assert result["gateway_rule_allowed"] is False
+    assert "'8766'" in scripts[-1]
+
+    async def repair_runner(script: str, _timeout: float) -> str:
+        scripts.append(script)
+        return json.dumps({"launched": True, "exitCode": 0})
+
+    repaired = await firewall.repair_firewall(
+        8765, gateway_port=8766, program_path=r"C:\swe-mux.exe", runner=repair_runner
+    )
+    assert repaired["ok"] is True
+    # The elevated inner script travels encoded; decode it to read the rule.
+    encoded = re.search(r"'-EncodedCommand', '([A-Za-z0-9+/=]+)'", scripts[-1])
+    assert encoded is not None
+    inner = base64.b64decode(encoded.group(1)).decode("utf-16-le")
+    assert "-LocalPort 8765,8766" in inner
+
+
+async def test_the_posix_probe_names_an_unreachable_gateway_port(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from swe_mux import posix_firewall
+
+    monkeypatch.setattr(posix_firewall, "posix_firewall_supported", lambda: True)
+    monkeypatch.setattr(posix_firewall, "firewall_tool", lambda: "ufw")
+
+    async def probe(_host: str, port: int) -> bool:
+        return port == 8765
+
+    monkeypatch.setattr(posix_firewall, "probe_reachable", probe)
+    status = await posix_firewall.inspect_posix_firewall(8765, "100.64.0.1", gateway_port=8766)
+    assert status["reachable"] is False
+    assert status["gateway_reachable"] is False
+    assert status["remedy"] == "sudo ufw allow 8766/tcp"
+    assert "100.64.0.1:8766" in str(status["detail"])
+
+    without = await posix_firewall.inspect_posix_firewall(8765, "100.64.0.1")
+    assert without["reachable"] is True
+    assert without["gateway_reachable"] is None
+    assert without["remedy"] is None
 
 
 # --------------------------------------------------------------------------- #

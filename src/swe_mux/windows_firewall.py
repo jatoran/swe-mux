@@ -213,7 +213,12 @@ def _inspection_detail(
 
 
 def interpret_inspection(
-    port: int, program_path: str, parsed: Any, *, serve_active: bool = False
+    port: int,
+    program_path: str,
+    parsed: Any,
+    *,
+    serve_active: bool = False,
+    gateway_port: int | None = None,
 ) -> dict[str, object]:
     """Turn parsed PowerShell inspection output into the display status.
 
@@ -222,6 +227,11 @@ def interpret_inspection(
     phone arrives via loopback), so a missing or blocking rule is reported without
     raising the repair alarm. Pure and platform-independent, so the block/allow/
     scope logic is unit-tested against fixtures without a Windows host.
+
+    ``gateway_port`` is the terminal gateway's port when the gateway is enabled. A
+    phone on the direct 100.x address opens its terminals there, so that port needs
+    the same Allow rule; the frozen gateway is the same ``swe-mux.exe``, which is why
+    one program-scoped rule with both ports is the repair.
     """
     if not isinstance(parsed, dict):
         return _unavailable_status(port, program_path, serve_active=serve_active)
@@ -230,27 +240,47 @@ def interpret_inspection(
     has_scope = _has_sufficient_scope(parsed.get("matchingRuleScopes"))
     # The direct 100.x inbound path is blocked when a Block rule exists, or the
     # private profile is on with no scope-sufficient Allow rule.
-    direct_path_blocked = blocking or (private_enabled and not has_scope)
+    daemon_blocked = blocking or (private_enabled and not has_scope)
+    gateway_blocked = False
+    gateway_allowed: bool | None = None
+    if gateway_port is not None:
+        gateway = parsed.get("gateway")
+        gateway = gateway if isinstance(gateway, dict) else {}
+        gateway_blocking = gateway.get("blockingRuleDetected") is True
+        gateway_scope = _has_sufficient_scope(gateway.get("matchingRuleScopes"))
+        gateway_blocked = gateway_blocking or (private_enabled and not gateway_scope)
+        gateway_allowed = not gateway_blocking and gateway_scope
+        blocking = blocking or gateway_blocking
+    direct_path_blocked = daemon_blocked or gateway_blocked
     # But that only stops a phone connect when Serve is not routing over loopback.
     needs_repair = direct_path_blocked and not serve_active
+    detail = _inspection_detail(
+        blocking=blocking,
+        direct_path_blocked=direct_path_blocked,
+        private_enabled=private_enabled,
+        serve_active=serve_active,
+    )
+    if gateway_blocked and not daemon_blocked:
+        detail += (
+            f" The terminal gateway's port {gateway_port} is the one not admitted, so a "
+            "phone on the direct 100.x address reaches the app but not its terminals; "
+            "repair adds it to the same rule."
+        )
     return {
         "supported": True,
         "inspection_available": True,
         "port": port,
         "program": program_path,
         "serve_active": serve_active,
-        "rule_allowed": not blocking and has_scope,
+        "rule_allowed": not blocking and has_scope and gateway_allowed is not False,
         "blocking_rule_detected": blocking,
         "direct_path_blocked": direct_path_blocked,
         "needs_repair": needs_repair,
         "private_firewall_enabled": private_enabled,
         "network_category": _network_category(parsed.get("networkCategory")),
-        "detail": _inspection_detail(
-            blocking=blocking,
-            direct_path_blocked=direct_path_blocked,
-            private_enabled=private_enabled,
-            serve_active=serve_active,
-        ),
+        "gateway_port": gateway_port,
+        "gateway_rule_allowed": gateway_allowed,
+        "detail": detail,
     }
 
 
@@ -288,10 +318,36 @@ def _quote_ps(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
 
 
-def build_inspection_script(port: int, program_path: str, address: str | None = None) -> str:
+def build_inspection_script(
+    port: int, program_path: str, address: str | None = None, gateway_port: int | None = None
+) -> str:
     # NetSecurity filter properties are stable across localized Windows display
     # output and keep every rule's address scope independent. ActiveStore
     # includes GPO-applied rules the persistent store hides.
+    gateway_block = ""
+    gateway_field = ""
+    if gateway_port is not None:
+        # The same rules, judged for the terminal gateway's port: one more pass over
+        # what was already read, reported beside the daemon's rather than merged.
+        gateway_block = f"""
+$gatewayScopes = @()
+$gatewayBlocking = $false
+foreach ($rule in $rules) {{
+  $portFilter = $rule | Get-NetFirewallPortFilter
+  $protocol = [string]$portFilter.Protocol
+  $ruleProfile = [string]$rule.Profile
+  $portMatches = @($portFilter.LocalPort | Where-Object {{ [string]$_ -eq 'Any' -or [string]$_ -eq '{gateway_port}' }}).Count -gt 0
+  if (($protocol -eq 'Any' -or $protocol -eq 'TCP' -or $protocol -eq '6') -and ($ruleProfile -eq 'Any' -or $ruleProfile -match 'Private') -and $portMatches) {{
+    if ([string]$rule.Action -eq 'Block') {{
+      $gatewayBlocking = $true
+    }} elseif ([string]$rule.Action -eq 'Allow') {{
+      $addressFilter = $rule | Get-NetFirewallAddressFilter
+      $gatewayScopes += [pscustomobject]@{{ remoteAddresses = @($addressFilter.RemoteAddress | ForEach-Object {{ [string]$_ }}) }}
+    }}
+  }}
+}}"""
+        gateway_field = """
+  gateway = [pscustomobject]@{ matchingRuleScopes = @($gatewayScopes); blockingRuleDetected = $gatewayBlocking }"""
     address_lookup = ""
     if address:
         address_lookup = f"""
@@ -317,35 +373,40 @@ foreach ($rule in $rules) {{
       $matchingRuleScopes += [pscustomobject]@{{ remoteAddresses = @($addressFilter.RemoteAddress | ForEach-Object {{ [string]$_ }}) }}
     }}
   }}
-}}
+}}{gateway_block}
 $privateFirewallEnabled = [bool](Get-NetFirewallProfile -PolicyStore ActiveStore -Name Private).Enabled
 $networkCategory = 'Unknown'{address_lookup}
 [pscustomobject]@{{
   matchingRuleScopes = @($matchingRuleScopes)
   blockingRuleDetected = $blockingRuleDetected
   privateFirewallEnabled = $privateFirewallEnabled
-  networkCategory = $networkCategory
+  networkCategory = $networkCategory{gateway_field}
 }} | ConvertTo-Json -Depth 4 -Compress"""
 
 
-def build_repair_script(port: int, program_path: str) -> str:
+def build_repair_script(port: int, program_path: str, gateway_port: int | None = None) -> str:
     # Windows gives explicit Block rules precedence over narrower Allow rules, so
     # the repair removes exact-app inbound conflicts first, then adds one scoped
     # Allow rule. Block removal ignores the block's remote scope, mirroring the
-    # fail-closed inspection (the phone address is unknown).
+    # fail-closed inspection (the phone address is unknown). With the terminal
+    # gateway enabled the one rule carries both ports: the frozen gateway is the
+    # same swe-mux.exe, so the program scope is unchanged.
+    ports = [port] if gateway_port is None else [port, gateway_port]
+    port_tests = " -or ".join(f"[string]$_ -eq '{item}'" for item in ports)
+    local_ports = ",".join(str(item) for item in ports)
     return f"""$ErrorActionPreference = 'Stop'
 $blockingRules = @(Get-NetFirewallApplicationFilter -Program {_quote_ps(program_path)} -ErrorAction SilentlyContinue | Get-NetFirewallRule | Where-Object {{ $_.Enabled -eq 'True' -and $_.Direction -eq 'Inbound' -and $_.Action -eq 'Block' }})
 foreach ($rule in $blockingRules) {{
   $portFilter = $rule | Get-NetFirewallPortFilter
   $protocol = [string]$portFilter.Protocol
   $ruleProfile = [string]$rule.Profile
-  $portMatches = @($portFilter.LocalPort | Where-Object {{ [string]$_ -eq 'Any' -or [string]$_ -eq '{port}' }}).Count -gt 0
+  $portMatches = @($portFilter.LocalPort | Where-Object {{ [string]$_ -eq 'Any' -or {port_tests} }}).Count -gt 0
   if (($protocol -eq 'Any' -or $protocol -eq 'TCP' -or $protocol -eq '6') -and ($ruleProfile -eq 'Any' -or $ruleProfile -match 'Private') -and $portMatches) {{
     $rule | Remove-NetFirewallRule
   }}
 }}
 Get-NetFirewallRule -Name {_quote_ps(FIREWALL_RULE_NAME)} -ErrorAction SilentlyContinue | Remove-NetFirewallRule
-New-NetFirewallRule -Name {_quote_ps(FIREWALL_RULE_NAME)} -DisplayName {_quote_ps(FIREWALL_RULE_DISPLAY_NAME)} -Description {_quote_ps(FIREWALL_RULE_DESCRIPTION)} -Direction Inbound -Action Allow -Enabled True -Profile Private -Protocol TCP -LocalPort {port} -Program {_quote_ps(program_path)} -EdgeTraversalPolicy Block | Out-Null"""
+New-NetFirewallRule -Name {_quote_ps(FIREWALL_RULE_NAME)} -DisplayName {_quote_ps(FIREWALL_RULE_DISPLAY_NAME)} -Description {_quote_ps(FIREWALL_RULE_DESCRIPTION)} -Direction Inbound -Action Allow -Enabled True -Profile Private -Protocol TCP -LocalPort {local_ports} -Program {_quote_ps(program_path)} -EdgeTraversalPolicy Block | Out-Null"""
 
 
 def build_wsl_repair_script(port: int, program_path: str, remote_subnet: str) -> str:
@@ -409,6 +470,7 @@ async def inspect_firewall(
     address: str | None = None,
     *,
     serve_active: bool = False,
+    gateway_port: int | None = None,
     program_path: str | None = None,
     runner: PowerShellRunner | None = None,
     timeout: float = POWERSHELL_TIMEOUT_SECONDS,  # noqa: ASYNC109
@@ -419,17 +481,21 @@ async def inspect_firewall(
     loopback, so a missing or blocking inbound rule is not flagged as a phone-
     connect failure (the phone arrives via loopback, which the firewall never
     governs; the rule only affects the direct 100.x HTTP fallback).
+    ``gateway_port`` is the terminal gateway's port while it is enabled, judged by
+    the same rules because the direct 100.x page opens its terminals there.
     """
     if not firewall_supported() or port is None:
         return _unsupported_status()
     program = program_path or firewall_program_path()
     run = runner or _run_powershell
     try:
-        raw = await run(build_inspection_script(port, program, address), timeout)
+        raw = await run(build_inspection_script(port, program, address, gateway_port), timeout)
         parsed = json.loads(raw.strip())
     except (OSError, TimeoutError, ValueError, RuntimeError):
         return _unavailable_status(port, program, serve_active=serve_active)
-    return interpret_inspection(port, program, parsed, serve_active=serve_active)
+    return interpret_inspection(
+        port, program, parsed, serve_active=serve_active, gateway_port=gateway_port
+    )
 
 
 async def repair_wsl_firewall(
@@ -475,6 +541,7 @@ async def repair_wsl_firewall(
 async def repair_firewall(
     port: int | None,
     *,
+    gateway_port: int | None = None,
     program_path: str | None = None,
     runner: PowerShellRunner | None = None,
     timeout: float = ELEVATION_TIMEOUT_SECONDS,  # noqa: ASYNC109
@@ -484,7 +551,7 @@ async def repair_firewall(
         return {"ok": False, "reason": "unsupported"}
     program = program_path or firewall_program_path()
     run = runner or _run_powershell
-    inner = build_repair_script(port, program)
+    inner = build_repair_script(port, program, gateway_port)
     outer = build_elevation_script(_windows_powershell_path(), _encode_powershell(inner))
     try:
         raw = await run(outer, timeout)

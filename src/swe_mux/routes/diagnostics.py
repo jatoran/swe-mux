@@ -682,10 +682,17 @@ async def diagnostics_export(request: web.Request) -> web.Response:
     if firewall_supported():
         serve_active = bool(remote.get("serve_configured") or remote.get("mobile_voice_configured"))
         firewall = await inspect_firewall(
-            config.port, await tailscale_ipv4(), serve_active=serve_active
+            config.port,
+            await tailscale_ipv4(),
+            serve_active=serve_active,
+            gateway_port=config.active_terminal_gateway_port(),
         )
     elif posix_firewall_supported():
-        firewall = await inspect_posix_firewall(config.port, await tailscale_ipv4())
+        firewall = await inspect_posix_firewall(
+            config.port,
+            await tailscale_ipv4(),
+            gateway_port=config.active_terminal_gateway_port(),
+        )
 
     live = sum(session.pty.isalive() for session in sessions.sessions.values())
     export = {
@@ -801,13 +808,20 @@ async def _doctor_report(app: web.Application) -> dict[str, Any]:
     if firewall_supported():
         serve_active = bool(remote.get("serve_configured") or remote.get("mobile_voice_configured"))
         firewall = await inspect_firewall(
-            config.port, await tailscale_ipv4(), serve_active=serve_active
+            config.port,
+            await tailscale_ipv4(),
+            serve_active=serve_active,
+            gateway_port=config.active_terminal_gateway_port(),
         )
     elif posix_firewall_supported():
         # The POSIX equivalent is a reachability probe plus the exact command this
         # host's firewall tool would need, never a rule edit: opening a port is a
         # security decision that requires root, and a daemon must not make it.
-        firewall = await inspect_posix_firewall(config.port, await tailscale_ipv4())
+        firewall = await inspect_posix_firewall(
+            config.port,
+            await tailscale_ipv4(),
+            gateway_port=config.active_terminal_gateway_port(),
+        )
     prerequisites = await asyncio.to_thread(detect_prerequisites, dict(config.tool_paths))
     installations = await asyncio.to_thread(
         detect_installations_with_versions, dict(config.harness_exe)

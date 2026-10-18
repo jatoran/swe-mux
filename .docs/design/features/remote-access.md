@@ -43,6 +43,20 @@ listener, with optional Tailscale Serve for browser-recognized HTTPS.
   When Serve cannot be configured, the route returns a diagnostic and leaves ordinary mobile
   access unchanged. swe-mux never enables Funnel or changes tailnet policy, ACLs, shields, or
   device authorization.
+- With the terminal gateway enabled (`design/features/terminal-gateway.md`), the same 443 listener
+  carries a second handler, `/gateway`, proxying to the gateway's loopback port, because a page on
+  the HTTPS address cannot open `ws:` to another port.
+  `tailscale.reconcile_gateway_serve` keeps it equal to the gateway's port after the root route is
+  ready, at startup and on the mobile-voice setup route (whose response carries the result as
+  `gateway_mount`), and removes a loopback mount it finds while the gateway is disabled.
+  It is touched only while `/` on 443 proxies to this daemon, never replaces a non-loopback
+  handler at that path, and is never added to a listener Funnel exposes.
+  Measured against Tailscale 1.102.2 on a scratch port: re-setting `/` keeps the other handlers,
+  `--set-path=/gateway <target>` replaces that one handler in place, `--set-path=/gateway off`
+  removes only it (and exits 1 when it is absent, which is why the mount is read first), and
+  Serve strips the mount from the path it forwards while preserving Host, proxying WebSocket
+  upgrades, and adding `X-Forwarded-*` and `Tailscale-User-*` headers.
+  `GET /api/remote/status` reports the mount as `gateway_mount_port`.
 
 ## Boundaries and diagnostics
 
@@ -80,7 +94,16 @@ listener, with optional Tailscale Serve for browser-recognized HTTPS.
   target the packaged `swe-mux.exe`, not a transient `python.exe`.
   The scope check is tailnet-specific: a sufficient Allow rule must cover the whole
   `100.64.0.0/10` range, because the phone connects from an unknown address inside it.
+  With the terminal gateway enabled, a page on the direct `100.x` address opens its terminals on
+  the gateway's own port, so the inspection judges that port by the same rules and reports it
+  beside the daemon's (`gateway_port`, `gateway_rule_allowed`, and a detail naming the gateway
+  when it is the only port not admitted), and the repair writes one rule carrying both ports.
+  One rule is enough because the frozen gateway is the same `swe-mux.exe`
+  (`swe-mux.exe --gateway-child`), so the program scope does not change.
   `src/swe_mux/windows_firewall.py` owns the inspect/repair logic and its unit tests.
+- POSIX hosts get a reachability probe rather than a rule read
+  (`src/swe_mux/posix_firewall.py`); it probes the gateway's port too while the gateway is
+  enabled (`gateway_reachable`) and names the allow command for whichever port failed.
 - `GET /api/diagnostics/export` returns one copyable bundle for a connection report: sanitized
   config (`public_dict`, no secrets), remote-connection state, firewall status, network counters,
   the fleet status-health aggregate, and the tails of `daemon.log` and `redeploy.log`.
@@ -231,6 +254,14 @@ while every phone is stranded.
 **Any daemon that is not the machine's primary must start with `--local-only`.** An isolated
 port and an isolated data directory are not enough: neither of them isolates the tailnet, and
 the Serve route is shared regardless of which port or data directory a daemon uses.
+
+The terminal gateway's `/gateway` mount follows the root route rather than having an owner of its
+own: only the daemon whose port `/` proxies to reconciles it, so a daemon that reclaims the address
+takes the mount with it, and one that does not own the address moves nothing.
+Every ownership decision above reads the root handler alone (`_mount_loopback_port(..., "/")`):
+before the mount existed, "the route's loopback port" was the first loopback port anywhere in the
+listener's config, and with two handlers that could be the gateway's - whose health is not a
+daemon's, so a live daemon's address would have been called abandoned and taken.
 
 ## Operator guidance
 
