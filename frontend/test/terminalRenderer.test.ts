@@ -96,6 +96,17 @@ test('a reconnect offers its parsed ring position; a doubtful cursor offers noth
   assert.ok(!('since' in terminalAttachReadyFrame(80, 24, 'dom', false, Number.NaN)))
 })
 
+test('the cursor travels with the stream it was counted in, and a stream never travels alone', () => {
+  const frame = terminalAttachReadyFrame(80, 24, 'dom', false, 4096, 's1@abc') as { since?: number; stream?: string }
+  assert.equal(frame.since, 4096)
+  assert.equal(frame.stream, 's1@abc')
+  // A daemon that predates streams named none: the cursor is offered alone, as before.
+  assert.ok(!('stream' in terminalAttachReadyFrame(80, 24, 'dom', false, 4096, null)))
+  // No cursor, no stream: a stream without a position asks for nothing.
+  assert.ok(!('stream' in terminalAttachReadyFrame(80, 24, 'dom', false, null, 's1@abc')))
+  assert.ok(!('stream' in terminalAttachReadyFrame(80, 24, 'dom', false, -1, 's1@abc')))
+})
+
 test('a ConPTY descriptor becomes xterm windowsPty options', () => {
   assert.deepEqual(windowsPtyCompatibility({ backend: 'conpty', build_number: 19045 }), {
     backend: 'conpty',

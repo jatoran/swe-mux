@@ -1242,6 +1242,10 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     // own bytes in order; a `gap` frame (dropped chunks) breaks the count, so it nulls
     // the cursor until the resync's `replay_end` re-anchors it.
     let serverPosition: number | null = null
+    // The stream that cursor counts (`replay_end.stream`), offered with it: a
+    // position from one incarnation of a session can land inside another's range,
+    // and only the pair lets the daemon refuse to answer it with a delta.
+    let serverStream: string | null = null
     // One transcript restatement per parsed buffer: set when this pane asks the daemon
     // for a repaint pulse, cleared only where `term.reset()` discards what was parsed
     // (a reconnect or resync replay), so a short transcript cannot re-request forever.
@@ -2376,7 +2380,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       else {
         const frame = JSON.parse(event.data)
         // Dropped chunks broke the byte count; the resync's `replay_end` re-anchors it.
-        if (frame.type === 'gap') { replaying = true; serverPosition = null }
+        if (frame.type === 'gap') { replaying = true; serverPosition = null; serverStream = null }
         const frameGeneration=String(frame.snapshot?._snapshot_generation||'')
         if(frameGeneration&&frameGeneration!==currentGeneration){currentGeneration=frameGeneration;currentRevision=-1}
         if ((frame.type === 'state' || frame.type === 'update') && Number(frame.revision ?? 0) > currentRevision) {
@@ -2396,6 +2400,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
           if (frame.reason === 'resync' || (reconnectReplay && frame.reason !== 'delta')) {
             term.reset()
             serverPosition = null
+            serverStream = null
             // The buffer this flag described no longer exists; the fresh replay
             // earns its own missing-scrollback judgement.
             scrollbackRepaintRequested = false
@@ -2411,6 +2416,8 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
           // `since` — the old full-replay behaviour.
           const anchor = Number(frame.position)
           serverPosition = Number.isSafeInteger(anchor) && anchor >= 0 ? anchor : null
+          // A daemon that predates streams sends none, and then honours `since` alone.
+          serverStream = typeof frame.stream === 'string' && frame.stream ? frame.stream : null
           reportStartup('replay_ready')
           replayEndReceived = true
           if (pendingReplayWrites === 0) finishReplay()
@@ -2533,7 +2540,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         // Seeded here so a pane that later goes hidden can withdraw the size it actually
         // registered, rather than waiting on a fit pass it will never be visible to run.
         if (registers) localFit = { cols: term.cols, rows: term.rows }
-        next.send(JSON.stringify(terminalAttachReadyFrame(term.cols, term.rows, activeRenderer, !registers, serverPosition)))
+        next.send(JSON.stringify(terminalAttachReadyFrame(term.cols, term.rows, activeRenderer, !registers, serverPosition, serverStream)))
         // attach_ready is itself a viewport registration; recording it keeps the fit
         // pass that follows from sending the same dimensions again.
         sentViewport={cols:term.cols,rows:term.rows,hidden:!registers}

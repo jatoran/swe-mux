@@ -18,6 +18,9 @@ from swe_mux.runtime_cwd import Osc7Parser, Osc133Parser, OscSignalParser
 from swe_mux.screen_mode import BracketedPasteParser, ScreenModeParser, StickyModeParser
 from swe_mux.session import ScrollbackBuffer, Session, SessionManager
 
+# The stream `_fake_session` rings count; a delta is answered only for it.
+STREAM = "s1@daemon.test"
+
 
 def _fake_session(max_bytes: int = 32) -> Any:
     fake = cast(Any, Session.__new__(Session))
@@ -36,6 +39,10 @@ def _fake_session(max_bytes: int = 32) -> Any:
         )(),
     )
     fake.revision = 0
+    # An in-process pane: no supervisor stream, so the ring's stream is the one this
+    # Session minted.
+    fake.pty = SimpleNamespace()
+    fake._stream_id = STREAM
     # Replay is exact here: these fixtures pin the *retention* contract, and a
     # replay budget would silently trim the very boundaries they assert on.
     fake.attach_replay_bytes = None
@@ -391,7 +398,9 @@ def test_a_covered_gap_is_answered_with_exactly_the_missed_bytes() -> None:
     since = fake.scrollback.position
     fake.scrollback.append(b"missed while away")
 
-    snapshot, revision, kind, payload, position, queue = Session.attach_and_subscribe(fake, since)
+    snapshot, revision, kind, payload, position, queue = Session.attach_and_subscribe(
+        fake, since, STREAM
+    )
 
     assert (kind, payload) == ("delta", b"missed while away")
     assert position == fake.scrollback.position
@@ -407,7 +416,7 @@ def test_a_current_client_gets_an_empty_delta_not_a_replay() -> None:
     fake.scrollback.append(b"all parsed already")
 
     _, _, kind, payload, position, _ = Session.attach_and_subscribe(
-        fake, fake.scrollback.position
+        fake, fake.scrollback.position, STREAM
     )
 
     assert (kind, payload) == ("delta", b"")
@@ -419,11 +428,11 @@ def test_an_uncovered_or_nonsense_position_falls_back_to_the_full_replay() -> No
     fake.scrollback.append(b"0123456789abcdef")  # ring retains only the last 8
 
     # Trimmed away: the ring cannot prove coverage.
-    assert Session.attach_and_subscribe(fake, 2)[2] == "attach"
+    assert Session.attach_and_subscribe(fake, 2, STREAM)[2] == "attach"
     # Ahead of the stream: not a position of this stream at all.
-    assert Session.attach_and_subscribe(fake, 999)[2] == "attach"
+    assert Session.attach_and_subscribe(fake, 999, STREAM)[2] == "attach"
     # Negative: same.
-    assert Session.attach_and_subscribe(fake, -1)[2] == "attach"
+    assert Session.attach_and_subscribe(fake, -1, STREAM)[2] == "attach"
     # No offer: the plain cold attach.
     assert Session.attach_and_subscribe(fake, None)[2] == "attach"
 
@@ -433,7 +442,7 @@ def test_a_gap_at_the_exact_retention_boundary_is_still_covered() -> None:
     fake.scrollback.append(b"0123456789abcdef")
     since = fake.scrollback.position - fake.scrollback.size
 
-    _, _, kind, payload, _, _ = Session.attach_and_subscribe(fake, since)
+    _, _, kind, payload, _, _ = Session.attach_and_subscribe(fake, since, STREAM)
 
     assert (kind, payload) == ("delta", b"89abcdef")
 
@@ -446,8 +455,42 @@ def test_a_gap_larger_than_the_attach_budget_falls_back() -> None:
     fake.attach_replay_bytes = 4
     fake.scrollback.append(b"0123456789")
 
-    assert Session.attach_and_subscribe(fake, 2)[2] == "attach"
-    assert Session.attach_and_subscribe(fake, 8)[2] == "delta"
+    assert Session.attach_and_subscribe(fake, 2, STREAM)[2] == "attach"
+    assert Session.attach_and_subscribe(fake, 8, STREAM)[2] == "delta"
+
+
+def test_a_covered_position_from_another_stream_is_never_a_delta() -> None:
+    """The position alone would be covered; the stream is what refuses it."""
+    fake = _fake_session(64)
+    fake.scrollback.append(b"earlier output ")
+    since = fake.scrollback.position
+    fake.scrollback.append(b"missed while away")
+
+    assert Session.attach_and_subscribe(fake, since, STREAM)[2] == "delta"
+    assert Session.attach_and_subscribe(fake, since, "s1@daemon.other")[2] == "attach"
+    # A cursor offered with no stream says nothing about which stream it counts.
+    assert Session.attach_and_subscribe(fake, since, None)[2] == "attach"
+    assert Session.attach_and_subscribe(fake, since)[2] == "attach"
+
+
+def test_a_supervisor_backed_ring_counts_the_supervisors_stream() -> None:
+    """It survives a daemon restart with the positions, so browser cursors stay good."""
+    fake = _fake_session(64)
+    assert fake.stream_id == STREAM, "no supervisor stream: the Session's own id"
+    fake.pty = SimpleNamespace(stream="s1@1760000000000.ab12cd34")
+    assert fake.stream_id == "s1@1760000000000.ab12cd34"
+    # A supervisor too old to name one leaves the Session's id in force.
+    fake.pty = SimpleNamespace(stream="")
+    assert fake.stream_id == STREAM
+
+
+def test_every_session_object_mints_its_own_stream() -> None:
+    """A respawn, a cold restore and a restart each build a new Session for the id."""
+    record = SessionRecord("same-id", "pane", "default", "shell", "native", ".", "cmd.exe", [])
+    first = Session(record, cast(Any, SimpleNamespace()), ShellAdapter(), 1024, "secret")
+    second = Session(record, cast(Any, SimpleNamespace()), ShellAdapter(), 1024, "secret")
+    assert first.stream_id != second.stream_id
+    assert first.stream_id.startswith("same-id@daemon.")
 
 
 def test_subscriber_overflow_coalesces_into_one_resync() -> None:

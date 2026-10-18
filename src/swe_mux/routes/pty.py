@@ -210,6 +210,9 @@ async def pty_ws(request: web.Request) -> web.WebSocketResponse:
         # before it, output arriving during the handshake would be neither in the
         # replay nor in the subscription.
         attach_since: int | None = None
+        # ...and the stream that position was counted in; a `since` is honoured only
+        # together with this ring's own (`Session.stream_id`).
+        attach_stream: str | None = None
         # unsupervised-loop-ok: bounded attach handshake for one websocket.
         while True:
             remaining = attach_deadline - asyncio.get_running_loop().time()
@@ -227,6 +230,9 @@ async def pty_ws(request: web.Request) -> web.WebSocketResponse:
                     since_value = initial_frame.get("since")
                     if isinstance(since_value, int) and not isinstance(since_value, bool):
                         attach_since = since_value
+                    stream_value = initial_frame.get("stream")
+                    if isinstance(stream_value, str) and stream_value:
+                        attach_stream = stream_value
                     geometry_queued = _apply_client_viewport(session, connection_id, initial_frame)
                     # A repaint-heavy TUI can wrap the retained ring until this
                     # attach's replay holds no transcript at all. The recovery is
@@ -249,8 +255,10 @@ async def pty_ws(request: web.Request) -> web.WebSocketResponse:
             return ws
 
         snapshot, revision, replay_kind, replay, ring_position, subscriber = (
-            session.attach_and_subscribe(attach_since)
+            session.attach_and_subscribe(attach_since, attach_stream)
         )
+        # Read before the first await, so it names the stream `ring_position` counts.
+        ring_stream = session.stream_id
         request.app[keys.EVENTS].emit_background(
             "terminal_attached",
             session_id=session.record.id,
@@ -283,9 +291,15 @@ async def pty_ws(request: web.Request) -> web.WebSocketResponse:
                 replay, "attach_replay" if replay_kind == "attach" else "delta_replay"
             )
         # `position` anchors the client's byte cursor: this position plus every live
-        # byte it receives afterwards is what it may offer as `since` next time.
+        # byte it receives afterwards is what it may offer as `since` next time,
+        # together with `stream`.
         await ws.send_json(
-            {"type": "replay_end", "reason": replay_kind, "position": ring_position}
+            {
+                "type": "replay_end",
+                "reason": replay_kind,
+                "position": ring_position,
+                "stream": ring_stream,
+            }
         )
         # The arbitrated size can differ from this client's own fit (another device owns
         # input), so tell it up front rather than letting it render at the wrong width
@@ -428,6 +442,7 @@ async def _pty_sender(
                 ring_position,
                 exit_frame,
             ) = session.take_resync(subscriber)
+            ring_stream = session.stream_id
             await ws.send_json(
                 {
                     "type": "gap",
@@ -443,7 +458,12 @@ async def _pty_sender(
             # Re-anchor the client's byte cursor: the drop broke its count, and a
             # stale cursor would cost every later reconnect a full replay.
             await ws.send_json(
-                {"type": "replay_end", "reason": "resync", "position": ring_position}
+                {
+                    "type": "replay_end",
+                    "reason": "resync",
+                    "position": ring_position,
+                    "stream": ring_stream,
+                }
             )
             await ws.send_json(
                 _versioned_pty_frame(

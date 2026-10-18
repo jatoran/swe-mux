@@ -320,7 +320,13 @@ async def test_a_reconnect_offering_its_position_gets_a_delta_and_no_repaint_pul
 
         second = await client.ws_connect("/pty/claude-id")
         await second.send_json(
-            {"type": "attach_ready", "cols": 80, "rows": 24, "since": first_end["position"]}
+            {
+                "type": "attach_ready",
+                "cols": 80,
+                "rows": 24,
+                "since": first_end["position"],
+                "stream": first_end["stream"],
+            }
         )
         assert (await second.receive_json())["type"] == "state"
         start = await second.receive_json()
@@ -335,6 +341,51 @@ async def test_a_reconnect_offering_its_position_gets_a_delta_and_no_repaint_pul
         await asyncio.sleep(0.1)
         # No truncated-replay repaint pulse for a delta.
         assert resizes == []
+        await second.close()
+
+
+@pytest.mark.filterwarnings("ignore:It is recommended to use web.AppKey instances for keys")
+@pytest.mark.parametrize("offered", ["another", "missing"])
+async def test_a_cursor_from_another_stream_is_never_answered_with_a_delta(offered: str) -> None:
+    """A position that would be covered is still refused when its stream is not this ring's.
+
+    A respawn restarts positions under the same session id, so a cursor from the old
+    incarnation can land inside the new range by chance; appending a delta across that
+    boundary corrupts the terminal silently. A `since` with no stream at all is refused
+    for the same reason: nothing says which stream it was counted in.
+    """
+    resizes: list[tuple[int, int]] = []
+    session = _repaint_test_session("claude", resizes)
+    _outgrow_replay_budget(session)
+    app = _repaint_test_app(session)
+
+    async with TestClient(TestServer(app)) as client:
+        ws = await client.ws_connect("/pty/claude-id")
+        await ws.send_json({"type": "attach_ready", "cols": 80, "rows": 24})
+        assert (await ws.receive_json())["type"] == "state"
+        assert (await ws.receive_json())["reason"] == "attach"
+        await next_bytes(ws)
+        first_end = await ws.receive_json()
+        assert first_end["stream"] == session.stream_id
+        await ws.close()
+
+        frame: dict[str, object] = {
+            "type": "attach_ready",
+            "cols": 80,
+            "rows": 24,
+            # Exactly the position a delta would be served for...
+            "since": first_end["position"],
+        }
+        if offered == "another":
+            frame["stream"] = "claude-id@daemon.000000000000"
+        second = await client.ws_connect("/pty/claude-id")
+        await second.send_json(frame)
+        assert (await second.receive_json())["type"] == "state"
+        assert (await second.receive_json())["reason"] == "attach"
+        assert await next_bytes(second) == b"xxxxxxxx"
+        end = await second.receive_json()
+        assert end["reason"] == "attach"
+        assert end["stream"] == session.stream_id
         await second.close()
 
 

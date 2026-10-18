@@ -67,14 +67,21 @@ export function windowsPtyCompatibility(value: unknown): WindowsPtyCompatibility
  *  that keeps its buffer — instead of a reset plus a bounded window that discards the
  *  scrollback this pane spent its whole session parsing. Always safe to offer: the
  *  daemon validates coverage and falls back to the full replay, and a daemon that
- *  predates the field ignores it. */
+ *  predates the field ignores it.
+ *
+ *  `stream` is the `replay_end` stream that position was counted in. A position is
+ *  meaningful only inside one stream - a respawn restarts positions under the same
+ *  session id - so the daemon answers a delta only when it matches its own, and
+ *  never to a `since` that arrives without one. */
 export function terminalAttachReadyFrame(
   cols: number,
   rows: number,
   renderer: ActiveTerminalRenderer,
   hidden = false,
   since: number | null = null,
+  stream: string | null = null,
 ) {
+  const cursor = since !== null && Number.isSafeInteger(since) && since >= 0
   return {
     type: 'attach_ready' as const,
     cols,
@@ -84,6 +91,7 @@ export function terminalAttachReadyFrame(
     // The daemon enables output credit only after the client advertises parser
     // acknowledgements. Older clients therefore keep the pre-credit protocol.
     output_flow_control: true,
-    ...(since !== null && Number.isSafeInteger(since) && since >= 0 ? { since } : {}),
+    ...(cursor ? { since } : {}),
+    ...(cursor && stream ? { stream } : {}),
   }
 }

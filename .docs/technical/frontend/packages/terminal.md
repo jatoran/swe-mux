@@ -18,7 +18,7 @@ Design: `../../../design/features/terminal-input.md`.
 - File picker, drop, and paste attachment uploads, plus unicast draft references.
 - Command-rail composition and pre-replay attach sizing, the rail's context menu, and the readings behind the hover-only rail (`railHover.ts`; `layout-and-chrome.md`).
 - Renderer policy and fallback: DOM-only for mobile, Claude, and OMP.
-- Replay, including the ring byte-cursor a reconnect offers as `since` so the daemon answers with a delta into an un-reset terminal instead of a fresh bounded window.
+- Replay, including the ring byte-cursor a reconnect offers as `since`, with the `stream` its `replay_end` named, so the daemon answers with a delta into an un-reset terminal instead of a fresh bounded window - and only when the cursor belongs to the ring it is reading.
 - Device-response classification and Codex late-color suppression, input, and responsive fitting.
 - Jump-to-latest tail convergence, and which backends are also asked to move their own viewport.
 - The forwarded-scroll estimate of an application-owned viewport's distance from its own tail: nothing reports it, so both drag directions are totalled and the chip is that total crossing a row.

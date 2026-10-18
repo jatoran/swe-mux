@@ -2389,6 +2389,11 @@ class Session:
         # every attach path (browser, adopted supervisor session, tests) is bound
         # by the same policy. ``None`` replays everything retained.
         self.attach_replay_bytes = attach_replay_bytes
+        # The stream this ring's positions count when no supervisor names one
+        # (`stream_id`). Minted per Session object, so a respawned id, a cold or
+        # inactive session rebuilt from disk, and an in-process pane after a
+        # restart can never share it.
+        self._stream_id = f"{record.id}@daemon.{secrets.token_hex(6)}"
         self.subscribers: set[PtySubscriber] = set()
         self.tasks: set[asyncio.Task[Any]] = set()
         self.stopping = False
@@ -2728,8 +2733,25 @@ class Session:
         snapshot, revision, _kind, payload, _position, subscriber = self.attach_and_subscribe(None)
         return snapshot, revision, payload, subscriber
 
+    @property
+    def stream_id(self) -> str:
+        """Which byte stream this session's ring positions count.
+
+        A client's ``since`` means something only in the stream it was taken from,
+        and the cold check alone could not tell streams apart. A supervisor-backed
+        session uses the supervisor's ``stream``, which survives a daemon restart
+        together with the positions (an adopted ring is seeded at the supervisor's
+        position), so a browser's cursor stays good across a reload. Anything
+        else - an in-process pane, a session rebuilt from disk, or one under a
+        supervisor too old to name its stream - uses the id this Session minted.
+        """
+        remote = getattr(self.pty, "stream", "")
+        if isinstance(remote, str) and remote:
+            return remote
+        return self._stream_id
+
     def attach_and_subscribe(
-        self, since: int | None
+        self, since: int | None, stream: str | None = None
     ) -> tuple[dict[str, Any], int, str, bytes, int, PtySubscriber]:
         """One atomic attach decision: what this client gets, and from where.
 
@@ -2742,21 +2764,30 @@ class Session:
         tab switch, a minimize, or a phone freeze, instead of being discarded and
         rebuilt from a bounded window that reconstructs roughly one screen.
 
-        Everything else — no ``since``, a gap the ring no longer covers, a gap
+        Everything else — no ``since``, a ``stream`` other than this ring's
+        (`stream_id`) or none at all, a gap the ring no longer covers, a gap
         larger than the attach budget (continuity would cost more parse than a
-        fresh window), or a position from some other stream entirely — falls back
-        to the full bounded replay (kind ``"attach"``), which is exactly the
-        previous behaviour. The validation is what makes offering ``since``
-        always safe for the client: a wrong answer here corrupts a terminal
-        silently, so nothing but a provably-covered gap is served as a delta.
+        fresh window) — falls back to the full bounded replay (kind
+        ``"attach"``), which is exactly the previous behaviour. The validation is
+        what makes offering ``since`` always safe for the client: a wrong answer
+        here corrupts a terminal silently, so nothing but a provably-covered gap
+        in the same stream is served as a delta. A position check alone could not
+        promise that: a respawn restarts positions under the same session id, and
+        a cursor from the old stream can land inside the new range by chance.
 
         Like ``replay_and_subscribe`` this has no await points, so the payload,
-        the returned ring ``position`` and the subscription describe one instant.
+        the returned ring ``position`` and the subscription describe one instant;
+        a caller reads `stream_id` before its next await to describe it too.
         """
         subscriber = self.subscribe()
         position = self.scrollback.position
         snapshot = self.record.snapshot()
-        if since is not None and self._delta_covers(since, position):
+        if (
+            since is not None
+            and stream is not None
+            and stream == self.stream_id
+            and self._delta_covers(since, position)
+        ):
             payload = self.scrollback.bytes_since(since)
             return snapshot, self.revision, "delta", payload, position, subscriber
         return snapshot, self.revision, "attach", self.replay_bytes(), position, subscriber

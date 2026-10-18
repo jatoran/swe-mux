@@ -65,7 +65,10 @@ and reattachable browser viewports.
 - **A reconnect is a delta, not a do-over, whenever the ring can prove coverage.**
   The client tracks the ring position it has parsed up to (each `replay_end` carries the anchor;
   live binary bytes advance it; a `gap` frame invalidates it until the resync re-anchors) and
-  offers it as `since` in `attach_ready`.
+  offers it as `since` in `attach_ready`, together with the `stream` the same `replay_end`
+  named. A delta is served only for this ring's own stream (`Session.stream_id`: the
+  supervisor's for a supervisor-backed session, otherwise one minted per `Session` object), so a
+  cursor from a respawned or rebuilt session can never be answered with another stream's bytes.
   A covered gap is answered with exactly the missed bytes into a terminal the client did not
   reset, so the scrollback a pane spent its whole session parsing survives a tab switch, a
   minimize, a phone freeze, and a session-preserving daemon restart.

@@ -478,12 +478,19 @@ Items are worked in order, and an item may reorder, split or remove later items 
     Unit level: an exit during recovery waits for the recovered bytes, a full refill is queued in order, an exit waiting on a recovery is delivered when none is coming, the session adopts a reseed and resyncs, and the fanout applies a reseed between the chunks around it.
     The two ticker tests in `test_supervisor_client_liveness.py` were rewritten, not weakened: the freeze test now removes the listener too so the session stays unreachable, and the "socket returns" test drives the real reattach instead of flipping the client's flags.
 
-- [ ] **15. Stream-bound `since` cursors.**
+- [x] **15. Stream-bound `since` cursors.**
   - **Why:** a `since` answered from a different stream silently corrupts the terminal, and nothing identifies a stream beyond the cold check.
   - **Change:** `replay_end` carries `stream`, the client sends its `since` together with that `stream`, and a mismatch always gets a full attach.
     In-process and cold sessions get a daemon-minted stream id.
   - **Where:** `routes/pty.py:251-289`, `session.py:2499-2553`, `frontend/src/TerminalPane.tsx:1237-1244,2347-2417`, `design/interfaces.md`.
   - **Done when:** a test proves a cursor from one stream is never answered with a delta from another.
+  - **Done (2026-10-17).**
+    `Session.stream_id` is the supervisor's `stream` when the host names one (item 13), which survives a daemon restart together with the positions, so a browser's cursor stays good across a reload; otherwise it is an id each `Session` object mints, which covers a respawn, a cold or inactive session rebuilt from disk, an in-process pane, and a session under a supervisor too old to name its stream.
+    `attach_and_subscribe(since, stream)` serves a delta only when `stream` equals it, and a `since` with no `stream` is refused as well: an old cached frontend loses deltas until it reloads, which is a wasted parse, where honouring an unbound cursor risks a corrupted terminal.
+    Both `replay_end` frames - attach and resync - carry `stream`, read in the same synchronous step as `position`.
+    The frontend keeps `serverStream` beside `serverPosition`, clears them together, and `terminalAttachReadyFrame` never sends a stream without a cursor; against a daemon that predates streams it offers `since` alone, as before.
+    The cold check in `_delta_covers` stays as a second guard.
+  - **Tests:** `tests/test_pty_ws.py::test_a_cursor_from_another_stream_is_never_answered_with_a_delta` (another stream, and no stream, for a position a delta would be served for); `tests/test_session_reliability.py` (a covered position refused for another or no stream, the supervisor's stream winning when named, and two `Session` objects for one id minting different streams; every delta-expecting fixture now offers its stream); `frontend/test/terminalRenderer.test.ts` (the pair travels together and a stream never alone).
 
 - [ ] **16. Supervisor revision for updates.**
   - **Why:** installed copies replace the supervisor only on a protocol change, so items 12 and 13 would never reach them.
