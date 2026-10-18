@@ -232,6 +232,7 @@ from .tailscale import (
 )
 from .telemetry_service import CanonicalTelemetryService
 from .tier0_store import Tier0Context, Tier0Store
+from .transcript_discovery import TranscriptScanner
 from .update_check import UPDATE_CHECK_LOOP, UpdateChecker
 from .update_install import UpdateInstaller
 from .usage import UsageManager
@@ -286,6 +287,10 @@ STARTUP_OPEN_PREFIXES = ("/assets/", "/icons/", "/notification-sounds/")
 # still building. Long enough not to be a poll storm from a page full of panes,
 # short enough that readiness is noticed promptly.
 STARTUP_RETRY_AFTER_SECONDS = 3
+# How long the startup history reconcile waits for the worker before walking the
+# conversation trees in this process instead. A worker is ready in about 0.2 s
+# from source and a few seconds in the frozen app on a loaded host.
+STARTUP_SCAN_WORKER_WAIT_SECONDS = 30.0
 
 
 @web.middleware
@@ -1399,6 +1404,19 @@ def _update_swap_announcer(events: EventBus) -> Callable[[int, str], Awaitable[N
     return announce
 
 
+async def _startup_history_reconcile(
+    history: HistoryIndex, scanner: TranscriptScanner, backends: tuple[str, ...]
+) -> int:
+    """The startup native-history reconcile, its discovery walk in the worker.
+
+    The worker was spawned moments before; the walk is worth waiting a few seconds
+    for rather than taking it on the daemon's GIL while every session reattaches
+    (`transcript_discovery.py`). With no worker it walks here, as it always did.
+    """
+    await scanner.wait_for_worker(STARTUP_SCAN_WORKER_WAIT_SECONDS)
+    return await reconcile_external_history(history, backends=backends, scan=scanner.scan)
+
+
 async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase by phase
     app: web.Application, timeline: StartupTimeline, predecessor_died_uncleanly: bool = False
 ) -> None:
@@ -1633,8 +1651,11 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
             agent_context.capture_project(root)
 
     await asyncio.to_thread(_capture_project_instructions)
-    history_backfills = HistoryBackfillManager(history, projects)
-    history_scan = HistoryScanManager(history, config)
+    # Every discovery walk goes through this, so it runs in the worker once that is
+    # ready (`transcript_discovery.py`); the worker host is attached below.
+    transcript_scanner = TranscriptScanner()
+    history_backfills = HistoryBackfillManager(history, projects, scan=transcript_scanner.scan)
+    history_scan = HistoryScanManager(history, config, scan=transcript_scanner.scan)
     reaper = create_reaper()
     timeline.mark("supervisor-connect")
     supervisor_client: SupervisorClient | None = None
@@ -1798,8 +1819,9 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
     # costs this start nothing, and every caller of it falls back while it is away.
     worker_host = WorkerHost(config)
     await worker_host.start()
-    publish(app, {keys.WORKER: worker_host})
+    publish(app, {keys.WORKER: worker_host, keys.TRANSCRIPT_SCANNER: transcript_scanner})
     canonical_telemetry.attach_worker(worker_host)
+    transcript_scanner.attach_worker(worker_host)
 
     # The monitor's branch-scoped diff is measured against the same base the Git
     # drawer uses, so the sidebar and the drawer cannot report a session's branch
@@ -2852,7 +2874,7 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
             enabled_backends, dict(config.harness_enabled), dict(config.harness_exe)
         )
         reconcile_task = asyncio.create_task(
-            reconcile_external_history(history, backends=reconcile_backends),
+            _startup_history_reconcile(history, transcript_scanner, reconcile_backends),
             name="history-reconcile",
         )
         # A one-shot task that dies is silent by default; the scan's failure mode

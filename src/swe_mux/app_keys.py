@@ -94,6 +94,7 @@ if TYPE_CHECKING:
     from .supervisor_client import SupervisorClient
     from .telemetry_service import CanonicalTelemetryService
     from .tier0_store import Tier0Store
+    from .transcript_discovery import TranscriptScanner
     from .update_check import UpdateChecker
     from .update_install import UpdateInstaller
     from .usage import UsageManager
@@ -227,6 +228,9 @@ VOICE_STORE: web.AppKey[VoiceStore] = web.AppKey("voice_store")
 #: The worker process host (`worker_host.py`). Present whenever the runtime is,
 #: whether or not the worker is enabled; `health()` says which.
 WORKER: web.AppKey[WorkerHost] = web.AppKey("worker")
+#: The native-conversation discovery walk, in the worker when it is ready
+#: (`transcript_discovery.py`).
+TRANSCRIPT_SCANNER: web.AppKey[TranscriptScanner] = web.AppKey("transcript_scanner")
 
 # --- gate closures and their caches ------------------------------------------
 

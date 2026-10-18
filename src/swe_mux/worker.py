@@ -138,12 +138,19 @@ def _telemetry_service() -> WorkerService:
     return TelemetryWorkerService()
 
 
-#: Every service the worker can host, by name. Item 22 adds its own here.
+def _transcript_service() -> WorkerService:
+    from .transcript_discovery import TranscriptDiscoveryService
+
+    return TranscriptDiscoveryService()
+
+
+#: Every service the worker can host, by name.
 SERVICES: dict[str, Callable[[], WorkerService]] = {
     "noop": NoopService,
     "processes": _process_service,
     "ghost_windows": _ghost_window_service,
     "telemetry": _telemetry_service,
+    "transcripts": _transcript_service,
 }
 
 

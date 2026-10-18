@@ -9,7 +9,7 @@ from typing import Any
 from .config import Config
 from .harness import enabled_backends
 from .history import HistoryIndex
-from .reconcile import ScanProgress, reconcile_external_history
+from .reconcile import ScanFunction, ScanProgress, reconcile_external_history
 
 
 @dataclass
@@ -47,12 +47,19 @@ class HistoryScanManager:
     """
 
     def __init__(
-        self, history: HistoryIndex, config: Config, *, home: Path | None = None
+        self,
+        history: HistoryIndex,
+        config: Config,
+        *,
+        home: Path | None = None,
+        scan: ScanFunction | None = None,
     ) -> None:
         self.history = history
         self.config = config
         # Production scans the real home; tests inject one so the scan is deterministic.
         self.home = home
+        # The discovery walk; the daemon passes the worker-backed one.
+        self.scan = scan
         self.job = ScanJob()
         self._task: asyncio.Task[None] | None = None
 
@@ -96,6 +103,7 @@ class HistoryScanManager:
                 backends=backends,
                 should_cancel=lambda: job.cancel_requested,
                 on_progress=on_progress,
+                scan=self.scan,
             )
             job.status = "cancelled" if job.cancel_requested else "completed"
             job.phase = job.status

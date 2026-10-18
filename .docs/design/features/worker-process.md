@@ -4,13 +4,14 @@ The daemon serves every terminal keystroke, every WebSocket frame and every API 
 The worker process is where bulk work that is heavy and not interactive goes instead: a second process with its own interpreter, spawned, owned and restarted by the daemon.
 It exists because measuring the daemon under fleet load showed the stall time sitting in GIL convoys held by exactly that kind of work (`development/DAEMON_LOAD_ISOLATION.md` items 2, 4 and 11).
 
-It hosts four services today:
+It hosts five services today:
 
 | Service | What it does | Daemon side |
 | --- | --- | --- |
 | `processes` | The process inspector's sampling pass, priority enforcement, process actions, port-conflict probes and unique-memory reads (item 20, `process_service.py`) | `ProcessInspector`, which keeps a mirror (`design/features/processes-and-previews.md`) |
 | `ghost_windows` | The headless-browser ghost-window sweep (item 20) | `GhostWindowSweeper`, which keeps the counts |
 | `telemetry` | The canonical telemetry ledgers: the reducer and every write, OTLP parsing, the legacy importer, native reconciliation, rollups, seals, and every query (item 21, `telemetry_worker.py`) | `CanonicalTelemetryService`, which keeps the bus subscription, the batching, the loops and a bounded buffer (`design/features/operational-telemetry.md`) |
+| `transcripts` | The native-conversation discovery walk behind the startup reconcile, "scan now", project backfills and onboarding (item 22, `transcript_discovery.py`) | `TranscriptScanner`, which forwards progress and cancellation and walks here when the worker cannot |
 | `noop` | Echo, pushed state and a notice: the service that proves the host | none |
 
 ## The shape
@@ -106,6 +107,7 @@ Requests are `<service>.<method>`, plus the built-ins `worker.stats` and `worker
 - `worker-console.log`: what the interpreter printed before logging started, truncated at a spawn once it passes 1 MiB.
 - `/api/diagnostics/background` → `worker`: `enabled`, `state` (`disabled`, `stopped`, `starting`, `running`, `backoff`), `ready`, `pid`, `launcher_pid`, `port`, `spawns`, `restarts`, `generation`, `last_exit_code`, `last_error`, `uptime_seconds`, `services`, `build`, `notices_unrouted`, and the connection's own counters.
 - `process_sampling` and `ghost_windows` on the same endpoint say where each service's work actually ran - in the worker, or in the daemon while it was away - and how often a call to it failed.
+- `transcript_discovery` counts discovery walks answered by the worker and here, and the last failure.
 - `canonical_telemetry` says whether the ledgers are in the worker (`in_worker`), how many worker generations they have been opened in (`worker_opens`), and what is waiting for one (`buffered_events`, `buffer_dropped`, `worker_unavailable`).
 
 ## Where it is tested
@@ -115,3 +117,4 @@ The `live_daemon` tier asserts that a real `muxd` reports a ready worker, that a
 `tests/test_process_sampling_worker.py` holds the process service to the in-process behaviour against a real worker and a real process tree, and the `live_daemon` tier asserts that a daemon a default install builds hands its sampling passes to the worker.
 `tests/test_telemetry_worker.py` replays one event stream, including the scrubbed real Claude and Codex OTLP captures, into ledgers in process and through a real worker, and requires every row of every ledger file and every query answer to match, with the columns a ledger stamps from its own clock held to a reading taken during their own run; it also covers the replay, buffering, reopening and 503 paths.
 `tests/test_shutdown_teardown.py` holds the teardown to stopping the worker after every service that calls it.
+`tests/test_transcript_discovery.py` holds a discovery walk answered by a real worker to exactly the records a walk in the daemon returns, and covers its progress, cancellation and fallback.

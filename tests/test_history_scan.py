@@ -147,6 +147,37 @@ async def test_scan_manager_runs_once_and_reports_completion(tmp_path: Path) -> 
         history.close()
 
 
+async def test_the_scan_manager_walks_through_the_scan_it_was_given(tmp_path: Path) -> None:
+    """The daemon hands its managers the worker-backed walk; they must use it."""
+    home = tmp_path / "home"
+    cwd = tmp_path / "work"
+    cwd.mkdir()
+    _write_claude(home, "claude-scan-4", str(cwd))
+    calls: list[dict[str, Any]] = []
+
+    async def scan(home: Path | None = None, **kwargs: Any) -> list[ExternalTranscript]:
+        calls.append({"home": home, **kwargs})
+        return await scan_external_transcripts_async(home, **kwargs)
+
+    history = HistoryIndex(tmp_path / "mux.db")
+    config = Config(data_dir=tmp_path)
+    config.harness_enabled = {
+        name: name == "claude" for name in ("claude", "codex", "omp", "pi", "opencode")
+    }
+    manager = HistoryScanManager(history, config, home=home, scan=scan)
+    try:
+        manager.start()
+        assert manager._task is not None
+        await manager._task
+        assert manager.status()["imported"] == 1
+        assert len(calls) == 1 and calls[0]["home"] == home
+        assert set(calls[0]["backends"]) == {"claude"}
+        assert callable(calls[0]["should_cancel"]) and callable(calls[0]["on_progress"])
+    finally:
+        await manager.stop()
+        history.close()
+
+
 def test_the_discovery_walk_polls_cancellation_as_often_as_the_indexing_pass(
     tmp_path: Path,
 ) -> None:

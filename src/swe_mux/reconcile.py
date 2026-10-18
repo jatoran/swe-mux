@@ -7,7 +7,8 @@ import logging
 import re
 import sqlite3
 import threading
-from collections.abc import Callable, Iterable
+import time
+from collections.abc import Awaitable, Callable, Generator, Iterable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -17,9 +18,9 @@ from .adapters.claude import encode_cwd, is_conversation_transcript
 from .adapters.omp import session_header
 from .git_projects import ProjectIdentity, resolve_project
 from .harness import HARNESSES, Backend, require_backend, transcript_dialect
-from .history import HistoryIndex
+from .history import HistoryIndex, transcript_path_key
 from .opencode_store import session_measurements
-from .transcript_view import TRANSCRIPT_PARSER_VERSION
+from .transcript_view import TRANSCRIPT_PARSER_VERSION, conversation_watermark
 
 log = logging.getLogger(__name__)
 
@@ -61,20 +62,33 @@ def _timestamp(value: Any, fallback: float) -> float:
     return fallback
 
 
-def _first_events(path: Path, limit: int = 20) -> list[dict[str, Any]]:
-    events: list[dict[str, Any]] = []
+def _header_events(path: Path, limit: int = 20) -> Generator[dict[str, Any], None, None]:
+    """The JSON objects among a transcript's first `limit` lines, decoded one at a time.
+
+    Lazy so an inspector that has what it needs stops decoding: a header line can be
+    large, and decoding all twenty for every inspected file was most of the discovery
+    walk (6.2 s of 9.8 s over 4,000 headers on the development host). Close it when
+    stopping early, which closes the file.
+    """
     try:
-        with path.open("r", encoding="utf-8", errors="replace") as handle:
+        handle = path.open("r", encoding="utf-8", errors="replace")
+    except OSError:
+        return
+    with handle:
+        try:
             for _, line in zip(range(limit), handle, strict=False):
                 try:
                     event = json.loads(line)
                 except json.JSONDecodeError:
                     continue
                 if isinstance(event, dict):
-                    events.append(event)
-    except OSError:
-        pass
-    return events
+                    yield event
+        except OSError:
+            return
+
+
+def _first_events(path: Path, limit: int = 20) -> list[dict[str, Any]]:
+    return list(_header_events(path, limit))
 
 
 def inspect_claude(path: Path) -> ExternalTranscript | None:
@@ -103,23 +117,28 @@ def inspect_claude(path: Path) -> ExternalTranscript | None:
 
 
 def inspect_codex(path: Path) -> ExternalTranscript | None:
-    events = _first_events(path)
-    for event in events:
-        if event.get("type") != "session_meta":
-            continue
-        payload = event.get("payload") or {}
-        if payload.get("parent_thread_id"):
-            return None
-        native_id, cwd = payload.get("id"), payload.get("cwd")
-        if native_id and cwd:
-            try:
-                st = path.stat()
-            except OSError:
+    # Decoded lazily: the answer is the first usable `session_meta`, which is almost
+    # always the first line, so the other nineteen are never decoded.
+    events = _header_events(path)
+    try:
+        for event in events:
+            if event.get("type") != "session_meta":
+                continue
+            payload = event.get("payload") or {}
+            if payload.get("parent_thread_id"):
                 return None
-            created = _timestamp(event.get("timestamp"), st.st_mtime)
-            return ExternalTranscript(
-                "codex", str(native_id), str(cwd), created, path, st.st_mtime_ns, st.st_size
-            )
+            native_id, cwd = payload.get("id"), payload.get("cwd")
+            if native_id and cwd:
+                try:
+                    st = path.stat()
+                except OSError:
+                    return None
+                created = _timestamp(event.get("timestamp"), st.st_mtime)
+                return ExternalTranscript(
+                    "codex", str(native_id), str(cwd), created, path, st.st_mtime_ns, st.st_size
+                )
+    finally:
+        events.close()
     return None
 
 
@@ -549,6 +568,68 @@ def summarize_transcript(
     return summary
 
 
+def index_currency(
+    transcripts: list[ExternalTranscript],
+    history_ids: dict[tuple[str, str], str],
+    message_watermarks: dict[str, tuple[int, int, int]],
+    should_cancel: Callable[[], bool] | None = None,
+) -> list[bool]:
+    """Whether each conversation's message index is current, by the index's own watermark.
+
+    The index records `transcript_view.conversation_watermark`, which
+    `HistoryIndex.index_transcript` compares before it re-reads anything; this asks
+    the same question. It used to compare the stored pair with the file's stat
+    instead, which is right only where the dialect's watermark *is* the stat: a
+    Codex conversation's is `(0, length across its forked segments)`, so no Codex
+    conversation ever matched and every external one was summarized whole again at
+    every start (481 on the development host).
+    One pass in a thread, because the Codex watermark reads segment headers.
+    """
+    current: list[bool] = []
+    for item in transcripts:
+        if should_cancel is not None and should_cancel():
+            current.append(False)
+            continue
+        history_id = history_ids.get((item.backend, item.native_id))
+        stored = message_watermarks.get(history_id) if history_id else None
+        if stored is None or stored[2] != TRANSCRIPT_PARSER_VERSION:
+            current.append(False)
+            continue
+        try:
+            _identity, first, second = conversation_watermark(
+                item.path, item.backend, item.native_id
+            )
+        except OSError:
+            # `index_transcript` raises the same error and the item is reported
+            # skipped there, exactly as before.
+            current.append(False)
+            continue
+        current.append(stored == (first, second, TRANSCRIPT_PARSER_VERSION))
+    return current
+
+
+async def _index_currency(
+    transcripts: list[ExternalTranscript],
+    history_ids: dict[tuple[str, str], str],
+    message_watermarks: dict[str, tuple[int, int, int]],
+    *,
+    should_cancel: Callable[[], bool] | None,
+) -> list[bool]:
+    """`index_currency` off the loop, released within one item when the caller is cancelled."""
+    abandoned = threading.Event()
+
+    def cancelled() -> bool:
+        return abandoned.is_set() or (should_cancel is not None and should_cancel())
+
+    try:
+        return await asyncio.to_thread(
+            index_currency, transcripts, history_ids, message_watermarks, cancelled
+        )
+    except asyncio.CancelledError:
+        abandoned.set()
+        raise
+
+
 @dataclass(slots=True)
 class ScanProgress:
     """Progress of one native-history reconcile, for a user-triggered scan.
@@ -565,6 +646,11 @@ class ScanProgress:
     imported: int = 0
 
 
+#: The discovery walk's signature: `scan_external_transcripts_async`, or
+#: `transcript_discovery.TranscriptScanner.scan`, which runs it in the worker.
+ScanFunction = Callable[..., Awaitable[list[ExternalTranscript]]]
+
+
 async def reconcile_external_history(
     history: HistoryIndex,
     home: Path | None = None,
@@ -572,8 +658,10 @@ async def reconcile_external_history(
     backends: Iterable[str] | None = None,
     should_cancel: Callable[[], bool] | None = None,
     on_progress: Callable[[ScanProgress], None] | None = None,
+    scan: ScanFunction | None = None,
 ) -> int:
     progress = ScanProgress()
+    discover = scan or scan_external_transcripts_async
 
     def report() -> None:
         if on_progress is not None:
@@ -583,7 +671,7 @@ async def reconcile_external_history(
         progress.scanned = count
         report()
 
-    transcripts = await scan_external_transcripts_async(
+    transcripts = await discover(
         home, backends=backends, should_cancel=should_cancel, on_progress=scan_progress
     )
     if should_cancel is not None and should_cancel():
@@ -594,61 +682,85 @@ async def reconcile_external_history(
     # Skip transcripts whose (mtime_ns, size) are unchanged since the last
     # reconcile so unchanged native files are never re-read/re-parsed. The
     # watermark is persisted per external row, so this holds across restarts.
+    started = time.perf_counter()
     watermarks = await history.external_watermarks()
     history_ids = await history.native_history_ids()
     message_watermarks = await history.message_index_watermarks()
+    owned_paths = await history.owned_transcript_paths()
+    index_current = await _index_currency(
+        transcripts, history_ids, message_watermarks, should_cancel=should_cancel
+    )
     projects: dict[str, ProjectIdentity] = {}
     skipped = 0
-    for item in transcripts:
+    unchanged = 0
+    owned_unchanged = 0
+    summarized = 0
+    for position, item in enumerate(transcripts):
         if should_cancel is not None and should_cancel():
             break
         progress.processed += 1
         report()
-        history_id = history_ids.get((item.backend, item.native_id))
-        messages_current = bool(
-            history_id
-            and message_watermarks.get(history_id)
-            == (item.mtime_ns, item.size, TRANSCRIPT_PARSER_VERSION)
-        )
-        # Keyed by the transcript path for a file, and by the conversation id for a
-        # store, because that is what the row records as its source in each case.
-        watermark_key = str(item.path) if item.path else f"{item.backend}:{item.native_id}"
-        if watermarks.get(watermark_key) == (item.mtime_ns, item.size) and messages_current:
-            continue
+        key = (item.backend, item.native_id)
+        messages_current = index_current[position]
+        owned = owned_paths.get(key)
+        if owned is not None:
+            # A conversation a mux session ran. Its row is the session's, and
+            # `upsert_external` keeps nothing a summary measured for it, so the scan
+            # does only what it can do for one - repair a relocated path, refresh a
+            # stale message index - and only when one is due. Summarizing it anyway
+            # read every owned conversation whole at every start and threw the
+            # result away: 1,310 of them, 81 s of CPU, on the development host.
+            path_recorded = item.path is None or transcript_path_key(str(item.path)) in owned
+            if path_recorded and messages_current:
+                owned_unchanged += 1
+                continue
+        else:
+            # Keyed by the transcript path for a file, and by the conversation id for
+            # a store, because that is what the row records as its source in each case.
+            watermark_key = str(item.path) if item.path else f"{item.backend}:{item.native_id}"
+            if watermarks.get(watermark_key) == (item.mtime_ns, item.size) and messages_current:
+                unchanged += 1
+                continue
         try:
-            if item.cwd not in projects:
-                projects[item.cwd] = await resolve_project(item.cwd)
-            project = projects[item.cwd]
-            await history.register_project_scope(project)
-            summary = await asyncio.to_thread(
-                summarize_transcript, item.path, item.backend, item.native_id, home
-            )
-            await history.upsert_external(
-                row_id=item.row_id,
-                native_id=item.native_id,
-                backend=item.backend,
-                name=Path(item.cwd).name or item.backend,
-                cwd=item.cwd,
-                spawned_at=item.created_at,
-                # Empty for a store-backed conversation, which has no file. Readers
-                # take the native id instead; `conversation_is_readable` is the gate.
-                transcript_path=str(item.path) if item.path else "",
-                repository_id=project.id,
-                project_label=project.label,
-                project_root=project.root,
-                project_scope_id=project.id,
-                repo_group_id=project.repo_group_id,
-                mtime_ns=item.mtime_ns,
-                size=item.size,
-                **summary,
-            )
+            if owned is not None:
+                if item.path is not None:
+                    await history.repair_owned_transcript(
+                        item.backend, item.native_id, str(item.path)
+                    )
+            else:
+                if item.cwd not in projects:
+                    projects[item.cwd] = await resolve_project(item.cwd)
+                project = projects[item.cwd]
+                await history.register_project_scope(project)
+                summary = await asyncio.to_thread(
+                    summarize_transcript, item.path, item.backend, item.native_id, home
+                )
+                summarized += 1
+                await history.upsert_external(
+                    row_id=item.row_id,
+                    native_id=item.native_id,
+                    backend=item.backend,
+                    name=Path(item.cwd).name or item.backend,
+                    cwd=item.cwd,
+                    spawned_at=item.created_at,
+                    # Empty for a store-backed conversation, which has no file. Readers
+                    # take the native id instead; `conversation_is_readable` is the gate.
+                    transcript_path=str(item.path) if item.path else "",
+                    repository_id=project.id,
+                    project_label=project.label,
+                    project_root=project.root,
+                    project_scope_id=project.id,
+                    repo_group_id=project.repo_group_id,
+                    mtime_ns=item.mtime_ns,
+                    size=item.size,
+                    **summary,
+                )
             # Only a conversation this scan has just created is missing from the map
             # taken before the loop; an existing one keeps the id it already had
             # (earliest row wins, and an upsert never makes an earlier one). Asking the
             # store again for every item was a full `history` scan per changed
             # transcript - a quarter of the daemon's GIL time in the first minutes
             # after the 2026-10-12 redeploy.
-            key = (item.backend, item.native_id)
             if key not in history_ids:
                 history_ids = await history.native_history_ids()
             history_id = history_ids.get(key)
@@ -668,4 +780,22 @@ async def reconcile_external_history(
             log.warning("external history reconcile skipped %s", item.path, exc_info=True)
     if skipped:
         log.warning("external history reconcile skipped %d transcript(s)", skipped)
+    elapsed = time.perf_counter() - started
+    log.info(
+        "external history reconcile discovered=%d summarized=%d unchanged=%d "
+        "owned_unchanged=%d imported=%d skipped=%d elapsed_s=%.2f",
+        len(transcripts),
+        summarized,
+        unchanged,
+        owned_unchanged,
+        progress.imported,
+        skipped,
+        elapsed,
+        extra={
+            "discovered": len(transcripts),
+            "summarized": summarized,
+            "owned_unchanged": owned_unchanged,
+            "elapsed_s": round(elapsed, 2),
+        },
+    )
     return len(transcripts)

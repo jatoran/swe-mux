@@ -34,14 +34,34 @@ The History reader's reads live here too:
 ### `history_backfill.py`
 
 Bounded cancellable complete-history jobs, project-scoped by cwd ownership.
+A conversation a mux session owns is not summarized, because `upsert_external` keeps no measurement for it.
+The discovery walk is the `scan` it is constructed with (the daemon passes `TranscriptScanner.scan`).
 
 **Not:** durable job scheduling, or native file mutation.
 
 ### `history_scan.py`
 
-The single user-triggered global native-history reconcile: one job at a time, scoped to `enabled_backends`, with `{status, phase, backends, scanned, processed, imported}` progress and cancellation over `reconcile_external_history`'s `should_cancel` and `on_progress`.
+The single user-triggered global native-history reconcile: one job at a time, scoped to `enabled_backends`, with `{status, phase, backends, scanned, processed, imported}` progress and cancellation over `reconcile_external_history`'s `should_cancel` and `on_progress`, walking through the `scan` it is constructed with.
 
 **Not:** the reconcile itself, project ownership resolution, or native file mutation.
+
+### `reconcile.py`
+
+Native-conversation discovery (`scan_external_transcripts`: each harness's layout from its descriptor, header inspection, store queries) and the startup/global reconcile into History (`reconcile_external_history`).
+The reconcile reads a conversation only when something it feeds is stale: owned conversations get a path repair or an index refresh and never a summary, and the rest are skipped when the external watermark matches and `index_currency` - judged by `conversation_watermark`, the pair the message index stores - says the index is current (`design/features/history.md`).
+Header inspection decodes lazily where an inspector can stop early (`_header_events`): a Codex rollout's answer is its first `session_meta`.
+`ScanFunction` is the seam the walk is passed through.
+
+**Not:** where the walk runs (`transcript_discovery.py`), or any write to a vendor file.
+
+### `transcript_discovery.py`
+
+The discovery walk in the worker process (`design/features/worker-process.md`).
+`TranscriptScanner` is the daemon's side, with `scan_external_transcripts_async`'s signature: the worker's `transcripts` service answers when a worker is ready, progress crosses as notices and cancellation as a request, and a worker that is away or fails falls back to the in-process walk - the same function, so the two cannot disagree.
+`TranscriptDiscoveryService` is the worker's side.
+`stats()` is the `transcript_discovery` block on `/api/diagnostics/background`.
+
+**Not:** the walk itself (`reconcile.py`), or anything that writes History.
 
 ## Transcripts
 

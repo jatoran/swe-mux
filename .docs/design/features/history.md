@@ -410,8 +410,26 @@
   database proves all three sides of the collision: the retained executable names a different
   provider, its note owner is that provider's canonical root row, and another canonical row
   owns the borrowed native ID or transcript. Legitimate shell-promoted runs do not qualify.
-- Startup reconciliation reads the newest 2,000 Claude/Codex transcript files in a worker,
-  incrementally indexes changed message bodies, and never moves vendor files.
+- Startup reconciliation discovers the newest 2,000 conversations per harness, incrementally
+  indexes changed message bodies, and never moves vendor files.
+  The discovery walk runs in the worker process when one is ready (`transcript_discovery.py`,
+  `design/features/worker-process.md`) and in a daemon thread otherwise; the startup run waits up
+  to 30 s for the worker first.
+  **A conversation is read only when something it feeds is out of date.**
+  - One a mux session owns (`external=0`) is never summarized: `upsert_external` keeps none of a
+    scan's measurements for it, only a repair of a relocated path. It is visited only when that
+    path needs repair or its message index is stale (`HistoryIndex.owned_transcript_paths`).
+  - Any other is skipped when its external row's stat watermark matches *and* its message index
+    is current, where "current" is judged by `conversation_watermark` - the pair
+    `index_transcript` stores and compares - in one pass on a thread (`reconcile.index_currency`).
+  - A store-backed conversation's external watermark is keyed `backend:native_id`, the key the
+    reconcile looks it up by.
+  Until 2026-10-17 all three were wrong at once: owned conversations had no external watermark
+  and were summarized and discarded at every start, a Codex conversation's `(0, total)` index
+  watermark was compared with the file's stat and never matched, and every store row's watermark
+  collapsed onto one empty key. Measured read-only on the development host's corpus of 2,115
+  conversations, a start summarized 1,481 of them (about 80 s of the daemon's CPU and 17 GB read
+  in its first minutes); it now summarizes 133, at 0.2 s, plus a 1.4 s currency pass.
 - Managed transcripts are indexed once more after session exit so the list's last-message
   summary is current without waiting for the periodic reconciler.
 - **A listing answers within a bounded wait and ships what the list draws.**

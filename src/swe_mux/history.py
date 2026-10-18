@@ -5,6 +5,7 @@ import concurrent.futures
 import contextlib
 import json
 import logging
+import os
 import re
 import sqlite3
 import threading
@@ -48,6 +49,17 @@ from .transcript_view import (
 
 T = TypeVar("T")
 log = logging.getLogger(__name__)
+
+
+def transcript_path_key(path: str) -> str:
+    """One spelling per transcript file, for comparing a recorded path with a found one.
+
+    Case and separators are folded where the platform folds them, so a row an
+    adapter recorded and the file a scan walked to compare equal when they are the
+    same file.
+    """
+    return os.path.normcase(os.path.normpath(path))
+
 
 #: Wall-clock ceiling on an agent-driven archive search (the MCP surface).
 #: Same reasoning as the assistant's: nobody is watching a spinner they can
@@ -2118,114 +2130,164 @@ class HistoryIndex:
         mtime_ns: int | None = None,
         size: int | None = None,
     ) -> None:
-        """Index a native CLI transcript without claiming ownership of the file."""
+        """Index a native CLI transcript without claiming ownership of the file.
+
+        For a conversation a mux session owns this only repairs that row's path
+        (`_repair_owned_transcript_op`) and keeps none of the measurements passed in,
+        which is why the startup reconcile never summarizes an owned one
+        (`reconcile.reconcile_external_history`).
+        """
 
         def op() -> None:
-            exists = self._db.execute(
-                "SELECT id,transcript_path FROM history "
-                "WHERE backend=? AND native_id=? AND external=0",
-                (backend, native_id),
-            ).fetchone()
-            if exists:
-                # A conversation mux ran owns its row, and the scan must never open a
-                # second one over the same file. It may still repair the one that is
-                # there: the scan has just *found* this conversation, so when the row's
-                # own path no longer exists the scan is holding the answer the row is
-                # missing (`transcript_repair`). Without this the scanner walked past
-                # every relocated row it found - it saw the file and dropped it on the
-                # floor, which is why 132 of them stayed broken on the development host.
-                recorded = str(exists["transcript_path"] or "")
-                if recorded != transcript_path and not Path(recorded).is_file():
-                    self._db.execute(
-                        "UPDATE history SET transcript_path=?,transcript_mtime_ns=NULL,"
-                        "transcript_size=NULL,time_summary_mtime_ns=NULL,"
-                        "time_summary_size=NULL WHERE id=?",
-                        (transcript_path, exists["id"]),
-                    )
-                    self._db.execute(
-                        "DELETE FROM history_transcript_index WHERE history_id=?",
-                        (exists["id"],),
-                    )
-                    log.info(
-                        "history scan repaired run %s transcript: %s -> %s",
-                        exists["id"],
-                        recorded or "<unrecorded>",
-                        transcript_path,
-                    )
-                    self._db.commit()
-            else:
-                self._db.execute(
-                    "INSERT INTO history"
-                    "(id,native_id,backend,name,cwd,project_id,note_id,spawned_at,transcript_path,external,"
-                    "agent_visible,repository_id,project_label,project_root,context_window,"
-                    "final_context_pct,peak_context_pct,tokens_in,tokens_out,"
-                    "tokens_cache_read,tokens_cache_write,cost_usd,provider,"
-                    "provider_account_hashes_json,model,"
-                    "measurement_source,project_scope_id,repo_group_id,"
-                    "transcript_mtime_ns,transcript_size) "
-                    "VALUES(?,?,?,?,?,?,?,?,?,1,1,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
-                    "ON CONFLICT(id) DO UPDATE SET "
-                    "name=excluded.name,cwd=excluded.cwd,spawned_at=excluded.spawned_at,"
-                    "project_id=COALESCE(excluded.project_id,history.project_id),"
-                    "note_id=COALESCE(history.note_id,excluded.note_id),"
-                    "transcript_path=excluded.transcript_path,repository_id=excluded.repository_id,"
-                    # A row already assigned to a canonical Project keeps that
-                    # Project's label/root. Startup reconcile re-derives them from
-                    # Git and supplies no project_id, so without this guard every
-                    # changed external row loses its backfill-assigned, most-
-                    # specific-root attribution back to the enclosing worktree.
-                    "project_label=CASE WHEN history.project_id IS NOT NULL "
-                    "AND excluded.project_id IS NULL THEN history.project_label "
-                    "ELSE excluded.project_label END,"
-                    "project_root=CASE WHEN history.project_id IS NOT NULL "
-                    "AND excluded.project_id IS NULL THEN history.project_root "
-                    "ELSE excluded.project_root END,"
-                    "context_window=excluded.context_window,"
-                    "final_context_pct=excluded.final_context_pct,"
-                    "peak_context_pct=excluded.peak_context_pct,tokens_in=excluded.tokens_in,"
-                    "tokens_out=excluded.tokens_out,tokens_cache_read=excluded.tokens_cache_read,"
-                    "tokens_cache_write=excluded.tokens_cache_write,cost_usd=excluded.cost_usd,"
-                    "provider=excluded.provider,"
-                    "provider_account_hashes_json=excluded.provider_account_hashes_json,"
-                    "model=excluded.model,"
-                    "measurement_source=excluded.measurement_source,"
-                    "project_scope_id=excluded.project_scope_id,repo_group_id=excluded.repo_group_id,"
-                    "transcript_mtime_ns=excluded.transcript_mtime_ns,"
-                    "transcript_size=excluded.transcript_size",
-                    (
-                        row_id,
-                        native_id,
-                        backend,
-                        name,
-                        cwd,
-                        project_id,
-                        row_id,
-                        spawned_at,
-                        transcript_path,
-                        repository_id,
-                        project_label,
-                        project_root,
-                        context_window,
-                        final_context_pct,
-                        peak_context_pct,
-                        tokens_in,
-                        tokens_out,
-                        tokens_cache_read,
-                        tokens_cache_write,
-                        cost_usd,
-                        provider,
-                        json.dumps(provider_account_hashes or {}, sort_keys=True),
-                        model,
-                        measurement_source,
-                        project_scope_id or repository_id,
-                        repo_group_id,
-                        mtime_ns,
-                        size,
-                    ),
-                )
-                self._db.commit()
+            if self._repair_owned_transcript_op(backend, native_id, transcript_path):
+                return
+            self._db.execute(
+                "INSERT INTO history"
+                "(id,native_id,backend,name,cwd,project_id,note_id,spawned_at,transcript_path,external,"
+                "agent_visible,repository_id,project_label,project_root,context_window,"
+                "final_context_pct,peak_context_pct,tokens_in,tokens_out,"
+                "tokens_cache_read,tokens_cache_write,cost_usd,provider,"
+                "provider_account_hashes_json,model,"
+                "measurement_source,project_scope_id,repo_group_id,"
+                "transcript_mtime_ns,transcript_size) "
+                "VALUES(?,?,?,?,?,?,?,?,?,1,1,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+                "ON CONFLICT(id) DO UPDATE SET "
+                "name=excluded.name,cwd=excluded.cwd,spawned_at=excluded.spawned_at,"
+                "project_id=COALESCE(excluded.project_id,history.project_id),"
+                "note_id=COALESCE(history.note_id,excluded.note_id),"
+                "transcript_path=excluded.transcript_path,repository_id=excluded.repository_id,"
+                # A row already assigned to a canonical Project keeps that
+                # Project's label/root. Startup reconcile re-derives them from
+                # Git and supplies no project_id, so without this guard every
+                # changed external row loses its backfill-assigned, most-
+                # specific-root attribution back to the enclosing worktree.
+                "project_label=CASE WHEN history.project_id IS NOT NULL "
+                "AND excluded.project_id IS NULL THEN history.project_label "
+                "ELSE excluded.project_label END,"
+                "project_root=CASE WHEN history.project_id IS NOT NULL "
+                "AND excluded.project_id IS NULL THEN history.project_root "
+                "ELSE excluded.project_root END,"
+                "context_window=excluded.context_window,"
+                "final_context_pct=excluded.final_context_pct,"
+                "peak_context_pct=excluded.peak_context_pct,tokens_in=excluded.tokens_in,"
+                "tokens_out=excluded.tokens_out,tokens_cache_read=excluded.tokens_cache_read,"
+                "tokens_cache_write=excluded.tokens_cache_write,cost_usd=excluded.cost_usd,"
+                "provider=excluded.provider,"
+                "provider_account_hashes_json=excluded.provider_account_hashes_json,"
+                "model=excluded.model,"
+                "measurement_source=excluded.measurement_source,"
+                "project_scope_id=excluded.project_scope_id,repo_group_id=excluded.repo_group_id,"
+                "transcript_mtime_ns=excluded.transcript_mtime_ns,"
+                "transcript_size=excluded.transcript_size",
+                (
+                    row_id,
+                    native_id,
+                    backend,
+                    name,
+                    cwd,
+                    project_id,
+                    row_id,
+                    spawned_at,
+                    transcript_path,
+                    repository_id,
+                    project_label,
+                    project_root,
+                    context_window,
+                    final_context_pct,
+                    peak_context_pct,
+                    tokens_in,
+                    tokens_out,
+                    tokens_cache_read,
+                    tokens_cache_write,
+                    cost_usd,
+                    provider,
+                    json.dumps(provider_account_hashes or {}, sort_keys=True),
+                    model,
+                    measurement_source,
+                    project_scope_id or repository_id,
+                    repo_group_id,
+                    mtime_ns,
+                    size,
+                ),
+            )
+            self._db.commit()
 
         await self._run(op)
+
+    def _repair_owned_transcript_op(
+        self, backend: str, native_id: str, transcript_path: str
+    ) -> bool:
+        """Repair a mux-owned row's transcript path from a scan; whether one owns it.
+
+        A conversation mux ran owns its row, and the scan must never open a second
+        one over the same file. It may still repair the one that is there: the scan
+        has just *found* this conversation, so when the row's own path no longer
+        exists the scan is holding the answer the row is missing
+        (`transcript_repair`). Without this the scanner walked past every relocated
+        row it found - it saw the file and dropped it on the floor, which is why 132
+        of them stayed broken on the development host.
+        """
+        exists = self._db.execute(
+            "SELECT id,transcript_path FROM history "
+            "WHERE backend=? AND native_id=? AND external=0",
+            (backend, native_id),
+        ).fetchone()
+        if not exists:
+            return False
+        recorded = str(exists["transcript_path"] or "")
+        if recorded != transcript_path and not Path(recorded).is_file():
+            self._db.execute(
+                "UPDATE history SET transcript_path=?,transcript_mtime_ns=NULL,"
+                "transcript_size=NULL,time_summary_mtime_ns=NULL,"
+                "time_summary_size=NULL WHERE id=?",
+                (transcript_path, exists["id"]),
+            )
+            self._db.execute(
+                "DELETE FROM history_transcript_index WHERE history_id=?",
+                (exists["id"],),
+            )
+            log.info(
+                "history scan repaired run %s transcript: %s -> %s",
+                exists["id"],
+                recorded or "<unrecorded>",
+                transcript_path,
+            )
+            self._db.commit()
+        return True
+
+    async def repair_owned_transcript(
+        self, backend: str, native_id: str, transcript_path: str
+    ) -> bool:
+        """The path repair `upsert_external` makes for an owned conversation, alone."""
+        return await self._run(
+            lambda: self._repair_owned_transcript_op(backend, native_id, transcript_path)
+        )
+
+    async def owned_transcript_paths(self) -> dict[tuple[str, str], set[str]]:
+        """Every transcript path a mux-owned row records, per conversation.
+
+        `{(backend, native_id): {path key, ...}}`, keyed by `transcript_path_key`, for
+        every `external=0` row - more than one where a conversation has duplicate
+        rows. The startup reconcile reads this to leave an owned conversation alone:
+        `upsert_external` keeps none of a scan's measurements for one, and with no
+        external watermark to skip it by, every owned conversation used to be read
+        whole at every start for a summary that was then discarded (1,310 of them on
+        the development host, 81 s of the daemon's CPU in its first five minutes).
+        """
+
+        def op() -> dict[tuple[str, str], set[str]]:
+            rows = self._db.execute(
+                "SELECT backend,native_id,transcript_path FROM history "
+                "WHERE external=0 AND native_id IS NOT NULL AND native_id!=''"
+            ).fetchall()
+            owned: dict[tuple[str, str], set[str]] = {}
+            for row in rows:
+                paths = owned.setdefault((str(row["backend"]), str(row["native_id"])), set())
+                if row["transcript_path"]:
+                    paths.add(transcript_path_key(str(row["transcript_path"])))
+            return owned
+
+        return await self._run(op)
 
     async def note_owner_labels(self, project_id: str) -> dict[str, dict[str, Any]]:
         """Map every note identity this Project has recorded to its owning run.
@@ -2909,22 +2971,31 @@ class HistoryIndex:
         return await self._run(op)
 
     async def external_watermarks(self) -> dict[str, tuple[int, int]]:
-        """Return ``{transcript_path: (mtime_ns, size)}`` for indexed external rows.
+        """Return ``{source: (mtime_ns, size)}`` for indexed external rows.
 
         Used by reconcile to skip re-reading native transcripts whose stat is
         unchanged. Only ``external=1`` rows with a recorded watermark are
         returned, so a live-session row can never cause a reconcile skip and a
         legacy row (NULL watermark) always re-parses once to backfill.
+
+        The source is the transcript path for a file and ``backend:native_id`` for
+        a store-backed conversation, which records an empty path - the key the
+        reconcile looks each one up by. Keyed by the path alone, every store row
+        collapsed onto ``""`` and none of them was ever skipped.
         """
 
         def op() -> dict[str, tuple[int, int]]:
             rows = self._db.execute(
-                "SELECT transcript_path,transcript_mtime_ns,transcript_size FROM history "
-                "WHERE external=1 AND transcript_path IS NOT NULL "
+                "SELECT backend,native_id,transcript_path,transcript_mtime_ns,transcript_size "
+                "FROM history WHERE external=1 AND transcript_path IS NOT NULL "
                 "AND transcript_mtime_ns IS NOT NULL"
             ).fetchall()
             return {
-                r["transcript_path"]: (r["transcript_mtime_ns"], r["transcript_size"]) for r in rows
+                (r["transcript_path"] or f"{r['backend']}:{r['native_id']}"): (
+                    r["transcript_mtime_ns"],
+                    r["transcript_size"],
+                )
+                for r in rows
             }
 
         return await self._run(op)

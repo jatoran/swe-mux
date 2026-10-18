@@ -10,7 +10,8 @@ import pytest
 import swe_mux.reconcile as reconcile
 import swe_mux.tailscale as tailscale
 import swe_mux.transcript_view as tv
-from swe_mux.history import HistoryIndex
+from swe_mux.history import HistoryIndex, transcript_path_key
+from swe_mux.models import SessionRecord
 from swe_mux.reconcile import reconcile_external_history
 from swe_mux.routes import automation as automation_routes
 from swe_mux.routes import projects as projects_routes
@@ -308,6 +309,153 @@ async def test_reconcile_reads_the_history_map_once_for_changed_known_conversati
         history.close()
 
 
+def _owned_session(native_id: str, cwd: str) -> SessionRecord:
+    return SessionRecord(
+        f"mux-{native_id}", "owned", "default", "claude", native_id, cwd, "claude.exe", []
+    )
+
+
+async def test_reconcile_never_summarizes_a_conversation_a_mux_session_owns(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """An owned row keeps none of a summary, so reading the transcript for one is waste.
+
+    Before the fix every owned conversation the scan found was read whole at every
+    start: it has no external watermark to be skipped by, and `upsert_external`
+    discarded what it measured. On the development host that was 1,310
+    conversations and 81 s of CPU in the daemon's first five minutes, every start.
+    """
+    home = tmp_path / "home"
+    cwd = str(tmp_path / "repo")
+    owned_path = _write_claude(home, "owned-id", cwd, assistant_lines=3)
+    _write_claude(home, "external-id", cwd, assistant_lines=1)
+    history = HistoryIndex(tmp_path / "mux.db")
+    summarized: list[str] = []
+    real_summarize = reconcile.summarize_transcript
+
+    def counting(*args, **kwargs):
+        summarized.append(str(args[2] if len(args) > 2 else kwargs.get("native_id")))
+        return real_summarize(*args, **kwargs)
+
+    indexed: list[str] = []
+    real_index = history.index_transcript
+
+    async def counting_index(history_id: str, *args, **kwargs):
+        indexed.append(history_id)
+        return await real_index(history_id, *args, **kwargs)
+
+    monkeypatch.setattr(reconcile, "summarize_transcript", counting)
+    monkeypatch.setattr(history, "index_transcript", counting_index)
+    try:
+        await history.session_started(_owned_session("owned-id", cwd), str(owned_path))
+        assert await reconcile_external_history(history, home) == 2
+        assert summarized == ["external-id"], "only the conversation nobody owns is measured"
+        assert "mux-owned-id" in indexed, "an owned conversation's message index is still built"
+
+        summarized.clear()
+        indexed.clear()
+        assert await reconcile_external_history(history, home) == 2
+        assert summarized == [] and indexed == [], "nothing changed, so nothing is read"
+
+        # A conversation that grew has its message index refreshed, and still no summary.
+        _write_claude(home, "owned-id", cwd, assistant_lines=5)
+        _bump_mtime(owned_path)
+        assert await reconcile_external_history(history, home) == 2
+        assert summarized == [] and indexed == ["mux-owned-id"]
+        rows = {row["id"]: row for row in await history.history("owned")}
+        assert rows["mux-owned-id"]["external"] in (0, False)
+    finally:
+        history.close()
+
+
+def _write_codex(home: Path, native_id: str, cwd: str, *, turns: int = 1) -> Path:
+    directory = home / ".codex" / "sessions" / "2026" / "08"
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / f"rollout-2026-08-11T00-00-00-{native_id}.jsonl"
+    lines = [
+        {
+            "type": "session_meta",
+            "timestamp": "2026-08-11T00:00:00.000Z",
+            "payload": {"id": native_id, "cwd": cwd, "model": "gpt-test"},
+        }
+    ]
+    for turn in range(turns):
+        lines.append(
+            {
+                "type": "event_msg",
+                "timestamp": "2026-08-11T00:00:01.000Z",
+                "payload": {
+                    "type": "token_count",
+                    "info": {
+                        "total_token_usage": {"input_tokens": 100 * (turn + 1)},
+                        "model_context_window": 1000,
+                    },
+                },
+            }
+        )
+    path.write_text("".join(json.dumps(line) + "\n" for line in lines), encoding="utf-8")
+    return path
+
+
+async def test_reconcile_skips_an_unchanged_codex_conversation(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The message index's watermark for Codex is not the file's stat.
+
+    It is `(0, length across the conversation's forked segments)`, and the skip used
+    to compare it with the stat, so no Codex conversation ever counted as current:
+    every external one was summarized whole again at every start (481 on the
+    development host).
+    """
+    home = tmp_path / "home"
+    path = _write_codex(home, "codex-id", str(tmp_path / "repo"))
+    history = HistoryIndex(tmp_path / "mux.db")
+    calls = {"n": 0}
+    real = reconcile.summarize_transcript
+
+    def counting(*args, **kwargs):
+        calls["n"] += 1
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(reconcile, "summarize_transcript", counting)
+    try:
+        assert await reconcile_external_history(history, home) == 1
+        assert calls["n"] == 1
+        assert await reconcile_external_history(history, home) == 1
+        assert calls["n"] == 1, "an unchanged Codex conversation is not read again"
+
+        _write_codex(home, "codex-id", str(tmp_path / "repo"), turns=3)
+        _bump_mtime(path)
+        assert await reconcile_external_history(history, home) == 1
+        assert calls["n"] == 2, "a Codex conversation that grew is"
+    finally:
+        history.close()
+
+
+async def test_reconcile_still_repairs_an_owned_conversation_whose_file_moved(
+    tmp_path: Path, monkeypatch
+) -> None:
+    home = tmp_path / "home"
+    cwd = str(tmp_path / "repo")
+    found = _write_claude(home, "moved-id", cwd, assistant_lines=1)
+    history = HistoryIndex(tmp_path / "mux.db")
+    summarized: list[object] = []
+    monkeypatch.setattr(
+        reconcile, "summarize_transcript", lambda *args, **kwargs: summarized.append(args)
+    )
+    try:
+        gone = tmp_path / "old-place" / "moved-id.jsonl"
+        await history.session_started(_owned_session("moved-id", cwd), str(gone))
+        assert await reconcile_external_history(history, home) == 1
+        owned = await history.owned_transcript_paths()
+        assert owned[("claude", "moved-id")] == {transcript_path_key(str(found))}
+        assert summarized == []
+        watermarks = await history.message_index_watermarks()
+        assert "mux-moved-id" in watermarks, "indexed from the file the scan found"
+    finally:
+        history.close()
+
+
 async def test_external_watermarks_only_returns_indexed_rows(tmp_path: Path) -> None:
     history = HistoryIndex(tmp_path / "mux.db")
     try:
@@ -338,6 +486,23 @@ async def test_external_watermarks_only_returns_indexed_rows(tmp_path: Path) -> 
         )
         marks = await history.external_watermarks()
         assert "/t/two.jsonl" not in marks
+        # A store-backed conversation records no path; it is keyed the way the
+        # reconcile looks it up, not collapsed onto "" with every other one.
+        for native_id, updated in (("s1", 11), ("s2", 22)):
+            await history.upsert_external(
+                row_id=f"external:{native_id}",
+                native_id=native_id,
+                backend="opencode",
+                name="n",
+                cwd="c",
+                spawned_at=1.0,
+                transcript_path="",
+                mtime_ns=updated,
+                size=0,
+            )
+        marks = await history.external_watermarks()
+        assert marks["opencode:s1"] == (11, 0) and marks["opencode:s2"] == (22, 0)
+        assert "" not in marks
     finally:
         history.close()
 

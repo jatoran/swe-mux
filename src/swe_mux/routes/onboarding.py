@@ -165,9 +165,12 @@ async def discover_projects(request: web.Request) -> web.Response:
     if not backends or any(name not in HARNESSES for name in backends):
         return json_response({"error": "Select at least one registered harness to scan."}, 422)
     started = time.monotonic()
+    # The worker-backed walk when the daemon has one (`transcript_discovery.py`).
+    scanner = request.app.get(keys.TRANSCRIPT_SCANNER)
+    scan = scanner.scan if scanner is not None else scan_external_transcripts_async
     try:
         async with asyncio.timeout(15):
-            items = await scan_external_transcripts_async(backends=backends, limit=300)
+            items = await scan(backends=backends, limit=300)
             candidates = await project_candidates(items)
     except TimeoutError:
         log.warning(

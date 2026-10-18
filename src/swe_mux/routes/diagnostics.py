@@ -521,6 +521,13 @@ async def get_background_health(request: web.Request) -> web.Response:
             "ghost_windows": (
                 ghost.diagnostics() if (ghost := request.app.get(keys.GHOST_WINDOWS)) else None
             ),
+            # Where the native-conversation discovery walks ran: the worker, or here
+            # while it was away or a call to it failed (`transcript_discovery.py`).
+            "transcript_discovery": (
+                scanner.stats()
+                if (scanner := request.app.get(keys.TRANSCRIPT_SCANNER)) is not None
+                else None
+            ),
             # Why each Git read happened (`initial`, `change`, `sweep`, or `poll` for a
             # checkout that fell back to timed polling) and the OS watches behind it.
             # `poll` climbing with `watch.unwatched_roots` above zero is a watch that

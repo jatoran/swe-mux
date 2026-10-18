@@ -12,7 +12,7 @@ from .errors import NotFound
 from .git_projects import resolve_project
 from .history import HistoryIndex
 from .projects import ProjectManager
-from .reconcile import scan_external_transcripts_async, summarize_transcript
+from .reconcile import ScanFunction, scan_external_transcripts_async, summarize_transcript
 
 
 def _normalized_path(value: str | Path) -> str:
@@ -56,11 +56,18 @@ class HistoryBackfillManager:
     """Runs explicit, cancellable, project-scoped native transcript scans."""
 
     def __init__(
-        self, history: HistoryIndex, projects: ProjectManager, *, home: Path | None = None
+        self,
+        history: HistoryIndex,
+        projects: ProjectManager,
+        *,
+        home: Path | None = None,
+        scan: ScanFunction | None = None,
     ) -> None:
         self.history = history
         self.projects = projects
         self.home = home
+        # The discovery walk; the daemon passes the worker-backed one.
+        self.scan: ScanFunction = scan or scan_external_transcripts_async
         self.jobs: dict[str, BackfillJob] = {}
         self._tasks: dict[str, asyncio.Task[None]] = {}
 
@@ -144,7 +151,7 @@ class HistoryBackfillManager:
             # Through the async seam rather than a bare `to_thread`: `stop()`
             # cancels this task, and only that seam turns the cancellation into
             # something the walking worker thread can see.
-            transcripts = await scan_external_transcripts_async(
+            transcripts = await self.scan(
                 self.home,
                 limit=None,
                 roots=[project.root],
@@ -166,6 +173,7 @@ class HistoryBackfillManager:
             job.total = len(candidates)
             job.phase = "indexing"
             history_ids = await self.history.native_history_ids()
+            owned = await self.history.owned_transcript_paths()
             for item in candidates:
                 if job.cancel_requested:
                     job.status = "cancelled"
@@ -174,8 +182,15 @@ class HistoryBackfillManager:
                 existed = (item.backend, item.native_id) in history_ids
                 try:
                     scope = await resolve_project(item.cwd)
-                    summary = await asyncio.to_thread(
-                        summarize_transcript, item.path, item.backend, item.native_id
+                    # `upsert_external` keeps no measurement for a conversation a mux
+                    # session owns (it only repairs that row's path), so reading the
+                    # whole transcript for one would be thrown away.
+                    summary: dict[str, Any] = (
+                        {}
+                        if (item.backend, item.native_id) in owned
+                        else await asyncio.to_thread(
+                            summarize_transcript, item.path, item.backend, item.native_id
+                        )
                     )
                     await self.history.register_project_scope(scope)
                     await self.history.upsert_external(
