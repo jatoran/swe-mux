@@ -54,6 +54,11 @@ HOOK_MEAN_BYTES = 50 * 1024
 # which is what `--hook-client raw` reproduces; the shipped client bounds it.
 HOOK_CAP_BYTES = 1024 * 1024
 OUTPUT_TICK_SECONDS = 0.05
+#: From a granted permission to its tool's `PostToolUse`. Claude Code 2.1.234 draws
+#: the dialog a constant 6.02 s after the hook's answer (`design/features/approvals.md`),
+#: the daemon's watcher types the accept key within its next look, and a quick tool
+#: (a file read) then runs, so the watcher's real life is about seven seconds.
+DECISION_TOOL_SECONDS = 7.0
 
 
 class Stats:
@@ -236,11 +241,15 @@ def grant_allow_all(base: str, session_id: str, secret: str) -> str:
     return status
 
 
-def _decision_body(sequence: int, cwd: str) -> bytes:
+def _decision_tool_use_id(index: int) -> str:
+    return f"toolu_decide_{index:08d}"
+
+
+def _decision_body(sequence: int, cwd: str, *, index: int) -> bytes:
     payload = {
         "hook_event_name": "PermissionRequest",
         "tool_name": "Read",
-        "tool_use_id": f"toolu_decide_{sequence:08d}",
+        "tool_use_id": _decision_tool_use_id(index),
         "tool_input": {"file_path": str(Path(cwd) / "README.md")},
     }
     # Its own source: ingress orders sequenced hooks per source and answers a number
@@ -254,6 +263,24 @@ def _decision_body(sequence: int, cwd: str) -> bytes:
             "payload": payload,
         }
     ).encode()
+
+
+def _decision_result_body(sequence: int, *, index: int) -> bytes:
+    """The `PostToolUse` of a tool whose permission was granted: it ran."""
+    payload = {
+        "hook_event_name": "PostToolUse",
+        "tool_name": "Read",
+        "tool_use_id": _decision_tool_use_id(index),
+        "tool_input": {"file_path": "README.md"},
+        "tool_response": {"type": "text", "file": {"numLines": 12}},
+    }
+    envelope = {
+        "event": "PostToolUse",
+        "source": "load-decision",
+        "sequence": sequence,
+        "payload": payload,
+    }
+    return json.dumps(envelope).encode()
 
 
 def _decision_outcome(status: str, response: bytes) -> str:
@@ -279,20 +306,32 @@ def decision_source(
 
     Claude gives the hook 3 s (`hook_client._DECISION_TIMEOUT`) and then asks the
     user, so the distribution's tail against that bound is the measurement.
+
+    An allowed request is followed, `DECISION_TOOL_SECONDS` later, by the
+    `PostToolUse` of the tool it granted, which is what a real approved tool sends
+    once its dialog is answered and it has run. Without it every decision left the
+    daemon's keystroke watcher looking for a dialog this pane never draws until the
+    watcher's 30 s deadline, which no real session does
+    (`DAEMON_LOAD_ISOLATION.md` item 20); runs before 2026-10-17 carry that cost.
     """
     if args.decision_rate <= 0:
         return
     rng = random.Random(args.seed + 4)
     cwd = os.getcwd()
     sequence = 0
+    index = 0
     while not stop.wait(rng.expovariate(args.decision_rate)):
         sequence += 1
-        body = _decision_body(sequence, cwd)
+        index += 1
+        body = _decision_body(sequence, cwd, index=index)
         started = time.perf_counter()
         status, response = _send(url, secret, body, timeout=args.post_timeout)
-        stats.record(
-            "decision", time.perf_counter() - started, _decision_outcome(status, response), len(body)
-        )
+        outcome = _decision_outcome(status, response)
+        stats.record("decision", time.perf_counter() - started, outcome, len(body))
+        if outcome == "allow" and not stop.wait(DECISION_TOOL_SECONDS):
+            sequence += 1
+            result = _decision_result_body(sequence, index=index)
+            _send(url, secret, result, timeout=args.post_timeout)
 
 
 def _transcript_record(native_id: str, parent: str | None, tick: int, size: int) -> dict[str, Any]:

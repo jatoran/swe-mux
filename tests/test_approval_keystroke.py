@@ -21,6 +21,7 @@ from swe_mux.models import ApprovalPolicy
 from swe_mux.observation import apply_hook_observation
 
 from .support.detection_replay import ReplaySession
+from .support.settle import until
 
 pytestmark = pytest.mark.anyio
 
@@ -175,6 +176,93 @@ async def test_the_watcher_gives_up_rather_than_waiting_forever(
     assert entry["outcome"] == "expired"
 
 
+async def test_the_decided_tool_running_retires_the_watcher(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Its approval was answered, so a dialog drawn afterwards is not its dialog."""
+    screen = {"value": "working"}
+    session = _session(monkeypatch, "working")
+    monkeypatch.setattr(observation, "session_pty_state", lambda _s: screen["value"])
+    session.approval_keystroke_window_seconds = 5.0
+    events = EventBus()
+    await _permission(session, events)
+    await apply_hook_observation(
+        session,
+        "PostToolUse",
+        {"tool_name": "Read", "tool_use_id": "toolu_1", "tool_response": {"content": "x"}},
+        events,
+    )
+    assert "pending_auto_delivery" not in observation._observation_state(session)
+    screen["value"] = "approval"
+    # A quiet window: a watcher still running would type into this dialog.
+    await _settle(0.3)
+    assert session.approval_input_sink.writes == []
+    assert not any(
+        entry["kind"] == "approval_keystroke_delivery" for entry in session.state_transitions
+    ), "retired, not expired and not delivered"
+
+
+async def test_another_tool_running_leaves_the_watcher_armed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _session(monkeypatch, "working")
+    session.approval_keystroke_window_seconds = 5.0
+    events = EventBus()
+    await _permission(session, events)
+    await apply_hook_observation(
+        session,
+        "PostToolUse",
+        {"tool_name": "Read", "tool_use_id": "toolu_other", "tool_response": {"content": "x"}},
+        events,
+    )
+    assert observation._observation_state(session)["pending_auto_delivery"] == "toolu_1"
+    # Let the watcher go rather than leave it polling past the test.
+    observation._observation_state(session).pop("pending_auto_delivery")
+    await _settle(0.1)
+
+
+async def test_ending_the_wait_for_its_approval_retires_the_watcher(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _session(monkeypatch, "working")
+    session.approval_keystroke_window_seconds = 5.0
+    await _permission(session, EventBus())
+    assert observation.cancel_pending_approval(session, "terminal_input")
+    assert "pending_auto_delivery" not in observation._observation_state(session)
+    await _settle(0.1)
+    assert session.approval_input_sink.writes == []
+
+
+async def test_the_watcher_backs_off_after_its_fast_window(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A dialog that never comes is looked for a bounded number of times."""
+    looks: list[float] = []
+
+    def screen(_session: Any) -> str:
+        looks.append(time.monotonic())
+        return "working"
+
+    session = _session(monkeypatch, "working")
+    monkeypatch.setattr(observation, "session_pty_state", screen)
+    monkeypatch.setattr(observation, "APPROVAL_KEYSTROKE_FAST_SECONDS", 0.1)
+    monkeypatch.setattr(observation, "APPROVAL_KEYSTROKE_SLOW_POLL_SECONDS", 0.2)
+    session.approval_keystroke_window_seconds = 1.0
+    await _permission(session, EventBus())
+    await until(
+        lambda: any(
+            entry["kind"] == "approval_keystroke_delivery" for entry in session.state_transitions
+        ),
+        seconds=10,
+        what="the watcher expired",
+    )
+    # A fixed 0.01 s poll would have looked about 100 times in the window; the fast
+    # tenth of a second allows about ten, and the backed-off rest about six more.
+    assert len(looks) < 40, len(looks)
+    gaps = [later - earlier for earlier, later in zip(looks, looks[1:], strict=False)]
+    assert max(gaps) >= 0.15, "the interval grew past the fast poll"
+
+
 # -- what may never arm it ---------------------------------------------------
 
 
@@ -243,7 +331,8 @@ def test_only_a_harness_with_a_measured_accept_key_may_be_typed_into() -> None:
 def test_a_harness_that_can_answer_through_its_hook_needs_no_keystroke() -> None:
     """Both may be declared, and Claude declares both today because its CLI
     publishes the request and ignores the answer. The watcher self-retires when
-    that changes: a CLI that honours the decision never draws the dialog."""
+    that changes: a CLI that honours the decision never draws the dialog, and the
+    tool it then runs retires the watcher the moment its `PostToolUse` arrives."""
     for harness in HARNESSES.values():
         if harness.approval_accept_key is not None:
             assert harness.hook_approval_decisions, harness.name

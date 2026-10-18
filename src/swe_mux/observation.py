@@ -2729,6 +2729,17 @@ def _persist_approval_candidate(
 #: looks. Defaults only; the server publishes the configured window per session.
 APPROVAL_KEYSTROKE_WINDOW_SECONDS = 30.0
 APPROVAL_KEYSTROKE_POLL_SECONDS = 0.5
+#: A dialog the CLI shows despite the hook's answer opens a fixed time after it -
+#: a constant 6.02 s on Claude Code 2.1.234 (`design/features/approvals.md`) - so
+#: the watcher looks at `APPROVAL_KEYSTROKE_POLL_SECONDS` for this long, with room
+#: to spare, and then backs off, doubling up to `APPROVAL_KEYSTROKE_SLOW_POLL_SECONDS`,
+#: for the rest of the window. Every look classifies the screen, and a dialog that
+#: never comes - a CLI that took the hook's answer, or a session that is not drawing
+#: one - was looked for 60 times over a changing screen at a fixed 0.5 s: 13% of the
+#: daemon's GIL at the load harness's one decision a second, whose sessions draw no
+#: dialog (`development/DAEMON_LOAD_ISOLATION.md` item 20).
+APPROVAL_KEYSTROKE_FAST_SECONDS = 10.0
+APPROVAL_KEYSTROKE_SLOW_POLL_SECONDS = 4.0
 
 
 def _keystroke_delivery_key(session: Session) -> str | None:
@@ -2786,7 +2797,10 @@ async def _deliver_decided_approval(
     poll = max(0.05, float(
         getattr(session, "approval_keystroke_poll_seconds", APPROVAL_KEYSTROKE_POLL_SECONDS)
     ))
-    deadline = time.monotonic() + window
+    started = time.monotonic()
+    deadline = started + window
+    fast_until = started + APPROVAL_KEYSTROKE_FAST_SECONDS
+    interval = poll
     state = _observation_state(session)
     # unsupervised-loop-ok: one watcher per decided approval, bounded by `window`
     # and cancelled with the approval it belongs to.
@@ -2797,10 +2811,13 @@ async def _deliver_decided_approval(
             return
         if session_pty_state(session) == "approval":
             break
-        if time.monotonic() >= deadline:
+        now = time.monotonic()
+        if now >= deadline:
             _ledger_keystroke(session, "expired", request=request, tool_use_id=tool_use_id)
             return
-        await asyncio.sleep(poll)
+        if now >= fast_until:
+            interval = min(max(interval * 2, poll), max(poll, APPROVAL_KEYSTROKE_SLOW_POLL_SECONDS))
+        await asyncio.sleep(min(interval, max(0.0, deadline - now)))
 
     sink = getattr(session, "approval_input_sink", None)
     if not callable(sink):
@@ -2855,6 +2872,11 @@ def cancel_pending_approval(session: Session, reason: str) -> bool:
     _persist_approval_candidate(session, None)
     source_record = pending if isinstance(pending, dict) else candidate
     assert isinstance(source_record, dict)
+    cancelled_tool_use_id = source_record.get("tool_use_id")
+    if cancelled_tool_use_id and state.get("pending_auto_delivery") == cancelled_tool_use_id:
+        # Whatever ended the wait for this approval also ends any reason to type
+        # its accept key; a keystroke after the wait ended lands on what replaced it.
+        state.pop("pending_auto_delivery", None)
     task = source_record.get("task")
     if isinstance(task, asyncio.Task) and task is not asyncio.current_task() and not task.done():
         task.cancel()
@@ -2922,7 +2944,13 @@ def note_activity_evidence(
     The PTY veto is the same one `_resume_from_awaiting` applies, and for the same
     reason: a parallel tool's record must not retire a prompt the user can see.
     """
-    pending = _observation_state(session).get("pending_approval")
+    state = _observation_state(session)
+    if tool_use_id and state.get("pending_auto_delivery") == tool_use_id:
+        # The decided tool ran, so its approval was answered - by the keystroke, by
+        # the operator, or by a CLI that took the hook's answer - and no dialog for
+        # it is coming: retire the keystroke watcher now rather than at its deadline.
+        state.pop("pending_auto_delivery", None)
+    pending = state.get("pending_approval")
     if not isinstance(pending, dict):
         return False
     approval_tool_use_id = str(pending.get("tool_use_id") or "")
