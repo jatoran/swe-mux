@@ -124,6 +124,9 @@ A throw in the observer would abandon a half-read pipe and block the process it 
 Where a removed checkout goes so the deletion does not have to happen in front of anyone: the graveyard's location under the repository's common Git directory, the single atomic rename that buries a tree, the restore that undoes it, and the idempotent purge.
 
 The purge clears the read-only bit before retrying a file (Git writes loose objects read-only, and Windows cannot unlink one at all), counts what it could not delete rather than raising, and never removes the graveyard root - a purge racing a burial must not delete the directory another removal is renaming into.
+On Windows it deletes through verbatim `\\?\` paths, built lexically, because Win32 path parsing rewrites some names before the filesystem sees them: a reserved device name with any extension (`nul.json`, `con.txt`) becomes the device and a trailing dot or space is dropped, so an ordinary unlink deletes nothing.
+Git Bash and WSL create such names freely; one `.trash/nul.json` kept a stellar-matter checkout in its graveyard, retried at every start, until 2026-10-18.
+`os.path.abspath` is `GetFullPathNameW` and rewrites the same names, which is why the path is built without it; the verbatim form also reaches paths past MAX_PATH.
 
 Two rules bound its patience, and both come from a purge loop that had neither (D2 soak, 2026-08-24, 1,165 warnings over three days for a handful of paths, up to 24 repeats of one).
 **An absent path is a purged path**: a directory Windows has marked delete-pending stays in the listing while every operation on it reports it missing, so a `FileNotFoundError` there is the deletion working, not failing.

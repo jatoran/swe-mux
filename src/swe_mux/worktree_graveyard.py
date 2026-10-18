@@ -64,6 +64,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .host_platform import IS_WINDOWS
 from .parked_threads import parked
 
 log = logging.getLogger(__name__)
@@ -155,6 +156,51 @@ def exhume(buried: Path, destination: str | Path) -> bool:
     return True
 
 
+def _verbatim(path: Path) -> str:
+    r"""``path`` in the form Win32 hands to the filesystem unparsed (``\\?\D:\...``).
+
+    A checkout can hold names Win32 path parsing rewrites before the filesystem
+    sees them: a reserved device name with any extension (`nul.json`, `con.txt`,
+    `aux.py`) is turned into the device, and a trailing dot or space is stripped.
+    Git Bash and WSL create such files without complaint, and an ordinary unlink
+    of one then deletes nothing - so a buried checkout holding one stayed in the
+    graveyard and was retried at every daemon start (stellar-matter, 2026-10-17
+    and 18: one `.trash/nul.json`). The verbatim form also reaches paths past
+    MAX_PATH whatever the process's long-path setting.
+
+    Built lexically, never with `os.path.abspath`: that is `GetFullPathNameW`, which
+    is itself one of the calls that turns `...\nul.json` into `\\.\nul`.
+    """
+    if not IS_WINDOWS:
+        return str(path)
+    text = str(path)
+    if text.startswith("\\\\?\\"):
+        return text
+    if not os.path.isabs(text):
+        text = os.path.join(os.getcwd(), text)
+    text = os.path.normpath(text)
+    if text.startswith("\\\\?\\"):
+        return text
+    if text.startswith("\\\\"):
+        return "\\\\?\\UNC\\" + text[2:]
+    return "\\\\?\\" + text
+
+
+def _present(target: str) -> bool:
+    """Whether anything is at ``target``, a dangling link included.
+
+    Only "not found" answers no. `os.path.lexists` answers no to every error, and an
+    entry the purge cannot even stat is one it failed to delete, not one it deleted.
+    """
+    try:
+        os.lstat(target)
+    except (FileNotFoundError, NotADirectoryError):
+        return False
+    except OSError:
+        return True
+    return True
+
+
 def _clear_readonly(function: Callable[..., Any], path: str, excinfo: BaseException) -> None:
     """Retry one deletion after clearing the read-only bit.
 
@@ -209,7 +255,8 @@ def purge(root: Path, *, stop: threading.Event | None = None) -> tuple[int, int]
         if already_abandoned:
             abandoned += 1
             continue
-        if not entry.exists() and not entry.is_symlink():
+        target = _verbatim(entry)
+        if not _present(target):
             # Gone before we touched it - a concurrent purge, or a delete-pending
             # directory Windows still lists. Either way the postcondition holds.
             removed += 1
@@ -217,10 +264,11 @@ def purge(root: Path, *, stop: threading.Event | None = None) -> tuple[int, int]
             log.debug("worktree_graveyard_purge_already_absent path=%s", entry)
             continue
         try:
-            if entry.is_dir() and not entry.is_symlink():
-                shutil.rmtree(entry, onexc=_clear_readonly)
+            if os.path.isdir(target) and not os.path.islink(target):
+                # Verbatim all the way down: `rmtree` joins every child onto this.
+                shutil.rmtree(target, onexc=_clear_readonly)
             else:
-                entry.unlink()
+                os.unlink(target)
         except FileNotFoundError:
             removed += 1
             _forget(key)
@@ -234,7 +282,7 @@ def purge(root: Path, *, stop: threading.Event | None = None) -> tuple[int, int]
             continue
         # `rmtree` with an error handler that swallows can return having left
         # files behind, so success is what the filesystem says afterwards.
-        if entry.exists():
+        if _present(target):
             failed += 1
             _report_failure(
                 entry,

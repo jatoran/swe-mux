@@ -278,6 +278,46 @@ def test_purge_clears_read_only_files_and_reports_what_it_removed(tmp_path: Path
     assert root.is_dir()
 
 
+def _raw(path: Path) -> str:
+    """A path Win32 will not reinterpret, written independently of the module's own.
+
+    Lexical on purpose: `os.path.abspath` is `GetFullPathNameW`, which is itself one
+    of the calls that turns `...\\nul.json` into `\\\\.\\nul`.
+    """
+    return "\\\\?\\" + os.path.normpath(path) if os.name == "nt" else str(path)
+
+
+def test_purge_deletes_names_win32_would_reinterpret_and_paths_past_max_path(
+    tmp_path: Path,
+) -> None:
+    """stellar-matter, 2026-10-17 and 18: one `.trash/nul.json` held a buried checkout.
+
+    On Windows an ordinary path ending in a reserved device name, with any extension,
+    is the device, so the unlink deleted nothing and the checkout was retried at
+    every daemon start. Git Bash and WSL create such names freely. A trailing dot is
+    the same class (Win32 strips it), and a path past MAX_PATH is reached by the
+    same verbatim form whatever the process's long-path setting.
+    """
+    root = tmp_path / "graveyard"
+    buried = root / "buried-abc"
+    trash = buried / ".trash"
+    deep = buried.joinpath(*(["d" * 40] * 7))
+    os.makedirs(_raw(trash))
+    os.makedirs(_raw(deep))
+    names = ["nul.json", "con.txt", "aux", "trailing."]
+    for name in names:
+        with open(_raw(trash / name), "w", encoding="utf-8") as handle:
+            handle.write("x")
+    with open(_raw(deep / "leaf.txt"), "w", encoding="utf-8") as handle:
+        handle.write("x")
+    # The setup really made files, not writes into a device.
+    assert sorted(os.listdir(_raw(trash))) == sorted(names)
+    assert len(os.path.abspath(deep / "leaf.txt")) > 260
+
+    assert worktree_graveyard.purge(root) == (1, 0)
+    assert os.listdir(root) == []
+
+
 def test_purge_of_a_missing_graveyard_is_not_an_error(tmp_path: Path) -> None:
     assert worktree_graveyard.purge(tmp_path / "never-created") == (0, 0)
 

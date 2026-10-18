@@ -45,6 +45,9 @@ The release procedure that maintains this file is [`RELEASING.md`](RELEASING.md)
   Everything else waiting on those threads stalled, including the signal the desktop app uses to tell a busy swe-mux from a hung one, so it restarted a swe-mux that was only busy.
   One background deleter now handles every removal in turn, the desktop app's liveness checks no longer wait behind other work, and the Git watcher sorts a deletion storm a folder at a time instead of a file at a time, which took it from minutes of work to about a second.
   When background work does back up, `daemon.log` now says so (`executor_saturated`) and names what is holding it.
+- **A removed worktree holding a file named like a Windows device is now deleted.**
+  A file such as `nul.json` or `con.txt`, which Git Bash and WSL create without complaint, could not be deleted through ordinary Windows paths, so the removed checkout around it stayed on disk and swe-mux retried it at every start.
+  Removed checkouts are now deleted in a form Windows does not reinterpret, which also reaches paths longer than 260 characters.
 - **A queued message is no longer refused because you typed into the session and deleted it.**
   The queue used to block any delivery once anything had been typed since the agent's last turn, so typing a line and erasing it held every message as "you typed in this terminal" until the next turn ended.
   It now reads the composer off the screen of any pane showing the session: an empty composer lets the message through, and text still sitting there blocks it with "there is unsent text in this agent's composer", including text typed while the agent was working.
