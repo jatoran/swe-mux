@@ -1,7 +1,7 @@
 """Which browser pages may drive swe-mux's HTTP and WebSocket surfaces.
 
 One policy for every process that serves a browser: the daemon, and the terminal
-gateway (`development/DAEMON_LOAD_ISOLATION.md` items 26 and 28). A second copy in
+gateway (`development/archive/DAEMON_LOAD_ISOLATION.md` items 26 and 28). A second copy in
 the gateway would be a second decision, and the two would drift on exactly the
 question this module exists to answer.
 

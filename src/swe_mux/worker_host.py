@@ -1,6 +1,6 @@
 """The daemon's side of the worker process: spawn it, own it, restart it, talk to it.
 
-`development/DAEMON_LOAD_ISOLATION.md` item 19; the child is `worker.py`.
+`development/archive/DAEMON_LOAD_ISOLATION.md` item 19; the child is `worker.py`.
 
 **Spawned off the loop.** `CreateProcess` on a loaded Windows host - Defender
 scanning a fresh image - can take seconds, so the spawn runs in a thread and the

@@ -655,7 +655,7 @@ buffer sized by `scrollback_bytes`. A refused frame closes the connection rather
 skipped: the stream is desynced at an unknown offset.
 
 Additive capabilities, none of which touches the protocol version
-(`development/DAEMON_LOAD_ISOLATION.md` items 12 and 13). The `hello` reply lists
+(`development/archive/DAEMON_LOAD_ISOLATION.md` items 12 and 13). The `hello` reply lists
 `capabilities` (`output_gap`, `subscribe_since`, `terminal_scope`, `notices`) and echoes the
 connection's `scope`; a supervisor that predates them sends neither, which is how a client knows
 to keep the old behaviour.

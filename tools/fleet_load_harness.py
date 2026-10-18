@@ -1,7 +1,7 @@
 """Reproducible fleet load against an isolated swe-mux daemon, with the numbers a user feels.
 
 The 2026-10-16 freezes (26 loop stalls of 3-9 s with about 36 agents) cannot be
-replayed on the live fleet, and every fix in `development/DAEMON_LOAD_ISOLATION.md`
+replayed on the live fleet, and every fix in `development/archive/DAEMON_LOAD_ISOLATION.md`
 needs a before and an after. This harness is that yardstick.
 
 It starts its own daemon from this checkout on an OS-allocated port with a data
@@ -22,6 +22,12 @@ port 8765, `~/.mux`, or the operator's profile - the same isolation rules the
     uv run python tools/fleet_load_harness.py --sessions 36 --duration 120
     uv run python tools/fleet_load_harness.py --sessions 36 --profile 45 --json after.json
     uv run python tools/fleet_load_harness.py --set gil_switch_interval_ms=1
+    uv run python tools/fleet_load_harness.py --gateway --burn 32 --duration 90
+
+`--gateway` turns the terminal gateway on (on an OS-allocated port of its own) and
+attaches every terminal, the timed probe included, through it - the comparison item
+35 of the plan makes: the same load, with keystrokes that do or do not cross the
+daemon's event loop.
 
 Every run ends by quitting its daemon through the authenticated shutdown route,
 which reaps the scratch sessions and the scratch supervisor; a daemon that will
@@ -109,6 +115,9 @@ class Options:
     peer: str = "loopback"
     ws_compress: str = "offer"
     stalled_subscriber: str = "none"
+    gateway: bool = False
+    freeze: float = 0.0
+    freeze_every: float = 15.0
 
 
 class StalledSubscriber:
@@ -228,6 +237,11 @@ class Harness:
         self.config_path = self.data_dir / "config.toml"
         self.port = free_port()
         self.base = f"http://127.0.0.1:{self.port}"
+        # The terminal gateway's own port, OS-allocated like the daemon's; terminals
+        # attach there when `--gateway` is on (DAEMON_LOAD_ISOLATION.md item 35).
+        self.gateway_port = free_port()
+        while self.gateway_port == self.port:
+            self.gateway_port = free_port()
         self.process: subprocess.Popen[bytes] | None = None
         self.http: aiohttp.ClientSession | None = None
         self.clients: list[Client] = []
@@ -253,6 +267,9 @@ class Harness:
         if self.options.decision_rate > 0:
             # Auto-approval is off by default; the decision probe needs it on.
             lines.append("approval_auto_enabled = true")
+        if self.options.gateway:
+            lines.append("terminal_gateway_enabled = true")
+            lines.append(f"terminal_gateway_port = {self.gateway_port}")
         for key, value in self.options.settings.items():
             lines.append(f"{key} = {value}")
         self.config_path.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
@@ -353,12 +370,42 @@ class Harness:
             except subprocess.TimeoutExpired:
                 self.process.kill()
                 await asyncio.to_thread(self.process.wait, 30)
-        # Whatever the daemon did, no scratch supervisor may outlive the run.
+        # Whatever the daemon did, no scratch supervisor or gateway may outlive the run.
         from swe_mux.config import Config
+        from swe_mux.gateway_discovery import stop_gateway
         from swe_mux.supervisor_client import kill_server
 
         with contextlib.suppress(Exception):
+            await asyncio.to_thread(stop_gateway, self.data_dir)
+        with contextlib.suppress(Exception):
             await kill_server(Config(data_dir=self.data_dir, config_path=self.config_path))
+
+    async def wait_gateway(self, seconds: float = 120.0) -> dict[str, Any]:
+        """Until the daemon reports the gateway carrying terminals, as a browser reads it."""
+        deadline = time.monotonic() + seconds
+        last: Any = None
+        while time.monotonic() < deadline:
+            status, payload = await self._json("GET", "/api/health")
+            last = (payload or {}).get("terminal_transport") if status == 200 else payload
+            if isinstance(last, dict) and last.get("transport") == "gateway":
+                return last
+            await asyncio.sleep(0.25)
+        raise SystemExit(f"the terminal gateway never carried terminals; last {last}")
+
+    def assert_served(self, clients: list[Client]) -> None:
+        """Every attached client is open and has been sent its terminal.
+
+        A terminal socket refused with a close code (4010 "not served by the gateway",
+        4012 "use the gateway") would otherwise leave a client that measures nothing
+        while the run reports numbers for it.
+        """
+        refused = [
+            f"{client.sid} (close {client.ws.close_code})"
+            for client in clients
+            if client.ws.closed or client.received == 0
+        ]
+        if refused:
+            raise SystemExit(f"terminal sockets not served: {', '.join(refused)}")
 
     # ---- sessions -----------------------------------------------------------
 
@@ -487,6 +534,32 @@ class Harness:
                 misses.append(time.perf_counter() - started)
             await probe.send(CLEAR_LINE)
 
+    async def freeze_loop(self, until: float, frozen: list[float]) -> None:
+        """Suspend the daemon's whole process for `--freeze` seconds every `--freeze-every`.
+
+        A stall on demand, and a worse one than any the load produces: nothing in the
+        daemon runs, its watchdog included. It is what a keystroke must survive when it
+        does not cross the daemon (item 35), and what it cannot when it does. Always
+        resumed, however the window ends.
+        """
+        import psutil
+
+        pid = self.daemon_pid()
+        if pid is None:
+            raise SystemExit("cannot freeze the daemon: its pid is unknown")
+        process = psutil.Process(pid)
+        while time.monotonic() + self.options.freeze < until:
+            await asyncio.sleep(self.options.freeze_every - self.options.freeze)
+            if time.monotonic() + self.options.freeze >= until:
+                return
+            started = time.monotonic()
+            process.suspend()
+            try:
+                await asyncio.sleep(self.options.freeze)
+            finally:
+                process.resume()
+            frozen.append(time.monotonic() - started)
+
     async def events_loop(self, until: float, counts: dict[str, int]) -> None:
         """One browser window's `/events` socket, reporting presence like the SPA.
 
@@ -590,6 +663,11 @@ class Harness:
             await self.wait_ready()
             project_id = await self.register_project()
             terminal_base = self.base
+            if options.gateway:
+                # Sessions spawned while the gateway is connected are placed on it
+                # before the spawn returns, so every terminal below attaches there.
+                await self.wait_gateway()
+                terminal_base = f"http://127.0.0.1:{self.gateway_port}"
             sids = [
                 await self.spawn_shell(project_id, f"load-{i:02d}") for i in range(options.sessions)
             ]
@@ -597,6 +675,7 @@ class Harness:
             self.clients = [await self.attach(sid, terminal_base) for sid in sids]
             self.probe = await self.attach(probe_sid, terminal_base)
             await asyncio.gather(*(c.quiet(1.5, 60) for c in [*self.clients, self.probe]))
+            self.assert_served([*self.clients, self.probe])
             if options.stalled_subscriber != "none":
                 # Every session, the probe included: the worst case for echo.
                 self.stalled = StalledSubscriber(self.data_dir, options.stalled_subscriber)
@@ -616,6 +695,7 @@ class Harness:
             health_reads: list[float] = []
             process_reads: list[float] = []
             event_counts: dict[str, int] = {}
+            frozen: list[float] = []
             work = [
                 self.probe_loop(until, echo, echo_misses),
                 # The open window's cadences (`frontend/src/App.tsx`): the fleet
@@ -625,6 +705,8 @@ class Harness:
                 self.rest_loop(until, "/api/processes?summary=1", 10.0, process_reads),
                 self.events_loop(until, event_counts),
             ]
+            if options.freeze > 0:
+                work.append(self.freeze_loop(until, frozen))
             profile_task = asyncio.create_task(self.profile()) if options.profile else None
             burners = self.start_burners()
             try:
@@ -664,6 +746,27 @@ class Harness:
             )
             report["process_read_ms"] = percentiles(process_reads)
             report["events_frames"] = event_counts
+            report["terminal_transport"] = "gateway" if options.gateway else "daemon"
+            if options.freeze > 0:
+                report["daemon_frozen"] = {
+                    "count": len(frozen),
+                    "total_seconds": round(sum(frozen), 2),
+                    "each_seconds": options.freeze,
+                }
+            if options.gateway:
+                gateway = after.get("terminal_gateway") or {}
+                report["terminal_gateway"] = {
+                    key: gateway.get(key)
+                    for key in (
+                        "state",
+                        "carrying",
+                        "placement",
+                        "restarts",
+                        "probe_misses",
+                        "hung_ends",
+                        "last_error",
+                    )
+                }
             if self.stalled is not None:
                 report["stalled_subscriber"] = {
                     "mode": self.stalled.mode,
@@ -835,6 +938,15 @@ def render(report: dict[str, Any]) -> None:
             f"{compression.get('negotiated')} of {compression.get('sockets')} sockets"
         )
     print(f"  generators reported: {report['generators_reported']}/{options['sessions']}")
+    gateway = report.get("terminal_gateway")
+    print(f"  terminals on the {report.get('terminal_transport', 'daemon')}", end="")
+    print(f": {gateway}" if gateway else "")
+    frozen = report.get("daemon_frozen")
+    if frozen:
+        print(
+            f"  daemon suspended {frozen['count']} times for {frozen['each_seconds']:g}s "
+            f"({frozen['total_seconds']}s of the window)"
+        )
     stalled = report.get("stalled_subscriber")
     if stalled:
         print(
@@ -1098,6 +1210,19 @@ def main() -> int:
         "waited on (direct) or dropped from with gaps (gap)",
     )
     parser.add_argument(
+        "--gateway",
+        action="store_true",
+        help="turn the terminal gateway on and attach every terminal through it",
+    )
+    parser.add_argument(
+        "--freeze",
+        type=float,
+        default=0.0,
+        metavar="SECONDS",
+        help="suspend the daemon's process this long, every --freeze-every seconds",
+    )
+    parser.add_argument("--freeze-every", type=float, default=15.0, metavar="SECONDS")
+    parser.add_argument(
         "--otlp-rate", type=float, default=1.5, help="OTLP posts/s across the fleet"
     )
     parser.add_argument(
@@ -1154,6 +1279,9 @@ def main() -> int:
         peer=args.peer,
         ws_compress=args.ws_compress,
         stalled_subscriber=args.stalled_subscriber,
+        gateway=args.gateway,
+        freeze=args.freeze,
+        freeze_every=args.freeze_every,
         otlp_rate=args.otlp_rate,
         spawn_interval=args.spawn_interval,
         probe_interval=args.probe_interval,

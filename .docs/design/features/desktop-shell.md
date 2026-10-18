@@ -219,7 +219,7 @@ Three independent layers now hold, each covering what the others cannot:
   "cannot tell whether this reaps your sessions" is not a case to guess at, and it is
   precisely what an archive built before this contract looks like.
 - **A newer supervisor that keeps the protocol is offered, never imposed**
-  (`development/DAEMON_LOAD_ISOLATION.md` item 16). The protocol deliberately does not move
+  (`development/archive/DAEMON_LOAD_ISOLATION.md` item 16). The protocol deliberately does not move
   for a compatible supervisor improvement, so on its own the gate above would never deliver
   one to an installed copy. So each bundle also states `supervisor_revision`
   (`supervisor.SUPERVISOR_REVISION`) and the running supervisor writes its own into

@@ -1,6 +1,6 @@
 """Framed, token-authenticated IPC between swe-mux's own processes.
 
-`development/DAEMON_LOAD_ISOLATION.md` item 18. The worker process and the
+`development/archive/DAEMON_LOAD_ISOLATION.md` item 18. The worker process and the
 terminal gateway both need to talk to the daemon, and the gateway to the PTY
 supervisor, over the same shape the supervisor already uses: a loopback TCP
 connection, a `hello` carrying a shared token, then length-prefixed frames. They

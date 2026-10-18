@@ -2737,7 +2737,7 @@ APPROVAL_KEYSTROKE_POLL_SECONDS = 0.5
 #: never comes - a CLI that took the hook's answer, or a session that is not drawing
 #: one - was looked for 60 times over a changing screen at a fixed 0.5 s: 13% of the
 #: daemon's GIL at the load harness's one decision a second, whose sessions draw no
-#: dialog (`development/DAEMON_LOAD_ISOLATION.md` item 20).
+#: dialog (`development/archive/DAEMON_LOAD_ISOLATION.md` item 20).
 APPROVAL_KEYSTROKE_FAST_SECONDS = 10.0
 APPROVAL_KEYSTROKE_SLOW_POLL_SECONDS = 4.0
 

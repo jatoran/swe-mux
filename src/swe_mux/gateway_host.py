@@ -1,6 +1,6 @@
 """The daemon's side of the terminal gateway: find it or start it, keep it, stop it.
 
-`development/DAEMON_LOAD_ISOLATION.md` item 29; the process is `terminal_gateway.py`
+`development/archive/DAEMON_LOAD_ISOLATION.md` item 29; the process is `terminal_gateway.py`
 and the protocol between the two is `terminal_core/protocol.py`.
 
 **Found before it is started.** The gateway outlives a daemon restart on purpose, so

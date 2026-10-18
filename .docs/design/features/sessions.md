@@ -377,7 +377,7 @@ and reattachable browser viewports.
   daemon reports `supervisor_state: "lost"` instead and reattaches by itself: it retries the
   same supervisor pid with capped backoff, and on success resubscribes every live session from
   the position its copy stops at, so output produced while it was away arrives as a delta
-  (`development/DAEMON_LOAD_ISOLATION.md` item 14). A different pid in the discovery file is
+  (`development/archive/DAEMON_LOAD_ISOLATION.md` item 14). A different pid in the discovery file is
   never reattached to - it means the old supervisor, and every child it owned, is gone.
 - **A hole in a session's output is filled, never skipped.** It opens when the supervisor stops
   sending a session's output because this daemon fell behind (a `gap`, from a supervisor that

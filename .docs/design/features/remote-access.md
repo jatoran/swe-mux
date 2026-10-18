@@ -190,7 +190,7 @@ listener, with optional Tailscale Serve for browser-recognized HTTPS.
   direct tailnet client's header.
 - WebSockets (`/pty`, `/events`, and the preview relay) negotiate per-message compression only with a peer that is not this machine.
   Every browser offers permessage-deflate and aiohttp accepts it by default, but over loopback the saving never crosses a network while the daemon pays for it: frames of 16 KiB or less are deflated on the event loop, larger ones on an executor thread, and each connection keeps a deflate window.
-  The peer is the forwarded one, so the phone reaching the loopback listener through Tailscale Serve keeps compression; real terminal output deflates to 16-38% of its size for 5-20 ms of CPU per MiB (`development/DAEMON_LOAD_ISOLATION.md` item 8), which is worth paying exactly where bytes are scarce.
+  The peer is the forwarded one, so the phone reaching the loopback listener through Tailscale Serve keeps compression; real terminal output deflates to 16-38% of its size for 5-20 ms of CPU per MiB (`development/archive/DAEMON_LOAD_ISOLATION.md` item 8), which is worth paying exactly where bytes are scarce.
 - Dynamic JSON and text responses of at least 1 KiB negotiate compression.
   Eligible static assets get a gzip sibling, which aiohttp's `FileResponse` serves according to `Accept-Encoding`; `add_static` does no on-the-fly compression, so a missing sibling means the file goes out uncompressed and nothing says so.
 - **The sibling has two producers and one rule, because it is required at run time and not worth shipping.**

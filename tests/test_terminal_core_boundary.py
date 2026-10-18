@@ -1,7 +1,7 @@
 """The terminal core must stay hostable outside the daemon.
 
 `terminal_core` is written to run in a terminal gateway process as well as in the
-daemon (`development/DAEMON_LOAD_ISOLATION.md` items 24-28). That holds only while
+daemon (`development/archive/DAEMON_LOAD_ISOLATION.md` items 24-28). That holds only while
 it reaches the daemon through its host interface and imports nothing of the
 daemon's own: one import of `session`, `observation` or a route module and the
 gateway would load the whole daemon - and its state - to serve a keystroke.

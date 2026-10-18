@@ -330,7 +330,7 @@ The duplicate-evidence, result-naming, window-edge, and live-twin tests were eac
 
 ## The ledgers in the worker process (2026-10-17)
 
-`development/DAEMON_LOAD_ISOLATION.md` item 21 moved the three ledgers, their maintenance and their queries into the worker process (`design/features/worker-process.md`), because with process inspection gone canonical telemetry was the daemon's costliest loop and 5.9% of its GIL samples under the load harness.
+`development/archive/DAEMON_LOAD_ISOLATION.md` item 21 moved the three ledgers, their maintenance and their queries into the worker process (`design/features/worker-process.md`), because with process inspection gone canonical telemetry was the daemon's costliest loop and 5.9% of its GIL samples under the load harness.
 The design rules are in `design/features/operational-telemetry.md` and `design/features/worker-process.md` § A service whose state is a store; the measurements are here.
 
 `tools/telemetry_ingest_latency.py` gained `--worker`, which spawns a real worker under a scratch data directory exactly as the daemon does, and reports the CPU the driving process (the daemon's stand-in) spent and the CPU the worker spent.

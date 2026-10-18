@@ -65,7 +65,7 @@ Its own module because `timer_resolution.py`, the natural neighbour, is in the s
 
 ### `framed_ipc.py`
 
-Token-authenticated framed IPC between swe-mux's own processes: the worker and the terminal gateway (`development/DAEMON_LOAD_ISOLATION.md` items 18-28).
+Token-authenticated framed IPC between swe-mux's own processes: the worker and the terminal gateway (`development/archive/DAEMON_LOAD_ISOLATION.md` items 18-28).
 The framing is byte-identical to the supervisor's, and the conventions are its too (requests carry `t` and `id`, replies the `id` and `ok`, notices no `id`), so one `FramedPeer` speaks to a supervisor and to the new processes alike.
 `FramedServer` checks the `hello` (token by constant-time compare, exact protocol, a `hello_reply` hook that may refuse) under a small header cap, no payload allowance and a deadline, and `connect` is the client half.
 A peer handles the other end's requests as tasks started in arrival order, answers `busy` past `MAX_INFLIGHT_REQUESTS`, runs notices and reply hooks inside its read loop, and drops a peer whose unwritten bytes pass `WRITE_BUFFER_LIMIT`.
@@ -303,7 +303,7 @@ Outside `routes/` deliberately, because `preview_transport.py` streams its own r
 
 ### `http_origin_policy.py`
 
-Which browser pages may drive a swe-mux surface, for every process that serves one (`development/DAEMON_LOAD_ISOLATION.md` item 26): the Host allowlist (`allowed_browser_host` - loopback, a Tailscale address, a `*.ts.net` name - with `is_tailscale_ip`), which requests are judged on their `Origin` (`origin_to_check`: state changes and WebSocket upgrades), and the two origin rules.
+Which browser pages may drive a swe-mux surface, for every process that serves one (`development/archive/DAEMON_LOAD_ISOLATION.md` item 26): the Host allowlist (`allowed_browser_host` - loopback, a Tailscale address, a `*.ts.net` name - with `is_tailscale_ip`), which requests are judged on their `Origin` (`origin_to_check`: state changes and WebSocket upgrades), and the two origin rules.
 The daemon's `browser_origin_matches_request` requires the page to be its own origin, port included.
 The terminal gateway's `gateway_origin_allowed` accepts the same host on the daemon's port, its own, or 443 on a `*.ts.net` name, plus the daemon's exact rule for a reverse proxy in front of it; `gateway_middleware` applies it with the daemon's two refusals (421 for the Host, 403 for the page).
 Neither rule ever accepts another host: every allowed name names a machine, and a page from another machine on the tailnet is not this one's.

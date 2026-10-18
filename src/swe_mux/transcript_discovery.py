@@ -4,7 +4,7 @@
 stats every file and decodes the head of the newest few thousand: 9.8 s of CPU,
 all of it holding the GIL, at every daemon start on the development host, and
 again on every "scan now", project backfill and onboarding preview
-(`development/DAEMON_LOAD_ISOLATION.md` item 22). It is bulk, non-interactive and
+(`development/archive/DAEMON_LOAD_ISOLATION.md` item 22). It is bulk, non-interactive and
 returns plain records, which is what the worker is for.
 
 `TranscriptScanner` is the daemon's side: one `scan` with the same arguments and

@@ -1,5 +1,8 @@
 # Daemon load isolation
 
+Status: complete (2026-10-18), and archived as the record of what was built and measured.
+The finished design lives in the feature documents it names - `design/features/terminal-gateway.md`, `design/features/worker-process.md`, `design/features/daemon-resilience.md` - and the numbers to compare against are item 35's.
+
 ## Purpose
 
 swe-mux must stay responsive however many agents are running.
@@ -1092,10 +1095,39 @@ Items are worked in order, and an item may reorder, split or remove later items 
     The live tier now runs its subprocess daemons at the new default with an OS-allocated gateway port, and the entry-point test asserts the default daemon's gateway is among the children a `quit` must take; the supervised-restart test pins the gateway off, because its subject is the daemon's own path - which every install keeps as the fallback - and the gateway's version of the same claim has its own test.
   - **Tests:** `test_gateway_host.py`'s default assertion and its port tests (a daemon on 65535 starts and its gateway says why), `test_startup_gate.py`'s default transport (on, and `unavailable` without a supervisor), and the live tier above.
 
-- [ ] **35. Verify at incident scale and close out.**
+- [x] **35. Verify at incident scale and close out.**
   - **Why:** the plan is done only when the original failure no longer reproduces.
   - **Change:**
     - Harness at and beyond the 2026-10-16 fleet: keystroke-echo p99 through the gateway unaffected by daemon stalls, daemon stall time against the item 1 baseline, hook decisions inside their timeout, and no agent throttled by a stalled subscriber.
     - Live fleet: `loop_stalls` per day and gateway echo latency (`tools/pty_latency_bench.py`) against the baseline.
     - Documents: `design/architecture.md` (process model), `design/features/daemon-resilience.md` (terminal traffic no longer pauses on a daemon stall or restart), `design/features/terminal-input.md`, `design/interfaces.md`, `design/features/remote-access.md`, `design/features/desktop-shell.md`, `technical/backend/packages.md`, `technical/backend/packages/runtime-rules.md`, `development/PERFORMANCE_RUNBOOK.md`, the root `CLAUDE.md`, and `.docs/CLAUDE.md`.
   - **Done when:** the numbers are recorded here and this plan moves to `development/archive/`.
+  - **Done (2026-10-18).** Run before item 34, so the default moved on these numbers.
+  - **The harness grew what the measurement needed:** `--gateway` attaches every terminal, the timed probe included, through the gateway and reports its health; `--freeze` suspends the scratch daemon's whole process on a schedule, which is the only way left to make the daemon stall at all; and every run now refuses to report on a terminal socket that was closed or never served.
+    `tools/pty_latency_bench.py` attaches where a browser would and says which process it measured.
+  - **Incident scale and beyond** (this host with the live fleet beside it, as item 1; 36 `scroll` sessions at 20 KB/s, 3 hooks/s, 1.5 OTLP/s and 1 decision/s fleet-wide unless noted; echo, `/api/sessions` and decisions as p50 / p95 / p99 ms):
+
+    | Run | Terminals | Echo | `/api/sessions` | Decisions | Stalls >= 3 s | Lag >= 100 ms |
+    | --- | --- | --- | --- | --- | --- | --- |
+    | 36 sessions + browser (120 s) | daemon | 4 / 34 / 42 | 19 / 92 / 234 | 16 / 18 / 24 | 0 | 0 / 241 |
+    | the same | gateway | 4 / 6 / 9 | 15 / 55 / 62 | 16 / 18 / 19 | 0 | 0 / 240 |
+    | + `--burn 32` (90 s) | daemon | 19 / 80 / 180 | 13 / 71 / 97 | 2 / 18 / 48 | 0 | 0 / 180 |
+    | the same | gateway | 19 / 45 / 119 | 26 / 63 / 97 | 2 / 17 / 27 | 0 | 0 / 181 |
+    | 48 `redraw` at 40 KB/s, 6 hooks/s, `--burn 32` (90 s) | gateway | 5 / 71 / 156 | 31 / 71 / 79 | 2 / 17 / 36 | 0 | 0 / 182 |
+    | 36 + `--burn 32` + stalled `gap` subscriber (90 s) | gateway | 13 / 53 / 94 | 21 / 69 / 133 | 2 / 17 / 58 | 0 | 0 / 181 |
+    | 36, daemon suspended 3 s every 15 s (90 s) | daemon | 4 / 2,926 / 3,213 | 14 / 2,744 / 2,856 | 16 / 2,114 / 2,869 | 1 | 5 / 153 |
+    | the same | gateway | 4 / 6 / 12 | 28 / 2,800 / 2,850 | 16 / 2,052 / 2,794 | 2 | 6 / 149 |
+
+  - **What the numbers say, against the questions this item asked.**
+    - *Daemon stall time against item 1:* the incident shape (36 sessions, a browser, `--burn 32`) went from echo 316 / 1,254 / 3,502 ms with a 3.88 s stall and 50 lag samples over 100 ms to 19 / 80 / 180 ms with no stall and no such sample, through the daemon alone; and 48 sessions writing 3 MB/s of redraw under the same burn, beyond the incident fleet, had none either.
+      Items 5 to 23 did that before the gateway carried a keystroke.
+    - *Echo through the gateway unaffected by daemon stalls:* since load no longer stalls the daemon, the stalls were made: suspending the daemon's whole process for three seconds in every fifteen put its own terminal path at 2.9 s p95, and left the gateway's at 4 / 6 / 12 ms - the gateway's unfrozen numbers.
+      The gateway counted no ping miss, restarted nothing and ended nothing through six of those freezes, which is item 32's late-timer rule holding against the daemon's own stall.
+    - *Hook decisions inside their timeout:* none reached the 3 s Claude hook timeout in any run; under load the worst was 58 ms.
+      Decisions are still the daemon's to make, though: with the daemon suspended for three seconds the worst was 2.87 s, so a daemon frozen past the timeout would still send the CLI to ask the user.
+      The gateway moves keystrokes off the daemon, not hooks.
+    - *No agent throttled by a stalled subscriber:* with a supervisor client subscribed to every session and never read again (`gap`), the fleet's output was 585 KB/s against 610 KB/s without it, inside run-to-run noise, and the supervisor dropped for that client once rather than waiting on it; with the daemon itself suspended, output held at 611 KB/s.
+  - **Live fleet.** `loop_stalls` per day from the operator's `mux.db`: 26 (145.4 s) on the incident's day, 2026-10-16; 5 (17.5 s, all 3.3-3.9 s) on 2026-10-17 as items 2 to 23 landed; and on 2026-10-18 one (13.9 s at 03:32, inside the item 31 redeploy's handoff) and none in the hours since the gateway went on at 04:48.
+    A day's figure under the finished plan does not exist yet, so this records the trend rather than a steady state.
+    Keystroke echo on the live fleet through the gateway (`tools/pty_latency_bench.py`, 25 samples, 6 s idle gap): p50 3.0 ms, p95 3.45 ms, max 4.4 ms, against the daemon path's quiet-fleet reference of 2.4 / 3.6 / 6.4 ms.
+  - **Documents** updated for the finished state: `design/architecture.md` (the gateway and the worker in the vocabulary and the process model, and the failure mode that said terminal traffic pauses), `design/features/daemon-resilience.md`, `design/features/terminal-input.md` (which process decides ownership and keeps the accounting), `technical/backend/packages.md`, `technical/backend/packages/runtime-rules.md` (the gateway's lifetime rules beside the worker's, its logs), `development/PERFORMANCE_RUNBOOK.md` (the harness's new options and the reference above, the bench through the gateway); `design/interfaces.md`, `design/features/remote-access.md`, `design/features/desktop-shell.md`, the root `CLAUDE.md` and `.docs/CLAUDE.md` were brought up to date item by item and now point here, in the archive.

@@ -1,6 +1,6 @@
 """The worker process: the daemon's bulk work, in an interpreter of its own.
 
-`development/DAEMON_LOAD_ISOLATION.md` item 19. The daemon serves every terminal
+`development/archive/DAEMON_LOAD_ISOLATION.md` item 19. The daemon serves every terminal
 keystroke from one event loop, and every thread it runs competes with that loop
 for one GIL. Work that is heavy and not interactive - process inspection, the
 canonical telemetry ledgers - therefore runs here instead, in a process the

@@ -2,7 +2,7 @@
 
 The daemon serves every terminal keystroke, every WebSocket frame and every API answer from one event loop, and every thread it runs competes with that loop for one GIL.
 The worker process is where bulk work that is heavy and not interactive goes instead: a second process with its own interpreter, spawned, owned and restarted by the daemon.
-It exists because measuring the daemon under fleet load showed the stall time sitting in GIL convoys held by exactly that kind of work (`development/DAEMON_LOAD_ISOLATION.md` items 2, 4 and 11).
+It exists because measuring the daemon under fleet load showed the stall time sitting in GIL convoys held by exactly that kind of work (`development/archive/DAEMON_LOAD_ISOLATION.md` items 2, 4 and 11).
 
 It hosts five services today:
 
@@ -45,7 +45,7 @@ The process inspector is the pattern, and each rule in it answers a way the move
 - **What only the daemon holds stays in the daemon.**
   A session root is interrupted through its PTY, so the worker verifies and answers "this is the root" and the daemon writes the byte; evidence is persisted by the daemon from its mirror.
 
-The Codex process proofs (`codex_process_identity.py`) and the handle queries behind them (`win_process_files.py`) stay in the daemon on purpose: they run once per hook or once per session event rather than per tick, on paths where an extra round trip is latency a person waits on, and they cost too little to see in any measurement taken (`development/DAEMON_LOAD_ISOLATION.md` item 20).
+The Codex process proofs (`codex_process_identity.py`) and the handle queries behind them (`win_process_files.py`) stay in the daemon on purpose: they run once per hook or once per session event rather than per tick, on paths where an extra round trip is latency a person waits on, and they cost too little to see in any measurement taken (`development/archive/DAEMON_LOAD_ISOLATION.md` item 20).
 
 ### A service whose state is a store: canonical telemetry
 

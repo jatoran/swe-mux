@@ -231,7 +231,7 @@ A mismatch stops a new daemon from driving the already-running supervisor, and t
 Add the message, let an older supervisor answer "unknown message type", and degrade on the daemon side.
 `spawn_status` is the current example: it exists so a daemon whose spawn reply was lost can learn the true outcome instead of guessing, and against a supervisor that predates it the daemon keeps its previous behaviour and logs the ambiguity.
 
-**A new swe-mux process talks over `framed_ipc`, never `multiprocessing`** (`development/DAEMON_LOAD_ISOLATION.md` item 18).
+**A new swe-mux process talks over `framed_ipc`, never `multiprocessing`** (`development/archive/DAEMON_LOAD_ISOLATION.md` item 18).
 `multiprocessing` is unsafe in the frozen app: no entry point calls `freeze_support()`, and a spawned child would land in the desktop argument parser.
 A process is a frozen entry flag plus a `FramedServer`/`connect` pair on loopback with a fresh `new_token()`, and bulk bytes go in the payload, because every header is decoded as JSON on the receiving loop.
 
@@ -239,7 +239,13 @@ A process is a frozen entry flag plus a `FramedServer`/`connect` pair on loopbac
 `WorkerHost.call` raises `WorkerUnavailable` instead of waiting for a restart, so a caller either runs the work in the daemon as it did before or reports that it could not, and a service's state is something the daemon pushes in an `on_ready` hook, because a restarted worker remembers nothing.
 The worker is the daemon's own child and must never be spawned to break away: it dies with the daemon, unlike the supervisor.
 
-**Any change to the supervisor's source closure bumps `SUPERVISOR_REVISION`** (`development/DAEMON_LOAD_ISOLATION.md` item 16).
+**The terminal gateway is the opposite on every one of those points, deliberately** (`design/features/terminal-gateway.md`).
+It is spawned outside every Job and in a process group or session of its own, outlives the daemon, and is ended only by the daemon's quit intent, a replacement for another build, the hung-gateway rule, or the staged swap - always asked first and terminated by pid and creation time only if it stays.
+Nothing measured on the daemon's own loop may end it: a stalled daemon must never kill a healthy gateway, which is the incident shape this whole split exists to end.
+A session's terminal lives in exactly one process at a time; moving it retires the old core in the same instant, and the gateway writes a keystroke and accounts it before telling the daemon, so no daemon-side code may write to a gateway-held session's PTY except through the gateway.
+Its control protocol grows by capability, as the supervisor's does, and keeps `GATEWAY_PROTOCOL_VERSION` for a change an older gateway cannot be asked to survive.
+
+**Any change to the supervisor's source closure bumps `SUPERVISOR_REVISION`** (`development/archive/DAEMON_LOAD_ISOLATION.md` item 16).
 The protocol stays put for a compatible change, so the revision is the only thing that tells an installed copy a better supervisor exists; the updater offers it, and only an explicit `with_supervisor_update` installs it, because that ends every session.
 Bump the number in `supervisor.py` and append its `build_desktop.supervisor_content_digest()` to `packaging/supervisor_revisions.json`; `tests/test_supervisor_revision.py` fails with both values spelled out when you forget, and never rewrite an existing pin.
 The running supervisor states its revision in `supervisor.json` and in its `hello` reply, and the daemon reports it as `supervisor_link.supervisor_revision`.
@@ -251,7 +257,7 @@ Supervisor teardown quiesces before it reaps: the closing flag goes up, the list
 Closing the reaper Job first orphans anything created a moment later, which is the one failure a reap cannot report.
 Client connections are closed before the listener is awaited, because since Python 3.12.1 `Server.wait_closed()` also waits for every connected client, and one client that stayed connected used to hold the reap open for as long as it stayed.
 
-**The supervisor never waits on a client that negotiated `output_gap`** (`development/DAEMON_LOAD_ISOLATION.md` item 12).
+**The supervisor never waits on a client that negotiated `output_gap`** (`development/archive/DAEMON_LOAD_ISOLATION.md` item 12).
 Such a connection has an outbox drained by its own writer task, and replies, control frames and output all go through it in order.
 Once the outbox holds `OUTPUT_GAP_QUEUE_BYTES` (8 MiB) of output, each session's further output is dropped for that connection and one `gap {sid, position}` frame names where its copy stops; `subscribe` ends the gap, and `pty_exit` is delivered regardless.
 Replies are never dropped and do not count toward that cap, so a large `subscribe` reply cannot cause a gap; a client that keeps asking past `REQUEST_PAUSE_QUEUE_BYTES` of unread replies has its own requests paused, and nothing else waits on it.
@@ -290,8 +296,8 @@ Nothing in-process can observe an external TerminateProcess, so death forensics 
 `lifecycle.py` keeps `daemon-heartbeat.json` fresh (~10 s) and marks clean exits with their intent, and the next daemon reports a predecessor whose record has no clean exit and a dead pid.
 The tray, which holds the daemon's process handle, ledgers the observed exit code.
 
-Rotating logs are per-process-owned files: `daemon.log`, `access.log`, `supervisor.log`, and `worker.log` via stdlib handlers.
-Console redirects (`desktop-daemon.log`, `supervisor-console.log`, `worker-console.log`, `daemon-relaunch.log`) stay append-only crash catchers and are never shared with a rotating handler, because the child holds the redirect handle for life and rotation of the same file can never succeed.
+Rotating logs are per-process-owned files: `daemon.log`, `access.log`, `supervisor.log`, `worker.log`, and `terminal-gateway.log` via stdlib handlers.
+Console redirects (`desktop-daemon.log`, `supervisor-console.log`, `worker-console.log`, `terminal-gateway-console.log`, `daemon-relaunch.log`) stay append-only crash catchers and are never shared with a rotating handler, because the child holds the redirect handle for life and rotation of the same file can never succeed.
 
 ## Desktop lifetime
 

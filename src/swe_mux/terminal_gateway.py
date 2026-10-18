@@ -1,6 +1,6 @@
 """The terminal gateway: browser terminals served from a process of their own.
 
-`development/DAEMON_LOAD_ISOLATION.md` item 28, and the point of the whole plan.
+`development/archive/DAEMON_LOAD_ISOLATION.md` item 28, and the point of the whole plan.
 The daemon runs every terminal keystroke on the same event loop as everything else
 it does, so a daemon stall - a slow scan, a GIL-heavy reconcile, a restart - froze
 every terminal with it. Here a terminal's bytes go browser -> gateway -> PTY

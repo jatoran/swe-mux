@@ -361,11 +361,11 @@ exited in between - the usual fate of a short-lived tool child, and where nearly
 lookups came from. A pid the table lists but that has exited since (a child that finished while
 the pass was walking) is answered by `host_metrics.process_exited`, one `OpenProcess` and a
 zero-timeout wait with the GIL released, before any handle is built
-(`development/DAEMON_LOAD_ISOLATION.md` item 6).
+(`development/archive/DAEMON_LOAD_ISOLATION.md` item 6).
 
 ### Where the pass runs
 
-Every psutil call above holds the GIL on Windows, and under fleet load the pass was the thread holding it through the daemon's worst stalls (`development/DAEMON_LOAD_ISOLATION.md` items 4 and 11).
+Every psutil call above holds the GIL on Windows, and under fleet load the pass was the thread holding it through the daemon's worst stalls (`development/archive/DAEMON_LOAD_ISOLATION.md` items 4 and 11).
 So while the worker process is ready (`design/features/worker-process.md`), the pass runs there, on an instance of this same `ProcessInspector` inside `process_service.py`, and the daemon's `owned` becomes a mirror of it.
 
 - **What crosses.**

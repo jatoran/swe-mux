@@ -55,7 +55,7 @@ Four rules this module exists to keep:
 - **Dispatching a frame never waits.**
   RPC replies, output, and `pty_exit` for every session share one read loop, so output goes to a per-session staging deque drained by a per-session pump.
   A reply that positions a session (`spawn`, `subscribe`) is applied inside the read loop through `request(on_reply=...)`, before the frames behind it are dispatched; applied when the caller next ran, it would race them.
-- **The daemon's ring never disagrees with the supervisor's positions** (`development/DAEMON_LOAD_ISOLATION.md` item 14).
+- **The daemon's ring never disagrees with the supervisor's positions** (`development/archive/DAEMON_LOAD_ISOLATION.md` item 14).
   Each `RemotePtyHost` tracks the supervisor's `stream` and the position at the end of what it took off the wire.
   A supervisor `gap`, or staging outgrowing its budget (that session's scrollback, floor 1 MiB), resubscribes with `since` from where the copy stops; staging used to drop its oldest bytes and carry on with a hole.
   A non-delta answer travels through the output queue as an `OutputReseed`, in order, and `Session.reseed_from_supervisor` adopts it.
@@ -139,7 +139,7 @@ Pure multi-device rules for one shared PTY.
 
 ## `terminal_core/`
 
-One session's terminal, independent of the process hosting it (`development/DAEMON_LOAD_ISOLATION.md` item 24).
+One session's terminal, independent of the process hosting it (`development/archive/DAEMON_LOAD_ISOLATION.md` item 24).
 
 - `stream.py` - `TerminalStream`: the retained ring and the replay-prefix parsers (screen mode, bracketed paste, sticky modes), what an attach replays, deltas and resyncs, and the `PtySubscriber` queues every byte fans out to.
 - `core.py` - `TerminalCore`: input ownership and the claim log, viewports and the arbitrated geometry, the repaint pulse and the resize-settle scheduler, client-diagnostic rate limits, and the input accounting delivery readiness reads (`input_revision`, the last input's time, the composer estimate).

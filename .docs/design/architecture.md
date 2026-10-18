@@ -9,6 +9,14 @@
   **on by default since 2026-08-28**; the in-process path remains the automatic fallback). Owns ConPTYs, their read loops, authoritative scrollback, and the
   kill-on-close reaper Job so live sessions survive a daemon restart. Deliberately small and
   near-frozen; volatile code stays in the daemon.
+- Terminal gateway: a second long-lived process (`swe_mux.terminal_gateway`, frozen as
+  `swe-mux.exe --gateway-child`; flag `terminal_gateway_enabled`, on by default) that carries
+  browser terminals from the supervisor on a port of its own, so typing never crosses the
+  daemon's event loop. It outlives daemon restarts, and the daemon's own `/pty` stays the
+  fallback (`features/terminal-gateway.md`).
+- Worker process: a daemon-owned child (`swe_mux.worker`) hosting bulk work - process
+  inspection, the canonical telemetry ledgers - on an interpreter and GIL of its own; it dies
+  with the daemon (`features/worker-process.md`).
 - Desktop supervisor: optional Windows `swe-mux` process; owns WebView2 window, tray, login
   startup, and a separately running managed daemon.
 - Project: explicit canonical folder and the only session/layout/resource container.
@@ -55,6 +63,24 @@ recorded come back as dead-but-visible **cold sessions** at the next boot, after
 adoption has claimed everything that is still running (`features/session-recovery.md`).
 An explicit Stand down writes durable inactive intent before stopping the process tree.
 Inactive rows restore on every boot independently of unexpected-loss recovery settings and retention limits.
+
+Two more processes keep the daemon's one event loop and one GIL off the paths a person feels
+(`development/archive/DAEMON_LOAD_ISOLATION.md`):
+
+```text
+browser ── /pty ──> terminal gateway ── terminal scope ──> PTY supervisor ──> ConPTY
+   │                     │ control (keystroke accounting, after the write)
+   └── HTTP + /events ─> daemon ── framed IPC ──> worker (process inspection, telemetry)
+```
+
+The **terminal gateway** holds each supervised session's terminal core - input ownership,
+geometry, the keystroke accounting - and writes a keystroke to the PTY before it tells anyone;
+the daemon applies what it is told, exactly once and in order, whenever it gets to it. A session's
+terminal lives in exactly one process at a time, so a daemon stall, a restart, or a redeploy's
+first seconds cost the keyboard nothing, and a gateway that is down, hung or disabled leaves every
+terminal on the daemon, which serves it as it always did. The **worker** takes the bulk work that
+used to convoy on the daemon's GIL; a service there keeps a daemon fallback, except the
+single-writer telemetry store, which the daemon buffers for instead.
 
 ## Package boundaries
 
@@ -172,7 +198,7 @@ Inactive rows restore on every boot independently of unexpected-loss recovery se
 
 - Desktop-owned recovery follows daemon process generations, replaces confirmed crashes, and replaces persistent hangs only after verifying supervisor protection and fencing out local PTY creation.
   Planned handoffs, redeploys, slow startup, and repeated crashes have separate gates.
-  Terminal traffic still pauses while the daemon is unavailable; detailed contracts: `features/daemon-resilience.md`.
+  Terminal traffic does not pause with it while the terminal gateway carries the terminals (the default); with the gateway off or unable to run, it does. Detailed contracts: `features/daemon-resilience.md`.
 
 - A daemon whose runtime build fails records the failing phase and its error on the health
   answer, then stops. It never lingers reachable-but-unusable: the desktop shell and the redeploy

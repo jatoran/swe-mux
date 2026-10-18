@@ -401,7 +401,7 @@ and the display callers (the watcher, `GET /api/sessions`, the queue summary) pa
 The watcher used to pass zero too, "because this loop is the liveness"; but the liveness it
 exists for is the clock-driven transitions, which read no screen, and re-classifying every
 repainting screen each second made it the daemon's largest GIL consumer at 34% of samples
-(`development/DAEMON_LOAD_ISOLATION.md` items 4 and 7).
+(`development/archive/DAEMON_LOAD_ISOLATION.md` items 4 and 7).
 A screen-driven reason can therefore reach the UI up to two seconds late; a quiet screen is
 always current.
 

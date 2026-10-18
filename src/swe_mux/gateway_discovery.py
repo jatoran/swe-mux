@@ -1,6 +1,6 @@
 """The terminal gateway's discovery record, and ending the process it names, from any process.
 
-`development/DAEMON_LOAD_ISOLATION.md` items 29 and 33. The gateway writes
+`development/archive/DAEMON_LOAD_ISOLATION.md` items 29 and 33. The gateway writes
 `terminal-gateway.json` into the data directory once its listeners are bound
 (`terminal_gateway.py`). Two kinds of process read it: a daemon finding the gateway it
 left running (`gateway_host.py`), and the staged swap, which has to end that gateway

@@ -3,8 +3,14 @@
 ## What it is
 
 One session can be attached from several devices at once, and two of the things they share
-cannot be shared: who may type into the PTY, and how big it is. The daemon decides both.
+cannot be shared: who may type into the PTY, and how big it is. The process holding the
+session's terminal core decides both - the terminal gateway for a supervised session while it
+runs (`features/terminal-gateway.md`), the daemon otherwise - with the same code in either.
 Whoever spoke last does not.
+That process also writes every keystroke and keeps the input accounting (`input_revision`, the
+last-input time), and a write that depends on it is judged there, atomically; the daemon reads a
+gateway-held session's accounting from its mirror and moves the revision on once when it takes a
+terminal back, so a condition judged against the gateway's count fails safe.
 
 ## Key concepts
 
@@ -465,7 +471,7 @@ None user-facing.
 - The same core hosted in the terminal gateway, and the daemon's mirror of it - one
   protocol to the browser either way, so every rule above holds unchanged there:
   `src/swe_mux/terminal_core/gateway.py`, `remote.py`, `protocol.py`
-  (`development/DAEMON_LOAD_ISOLATION.md` item 27, `design/interfaces.md`)
+  (`development/archive/DAEMON_LOAD_ISOLATION.md` item 27, `design/interfaces.md`)
 - Client ownership model (pure): `frontend/src/inputOwnership.ts`
 - Letterbox math and the reveal-adoption rule (pure): `frontend/src/terminalLetterbox.ts`
 - Wheel-report pacing to an application-owned viewport (pure): `frontend/src/terminalWheelPacing.ts`

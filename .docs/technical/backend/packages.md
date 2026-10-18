@@ -40,7 +40,7 @@ Feature stores sharing `mux.db` use their own single-worker executor and connect
 
 - [`packages/platform.md`](packages/platform.md) - the host seams: which host this is, pseudoterminal allocation, process-tree ownership, the shared bounded one-shot subprocess runner and the shared CLI version probe, path identity, where secrets rest, firewall probing, the WSL bridge.
 - [`packages/pty-and-sessions.md`](packages/pty-and-sessions.md) - the PTY supervisor, the PTY host, scrollback, the terminal core and its one PTY writer, operator input, the live session registry, recovery, arbitration, spawn and resume.
-- [`packages/daemon-runtime.md`](packages/daemon-runtime.md) - the daemon process itself: startup, supervision, logging, traffic accounting, packaging support, the desktop shell, the CLI and doctor.
+- [`packages/daemon-runtime.md`](packages/daemon-runtime.md) - the daemon process itself and the two it runs beside: startup, supervision, logging, traffic accounting, the worker process, the terminal gateway and which process holds a terminal, packaging support and the staged swap, the desktop shell, the CLI and doctor.
 - [`packages/projects-and-worktrees.md`](packages/projects-and-worktrees.md) - Projects, files and notes, worktree setup, removal, and verification, Project actions, Agent Context, Project context.
 - [`packages/git-and-landing.md`](packages/git-and-landing.md) - Git observation, mutation, provenance attribution, and the land queue.
 - [`packages/history-and-observation.md`](packages/history-and-observation.md) - run history, transcripts and forking, the observation pipeline, approvals, and the durable status timeline.

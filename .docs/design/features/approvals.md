@@ -144,7 +144,7 @@ Two consequences worth stating:
 - **The watcher looks less as it waits.** Every look classifies the session's screen, and a
   dialog that never comes was looked for 60 times at a fixed 0.5 s; at the load harness's one
   decision a second, over panes that draw no dialog, that was 13% of the daemon's GIL
-  (`development/DAEMON_LOAD_ISOLATION.md` item 20). It now looks every 0.5 s for the first 10 s,
+  (`development/archive/DAEMON_LOAD_ISOLATION.md` item 20). It now looks every 0.5 s for the first 10 s,
   which covers the measured 6.02 s with room to spare, and then backs off, doubling to 4 s, for
   the rest of `approval_keystroke_window_seconds`.
 

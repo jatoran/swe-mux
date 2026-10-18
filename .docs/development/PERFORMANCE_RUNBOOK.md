@@ -77,6 +77,9 @@ three rungs read the same, and a gap-dependent result means that wake has regres
 
 Reference, measured 2026-08-05 on a quiet fleet: **p50 ~2.4 ms, p95 ~3.6 ms, max ~6.4 ms,
 independent of idle gap** (40 samples).
+With the terminal gateway carrying terminals the bench attaches where a browser would and says so;
+measured on the live fleet 2026-10-18 through the gateway: p50 3.0 ms, p95 3.45 ms, max 4.4 ms (25
+samples, 6 s idle gap) - the same as the daemon path's reference, with no daemon on the path.
 Two regressions to look for: a p50 that tracks `--idle-gap` means the reader's wake has
 broken, and a p50 jumping to ~16 ms means
 `timer_resolution.raise_timer_resolution()` is not taking effect and every wait has fallen
@@ -364,8 +367,18 @@ uv run python tools/fleet_load_harness.py --set gil_switch_interval_ms=1
   gateway. `direct` connects as an older client the supervisor waits on; `gap` negotiates
   `output_gap` and is dropped from instead. The report says whether the supervisor started dropping
   (`gap_episodes`, read from its log). With `direct` the probe's echo stops outright.
-- `--burn N` adds below-normal CPU-bound processes for agents' builds. A saturated host is what turns
-  sub-second lag into multi-second stalls, and it is the only way this harness reproduces them.
+- `--burn N` adds below-normal CPU-bound processes for agents' builds. A saturated host is what turned
+  sub-second lag into multi-second stalls before the load-isolation work; since then the incident
+  shape at `--burn 32` produces none.
+- `--gateway` turns the terminal gateway on, on an OS-allocated port of its own, and attaches every
+  terminal through it, the timed probe included; the report says which process carried them and the
+  gateway's restarts, counted ping misses, hung ends and handovers. Every run now also refuses to
+  report on a terminal socket that was closed or never served, which a 4010 or 4012 would otherwise
+  turn into a client that measures nothing.
+- `--freeze SECONDS --freeze-every SECONDS` suspends the scratch daemon's whole process on a schedule:
+  a stall on demand, and a worse one than any load produces, since the daemon's own watchdog stops
+  too. Run it with and without `--gateway` to see what a keystroke costs when it crosses the daemon
+  and when it does not.
 - `--stall-profiler PATH` hands the scratch daemon a `py-spy` executable through
   `MUX_STALL_PROFILER` (which the environment scrub would otherwise remove), so its stalls carry a
   measured GIL holder; the report prints each stall's verdict, CPU split and holder.
@@ -380,9 +393,22 @@ uv run python tools/fleet_load_harness.py --set gil_switch_interval_ms=1
   authenticated shutdown route, and any scratch supervisor is reaped by the identity-checked
   `kill_server`.
 
-Read the baseline in `development/DAEMON_LOAD_ISOLATION.md` item 1 before comparing a number.
+Read the baseline in `development/archive/DAEMON_LOAD_ISOLATION.md` item 1, and the incident-scale
+matrix at its end (item 35), before comparing a number.
 The host is shared with the live fleet, so compare runs taken close together, and read p95, p99 and
 stall counts rather than p50, which a quiet minute on the host moves.
+
+Reference after the load-isolation plan (2026-10-18, this host, 36 `scroll` sessions at 20 KB/s, 3 hooks/s,
+1.5 OTLP posts/s and 1 decision/s fleet-wide; echo p50 / p95 / p99 in ms):
+
+| Run | Terminals on the daemon | Terminals on the gateway |
+| --- | --- | --- |
+| no burn | 4 / 34 / 42 | 4 / 6 / 9 |
+| `--burn 32` | 19 / 80 / 180 | 19 / 45 / 119 |
+| daemon suspended 3 s every 15 s | 4 / 2,926 / 3,213 | 4 / 6 / 12 |
+
+None of those runs had a loop stall or a lag sample of 100 ms or more, and no decision reached the 3 s
+hook timeout; the item 1 baseline for the `--burn 32` row was 316 / 1,254 / 3,502 ms with a 3.9 s stall.
 
 ## Startup latency
 

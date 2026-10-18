@@ -11,7 +11,7 @@ revision, the event log, which device the human is at, and what typing means to
 the rest of the daemon. The daemon hosts it in process (`routes/pty.py`), and a
 `Session` keeps its old attributes as views onto it, so no reader changed when it
 moved here. Keeping the host interface this narrow is what lets the same core run
-in a terminal gateway process (`development/DAEMON_LOAD_ISOLATION.md`).
+in a terminal gateway process (`development/archive/DAEMON_LOAD_ISOLATION.md`).
 
 The gateway half is here too, process-agnostic: `protocol.py` is what the daemon
 and the gateway say, `gateway.py` hosts cores for the daemon's sessions, and

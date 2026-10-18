@@ -3,9 +3,9 @@
 ## What it is
 
 Safe stall diagnostics and desktop-owned daemon recovery preserve access to supervisor-owned sessions after a daemon failure.
-The terminal WebSockets still traverse the daemon, so a stall or replacement temporarily interrupts input and output.
-The PTY supervisor keeps the processes and scrollback alive during that interruption.
-This is bounded recovery, not an independent terminal transport.
+Terminal traffic no longer pauses with the daemon: the terminal gateway (`terminal-gateway.md`, on by default) carries every supervised session's terminal WebSocket on a process of its own, writes keystrokes to the PTY itself, and goes on doing so through a daemon stall, a restart, or a recovery that replaces the daemon.
+The PTY supervisor keeps the processes and scrollback alive throughout, as before.
+What still pauses is everything else the daemon serves - the sidebar, status, delivery - and the terminals of sessions the gateway cannot hold (in-process, cold, or with the gateway off or down), whose sockets still traverse the daemon.
 
 ## Stall diagnostics
 

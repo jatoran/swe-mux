@@ -1,6 +1,6 @@
 """Which process holds each session's terminal: this daemon, or the terminal gateway.
 
-`development/DAEMON_LOAD_ISOLATION.md` item 32. A session's terminal core - input
+`development/archive/DAEMON_LOAD_ISOLATION.md` item 32. A session's terminal core - input
 ownership, geometry, the keystroke accounting - lives in exactly one process at a
 time, because a terminal written and resized from two processes has two owners and
 two sets of books. This module is the one place that moves it.

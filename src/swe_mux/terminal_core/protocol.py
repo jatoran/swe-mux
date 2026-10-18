@@ -1,6 +1,6 @@
 """The terminal gateway's control protocol: what the daemon and the gateway say.
 
-`development/DAEMON_LOAD_ISOLATION.md` item 27. The gateway hosts terminal cores
+`development/archive/DAEMON_LOAD_ISOLATION.md` item 27. The gateway hosts terminal cores
 for the daemon's sessions; the daemon keeps the session's record, its event log
 and every decision about what typing means. They talk over `framed_ipc` - a
 loopback connection authenticated by a shared token, with the protocol version

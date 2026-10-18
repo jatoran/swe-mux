@@ -1,7 +1,7 @@
 # Terminal gateway
 
 A browser terminal's bytes used to go browser -> daemon -> PTY supervisor and back, on the daemon's one event loop.
-Every daemon stall - a GIL-heavy reconcile, a slow scan, a restart - therefore froze every terminal with it, and that was the incident `development/DAEMON_LOAD_ISOLATION.md` exists to end.
+Every daemon stall - a GIL-heavy reconcile, a slow scan, a restart - therefore froze every terminal with it, and that was the incident `development/archive/DAEMON_LOAD_ISOLATION.md` exists to end.
 The terminal gateway is a process of its own that carries terminals instead: browser -> gateway -> supervisor and back, with the daemon told about each keystroke afterwards.
 The daemon can stall, or restart, and typing keeps echoing.
 

@@ -543,7 +543,7 @@ class WhisperModelStore:
 
         The first answer imports ``faster_whisper`` and, through its resolver,
         ``huggingface_hub``, then reads the hub cache: 3.4-3.9 s on the live daemon,
-        measured at two consecutive starts (`development/DAEMON_LOAD_ISOLATION.md`
+        measured at two consecutive starts (`development/archive/DAEMON_LOAD_ISOLATION.md`
         item 21). On the event loop that was a stall every terminal felt, the first
         time anything read voice status after a start.
         """

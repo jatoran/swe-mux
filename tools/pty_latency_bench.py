@@ -19,6 +19,12 @@ floor could not go below it.
 
 Spawns one throwaway shell session and removes it afterwards, including on failure.
 Run it against a quiet daemon; a working agent's output makes every reading noise.
+
+With the terminal gateway carrying terminals (`terminal_transport` on `/api/health`),
+the session is placed on it before the spawn returns and the daemon refuses its socket,
+so the bench attaches where a browser would and says which process it measured: the
+path is then client -> gateway -> supervisor -> ConPTY -> child, and back, with no
+daemon on it (`DAEMON_LOAD_ISOLATION.md` item 35).
 """
 
 from __future__ import annotations
@@ -83,12 +89,16 @@ async def run(port: int, samples: int, idle_gap: float, warmup: int) -> dict[str
     if not items:
         raise SystemExit("no projects registered; cannot spawn a bench session")
     project_id = items[0]["id"]
+    transport = _get(port, "/api/health").get("terminal_transport") or {}
+    terminal_port = port
+    if transport.get("transport") == "gateway" and isinstance(transport.get("port"), int):
+        terminal_port = int(transport["port"])
 
     latencies: list[float] = []
     async with aiohttp.ClientSession() as http:
         sid = await _spawn(http, port, project_id)
         try:
-            async with http.ws_connect(f"http://127.0.0.1:{port}/pty/{sid}") as ws:
+            async with http.ws_connect(f"http://127.0.0.1:{terminal_port}/pty/{sid}") as ws:
                 await ws.send_json(
                     {"type": "attach_ready", "cols": 100, "rows": 30,
                      "renderer": "dom", "hidden": False}
@@ -140,6 +150,8 @@ async def run(port: int, samples: int, idle_gap: float, warmup: int) -> dict[str
         raise SystemExit("no echo was observed; is the daemon healthy and quiet?")
     ordered = sorted(latencies)
     return {
+        "transport": "gateway" if terminal_port != port else "daemon",
+        "terminal_port": terminal_port,
         "samples": len(ordered),
         "idle_gap_seconds": idle_gap,
         "min_ms": round(ordered[0], 2),
@@ -167,6 +179,7 @@ def main() -> int:
 
     result = asyncio.run(run(args.port, args.samples, args.idle_gap, args.warmup))
     print("=== PTY round-trip latency (keystroke to echo) ===")
+    print(f"  via       the {result['transport']} on port {result['terminal_port']}")
     print(f"  samples   {result['samples']} (idle gap {result['idle_gap_seconds']:g}s)")
     print(f"  min       {result['min_ms']:8.2f} ms")
     print(f"  p50       {result['p50_ms']:8.2f} ms")
