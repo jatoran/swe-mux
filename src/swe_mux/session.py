@@ -94,7 +94,7 @@ from .supervisor_client import (
     liveness_of,
 )
 from .telemetry_otlp import provider_otel_args, provider_otel_env
-from .terminal_core import PtySubscriber, TerminalCore, TerminalDescriptor, TerminalStream
+from .terminal_core import PtySubscriber, TerminalCore, TerminalStream
 from .transcript_repair import resolve_row_transcript
 from .transcript_scan import (
     TranscriptScanCache,
@@ -2309,6 +2309,55 @@ class _TerminalView[T]:
         setattr(self._target(session), self.name, value)
 
 
+class _SessionTerminalDescriptor:
+    """The terminal core's view of a session hosted in this process: read live."""
+
+    __slots__ = ("_session",)
+
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    @property
+    def session_id(self) -> str:
+        return self._session.record.id
+
+    @property
+    def backend(self) -> str:
+        return str(self._session.record.backend)
+
+    @property
+    def state(self) -> str:
+        return str(self._session.record.state)
+
+    @property
+    def created_at(self) -> float:
+        return self._session.record.created_at
+
+    @property
+    def stopping(self) -> bool:
+        return self._session.stopping
+
+    @property
+    def ended(self) -> bool:
+        return self._session.record.state in {"exited", "crashed"}
+
+    @property
+    def needs_resize_repaint(self) -> bool:
+        return needs_resize_repaint(self._session.record.backend)
+
+    @property
+    def repaints_scrollback(self) -> bool:
+        return repaints_scrollback(self._session.record.backend)
+
+    @property
+    def replay_needs_repaint(self) -> bool:
+        return replay_needs_repaint(self._session.record.backend)
+
+    @property
+    def suppresses_late_color_response(self) -> bool:
+        return suppresses_late_color_response(self._session.record.backend)
+
+
 def reset_session_observation_state(session: Any, evidence: str) -> None:
     """Reset run-scoped observation state without leaving delayed work behind."""
     # Local import avoids the observation -> session module cycle.
@@ -2452,7 +2501,7 @@ class Session:
                 ),
             ),
             pty=lambda: self.pty,
-            descriptor=self.terminal_descriptor,
+            descriptor=_SessionTerminalDescriptor(self),
             tasks=self.tasks,
         )
         # The last screen explanation and every input it was derived from, so the
@@ -2702,22 +2751,6 @@ class Session:
         # proven, so the manager can confirm or discard a provisional transcript
         # binding. Sync: it schedules its own task rather than blocking the hook.
         self.provisional_binding_sink: Callable[[], None] | None = None
-
-    def terminal_descriptor(self) -> TerminalDescriptor:
-        """What the terminal core reads about this session, at the moment it asks."""
-        record = self.record
-        backend = record.backend
-        return TerminalDescriptor(
-            session_id=record.id,
-            backend=str(backend),
-            state=str(record.state),
-            created_at=record.created_at,
-            stopping=self.stopping,
-            needs_resize_repaint=needs_resize_repaint(backend),
-            repaints_scrollback=repaints_scrollback(backend),
-            replay_needs_repaint=replay_needs_repaint(backend),
-            suppresses_late_color_response=suppresses_late_color_response(backend),
-        )
 
     def terminal_snapshot(self) -> tuple[dict[str, Any], int]:
         """The record snapshot and revision a terminal frame carries."""
@@ -7515,9 +7548,12 @@ class SessionManager:
                 and session.record.last_activity_ts - session.output_window[0][0] > 60
             ):
                 session.output_window.popleft()
-            session.screen.feed(chunk)
-            session.bracketed_paste.feed(chunk)
-            session.sticky_modes.feed(chunk)
+            # The terminal's parsers and ring, reached once: this runs for every chunk
+            # of every session, and each read through a Session view is a lookup.
+            stream = session.terminal.stream
+            stream.screen.feed(chunk)
+            stream.bracketed_paste.feed(chunk)
+            stream.sticky_modes.feed(chunk)
             session.osc_signals.feed(chunk)
             shell_prompt_marker = self._note_shell_breakpoints(session, chunk)
             prompt_uris = session.osc7.feed(chunk)
@@ -7530,8 +7566,8 @@ class SessionManager:
                 self._queue_runtime_cwd(session, uri)
             if (prompt_uris or shell_prompt_marker) and session.record.backend in AGENT_BACKENDS:
                 self._queue_agent_exit_check(session)
-            session.scrollback.append(chunk)
-            session.publish_output(chunk)
+            stream.scrollback.append(chunk)
+            stream.publish_output(chunk)
             if session.record.backend in AGENT_BACKENDS and session.record.state == "starting":
                 self._queue_agent_ready_check(session)
             if timing_changed:

@@ -46,10 +46,10 @@ RESIZE_REPAINT_SETTLE_SECONDS = 0.25
 class TerminalCore:
     """Everything about one session's terminal that its browser connections touch.
 
-    ``pty`` and ``descriptor`` are read each time they are needed rather than
-    captured, because the hosting session's PTY and state move underneath it;
-    ``tasks`` is the hosting session's task set, so the work this schedules is
-    cancelled with the session.
+    ``pty`` is asked for each time it is needed rather than captured, because the
+    hosting session's PTY can be replaced underneath it, and ``descriptor`` reads
+    the session live (`TerminalDescriptor`); ``tasks`` is the hosting session's
+    task set, so the work this schedules is cancelled with the session.
     """
 
     def __init__(
@@ -57,12 +57,12 @@ class TerminalCore:
         stream: TerminalStream,
         *,
         pty: Callable[[], PtySink],
-        descriptor: Callable[[], TerminalDescriptor],
+        descriptor: TerminalDescriptor,
         tasks: set[asyncio.Task[Any]],
     ) -> None:
         self.stream = stream
         self._pty = pty
-        self._descriptor = descriptor
+        self.descriptor = descriptor
         self.tasks = tasks
         self.attachments_seen = 0
         # Exactly one browser connection may write terminal-generated responses
@@ -132,9 +132,6 @@ class TerminalCore:
     @property
     def pty(self) -> PtySink:
         return self._pty()
-
-    def descriptor(self) -> TerminalDescriptor:
-        return self._descriptor()
 
     # --- input ownership (see terminal_arbitration) ---------------------------
 
@@ -240,7 +237,7 @@ class TerminalCore:
         geometry has already won, so never restore the stale size over it.
         """
         size = self.geometry
-        if size is None or self.descriptor().ended:
+        if size is None or self.descriptor.ended:
             return False
         cols, rows = size
         pulse_cols = cols - 1 if cols > 2 else cols + 1
@@ -273,7 +270,7 @@ class TerminalCore:
             if remaining <= 0:
                 break
             await asyncio.sleep(remaining)
-        descriptor = self.descriptor()
+        descriptor = self.descriptor
         if descriptor.stopping:
             return
         size = self.geometry
@@ -294,7 +291,7 @@ class TerminalCore:
         Called on every arbitrated geometry change, so it must stay cheap and idempotent:
         the common case is pushing a float forward while a task already waits on it.
         """
-        descriptor = self.descriptor()
+        descriptor = self.descriptor
         if not descriptor.needs_resize_repaint:
             return
         self.resize_repaint_deadline = time.monotonic() + RESIZE_REPAINT_SETTLE_SECONDS
@@ -312,7 +309,7 @@ class TerminalCore:
             "terminal_repaint_requested",
             source="daemon",
             reason="truncated_replay",
-            backend=self.descriptor().backend,
+            backend=self.descriptor.backend,
             applied=repainted,
         )
 
@@ -339,7 +336,7 @@ class TerminalCore:
         through the subscriber queue registered before the replay snapshot, so they are
         delivered after the replay rather than painted over by it.
         """
-        descriptor = self.descriptor()
+        descriptor = self.descriptor
         if not descriptor.replay_needs_repaint:
             return
         if not self.stream.replay_window_truncated():
@@ -369,7 +366,7 @@ class TerminalCore:
         windowed replay of a differential frame stream — is repaired without asking the
         client anything, in `schedule_attach_repaint`.
         """
-        if not self.descriptor().repaints_scrollback:
+        if not self.descriptor.repaints_scrollback:
             return
         now = time.monotonic()
         if now - self.last_client_repaint_ts < CLIENT_REPAINT_MIN_INTERVAL_SECONDS:

@@ -552,11 +552,16 @@ async def test_fanout_records_first_output_and_prompt_startup_milestones() -> No
         osc7=Osc7Parser(),
         osc_signals=OscSignalParser(),
         osc133=Osc133Parser(),
-        screen=ScreenModeParser(),
-        bracketed_paste=BracketedPasteParser(),
-        sticky_modes=StickyModeParser(),
-        scrollback=ScrollbackBuffer(1024),
-        publish_output=output.append,
+        # The fanout feeds the terminal core's stream directly.
+        terminal=SimpleNamespace(
+            stream=SimpleNamespace(
+                screen=ScreenModeParser(),
+                bracketed_paste=BracketedPasteParser(),
+                sticky_modes=StickyModeParser(),
+                scrollback=ScrollbackBuffer(1024),
+                publish_output=output.append,
+            )
+        ),
         publish_update=lambda: updates.append(dict(record.startup_timing_ms)),
         startup_measurement_task=None,
         tasks=set(),

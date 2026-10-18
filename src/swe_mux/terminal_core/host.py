@@ -10,15 +10,17 @@ process of its own.
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
 from typing import Any, Protocol
 
 from aiohttp import WSMessage
 
 
-@dataclass(frozen=True, slots=True)
-class TerminalDescriptor:
-    """What the core needs to know about the session it serves, read when needed.
+class TerminalDescriptor(Protocol):
+    """What the core needs to know about the session it serves.
+
+    Read live, attribute by attribute, at the moment the core needs one: a keystroke
+    reads two of these, and the session's state and harness move underneath the
+    core (a shell promoted to an agent changes every trait at once).
 
     The four traits are the harness's: whether a geometry change leaves its screen
     for the core to repair (`needs_resize_repaint`), whether it answers a width
@@ -28,20 +30,37 @@ class TerminalDescriptor:
     accepting late OSC 10/11 replies (`suppresses_late_color_response`).
     """
 
-    session_id: str
-    backend: str
-    state: str
-    created_at: float
-    stopping: bool
-    needs_resize_repaint: bool
-    repaints_scrollback: bool
-    replay_needs_repaint: bool
-    suppresses_late_color_response: bool
+    @property
+    def session_id(self) -> str: ...
+
+    @property
+    def backend(self) -> str: ...
+
+    @property
+    def state(self) -> str: ...
+
+    @property
+    def created_at(self) -> float: ...
+
+    @property
+    def stopping(self) -> bool: ...
 
     @property
     def ended(self) -> bool:
         """An ended pane stays visible until it is dismissed, with no child behind it."""
-        return self.state in {"exited", "crashed"}
+        ...
+
+    @property
+    def needs_resize_repaint(self) -> bool: ...
+
+    @property
+    def repaints_scrollback(self) -> bool: ...
+
+    @property
+    def replay_needs_repaint(self) -> bool: ...
+
+    @property
+    def suppresses_late_color_response(self) -> bool: ...
 
 
 class PtySink(Protocol):

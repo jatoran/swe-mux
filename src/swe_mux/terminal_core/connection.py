@@ -54,7 +54,7 @@ async def serve_connection(
     connection_id: str,
 ) -> None:
     """Run one prepared browser socket against a terminal core until it closes."""
-    descriptor = core.descriptor()
+    descriptor = core.descriptor
     allow_terminal_responses = (
         core.attachments_seen == 0
         and descriptor.state not in {"exited", "crashed"}
@@ -449,7 +449,7 @@ async def _handle_text_input(
         and 0 < raw_input_seq <= 2_147_483_647
         else None
     )
-    descriptor = core.descriptor()
+    descriptor = core.descriptor
     # Reject a late OSC 10/11 reply before the CLI mistakes it for prompt input.
     # Gated on the descriptor rather than the name (`is_default_color_response`).
     if descriptor.suppresses_late_color_response and is_default_color_response(data):
@@ -549,7 +549,7 @@ async def _handle_binary_input(
     if core.input_owner != connection_id:
         core.note_input_rejected(host, len(data))
         return
-    if core.descriptor().ended:
+    if core.descriptor.ended:
         await ws.send_json({"type": "input_refused", "reason": "session_ended"})
         return
     core.pty.write(data)

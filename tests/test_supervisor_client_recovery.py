@@ -482,11 +482,16 @@ async def test_the_fanout_applies_a_reseed_between_the_chunks_around_it() -> Non
         osc7=SimpleNamespace(feed=lambda _chunk: []),
         osc_signals=SimpleNamespace(feed=lambda _chunk: None),
         osc133=SimpleNamespace(feed=lambda _chunk: []),
-        screen=ScreenModeParser(),
-        bracketed_paste=BracketedPasteParser(),
-        sticky_modes=StickyModeParser(),
-        scrollback=ScrollbackBuffer(1024),
-        publish_output=order.append,
+        # The fanout feeds the terminal core's stream directly.
+        terminal=SimpleNamespace(
+            stream=SimpleNamespace(
+                screen=ScreenModeParser(),
+                bracketed_paste=BracketedPasteParser(),
+                sticky_modes=StickyModeParser(),
+                scrollback=ScrollbackBuffer(1024),
+                publish_output=order.append,
+            )
+        ),
         reseed_from_supervisor=lambda reseed: order.append(reseed),
         publish_update=lambda: None,
         tasks=set(),
