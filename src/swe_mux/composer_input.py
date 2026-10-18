@@ -1,24 +1,42 @@
-"""Unsent text in a session's composer, tracked from the bytes mux writes to it.
+"""Unsent text in a session's composer: an estimate from the bytes mux writes to
+it, corrected by what a browser read off the screen.
 
-The CLI's input box is not readable: the daemon holds a write log, not a terminal
-cell grid, and no harness publishes its composer contents. What the daemon does
-hold is every byte any operator path writes to the PTY, so the composer's
-*emptiness* is derivable from the input side alone — count what was typed, drop
-the count on the keys that submit or discard it.
+The daemon holds a write log, not a terminal cell grid, and no harness publishes
+its composer contents. Two sources answer "is something sitting in the composer",
+and they fail in opposite places:
 
-That estimate exists for one purpose: telling a human "you left something
-half-typed here" on a row they are scanning, from any device, including the one
-they did not type it on. It is display evidence and nothing else.
+- **The estimate** (`ComposerState`) counts what every operator path wrote - typed
+  text adds, erase keys subtract, a submit or a declared clear key zeroes it. It
+  exists for every session whether or not anyone is watching, and it is wrong
+  wherever a key's effect is the CLI's business: a word delete, a history recall,
+  a slash menu that consumed the keys.
+- **A screen reading** (`ComposerScreenReading`) is what a browser's own xterm
+  showed in the composer's rectangle (`frontend/src/composerText.ts`). It is the
+  truth about what was drawn, and it exists only while some browser has the pane.
+  The terminal core accepts one only while it is *current* - nothing was drawn
+  after the screen it describes, and nothing that could put text in the composer
+  was written since the CLI last drew (`write_may_add_text`) - and drops it the
+  moment either stops being true.
 
-- **It never relaxes a delivery gate.** `delivery_readiness.py` keeps blocking on
-  its own `input_revision` boundary, which cannot be talked out of a block by an
-  estimate. A flag that says "empty" while the composer holds a line would turn a
-  refused send into a corrupted one, and a false *safe* is the dangerous
-  direction (`.docs/design/features/delivery-readiness.md`).
-- **It is run-scoped and process-scoped.** Nothing here survives a daemon
+How each is used, and why the asymmetry:
+
+- **A current screen reading decides.** `empty` is positive evidence the composer
+  holds nothing, and it is what lets delivery readiness stop refusing a session
+  whose operator typed and then deleted (`delivery-readiness.md`). `draft` blocks.
+  `placeholder` is a screen showing only the harness's empty-composer hint
+  without the dim attribute that normally marks it, which is evidence of empty
+  only together with an estimate that agrees.
+- **The estimate can only ever block.** Pending text with no screen reading keeps
+  a delivery out; an estimate of zero proves nothing on its own, because the
+  places it is wrong include text it never counted. A false *safe* is the
+  dangerous direction (`.docs/design/features/delivery-readiness.md`).
+- **A screen reading re-anchors the estimate** (`reanchor_composer`), so the count
+  a row shows after the browser leaves starts from what was actually on screen
+  rather than from a drift the screen already contradicted.
+- **Both are run-scoped and process-scoped.** Nothing here survives a daemon
   restart: the PTY does (the supervisor owns it), the byte history does not, so a
   rebuilt session starts at "composer empty". Absent is the honest reading of
-  "not observed", and the next keystroke re-establishes it.
+  "not observed", and the next keystroke or screen reading re-establishes it.
 
 Accuracy, measured against what the keys actually do in Claude Code and Codex:
 
@@ -54,7 +72,7 @@ Accuracy, measured against what the keys actually do in Claude Code and Codex:
   the composer and are ignored. History recall (`↑`) does put text there and is
   deliberately NOT counted: inventing a count for bytes the operator never sent
   is worse than missing one, because the mark's whole value is that it means
-  something when it is drawn.
+  something when it is drawn. A screen reading is what corrects it.
 """
 
 from __future__ import annotations
@@ -88,6 +106,192 @@ DEFAULT_CLEAR_KEYS = "\x15"
 # ``HarnessDescriptor.composer_newline`` existed.
 DEFAULT_NEWLINE_KEYS = "\x1b\r"
 _SUBMIT_KEYS = ("\r", "\n")
+
+# Keys that can only take text out of a composer or move within it: erase, word
+# and line kills, cursor movement, and the reports a terminal sends on the same
+# channel (focus changes, mouse). A write made only of these cannot leave text
+# behind that the screen does not yet show, which is the one thing a screen
+# reading has to be protected from (`write_may_add_text`).
+#
+# Everything absent from this list counts as able to add text, including keys
+# that add none on most harnesses but are not known never to: Tab completes,
+# `↑`/`↓` recall history, Ctrl+Y yanks. Measured 2026-10-18 against Claude Code
+# v2.1.302 and Codex v0.163.0: an extra backspace on an empty composer draws
+# nothing at all on Claude, so a rule that wanted fresh output after *every*
+# keystroke would have refused exactly the "typed it, held backspace" case.
+_NON_ADDITIVE_KEY = re.compile(
+    r"\x1b[\x7f\x08]"  # Alt/Ctrl+Backspace: word erase
+    r"|[\x7f\x08]"  # Backspace
+    r"|[\x01\x05\x0b\x15\x17]"  # Ctrl+A, Ctrl+E, Ctrl+K, Ctrl+U, Ctrl+W
+    r"|\x1b\[3(?:;\d{1,3})?~"  # Delete, with modifiers
+    r"|\x1b\[(?:1;\d{1,3})?[CDHF]"  # Right, Left, Home, End, with modifiers
+    r"|\x1bO[CDHF]"  # the same, application cursor mode
+    r"|\x1b\[[1478]~"  # Home and End, VT220 spellings
+    r"|\x1b[bf]"  # Alt+B, Alt+F: word movement
+    r"|\x1b\[[IO]"  # focus in, focus out
+    r"|\x1b\[<\d{1,4};\d{1,5};\d{1,5}[Mm]"  # SGR mouse report
+    r"|\x1b\[\d{1,4};\d{1,5};\d{1,5}M"  # urxvt mouse report
+    r"|\x1b\[M[\x20-\xff]{3}"  # X10 mouse report
+)
+_NON_ADDITIVE_WRITE = re.compile(f"(?:{_NON_ADDITIVE_KEY.pattern})+")
+# A bare Esc, or several: Claude's double-Esc clear is two of them in one write.
+_ESCAPES_ONLY = re.compile(r"\x1b+")
+
+
+def write_may_add_text(data: str | bytes) -> bool:
+    """Whether a PTY write could put text in a composer that the screen does not
+    yet show.
+
+    False only for a write made entirely of keys that remove or move
+    (`_NON_ADDITIVE_KEY`), or of bare Esc presses. A screen reading taken before
+    such a write still describes the composer after it: the write could have
+    emptied the composer further, or opened something else entirely, and both of
+    those draw - which retires the reading on its own - but neither can leave text
+    the reading did not see. Every other write retires the reading at once,
+    because the text it carried may still be on its way through the CLI.
+    """
+    if not data:
+        return False
+    text = data.decode("latin-1") if isinstance(data, bytes) else data
+    if _ESCAPES_ONLY.fullmatch(text):
+        return False
+    return _NON_ADDITIVE_WRITE.fullmatch(text) is None
+
+
+#: What a browser can report about one composer, read off its own cell grid
+#: (`frontend/src/composerText.ts`). ``placeholder`` is a screen showing only the
+#: harness's empty-composer hint, undimmed and with the caret parked before it -
+#: what Claude Code v2.1.302 draws after a full repaint. ``unreadable`` is a screen
+#: whose composer the browser could not find, a dialog or a picker most often.
+SCREEN_COMPOSER_STATES = frozenset({"empty", "placeholder", "draft", "unreadable"})
+#: The longest draft a reading may claim, in characters. A count, never content.
+MAX_SCREEN_COMPOSER_CHARS = 1_000_000
+
+
+@dataclass(frozen=True, slots=True)
+class ComposerScreenReading:
+    """What one browser saw in a session's composer, and where in the stream.
+
+    ``position`` is the output ring position the reading's screen was parsed up
+    to, in ``stream`` (`TerminalStream.stream_id`); the core holding the terminal
+    accepts the reading only when that is where its ring ends now. ``chars`` is the
+    visible draft's length for ``draft`` and zero otherwise - a count and never
+    the text, which never leaves the browser.
+    """
+
+    state: str
+    chars: int
+    position: int
+    stream: str
+
+
+def parse_screen_reading(frame: dict[str, object]) -> ComposerScreenReading | None:
+    """A `composer_reading` frame from a browser, or None when it is malformed."""
+    state = frame.get("state")
+    position = frame.get("position")
+    stream = frame.get("stream")
+    chars = frame.get("chars", 0)
+    if state not in SCREEN_COMPOSER_STATES:
+        return None
+    if not isinstance(position, int) or isinstance(position, bool) or position < 0:
+        return None
+    if not isinstance(stream, str) or not stream or len(stream) > 256:
+        return None
+    if (
+        not isinstance(chars, int)
+        or isinstance(chars, bool)
+        or not 0 <= chars <= MAX_SCREEN_COMPOSER_CHARS
+    ):
+        return None
+    return ComposerScreenReading(
+        state=str(state),
+        chars=chars if state == "draft" else 0,
+        position=position,
+        stream=stream,
+    )
+
+
+# Two browsers reading the same screen can disagree only if one of them parsed it
+# wrong, and the merge takes the reading that stops a delivery: text over a
+# placeholder over empty, and any of those over a browser that could not read it.
+_SCREEN_STATE_WEIGHT = {"unreadable": 0, "empty": 1, "placeholder": 2, "draft": 3}
+
+
+def merge_screen_readings(
+    standing: ComposerScreenReading | None, incoming: ComposerScreenReading
+) -> ComposerScreenReading:
+    """The reading to keep when ``incoming`` arrives for the screen ``standing``
+    may already describe."""
+    if (
+        standing is None
+        or standing.position != incoming.position
+        or standing.stream != incoming.stream
+    ):
+        return incoming
+    if _SCREEN_STATE_WEIGHT[incoming.state] > _SCREEN_STATE_WEIGHT[standing.state]:
+        return incoming
+    if incoming.state == standing.state == "draft" and incoming.chars > standing.chars:
+        return incoming
+    return standing
+
+
+def screen_reading_wire(reading: ComposerScreenReading | None) -> dict[str, object] | None:
+    if reading is None:
+        return None
+    return {
+        "state": reading.state,
+        "chars": reading.chars,
+        "position": reading.position,
+        "stream": reading.stream,
+    }
+
+
+def screen_composer_empty(
+    reading: ComposerScreenReading | None, estimate: ComposerState | None
+) -> bool | None:
+    """What a current screen reading proves about the composer.
+
+    True: it is empty. False: text is sitting in it. None: the screen proves
+    nothing, and the caller falls back to what the input side says. A
+    ``placeholder`` reading proves empty only beside an estimate of zero - the
+    hint's wording is what identified it, and an operator could type that wording
+    and move the caret to the front; requiring the estimate to agree means both
+    sources have to be wrong together for that to read as empty.
+    """
+    if reading is None:
+        return None
+    if reading.state == "empty":
+        return True
+    if reading.state == "draft":
+        return False
+    if reading.state == "placeholder":
+        return None if estimate is not None and estimate.pending else True
+    return None
+
+
+def reanchor_composer(
+    state: ComposerState, reading: ComposerScreenReading, now: float
+) -> str | None:
+    """Correct the estimate from a current screen reading.
+
+    Returns ``'pending'`` or ``'cleared'`` on an empty/non-empty crossing, exactly
+    as a write does (`apply_composer_write`). ``empty`` zeroes the count; ``draft``
+    replaces it with the visible length, which is what undoes an over-count (a word
+    delete the estimate saw as one key) and an under-count (a history recall it
+    never counted). A ``placeholder`` over a pending estimate is the one reading
+    the screen cannot settle, so it changes nothing.
+    """
+    was_pending = state.pending
+    if reading.state == "empty" or (reading.state == "placeholder" and not was_pending):
+        state.chars = 0
+    elif reading.state == "draft":
+        state.chars = max(1, reading.chars)
+    else:
+        return None
+    if state.pending == was_pending:
+        return None
+    state.since = now if state.pending else 0.0
+    return "pending" if state.pending else "cleared"
 
 
 @dataclass(frozen=True, slots=True)
@@ -169,9 +373,10 @@ def note_unsubmitted_delivery(
 def clear_pending_submit(session: object) -> PendingSubmit | None:
     """Retire the mark, returning what it held. ``None`` when nothing was standing.
 
-    Called from the two seams that *prove* the composer no longer holds the body:
-    a turn opening (whatever wrote the carriage return), and an operator write
-    that submits or discards the composer. Nothing expires it on a timer — an
+    Called from the three seams that *prove* the composer no longer holds the body:
+    a turn opening (whatever wrote the carriage return), an operator write that
+    submits or discards the composer, and a current screen reading of an empty
+    composer (`operator_input.note_composer_reading`). Nothing expires it on a timer - an
     unsubmitted paste does not become submitted by waiting, and a mark that
     lapsed on its own would restore exactly the silent pile-up it exists to stop.
     """

@@ -9,11 +9,11 @@ regimes on one line of UI:
   `state_changed`, which the browser already treats as a reason to re-read the
   fleet. Those were live.
 - Composer and screen reasons (`terminal_input_after_completion`,
-  `operator_recently_typed`, `screen_not_at_agent_prompt`) turn on `terminal_input`
-  and `terminal_mode_changed` — both deliberately excluded from fleet refresh,
-  because they arrive at keystroke rate and refetching five endpoints per keypress
-  would contend with terminal I/O. Those were stale for up to the browser's
-  sixty-second safety poll.
+  `composer_holds_draft`, `operator_recently_typed`, `screen_not_at_agent_prompt`)
+  turn on `terminal_input`, `terminal_mode_changed` and a pane's composer reading,
+  none of which drives fleet refresh, because they arrive at keystroke or repaint
+  rate and refetching five endpoints per keypress would contend with terminal I/O.
+  Those were stale for up to the browser's sixty-second safety poll.
 - The clock-driven transitions have no event at all and never will: `operator_quiet`
   becoming true is the *absence* of typing, `readiness_debounce_pending` and
   `lifecycle_evidence_stale` are thresholds crossing. Nothing announces those, so a

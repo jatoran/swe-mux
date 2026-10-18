@@ -29,7 +29,7 @@ from collections import deque
 from collections.abc import Callable, Coroutine
 from typing import Any
 
-from ..composer_input import PendingSubmit
+from ..composer_input import ComposerScreenReading, PendingSubmit, screen_reading_wire
 from ..framed_ipc import FramedPeer, FramedServer, PeerClosed, RequestRefused
 from .connection import serve_connection
 from .core import TerminalCore, WriteRefused
@@ -163,6 +163,11 @@ class GatewayTerminalHost:
     def note_owner_submit(self, data: str) -> None:
         self._session.record_owner_submit(data)
 
+    def note_composer_reading(self, reading: ComposerScreenReading) -> None:
+        # Nothing to send on its own: the core marked the session dirty when it
+        # kept the reading, and the next `state` carries it to the daemon.
+        pass
+
     async def broadcast(self, data: str) -> None:
         # Delivered by the daemon, which owns the broadcast set, each target's
         # liveness and the accounting every operator write owes
@@ -286,6 +291,10 @@ class GatewaySession:
             "attachments_seen": core.attachments_seen,
             "rejections": core.input_rejections,
             "denials": core.input_claim_denials,
+            # Only while current: the core drops it on the output or the write
+            # that retires it and marks the session dirty, so the daemon's mirror
+            # loses it in the next `state` (`TerminalCore.composer_screen`).
+            "composer": screen_reading_wire(core.composer_screen()),
         }
         claim_log = core.claim_log
         fingerprint = (len(claim_log), id(claim_log[-1]) if claim_log else 0)
@@ -312,6 +321,8 @@ class GatewaySession:
             "writes_dropped": self.writes_dropped,
             "in_flight": self.in_flight,
             "ring_position": core.stream.scrollback.position,
+            "composer_screen": screen_reading_wire(core.composer_screen()),
+            "additive_input_position": core.additive_input_position,
         }
 
     @property
@@ -412,6 +423,9 @@ class GatewayHub:
         session = self.sessions.get(session_id)
         if session is not None:
             session.core.stream.feed(data)
+            # A composer reading describes the screen before this output; retiring
+            # it marks the session dirty, so the daemon stops relying on it.
+            session.core.note_output()
 
     # -- the daemon connection ---------------------------------------------------------
 

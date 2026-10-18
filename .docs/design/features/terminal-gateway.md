@@ -13,6 +13,7 @@ A redeploy, an update and a daemon restart each treat it as below (item 33).
 
 - **The gateway** hosts the terminal cores (`terminal_core`) for the sessions the daemon hands it: the same stream, core and browser protocol the daemon runs in process, so a browser cannot tell which process answered.
   Keystrokes are written to the PTY, and their accounting done, before anything is sent anywhere.
+  Its core also decides whether a browser's composer reading is current, because only the process that sees the keystrokes and the output in one order can, and reports the current one in each session's `state` (`delivery-readiness.md` § The composer).
 - **The daemon** keeps everything a session is beyond its terminal: the record, the event log, status detection, delivery readiness, and what typing *means* - approval cancellation, the composer estimate, interrupt intent.
   It holds a mirror of each gateway-held terminal (`terminal_core.remote.RemoteTerminal`) on `Session.terminal`, where an in-process `TerminalCore` otherwise stands, so its readers do not know which process the core is in.
 - **The supervisor** owns the PTYs, as before.

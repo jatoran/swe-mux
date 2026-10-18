@@ -344,16 +344,26 @@ When that is an approval or a question, the text does not fill a composer - it *
 
 The daemon holds a write log, not a terminal cell grid, and no harness publishes what is in its
 input box.
-What it does hold is every byte an operator path writes, so the composer's *emptiness* is
-derivable from the input side alone: count what was typed, drop the count on the keys that
+What it does hold is every byte an operator path writes, so it keeps an *estimate* of the
+composer's emptiness from the input side: count what was typed, drop the count on the keys that
 submit or discard it (`src/swe_mux/composer_input.py`).
+A pane's **screen reading** (`Reading the composer back`) corrects that estimate whenever one is
+current, so the count a row shows after the pane goes away starts from what was on screen.
 The estimate is published as `unsent_input` and is what marks a sidebar row that has something
 half-typed in it, from any device (`features/ui.md`).
 
-- **Display evidence only.**
-  `delivery_readiness` keeps blocking on its own `input_revision` boundary and never reads this.
-  A flag that said "empty" while the composer held a line would turn a refused send into a
-  corrupted one, and a false *safe* is the dangerous direction.
+- **It can block a delivery, never permit one.**
+  Delivery readiness decides on a current screen reading where there is one, and otherwise
+  treats a pending estimate as a draft in the composer (`composer_holds_draft`) - which is what
+  stops a delivery being pasted onto text typed while a turn ran.
+  An estimate of zero lifts nothing: it is wrong exactly where it under-counts, and a false
+  *safe* is the dangerous direction (`delivery-readiness.md` § The composer).
+- **A screen reading re-anchors it** (`composer_input.reanchor_composer`).
+  `empty` zeroes it, `draft` replaces it with the visible length - undoing a word delete counted
+  as one key and a history recall never counted at all - and a reading that crosses empty and
+  non-empty is announced like a keystroke that does, with `source: "screen"`.
+  A reading of `empty` also retires a stuck queue delivery's `pending_submit`, the same proof a
+  submit or a clear is.
 - **Every operator write is counted.**
   Text inserted by a voice append, a send-to-agent, or a mobile draft is as unsent as text
   someone typed, so `operator_input.note_composer_write` sits on both the WebSocket path and
@@ -383,15 +393,18 @@ half-typed in it, from any device (`features/ui.md`).
   It is not a control sequence the escape stripper matches, so its bare CR used to survive the
   strip and classify the whole write as a submit - the same false *empty*, and already live,
   because the rail's Markdown divider and code-fence buttons have always sent exactly these bytes.
-- **Known imprecision, in the safe direction.**
-  Keystrokes a slash menu consumed can leave the mark standing until the next submit;
-  history recall (`↑`) puts text in the composer that this cannot see and is deliberately not
-  counted, because inventing a count for bytes nobody sent is worse than missing one.
+- **Known imprecision, corrected by the screen where a pane can see it.**
+  Keystrokes a slash menu consumed, or a word delete, can leave the count standing over an empty
+  composer; history recall (`↑`) puts text there that the count cannot see and is deliberately
+  not counted, because inventing a count for bytes nobody sent is worse than missing one.
+  Every one of these is what a screen reading re-anchors, and none of them survives a pane
+  showing the session.
 
 ## Reading the composer back
 
-The count above is all the daemon can offer, so the Action rail's **Copy input** and **Clear
-input** read the draft off the client's own cell grid instead (`frontend/src/composerText.ts`).
+The count is all the daemon can derive, so the composer is read off a client's own cell grid
+(`frontend/src/composerText.ts`): for the Action rail's **Copy input**, and, as a
+`composer_reading` frame, for the daemon.
 Reconstructing text from the write log was the alternative and is rejected: it would have to
 emulate a line editor, and would still be wrong the moment `↑` puts characters in the composer
 that mux never sent. The screen is the truth.
@@ -406,9 +419,30 @@ that mux never sent. The screen is the truth.
   `❯` plus U+00A0, continuation rows leave those two columns blank, text runs from column 2, and
   the editor wraps at `cols-2`. Its `/` completion list renders above the top rule, outside the
   composer entirely, so unlike pi there is no picker to refuse.
+  Its **agents view** (`←` on an empty composer, v2.1.302) is refused: it draws a composer of its
+  own in the same frame, for a *new* session, and its footer ("enter to return", "enter to
+  create") is the positive detection.
 - **Dim cells are dropped**, which removes a placeholder hint without matching its wording -
-  every harness paints the hint with SGR 2 (verified in Claude's own output bytes), and nothing
-  an operator types arrives dim. It also removes the ghost completion painted after the caret.
+  a harness paints the hint with SGR 2, and nothing an operator types arrives dim. It also
+  removes the ghost completion painted after the caret.
+  xterm's `isDim()` returns the attribute's *bit* (0x8000000), never 1, and the snapshot builder
+  read `isDim() === 1` until 2026-10-18 - so no cell was ever dim, and every empty composer read
+  back as its own hint (`Try "…"` on Claude, "Ask Codex to do anything" on Codex).
+  `terminalCellSnapshot.ts` is now the one translation from xterm's cells, and
+  `frontend/test/composerCaptures.test.ts` replays real captured output through the app's own
+  xterm to keep it honest.
+- **An undimmed hint is a `placeholder`, not a draft.** Claude Code v2.1.302 draws its hint with no
+  SGR at all after any full repaint (leaving the agents view, among others), so the dim rule keeps
+  it as text. `readComposerState` names it from three facts together - the region holds one row,
+  the caret is parked at the first text column, and the row matches the harness's declared hint
+  (`EmptyComposerContract.undimmedPlaceholder`) - and the daemon counts it as empty only beside an
+  estimate of zero, because an operator could type those words.
+- **The caret tells an empty composer from invisible text** on the harnesses measured to park it
+  at the first text column when empty (Claude and Codex, column 2): nothing drawn with the caret
+  further on is a draft, because Claude does not draw trailing spaces.
+  Both facts are per-harness measurements and live beside the composer regions in
+  `terminalCaretPlacement.ts` (`emptyComposerContractForBackend`), so `composerText.ts` names no
+  harness.
 - **Soft wraps are inferred.** A row whose content reaches the wrap column is joined to the
   next; anything shorter ends a line. A hard newline landing exactly on the wrap column is read
   as a wrap, which costs one newline rather than any characters, and is the only ambiguity a
@@ -419,13 +453,22 @@ that mux never sent. The screen is the truth.
   scrape is a best-effort clipboard-history record whose character count is shown to the operator.
 - **Three outcomes, never two.** `null` means "this screen is not showing a readable draft";
   an empty string means "read it, and it is empty". Callers must not collapse them.
+- **What the daemon is sent, and when.** After output stops for `COMPOSER_READING_SETTLE_MS`
+  (120 ms), a pane whose parse is caught up with everything it received sends
+  `composer_reading` with the state, the draft's length, the ring position its screen was parsed
+  to, the stream, and its size - never the text, and never twice for the same screen.
+  The position is the *parsed* cursor, advanced in xterm's write callbacks rather than on
+  receipt, so it names the screen the reading describes.
+  The core holding the terminal keeps it only while it is current (`delivery-readiness.md`
+  § The composer); a refusal costs nothing, because the next parse sends another.
 
 ## API surface
 
 PTY WebSocket frames, typed in `design/interfaces.md`: `claim_input`, `input_owner`,
 `input_owner_released`, `input_rejected`, `resize`/`attach_ready` (with `hidden`),
 `geometry`, `repaint` (client-requested transcript restatement, `features/sessions.md`),
-`output_ack` (xterm parser credit), `client_diagnostic` (durable client repair telemetry).
+`output_ack` (xterm parser credit), `client_diagnostic` (durable client repair telemetry),
+`composer_reading` (what the pane's screen shows in the composer).
 
 ## Diagnostics
 
@@ -434,6 +477,10 @@ PTY WebSocket frames, typed in `design/interfaces.md`: `claim_input`, `input_own
 `input_rejections`, `claim_denials`, and `claims` — the last 24 decisions with the asking
 device, what it reported about itself, what the daemon believed, and the verdict. A counter
 says a claim was refused; only that log says which device asked and why it lost.
+The same endpoint's `composer` block answers "the row says there is a draft and there is none":
+`estimate_pending` and `estimate_since`, the current `screen` reading (absent unless current),
+and a standing `pending_submit`; the transition ledger's `kind: "composer"` entries say which
+source moved the mark (`browser`, `screen`, `queue`, ...).
 Opt-in terminal diagnostics also record `caret_placement_started` and `caret_placement_finished` with the outcome, elapsed time, and number of steering keys.
 
 ## Constraints + trade-offs
@@ -459,9 +506,12 @@ None user-facing.
 ## Key files
 
 - Rules (pure): `src/swe_mux/terminal_arbitration.py`
-- Unsent-composer estimate (pure): `src/swe_mux/composer_input.py`
-- Composer text assembly from the cell grid (pure): `frontend/src/composerText.ts`;
-  the per-harness rectangles it reads: `frontend/src/terminalCaretPlacement.ts`
+- Unsent-composer estimate, screen readings, `write_may_add_text` (pure): `src/swe_mux/composer_input.py`
+- Composer text assembly and `readComposerState` from the cell grid (pure): `frontend/src/composerText.ts`;
+  the per-harness rectangles it reads: `frontend/src/terminalCaretPlacement.ts`;
+  the cell grid itself: `frontend/src/terminalCellSnapshot.ts`
+- Which reading is current, and the write condition that re-checks it: `src/swe_mux/terminal_core/core.py`
+  (`composer_screen`, `note_composer_reading`); the daemon's mirror: `terminal_core/remote.py`
 - Ownership/viewport state, geometry fanout, input accounting: `src/swe_mux/terminal_core/core.py`
   (`TerminalCore`; `Session` keeps the same attribute names as views onto it)
 - Frame handling, claim decisions, decision log: `src/swe_mux/terminal_core/connection.py`

@@ -6,6 +6,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol
 
+from .composer_input import ComposerScreenReading, screen_composer_empty, screen_reading_wire
 from .harness import HARNESSES
 from .models import MuxEvent
 
@@ -57,6 +58,10 @@ class ReadinessSession(Protocol):
     # was not seen to take (`composer_input.PendingSubmit`). Read through
     # ``getattr`` so a stand-in that predates it simply has none.
     pending_submit: Any
+    # The input-side estimate of unsent composer text (`composer_input.ComposerState`)
+    # and the browser's current screen reading of it (`Session.composer_screen`).
+    # Both read through ``getattr``: a stand-in without them has no composer evidence.
+    composer: Any
 
     @property
     def attended(self) -> bool:
@@ -345,7 +350,7 @@ class DeliveryReadinessTracker:
         )
 
     def _adopt_first_prompt_ready(
-        self, session: ReadinessSession, memory: ReadinessMemory
+        self, session: ReadinessSession, memory: ReadinessMemory, screen_empty: bool | None
     ) -> None:
         """Let a session that has never run a turn accept its first prompt.
 
@@ -363,13 +368,16 @@ class DeliveryReadinessTracker:
           status layer's inferred startup-quiet fallback, which fires *inside*
           the window where a submit is swallowed);
         - the settle must have elapsed since this session was first seen;
-        - nothing may ever have been typed into this PTY. A fresh session with
-          keystrokes in it has a composer this cannot see the contents of, and
-          that is the collision `partial_input_absent` exists to prevent.
+        - nothing may ever have been typed into this PTY, unless a current screen
+          reading shows the composer empty. A fresh session with keystrokes in it
+          has a composer the input side cannot see the contents of, and that is
+          the collision `partial_input_absent` exists to prevent; the screen is
+          the one thing that can see them.
         """
         if memory.phase != "unknown" or session.record.state != "idle":
             return
-        if int(getattr(session, "input_revision", 0)) != 0:
+        input_revision = int(getattr(session, "input_revision", 0))
+        if input_revision != 0 and screen_empty is not True:
             return
         observation_state = getattr(session, "observation_state", None)
         if not observation_state or not observation_state.get("session_start_seen"):
@@ -386,7 +394,7 @@ class DeliveryReadinessTracker:
         # A native hook fired for this session, which is the same capability
         # proof `_observation_check` accepts from any other hook.
         memory.observation_proven = True
-        memory.input_revision_at_completion = 0
+        memory.input_revision_at_completion = input_revision
         memory.screen_at_completion = getattr(getattr(session, "screen", None), "mode", None)
         memory.transitions.append(
             {
@@ -397,6 +405,22 @@ class DeliveryReadinessTracker:
                 "scope": "root",
             }
         )
+
+    @staticmethod
+    def _composer_screen(session: ReadinessSession) -> ComposerScreenReading | None:
+        """A browser's current reading of the composer (`Session.composer_screen`).
+
+        Current is the terminal core's judgement, made where the keystrokes and the
+        output both arrive, and a stand-in without the method simply has none.
+        """
+        reader = getattr(session, "composer_screen", None)
+        if not callable(reader):
+            return None
+        try:
+            reading = reader()
+        except (AttributeError, OSError, ValueError):
+            return None
+        return reading if isinstance(reading, ComposerScreenReading) else None
 
     @staticmethod
     def _screen_evidence(session: ReadinessSession, now: float) -> tuple[str | None, str]:
@@ -512,9 +536,16 @@ class DeliveryReadinessTracker:
         now = self.clock()
         memory = self._memory(session)
         record = session.record
+        # What is sitting in the composer, from the two sources that can say
+        # (`composer_input.py`). A current screen reading decides; the input-side
+        # estimate can only ever add a block, never lift one.
+        screen_reading = self._composer_screen(session)
+        estimate = getattr(session, "composer", None)
+        estimate_pending = bool(getattr(estimate, "pending", False))
+        screen_empty = screen_composer_empty(screen_reading, estimate)
         if adopt:
             self._adopt_catchup_settle(session, memory)
-            self._adopt_first_prompt_ready(session, memory)
+            self._adopt_first_prompt_ready(session, memory, screen_empty)
         lifecycle_age = max(0.0, now - memory.observed_at)
         terminal_mode = getattr(session, "terminal_mode", None)
         terminal_mode_updated_at = float(getattr(session, "terminal_mode_updated_at", 0.0))
@@ -543,9 +574,34 @@ class DeliveryReadinessTracker:
         # start, an approval, or operator input all arrive through paths this
         # tracker already watches. Every other phase keeps the age bound.
         lifecycle_fresh = root_ready or lifecycle_age <= LIFECYCLE_EVIDENCE_MAX_AGE_SECONDS
-        partial_input_absent: bool | None = None
-        if memory.input_revision_at_completion is not None:
-            partial_input_absent = input_revision == memory.input_revision_at_completion
+        # Whether the composer holds anything the delivery would land on.
+        #
+        # - A current screen reading answers it outright. That is what lets a
+        #   session whose operator typed and then deleted go back to deliverable:
+        #   the revision moved and will not move back, but the screen shows the
+        #   composer empty, and the screen is what the paste lands on.
+        # - Without one, the composer counts as untouched only when no input
+        #   arrived since the turn completed *and* the estimate holds nothing. The
+        #   second half closes a hole the revision alone left open: text typed
+        #   while the turn ran is counted into the completion boundary, so it read
+        #   as untouched and a delivery was pasted after the operator's draft.
+        revision_untouched = (
+            memory.input_revision_at_completion is not None
+            and input_revision == memory.input_revision_at_completion
+        )
+        partial_input_absent: bool | None
+        if screen_empty is not None:
+            partial_input_absent = screen_empty
+        elif memory.input_revision_at_completion is None:
+            partial_input_absent = None
+        else:
+            partial_input_absent = revision_untouched and not estimate_pending
+        composer_holds_draft = screen_empty is False or (screen_empty is None and estimate_pending)
+        # The verdict leans on the screen only where the input side alone would
+        # refuse; only then does the write have to find the same screen standing
+        # (`WriteCondition.screen_position`). Leaning on it anywhere else would make
+        # a clean delivery fail over an unrelated repaint.
+        screen_relied = screen_empty is True and not (revision_untouched and not estimate_pending)
         operator_quiet = now - last_input_event_ts >= READINESS_DEBOUNCE_SECONDS
         checks: dict[str, bool | None] = {
             "local_terminal_boundary": getattr(record, "runtime_boundary", "local")
@@ -565,8 +621,9 @@ class DeliveryReadinessTracker:
             # writing to a PTY: the daemon owns the PTY, and delivery is the same
             # write whether or not a pane is rendering it. Both facts stay in the
             # evidence below for diagnostics.
-            # swe-mux currently has no application-level composer. Terminal draft input is
-            # covered conservatively by input_revision after root completion.
+            # swe-mux currently has no application-level composer. The terminal's own
+            # composer is `partial_input_absent`: the screen reading, else the input
+            # revision since root completion together with the estimate.
             "application_composer_empty": True,
             "adapter_etiquette_defined": record.backend in ADAPTER_DELIVERY_ETIQUETTE,
             "readiness_debounce_elapsed": now - memory.phase_since >= READINESS_DEBOUNCE_SECONDS,
@@ -593,11 +650,17 @@ class DeliveryReadinessTracker:
             hard_block_reasons.append("session_ended")
         if not screen_at_agent_prompt:
             hard_block_reasons.append("screen_not_at_agent_prompt")
-        if partial_input_absent is False:
+        pending_submit = getattr(session, "pending_submit", None)
+        # With a stuck delivery standing, the composer's contents are that delivery,
+        # which its own reason below names; saying "the operator typed" about mux's
+        # own bytes is the misreading that reason was created to end.
+        if pending_submit is None and composer_holds_draft:
+            hard_block_reasons.append("composer_holds_draft")
+        elif pending_submit is None and partial_input_absent is False:
             hard_block_reasons.append("terminal_input_after_completion")
         if not operator_quiet:
             hard_block_reasons.append("operator_recently_typed")
-        if getattr(session, "pending_submit", None) is not None:
+        if pending_submit is not None:
             # A previous delivery's body is still in this composer: the daemon
             # pressed Enter, watched for a turn, and saw none
             # (`prompt_queue.PendingSubmit`). Pasting the next one on top merges
@@ -690,8 +753,13 @@ class DeliveryReadinessTracker:
                 "input_revision": input_revision,
                 "completion_input_revision": memory.input_revision_at_completion,
                 "turn_start_input_revision": memory.input_revision_at_turn_start,
-                "unsubmitted_delivery": (
-                    getattr(getattr(session, "pending_submit", None), "message_id", None)
+                "unsubmitted_delivery": getattr(pending_submit, "message_id", None),
+                "composer_screen": screen_reading_wire(screen_reading),
+                "composer_estimate_pending": estimate_pending,
+                # Set only when the verdict needed the screen, and then carried by
+                # the delivery's write (`prompt_queue.delivery_condition`).
+                "composer_screen_position": (
+                    screen_reading.position if screen_relied and screen_reading else None
                 ),
                 "subagent_events_ignored": memory.subagent_events,
                 "recent_transitions": list(memory.transitions),

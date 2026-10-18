@@ -696,7 +696,8 @@ Daemon to gateway:
 - `update {sid, frame, descriptor}` and `exit {sid, frame, descriptor}` - a snapshot frame for attached browsers, with the descriptor it implies.
 - `presence {leader}` - the leading device class, for passive claims.
 - `pending_submit {sid, pending_submit}` - the daemon-owned unsubmitted-delivery mark, which the gateway needs only as a write condition.
-- `write {sid, rid, text, accounted, condition}` with the bytes as payload - `condition` is `{input_revision, operator_quiet_seconds, no_pending_submit}` or null; `accounted` advances the input revision and the last input's time as operator input.
+- `write {sid, rid, text, accounted, condition}` with the bytes as payload - `condition` is `{input_revision, operator_quiet_seconds, no_pending_submit, screen_position}` or null; `accounted` advances the input revision and the last input's time as operator input.
+  `screen_position` is set only when the verdict relied on a screen reading of an empty composer, and requires that reading still to be current at that ring position.
 - `repaint {sid, rid}` - the one-column pulse.
 - `state_ack {sid, upto}` - every keystroke write numbered below `upto` is applied.
 - `quit {}` - the daemon is stopping for good rather than restarting, so the gateway exits too.
@@ -707,14 +708,15 @@ On connecting, the daemon sends an `upsert` for every session whose terminal it 
 
 Gateway to daemon:
 
-- `state {sid, revision, age, first_write_seq, writes, mode, mode_age, owner_connection, owner_device, owner_epoch, geometry, viewports, attached, attachments_seen, rejections, denials, claims?}` - one per session, at most one unacknowledged; changes made meanwhile fold into the next.
+- `state {sid, revision, age, first_write_seq, writes, mode, mode_age, owner_connection, owner_device, owner_epoch, geometry, viewports, attached, attachments_seen, rejections, denials, composer, claims?}` - one per session, at most one unacknowledged; changes made meanwhile fold into the next.
+  `composer` is the gateway core's current browser `composer_reading` as `{state, chars, position, stream}`, or null; the daemon applies it after the header's `writes` and drops it again once its own ring has drawn past `position`.
   `writes` are the keystroke writes whose side effects the daemon owes, oldest first and numbered from `first_write_seq`: `["t", text]` (typed text, with a third element `1` when it was also the owner's submit), `["o", text]` (an owner submit on its own), `["b", base64]` (binary input).
   The daemon applies each number once, so a resend after a lost acknowledgement is harmless, and a gateway with a new `gateway_id` numbers from zero again.
   At most 1024 writes or 256 KiB are held per session; the oldest are dropped past that, and the daemon reads a gap as typed-in composer text.
   `claims` is the whole claim log, present when it changed.
 - `event {sid, kind, source, payload}` - for the event log; held, at most 512, while no daemon is attached.
 - `write_result {sid, rid, written, reason?, revision, age}` and `repaint_result {sid, rid, applied}`.
-  A refused write names the part of its condition that moved (`input_revision_moved`, `operator_recently_typed`, `unsubmitted_delivery_in_composer`); `not_hosted` and `write_failed:*` mean the gateway could not write at all.
+  A refused write names the part of its condition that moved (`input_revision_moved`, `operator_recently_typed`, `unsubmitted_delivery_in_composer`, `composer_screen_moved`); `not_hosted` and `write_failed:*` mean the gateway could not write at all.
 - `broadcast {sid, data}` - typed text the daemon delivers to the rest of the broadcast set (`routes/terminal.deliver_broadcast`).
 - `metering {gateway_id, usage}` - the browser traffic the gateway carried, as a `NetworkUsage` snapshot cumulative since the gateway started, so a report the daemon misses costs nothing; sent every five seconds when it changed.
   The daemon folds it into its own measurement window (`diagnostics/network`).
@@ -1589,7 +1591,8 @@ readiness across raw PTY snapshots, so without a stamp a minute-old verdict rend
 identically to a current one.
 Rows carry `unsent_input` — `{since}` in epoch seconds, or absent — the daemon's estimate that
 text is sitting unsent in that session's composer, derived from the bytes every operator path
-writes to the PTY (`features/terminal-input.md`).
+writes to the PTY and re-anchored by any current pane `composer_reading`
+(`features/terminal-input.md`).
 It is present only while something is there, so presence is the whole signal, and the character
 count behind it is deliberately not published: it is inferred from keystrokes and a number on
 screen would be read as a measurement.
@@ -1684,6 +1687,8 @@ Latency phases `input_event_delay`, `input_main_thread_stall`, `input_socket_bac
 Each phase has its own one-second rate window, so a renderer repair cannot suppress input evidence.
 Diagnostic payloads contain timing, counts, connection state, visibility, ownership, device, and renderer context but never the input text.
 The one deliberate exception is the paste trace: phase `terminal_paste_trace` on the same frame persists as its own `terminal_paste_trace` event type under a wider clamp, and its detail carries a bounded pasted-payload summary (codepoint count, flagged non-ASCII codepoints, head/tail excerpt) plus before/after composer snapshots, because that content is the evidence the trace exists to keep (`features/terminal-input.md`).
+Any attached client may send `{type:"composer_reading", state, chars, position, stream, cols, rows}`, what its own cell grid shows in the agent's composer: `state` is `empty`, `placeholder`, `draft`, or `unreadable`, `chars` is the draft's length (never its text), and `position`/`stream` name the ring position its screen was parsed to.
+The core holding the terminal keeps a reading only while it is current - the same stream, `position` equal to the ring's end, later than the last write that could add text, and `cols`/`rows` equal to the PTY's - and drops a malformed or stale one without a reply (`features/delivery-readiness.md` § The composer).
 
 ### Multi-device arbitration
 
@@ -1729,6 +1734,11 @@ as `input_arbitration`, alongside the refused-claim count, the current geometry,
 leading device, and `claims`: the last two dozen decisions with the asking device, what it
 reported about itself, what the daemon believed, and the verdict. A counter says a claim was
 refused; only that log says which device asked and why it lost.
+The same endpoint carries `composer`: `{estimate_pending, estimate_since, screen, pending_submit}`,
+where `screen` is the current pane `composer_reading` (`{state, chars, position, stream}`) or
+null when none is current, and `pending_submit` is the message id of a queue delivery written
+but not yet submitted - the evidence behind `unsent_input` and behind the
+`composer_holds_draft` and `terminal_input_after_completion` readiness reasons.
 
 Input to a session that has **ended** — including a cold one — is refused separately and before
 ownership is considered: `{type:"input_refused", reason:"session_ended"}` on the socket, and a 400

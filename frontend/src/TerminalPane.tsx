@@ -142,7 +142,6 @@ import {
   terminalTapAction,
   type CaretPointerType,
   type TerminalCaretPosition,
-  type TerminalCaretSnapshot,
 } from './terminalCaretPlacement'
 import {
   composerTraceSnapshot,
@@ -154,7 +153,8 @@ import {
   type PasteOrigin,
   type PasteWrite,
 } from './pasteTrace'
-import { composerIsReadable, readComposerText } from './composerText'
+import { composerIsReadable, readComposerDraft, readComposerState } from './composerText'
+import { terminalCaretSnapshot } from './terminalCellSnapshot'
 import { ClipboardDropup } from './ClipboardDropup'
 import { SkillsDropup } from './SkillsDropup'
 import { PromptsDropup } from './PromptsDropup'
@@ -189,6 +189,13 @@ const BASE_FONT_SIZE = 11
 const LETTERBOX_NOTICE_DELAY_MS = 1500
 /** How long output must stop for before the keyboard-layout questions are re-asked. */
 const KEYBOARD_LAYOUT_SETTLE_MS = 250
+/**
+ * How long output must stop for before the composer is read for the daemon. Short,
+ * because an `empty` reading is what returns a session to deliverable and every
+ * repaint retires the last one; long enough that a keystroke's echo, which lands in
+ * a frame or two, is read once rather than mid-paint.
+ */
+const COMPOSER_READING_SETTLE_MS = 120
 /**
  * How recently the reader must have typed for output in the hidden half of the grid to be
  * left alone. Typing means they are composing rather than waiting for an answer, and a pane
@@ -360,36 +367,6 @@ function pasteIntoTerminal(term: Terminal, inputBackend: string, text: string, o
     return
   }
   performPasteWrite({ origin, kind: 'payload' }, () => term.paste(body))
-}
-
-function terminalCaretSnapshot(term: Terminal): TerminalCaretSnapshot {
-  const buffer = term.buffer.active
-  const lines = []
-  for (let row = buffer.viewportY; row < buffer.viewportY + term.rows; row += 1) {
-    const line = buffer.getLine(row)
-    const cells = []
-    for (let column = 0; column < term.cols; column += 1) {
-      const cell = line?.getCell(column)
-      cells.push({
-        chars: cell?.getChars() ?? '',
-        code: cell?.getCode() ?? 0,
-        width: cell?.getWidth() ?? 1,
-        bgMode: cell?.getBgColorMode() ?? 0,
-        bg: cell?.getBgColor() ?? 0,
-        dim: cell?.isDim() === 1,
-      })
-    }
-    lines.push({ row, cells })
-  }
-  return {
-    cols: term.cols,
-    rows: term.rows,
-    viewportY: buffer.viewportY,
-    baseY: buffer.baseY,
-    cursorX: buffer.cursorX,
-    cursorY: buffer.cursorY,
-    lines,
-  }
 }
 
 function mobileClipboardFallback(): boolean {
@@ -1247,6 +1224,15 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     // position from one incarnation of a session can land inside another's range,
     // and only the pair lets the daemon refuse to answer it with a delta.
     let serverStream: string | null = null
+    // The ring position xterm has *parsed* up to, as opposed to received: the
+    // screen a composer reading describes. `replayAnchor` is where it lands when a
+    // replay finishes parsing, and `cursorEpoch` retires the callbacks of bytes
+    // written before a reset or a gap.
+    let parsedPosition: number | null = null
+    let replayAnchor: number | null = null
+    let cursorEpoch = 0
+    let composerReadingTimer: number | undefined
+    let lastComposerReadingKey = ''
     // One transcript restatement per parsed buffer: set when this pane asks the daemon
     // for a repaint pulse, cleared only where `term.reset()` discards what was parsed
     // (a reconnect or resync replay), so a short transcript cannot re-request forever.
@@ -1417,6 +1403,47 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       if (socket?.readyState !== WebSocket.OPEN) return
       socket.send(JSON.stringify({ type: 'terminal_state', mode: term.buffer.active.type }))
     }
+    // What this pane's own screen shows in the composer, for the daemon
+    // (`composer_input.py`). Delivery readiness takes an `empty` reading as proof
+    // the composer holds nothing - which is what lets a session whose operator
+    // typed and then deleted take a queued message again - and the sidebar's
+    // unsent-input mark is corrected from it. So a reading is sent only for a screen
+    // that is the whole stream: nothing received and still unparsed, and the
+    // position counted in the stream the daemon named. The daemon refuses anything
+    // that is not current where it stands, and the next parse sends another.
+    const resetParsedCursor = () => {
+      parsedPosition = null
+      replayAnchor = null
+      cursorEpoch += 1
+      lastComposerReadingKey = ''
+    }
+    const reportComposerReading = () => {
+      composerReadingTimer = undefined
+      if (disposed || replaying || socket?.readyState !== WebSocket.OPEN) return
+      if (parsedPosition === null || serverStream === null || parsedPosition !== serverPosition) return
+      if (pendingLiveWrites.length) return
+      const backend = backendRef.current
+      if (!composerIsReadable(backend)) return
+      const reading = readComposerState(backend, terminalCaretSnapshot(term))
+      const key = `${reading.state}:${reading.chars}:${parsedPosition}:${serverStream}:${term.cols}x${term.rows}`
+      if (key === lastComposerReadingKey) return
+      lastComposerReadingKey = key
+      socket.send(JSON.stringify({
+        type: 'composer_reading',
+        state: reading.state,
+        chars: reading.chars,
+        position: parsedPosition,
+        stream: serverStream,
+        cols: term.cols,
+        rows: term.rows,
+      }))
+    }
+    // Trailing, so a repainting CLI is read once it settles rather than once per
+    // write: a reading of a frame half-drawn would be refused or, worse, wrong.
+    const scheduleComposerReading = () => {
+      if (composerReadingTimer !== undefined) window.clearTimeout(composerReadingTimer)
+      composerReadingTimer = window.setTimeout(reportComposerReading, COMPOSER_READING_SETTLE_MS)
+    }
     const bufferChange = term.buffer.onBufferChange(() => {
       cancelCaretPlacement()
       reportTerminalState()
@@ -1442,6 +1469,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     const writeParsed = term.onWriteParsed(() => {
       lastParsedAt = performance.now()
       scheduleKeyboardSettleRef.current()
+      scheduleComposerReading()
     })
     // The invariant half of terminal display correctness (`terminalHealth.ts`):
     // every event path can be raced or missed, so on the same slow clock as the
@@ -2319,8 +2347,12 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     const finishReplay = () => {
       replaying = false
       replayAllowsTerminalResponses = false
+      // The replay has parsed, and xterm parses in order, so nothing written after
+      // it has: the screen is exactly the ring at `replay_end`.
+      parsedPosition = replayAnchor
       attachmentReadyRef.current = true
       setAttachmentReady(true)
+      scheduleComposerReading()
       const queued = pendingUserInput.splice(0, pendingUserInput.length)
       pendingUserInputLength = 0
       for (const item of queued) sendInput(item.data, false, item.broadcast, false, item.capture)
@@ -2342,7 +2374,13 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       if (event.data instanceof ArrayBuffer) {
         lastBytesAt = performance.now()
         const byteCount = event.data.byteLength
-        if (replaying) {
+        // Replay bytes are exactly the ones between `replay_start` and `replay_end`.
+        // Bytes after `replay_end` are live even while the replay is still parsing:
+        // the daemon sends the replay, then `replay_end`, then live output, and the
+        // live bytes that arrived in that window used to be taken for replay - so
+        // the ring cursor skipped them, and the next reconnect's `since` asked for
+        // bytes this terminal had already parsed.
+        if (replaying && !replayEndReceived) {
           pendingReplayWrites += 1
           term.write(new Uint8Array(event.data), () => {
             pendingReplayWrites -= 1
@@ -2353,6 +2391,12 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
           // Live bytes advance the ring cursor; replay bytes never do (their end
           // position arrives on `replay_end`, and a full replay is not ring bytes).
           if (serverPosition !== null) serverPosition += byteCount
+          // ...and the parsed cursor moves when xterm has parsed them, which is the
+          // position a composer reading of this screen describes. Stamped with the
+          // cursor's epoch, so a callback for bytes written before a reset cannot
+          // move the cursor of the stream that replaced them.
+          const endPosition = serverPosition
+          const epoch = cursorEpoch
           // Output arriving is the ack the wheel pacer's clock runs on: the repaint
           // answering the last scroll report means the CLI is ready for the next one.
           wheelPacer.noteOutput()
@@ -2366,6 +2410,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
             const index = pendingLiveWrites.indexOf(pending)
             if (index >= 0) pendingLiveWrites.splice(index, 1)
             pendingLiveWriteBytes = Math.max(0, pendingLiveWriteBytes - byteCount)
+            if (socket === source && epoch === cursorEpoch) parsedPosition = endPosition
             acknowledgeParsedOutput(source, byteCount)
             if (echoBatch) {
               window.requestAnimationFrame(() => {
@@ -2384,7 +2429,13 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       else {
         const frame = JSON.parse(event.data)
         // Dropped chunks broke the byte count; the resync's `replay_end` re-anchors it.
-        if (frame.type === 'gap') { replaying = true; serverPosition = null; serverStream = null }
+        if (frame.type === 'gap') {
+          replaying = true
+          replayEndReceived = false
+          serverPosition = null
+          serverStream = null
+          resetParsedCursor()
+        }
         const frameGeneration=String(frame.snapshot?._snapshot_generation||'')
         if(frameGeneration&&frameGeneration!==currentGeneration){currentGeneration=frameGeneration;currentRevision=-1}
         if ((frame.type === 'state' || frame.type === 'update') && Number(frame.revision ?? 0) > currentRevision) {
@@ -2401,6 +2452,9 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
           // provably missed bytes the replay does not patch over), or a reconnect the
           // daemon answered with a full window (`attach`, including every daemon that
           // predates deltas).
+          // Whatever the replay is, the parsed cursor waits for its end: a delta's
+          // bytes are not yet parsed, and a reset discards what they counted.
+          resetParsedCursor()
           if (frame.reason === 'resync' || (reconnectReplay && frame.reason !== 'delta')) {
             term.reset()
             serverPosition = null
@@ -2422,6 +2476,8 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
           serverPosition = Number.isSafeInteger(anchor) && anchor >= 0 ? anchor : null
           // A daemon that predates streams sends none, and then honours `since` alone.
           serverStream = typeof frame.stream === 'string' && frame.stream ? frame.stream : null
+          // Where the parsed cursor lands once the replay itself has parsed.
+          replayAnchor = serverPosition
           reportStartup('replay_ready')
           replayEndReceived = true
           if (pendingReplayWrites === 0) finishReplay()
@@ -3550,7 +3606,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     window.visualViewport?.addEventListener('resize',scheduleBurstFit)
     window.addEventListener(PRESENCE_REPORTED_EVENT, onPresenceReported)
     connect(false)
-    return () => { disposed=true;finishCaretPlacement('disposed');stopSelectionScroll();stopLivenessWatch();stopInputStallWatch();clearHandshakeWatchdog();reconnectNowRef.current=()=>{};if(reconnectTimer!==undefined)clearTimeout(reconnectTimer);if(lineBreakResetTimer!==undefined)clearTimeout(lineBreakResetTimer);if(outputAckTimer!==undefined)clearTimeout(outputAckTimer);window.clearInterval(terminalStateTimer);if(keyboardSettleTimer!==undefined)window.clearTimeout(keyboardSettleTimer);scheduleKeyboardSettleRef.current=()=>{};bufferChange.dispose();tailScroll.dispose();tailRender.dispose();writeParsed.dispose();renderDiagnostic?.dispose();input.dispose();wheelPacer.dispose();selectionChange.dispose();caretCursorMove.dispose();caretWriteParsed.dispose();caretResize.dispose();cancelLongPress();observer.disconnect();trackObserver.disconnect();intersection?.disconnect();window.cancelAnimationFrame(fitFrame);window.cancelAnimationFrame(redrawFrame);surfaceRepair?.cancel();window.cancelAnimationFrame(visibilityFrame);window.clearTimeout(surfaceConfirmTimer);window.removeEventListener('resize',scheduleBurstFit);window.visualViewport?.removeEventListener('resize',scheduleBurstFit);viewportScheduler.cancel();document.removeEventListener('visibilitychange',onVisibility);window.removeEventListener('pageshow',onPageShow);window.removeEventListener('focus',onWindowFocus);window.removeEventListener('error',onRenderError);window.removeEventListener('pointermove',pointerMove);window.removeEventListener('pointerup',pointerEnd);window.removeEventListener('pointercancel',pointerCancel);window.removeEventListener('mux:theme',onTheme);window.removeEventListener(PRESENCE_REPORTED_EVENT,onPresenceReported);mobileLiveInput?.removeEventListener('beforeinput',mobileBeforeInput);mobileLiveInput?.removeEventListener('input',mobileTextInput);mobileLiveInput?.removeEventListener('keydown',mobileKeyDown);mobileLiveInput?.removeEventListener('paste',mobilePaste);mobileLiveInput?.removeEventListener('focusout',keepBridgeFocused);holdingBridgeFocus=false;terminalGestureActiveRef.current=false;deferredKeyboardInsetRef.current=null;setKeyboardGestureHold(false);if(mobileLiveInput)mobileLiveInput.value='';host.current?.removeEventListener('pointerdown',pointerClaim);host.current?.removeEventListener('mousedown',mobileMouseClaim,true);host.current?.removeEventListener('keydown',terminalKeyCapture,true);host.current?.removeEventListener('beforeinput',terminalBeforeInputCapture,true);host.current?.removeEventListener('focusin',claimOnFocus);host.current?.removeEventListener('contextmenu',openMenu);host.current?.removeEventListener('paste',pasteEvent,true);term.textarea?.removeEventListener('paste',unclaimedPaste);document.removeEventListener('paste',documentPaste,true);host.current?.removeEventListener('dragenter',dragEnter);host.current?.removeEventListener('dragover',dragOver);host.current?.removeEventListener('dragleave',dragLeave);host.current?.removeEventListener('drop',drop);if(socket){socket.onclose=null;socket.close()}term.dispose();termRef.current=null;searchRef.current=null;focusTerminalInputRef.current=()=>{};pasteAttachmentRef.current=()=>{};claimInputRef.current=()=>{};resizeToPaneRef.current=()=>{};applyBaseFontRef.current=()=>{};applyFontFamilyRef.current=()=>{} }
+    return () => { disposed=true;finishCaretPlacement('disposed');stopSelectionScroll();stopLivenessWatch();stopInputStallWatch();clearHandshakeWatchdog();reconnectNowRef.current=()=>{};if(reconnectTimer!==undefined)clearTimeout(reconnectTimer);if(lineBreakResetTimer!==undefined)clearTimeout(lineBreakResetTimer);if(outputAckTimer!==undefined)clearTimeout(outputAckTimer);if(composerReadingTimer!==undefined)window.clearTimeout(composerReadingTimer);window.clearInterval(terminalStateTimer);if(keyboardSettleTimer!==undefined)window.clearTimeout(keyboardSettleTimer);scheduleKeyboardSettleRef.current=()=>{};bufferChange.dispose();tailScroll.dispose();tailRender.dispose();writeParsed.dispose();renderDiagnostic?.dispose();input.dispose();wheelPacer.dispose();selectionChange.dispose();caretCursorMove.dispose();caretWriteParsed.dispose();caretResize.dispose();cancelLongPress();observer.disconnect();trackObserver.disconnect();intersection?.disconnect();window.cancelAnimationFrame(fitFrame);window.cancelAnimationFrame(redrawFrame);surfaceRepair?.cancel();window.cancelAnimationFrame(visibilityFrame);window.clearTimeout(surfaceConfirmTimer);window.removeEventListener('resize',scheduleBurstFit);window.visualViewport?.removeEventListener('resize',scheduleBurstFit);viewportScheduler.cancel();document.removeEventListener('visibilitychange',onVisibility);window.removeEventListener('pageshow',onPageShow);window.removeEventListener('focus',onWindowFocus);window.removeEventListener('error',onRenderError);window.removeEventListener('pointermove',pointerMove);window.removeEventListener('pointerup',pointerEnd);window.removeEventListener('pointercancel',pointerCancel);window.removeEventListener('mux:theme',onTheme);window.removeEventListener(PRESENCE_REPORTED_EVENT,onPresenceReported);mobileLiveInput?.removeEventListener('beforeinput',mobileBeforeInput);mobileLiveInput?.removeEventListener('input',mobileTextInput);mobileLiveInput?.removeEventListener('keydown',mobileKeyDown);mobileLiveInput?.removeEventListener('paste',mobilePaste);mobileLiveInput?.removeEventListener('focusout',keepBridgeFocused);holdingBridgeFocus=false;terminalGestureActiveRef.current=false;deferredKeyboardInsetRef.current=null;setKeyboardGestureHold(false);if(mobileLiveInput)mobileLiveInput.value='';host.current?.removeEventListener('pointerdown',pointerClaim);host.current?.removeEventListener('mousedown',mobileMouseClaim,true);host.current?.removeEventListener('keydown',terminalKeyCapture,true);host.current?.removeEventListener('beforeinput',terminalBeforeInputCapture,true);host.current?.removeEventListener('focusin',claimOnFocus);host.current?.removeEventListener('contextmenu',openMenu);host.current?.removeEventListener('paste',pasteEvent,true);term.textarea?.removeEventListener('paste',unclaimedPaste);document.removeEventListener('paste',documentPaste,true);host.current?.removeEventListener('dragenter',dragEnter);host.current?.removeEventListener('dragover',dragOver);host.current?.removeEventListener('dragleave',dragLeave);host.current?.removeEventListener('drop',drop);if(socket){socket.onclose=null;socket.close()}term.dispose();termRef.current=null;searchRef.current=null;focusTerminalInputRef.current=()=>{};pasteAttachmentRef.current=()=>{};claimInputRef.current=()=>{};resizeToPaneRef.current=()=>{};applyBaseFontRef.current=()=>{};applyFontFamilyRef.current=()=>{} }
     // `keybindings` used to be a dependency here, so every keymap edit tore down and
     // rebuilt the terminal. The key handler now asks `keymapDispatch` at the moment
     // it fires, so a changed map is picked up without remounting anything.
@@ -3708,7 +3764,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
   const readComposer = ():string|null => {
     const term=termRef.current
     if(!term||!composerIsReadable(session.backend))return null
-    return readComposerText(session.backend,terminalCaretSnapshot(term))
+    return readComposerDraft(session.backend,terminalCaretSnapshot(term))
   }
   const composerUnreadable = 'The composer could not be read from this screen. It may be showing a dialog, a picker, or output rather than a draft.'
   const copyComposerInput = async () => {

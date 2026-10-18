@@ -59,10 +59,15 @@ const EXPLANATIONS: Record<string, Explanation> = {
   },
 
   // --- blocked: the composer / the screen -----------------------------------
-  terminal_input_after_completion: {
-    summary: 'you typed in this terminal after its last turn ended',
+  composer_holds_draft: {
+    summary: 'there is unsent text in this agent’s composer',
     clears:
-      'Clearing the line does not clear this: the queue counts keystrokes, not what is in the composer, because an estimate that said “empty” could authorize a send on top of text nothing can see. It resets when the next turn ends.',
+      'Send it or clear it in the terminal. A queued message would otherwise be pasted onto the end of it and the agent would receive both as one prompt.',
+  },
+  terminal_input_after_completion: {
+    summary: 'something was typed in this terminal after its last turn ended, and its composer has not been read since',
+    clears:
+      'Open the session: once a pane has drawn the composer empty, this clears on its own. Without a pane the queue cannot see what is in the composer, so it waits for the next turn to end rather than risk pasting onto text.',
   },
   operator_recently_typed: {
     summary: 'someone is typing in this terminal right now',

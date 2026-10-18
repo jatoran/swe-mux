@@ -21,6 +21,11 @@ What is authoritative where:
   effects on it that it runs in process, in order, exactly once per daemon.
 - **The daemon** also owns `pending_submit`, which the gateway needs only as a
   condition, so it is sent the other way.
+- **The gateway** owns the composer's screen reading, because the browsers that
+  read it and the output that retires it both arrive there. Each `state` carries
+  the reading only while it is current, and the mirror additionally drops one its
+  own ring has drawn past; a delivery that relied on it re-checks it at the gateway
+  (`WriteCondition.screen_position`).
 
 Writes go to the gateway as ordered notices with a request id. `write` and
 `write_operator_input` do not wait, so the in-process callers keep their shape;
@@ -37,7 +42,13 @@ from collections import deque
 from collections.abc import Callable, Coroutine
 from typing import Any
 
-from ..composer_input import ComposerState, PendingSubmit
+from ..composer_input import (
+    ComposerScreenReading,
+    ComposerState,
+    PendingSubmit,
+    parse_screen_reading,
+    write_may_add_text,
+)
 from ..framed_ipc import (
     FramedPeer,
     HandshakeRefused,
@@ -129,6 +140,9 @@ class RemoteTerminal:
         self.input_revision = 0
         self.composer = ComposerState()
         self._pending_submit: PendingSubmit | None = None
+        # The gateway's current composer reading, as its last `state` reported it.
+        self._screen_reading: ComposerScreenReading | None = None
+        self._screen_reading_announced: ComposerScreenReading | None = None
         self.terminal_mode: str | None = None
         self.terminal_mode_updated_at = 0.0
         self.attached_connections = 0
@@ -171,6 +185,10 @@ class RemoteTerminal:
         core.last_input_report_ts = self.last_input_report_ts
         core.composer = self.composer
         core.pending_submit = self._pending_submit
+        # The screen reading stays behind for the same reason: a keystroke the
+        # gateway accepted after its last report may not be drawn yet, so the new
+        # core needs a reading taken after the CLI next draws.
+        core.additive_input_position = core.stream.scrollback.position
         core.terminal_mode = self.terminal_mode
         core.terminal_mode_updated_at = self.terminal_mode_updated_at
         core.geometry = self.geometry
@@ -194,6 +212,45 @@ class RemoteTerminal:
             return None
         return max(0.0, time.monotonic() - self.last_input_event_ts)
 
+    def composer_screen(self) -> ComposerScreenReading | None:
+        """The gateway's current composer reading (`TerminalCore.composer_screen`).
+
+        The gateway sends it only while current, so this mirror can lag it by one
+        message; it also drops one that this daemon's own ring has drawn past, when
+        both rings count the same stream. The lag is what the delivery condition's
+        `screen_position` exists to make harmless.
+        """
+        reading = self._screen_reading
+        if reading is None:
+            return None
+        if (
+            reading.stream == self.stream.stream_id
+            and self.stream.scrollback.position > reading.position
+        ):
+            return None
+        return reading
+
+    def announce_screen_reading(self) -> None:
+        """Hand a newly mirrored reading to the daemon's side effects, once.
+
+        Called after the `state` that carried it has had its writes applied, so the
+        estimate is corrected from the screen rather than the other way round.
+        """
+        reading = self._screen_reading
+        if reading is None or reading == self._screen_reading_announced:
+            return
+        self._screen_reading_announced = reading
+        try:
+            self.host.note_composer_reading(reading)
+        except Exception:
+            log.exception("session %s: a composer reading side effect failed", self.session_id)
+
+    def _retire_screen_reading(self, data: str | bytes) -> None:
+        # The gateway retires it on the same write; this keeps the mirror from
+        # offering it in the moment before the gateway's next `state` says so.
+        if self._screen_reading is not None and write_may_add_text(data):
+            self._screen_reading = None
+
     # -- writes --------------------------------------------------------------------
 
     def write(self, data: str | bytes, *, condition: WriteCondition | None = None) -> None:
@@ -201,6 +258,7 @@ class RemoteTerminal:
         if condition is not None:
             raise TypeError("a conditional write to a remote terminal is awaited: write_when")
         self.hub.send_write(self, data, accounted=False, condition=None)
+        self._retire_screen_reading(data)
 
     def write_operator_input(
         self, data: str, *, condition: WriteCondition | None = None
@@ -213,6 +271,7 @@ class RemoteTerminal:
         if condition is not None:
             raise TypeError("a conditional write to a remote terminal is awaited: write_when")
         self.hub.send_write(self, data, accounted=True, condition=None)
+        self._retire_screen_reading(data)
         now = time.monotonic()
         self.input_revision += 1
         self.last_input_event_ts = now
@@ -229,6 +288,7 @@ class RemoteTerminal:
         if accounted and not isinstance(data, str):
             raise TypeError("accounted input is text")
         await self.hub.write_and_wait(self, data, accounted=accounted, condition=condition)
+        self._retire_screen_reading(data)
 
     async def repaint_current_geometry(self) -> bool:
         return await self.hub.repaint(self)
@@ -294,6 +354,10 @@ class RemoteTerminal:
                 for cid, size in viewports.items()
                 if isinstance(size, list) and len(size) == 2
             }
+        composer = header.get("composer")
+        self._screen_reading = (
+            parse_screen_reading(composer) if isinstance(composer, dict) else None
+        )
         self.attached_connections = int(header.get("attached") or 0)
         self.attachments_seen = int(header.get("attachments_seen") or 0)
         self.input_rejections = int(header.get("rejections") or 0)
@@ -647,6 +711,7 @@ class RemoteHub:
         if terminal is not None:
             terminal.merge(header)
             upto = terminal.apply_writes(first, writes)
+            terminal.announce_screen_reading()
         # Acknowledged even for a session this daemon no longer serves, so the
         # gateway is never left holding a summary nobody will read.
         try:

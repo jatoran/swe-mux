@@ -143,6 +143,7 @@ One session's terminal, independent of the process hosting it (`development/arch
 
 - `stream.py` - `TerminalStream`: the retained ring and the replay-prefix parsers (screen mode, bracketed paste, sticky modes), what an attach replays, deltas and resyncs, and the `PtySubscriber` queues every byte fans out to.
 - `core.py` - `TerminalCore`: input ownership and the claim log, viewports and the arbitrated geometry, the repaint pulse and the resize-settle scheduler, client-diagnostic rate limits, and the input accounting delivery readiness reads (`input_revision`, the last input's time, the composer estimate).
+  It also judges which browser `composer_reading` is current (`composer_screen`): the same stream, at the ring's end, after `additive_input_position` - the ring position at the last write `write_may_add_text` could not rule out - and at the PTY's size; output (`note_output`) and a reseed (`note_stream_reseeded`) retire it.
   It knows the browser sockets it serves (`sockets`, kept by `serve_connection`), and `retire(code, message)` ends its service when another process takes the terminal: a retired core writes and resizes nothing, refuses a socket at the handshake and each message on an attached one, and closes every browser with the code.
 - `connection.py` - one browser connection from the 0.25 s attach handshake to detach: replay, the sender with its output credit (`flow.py`), claims, input frames and client frames.
 - `host.py` - the only things the core asks of its host: a live `TerminalDescriptor` (state, created and stopping flags, the four harness traits it acts on), the record snapshot and revision, the presence leader, an event sink, the side effects typed input owes, and broadcast.
@@ -151,7 +152,7 @@ One session's terminal, independent of the process hosting it (`development/arch
 - `gateway.py` - `GatewayHub`, the gateway's side: a `framed_ipc` server for the daemon, one `GatewaySession` (stream, core, `MirroredDescriptor`, `GatewayTerminalHost`) per session it is sent, `serve` for a browser and `feed_output` for the supervisor's bytes.
   Each session's `state` goes out at most one unacknowledged at a time, and the keystroke writes it carries are numbered so a resend applies once.
 - `remote.py` - `RemoteHub` and `RemoteTerminal`, the daemon's side: a mirror that stands on `Session.terminal` where a `TerminalCore` stands in process, answering the same attribute names from what the gateway reports and running the daemon's own `TerminalHost` side effects on each keystroke write.
-  The gateway owns the input accounting, ownership and geometry; the daemon owns what typing means and `pending_submit`.
+  The gateway owns the input accounting, ownership, geometry and the current composer reading (carried in `state` as `composer`); the daemon owns what typing means and `pending_submit`, and drops a mirrored reading as soon as its own ring or a write it sent has moved past it.
   `RemoteHub.connect(before_sync=...)` runs the handover between the handshake and the first notice, `ping` and `last_heard` are the liveness reading a hung gateway is judged by, and `RemoteTerminal.hand_back` seeds the in-process core that takes a terminal back (`terminal_placement.py`).
 
 `Session` constructs its core and keeps every attribute it had as a view onto it (`_TerminalView`), so delivery readiness, automation's attended checks and every other reader are unchanged; the per-chunk fanout reaches the stream directly, because a view read costs a lookup on the hottest path in the daemon.
@@ -161,7 +162,8 @@ The core's mutations of what the daemon mirrors call `on_change` (`note_typed_in
 
 `TerminalCore.write` is the daemon's only PTY write (item 25), and `tests/test_pty_single_writer.py` fails on a `pty.write` or `pty.resize` anywhere outside the core and the PTY implementations under it.
 `write_when` is the daemon's conditional write, the same awaited call on a `TerminalCore` and on a `RemoteTerminal`, because only the process the keystrokes arrive in can judge a condition.
-One writer gives writes from every source a single order, and it is what lets a write carry a `WriteCondition` - the input revision, operator-quiet window and pending-submit state a delivery's readiness verdict relied on - checked with nothing able to run between the check and the write; a condition that no longer holds raises `WriteRefused` and writes nothing.
+One writer gives writes from every source a single order, and it is what lets a write carry a `WriteCondition`: the facts a delivery's readiness verdict relied on, checked with nothing able to run between the check and the write.
+Those are the input revision, the operator-quiet window, the pending-submit state, and, when the verdict needed a screen reading, that reading's position (`screen_position`); a condition that no longer holds raises `WriteRefused` and writes nothing.
 `write_operator_input` is the accounted variant: it writes, then advances `input_revision` and the last input's time.
 `last_input_age` reports that time as an age, because a monotonic stamp means nothing in another process.
 
@@ -201,6 +203,12 @@ The body is a bracketed paste with newlines as CR; a *leading* newline run is li
 
 `routes/pty.py` (for the terminal core's typed input) and `operator_input.py` call it wherever `input_revision` is advanced, and `session.py` clears it when a turn opens or the session ends.
 
+It also holds the screen half: `ComposerScreenReading` and `parse_screen_reading` for a browser's `composer_reading` frame, and `merge_screen_readings` for two panes reporting the same position (a draft outranks an empty).
+`screen_composer_empty` is the rule delivery readiness decides on - `placeholder` is empty only beside an estimate of zero - and `reanchor_composer` corrects the estimate from a current reading.
+`write_may_add_text` is the allowlist the terminal core retires a reading by.
+Only keys that erase or move within the line leave it standing: Backspace, Delete, the line and word kills, Left/Right, Home/End, word movement, bare Esc, and focus and mouse reports.
+Any write that might have put text in the composer - including `↑`/`↓`, which recall history, and Tab - forces a fresh reading of a screen drawn after it.
+
 ## `operator_input.py`
 
 Operator-class input: every write into a terminal that is not a browser keystroke - the HTTP input route, broadcast, voice, approvals, the prompt queue, staged spawn text, and the interrupt and graceful-end operations.
@@ -211,7 +219,9 @@ Operator-class input: every write into a terminal that is not a browser keystrok
 **Not:** the browser path, which accounts per keystroke kind in `terminal_core/connection.py`; or the two deliberately unaccounted writers, automation `write_pty` (`meta_hooks.py`) and process-action interrupts (`processes.py`), which call `TerminalCore.write` because they are not operator input (`design/features/delivery-readiness.md`).
 It holds no state and runs in the daemon only; `processes.py` also runs in the worker process and imports nothing from here.
 
-**Not:** reading the composer, which nothing can, or authorizing anything - `delivery_readiness.py` keeps its own coarse boundary and never consults this.
+`note_composer_reading` is what a current screen reading owes the daemon: it re-anchors the estimate, retires `pending_submit` on an `empty` reading, and announces a crossing with `source: "screen"`.
+
+**Not:** reading the composer, which only a browser's cell grid can, or authorizing anything - `delivery_readiness.py` lets the estimate add a block and never lift one.
 Not the queue's delivery bytes either: `prompt_queue.delivery_payload` builds those on top of this, and *drops* a leading newline rather than lifting it, because a delivery has passed the readiness gate and is about to submit.
 
 ## `spawn_contract.py`

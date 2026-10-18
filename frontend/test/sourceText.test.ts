@@ -77,6 +77,8 @@ const SOURCE_TEXT_TESTS: Readonly<Record<string, readonly Reason[]>> = {
   'budgetControl.test.ts': ['component-jsx'],
   'bundleSplit.test.ts': ['build-artifact', 'stylesheet'],
   'changeMap.test.ts': ['component-jsx', 'cross-language-contract'],
+  //: Real CLI output captured under a pseudoterminal, replayed through xterm itself.
+  'composerCaptures.test.ts': ['fixture'],
   'conversationToggle.test.ts': ['component-jsx', 'stylesheet'],
   //: `cross-language-contract` because the reason vocabulary is declared in
   //: `delivery_readiness.py` and worded in `deliveryReadiness.ts`, and a code with no

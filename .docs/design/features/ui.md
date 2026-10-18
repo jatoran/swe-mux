@@ -3591,6 +3591,7 @@ Every session context menu carries **Configure appearance**, which deep-links to
   The workspace tab strip draws the same mark from the same resolved mode, gated on the same configured field, so the two surfaces cannot disagree.
 - **Unsent input is marked with a caret bar (`▌`), in teal.**
   It reports `unsent_input` from the daemon (`features/terminal-input.md`) unioned with this device's own mobile draft registry, which never reaches the PTY and so is invisible to every other client.
+  The daemon's half is a keystroke count that any pane showing the session corrects from its screen, so a mark left standing by a word delete, a slash menu, or text that was typed and erased clears as soon as a pane draws the empty composer, and history recalled with `↑` raises it.
   Where the two disagree the mark reports the **oldest**: the question is how long something has been sitting there, and a phone draft from an hour ago is not made recent by a keystroke on the desktop a minute ago.
   Teal because green, blue, amber, and red already say something about what the *agent* is doing, and this is the one mark on the row that is about the operator; the same family as the unread edge, for the same reason.
   An ended session has no composer and is never marked.

@@ -14,6 +14,8 @@ from typing import Any, Protocol
 
 from aiohttp import WSMessage
 
+from ..composer_input import ComposerScreenReading
+
 
 class TerminalDescriptor(Protocol):
     """What the core needs to know about the session it serves.
@@ -117,6 +119,11 @@ class TerminalHost(Protocol):
 
     def note_owner_submit(self, data: str) -> None:
         """Typed text from the input owner, after its presence was renewed."""
+        ...
+
+    def note_composer_reading(self, reading: ComposerScreenReading) -> None:
+        """A current screen reading of the composer, after the core accepted it:
+        what the daemon's composer estimate is corrected from."""
         ...
 
     async def broadcast(self, data: str) -> None:

@@ -17,6 +17,7 @@ from typing import Any
 
 from aiohttp import WSMessage, WSMsgType
 
+from swe_mux.composer_input import ComposerScreenReading
 from swe_mux.framed_ipc import new_token
 from swe_mux.terminal_core import (
     DescriptorState,
@@ -65,6 +66,7 @@ class DaemonHost:
         self.submits: list[str] = []
         self.events: list[tuple[str, str, dict[str, Any]]] = []
         self.broadcasts: list[str] = []
+        self.readings: list[ComposerScreenReading] = []
         self.record: dict[str, Any] = {"id": SESSION_ID, "state": "idle"}
         self.revision = 0
 
@@ -92,6 +94,9 @@ class DaemonHost:
 
     def note_owner_submit(self, data: str) -> None:
         self.submits.append(data)
+
+    def note_composer_reading(self, reading: ComposerScreenReading) -> None:
+        self.readings.append(reading)
 
     async def broadcast(self, data: str) -> None:
         self.broadcasts.append(data)

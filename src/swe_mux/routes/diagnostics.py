@@ -18,6 +18,7 @@ from .. import (
 )
 from ..background_tasks import background
 from ..batched_stat import ticker as batched_stat_ticker
+from ..composer_input import screen_reading_wire
 from ..config import Config
 from ..console_contention import ConsoleCensus, probe_console_participants
 from ..deterministic_consumers import DeterministicConsumerService
@@ -206,6 +207,16 @@ def _live_state_log_payload(
             "input_rejections": session.input_rejections,
             "claim_denials": session.input_claim_denials,
             "claims": list(session.claim_log),
+        },
+        # Both sources of "is something sitting in the composer" (`composer_input.py`):
+        # the input-side estimate and a browser's screen reading, only while current.
+        # A row marked as holding a draft that the operator says is empty is
+        # answered here - which source said so, and whether the screen agreed.
+        "composer": {
+            "estimate_pending": session.composer.pending,
+            "estimate_since": session.composer.since or None,
+            "screen": screen_reading_wire(session.composer_screen()),
+            "pending_submit": getattr(session.pending_submit, "message_id", None),
         },
         # Real state changes are kept separately: a busy turn emits dozens
         # of same-state tool detail updates that would otherwise evict the

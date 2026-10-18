@@ -91,14 +91,20 @@ def delivery_condition(evaluation: Mapping[str, Any]) -> WriteCondition:
     (`input_revision`), the operator quiet for the debounce window, and no earlier
     delivery still sitting unsubmitted; the write re-checks exactly those, so a
     keystroke that lands after the verdict refuses the paste instead of being
-    pasted over.
+    pasted over. A verdict that needed a screen reading of an empty composer to be
+    safe also carries that reading's ring position, so anything drawn after it
+    refuses the write too (`WriteCondition.screen_position`).
     """
     evidence = evaluation.get("evidence")
-    revision = evidence.get("input_revision") if isinstance(evidence, Mapping) else None
+    if not isinstance(evidence, Mapping):
+        evidence = {}
+    revision = evidence.get("input_revision")
+    screen = evidence.get("composer_screen_position")
     return WriteCondition(
         input_revision=revision if isinstance(revision, int) else None,
         operator_quiet_seconds=READINESS_DEBOUNCE_SECONDS,
         no_pending_submit=True,
+        screen_position=screen if isinstance(screen, int) else None,
     )
 
 

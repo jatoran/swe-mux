@@ -229,6 +229,34 @@ def test_agent_owned_viewer_is_uninformative_and_explainable() -> None:
     assert "Enter to select - Esc to cancel" in first["preview"]
 
 
+def test_claude_agents_view_is_a_viewer_not_a_running_turn() -> None:
+    """Claude Code v2.1.302's agents view, opened by `←` on an empty composer.
+
+    Captured 2026-10-18 and scrubbed: the list rows name every background session
+    on the capturing machine, so their titles and summaries are neutral letters,
+    with the escape sequences, spacing, `…` truncation marks and ages untouched.
+    The marks are the point - the spinner rule keys on `…`, so this screen read as
+    `working`, and readiness would have let a delivery into a composer whose Enter
+    starts a new session.
+    """
+    value = tail("claude-agents-view.bin")
+    explanation = pty_tail_explain(value, backend="claude")
+    assert explanation["outcome"] == "uninformative"
+    matched = [rule["id"] for rule in explanation["rules"] if rule["matched"]]
+    assert matched[0] == "viewer.claude_agents"
+    # The spinner rule still matches underneath; the viewer has to outrank it.
+    assert "working.spinner" in matched
+    # And only Claude's footer is that footer: the rule is scoped to the harness.
+    assert pty_tail_explain(value, backend="codex")["outcome"] != "uninformative"
+
+
+def test_claude_main_screen_is_not_taken_for_its_agents_view() -> None:
+    explanation = pty_tail_explain(tail("idle-footer.bin"), backend="claude")
+    assert explanation["outcome"] == "idle"
+    viewer = next(rule for rule in explanation["rules"] if rule["id"] == "viewer.claude_agents")
+    assert viewer["matched"] is False
+
+
 def test_omp_captured_idle_prompt_classifies() -> None:
     explanation = pty_tail_explain(tail("omp-idle.txt"), backend="omp")
     assert explanation["outcome"] == "idle"

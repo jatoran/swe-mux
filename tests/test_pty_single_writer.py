@@ -17,12 +17,13 @@ from typing import Any, cast
 
 import pytest
 
+from swe_mux.delivery_readiness import DeliveryReadinessTracker
 from swe_mux.meta_hooks import MetaHookEngine
 from swe_mux.models import MuxEvent, SessionRecord
 from swe_mux.operator_input import deliver_operator_input, record_operator_input
 from swe_mux.prompt_queue import PromptQueueService, PromptQueueStore, QueueError, delivery_payload
 from swe_mux.session import Session
-from swe_mux.terminal_core import WriteCondition, WriteRefused
+from swe_mux.terminal_core import TerminalCore, WriteCondition, WriteRefused
 
 SOURCE = Path(__file__).parents[1] / "src" / "swe_mux"
 
@@ -294,6 +295,88 @@ async def test_input_that_keeps_racing_the_write_is_refused_after_the_bounded_re
     assert refused.value.payload["reasons"] == ["input_revision_moved"]
     assert readiness.verdicts == 3
     assert pty.writes == []
+
+
+def _typed_then_deleted(session: Session) -> DeliveryReadinessTracker:
+    """A real tracker over a session that finished a turn, then had text typed into
+    its composer and deleted again - the case that was refused for good."""
+    tracker = DeliveryReadinessTracker()
+    session.record.parser_status = "ready"
+    for kind, payload in (("turn_started", {}), ("turn_ended", {"outcome": "completed"})):
+        tracker.observe(
+            MuxEvent(ts=time.time(), session_id="s1", source="hook", type=kind, payload=payload),
+            session,
+        )
+    memory = tracker._memory(session)
+    memory.phase_since -= 10.0  # the readiness debounce has long passed
+    core = session.terminal
+    assert isinstance(core, TerminalCore)
+    core.geometry = (100, 30)
+    core.stream.feed(b"\x1b[?1049h prompt")
+    core.write("typed")
+    core.write("\x7f" * 5)
+    core.input_revision += 2
+    core.last_input_event_ts = time.monotonic() - 10.0
+    core.stream.feed(b" redrawn, empty")
+    return tracker
+
+
+def _read_empty(core: Any) -> None:
+    kept = core.note_composer_reading(
+        {
+            "state": "empty",
+            "position": core.stream.scrollback.position,
+            "stream": core.stream.stream_id,
+            "cols": 100,
+            "rows": 30,
+        }
+    )
+    assert kept is not None
+
+
+async def test_a_pane_reading_the_composer_empty_lets_the_delivery_through(
+    tmp_path: Path,
+) -> None:
+    session, pty = _session()
+    tracker = _typed_then_deleted(session)
+    service, _events = await _queue(tmp_path, session, tracker)
+    message = await service.enqueue(target_session_id="s1", body="hello there")
+
+    with pytest.raises(QueueError) as refused:
+        await service.send_next(message["id"], revision=1)
+    assert refused.value.payload["reasons"] == ["terminal_input_after_completion"]
+
+    _read_empty(session.terminal)
+    result = await service.send_next(message["id"], revision=1)
+    assert result["status"] == "sent"
+    assert delivery_payload("hello there", "claude") in pty.writes
+
+
+async def test_a_repaint_between_the_verdict_and_the_write_refuses_the_paste(
+    tmp_path: Path,
+) -> None:
+    """The verdict leaned on a screen; the write has to find that same screen."""
+    session, pty = _session()
+    tracker = _typed_then_deleted(session)
+    _read_empty(session.terminal)
+
+    class _Repainting:
+        def screen_state(self, target: Any) -> str:
+            return tracker.screen_state(target)
+
+        def evaluate(self, target: Any, **options: Any) -> dict[str, Any]:
+            verdict = tracker.evaluate(target, **options)
+            # The CLI draws after the verdict and before the write.
+            session.terminal.stream.feed(b"!")
+            return verdict
+
+    service, _events = await _queue(tmp_path, session, _Repainting())
+    message = await service.enqueue(target_session_id="s1", body="hello there")
+
+    with pytest.raises(QueueError) as refused:
+        await service.send_next(message["id"], revision=1)
+    assert refused.value.code == "delivery_not_safe"
+    assert pty.writes == ["typed", "\x7f" * 5], "nothing was pasted after the repaint"
 
 
 async def test_a_human_override_carries_no_condition(tmp_path: Path) -> None:

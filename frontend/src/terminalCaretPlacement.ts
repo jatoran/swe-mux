@@ -507,6 +507,22 @@ const CLAUDE_RULE = '─'
 const CLAUDE_PROMPT = '❯'
 const CLAUDE_TEXT_START = 2
 const CLAUDE_RIGHT_INSET = 2
+// Claude Code v2.1.302's agents view (`←` on an empty composer, measured
+// 2026-10-18) draws a composer of its own in exactly the same rules-and-`❯` frame,
+// for a *new* session: "describe a task for a new session". Its footer, the row
+// under the bottom rule, is the positive detection - "enter to return" while empty,
+// "enter to create" once something is typed or pasted - and the session's own
+// composer footer never says either.
+const CLAUDE_FOREIGN_COMPOSER_FOOTER = /\benter to (?:return|create)\b/i
+
+function rowText(snapshot: TerminalCaretSnapshot, row: number): string {
+  let text = ''
+  for (let column = 0; column < snapshot.cols; column += 1) {
+    const cell = cellAt(snapshot, row, column)
+    if (cell && cell.width !== 0) text += cell.chars || ' '
+  }
+  return text
+}
 
 /** True for the two gutter columns Claude leaves blank on a continuation row. */
 function claudeGutterIsClear(snapshot: TerminalCaretSnapshot, row: number): boolean {
@@ -545,6 +561,11 @@ export function readClaudeComposerRegion(snapshot: TerminalCaretSnapshot): Compo
   for (let row = firstRow + 1; row < bottomRule; row += 1) {
     if (!claudeGutterIsClear(snapshot, row)) return null
   }
+  // Another session's composer, not this one's: reading it as this session's
+  // draft would mark the row and block its queue over text that is not there.
+  if (bottomRule + 1 < viewportEnd && CLAUDE_FOREIGN_COMPOSER_FOOTER.test(rowText(snapshot, bottomRule + 1))) {
+    return null
+  }
   return {
     firstRow,
     lastRow: bottomRule - 1,
@@ -576,6 +597,38 @@ const COMPOSER_REGIONS = new Map<string, ComposerRegionReader>([
 /** Whether this backend's draft can be read off the screen at all. */
 export function composerRegionForBackend(backend: string): ComposerRegionReader | null {
   return COMPOSER_REGIONS.get(backend) ?? null
+}
+
+// What an *empty* composer looks like, beyond its rectangle: the two facts a
+// reader needs to tell an empty composer from one whose text it cannot see, or
+// from a hint drawn as if it were text. Kept beside the regions because they are
+// measurements of the same surface, and kept out of `ComposerRegion` because a
+// region is geometry that is persisted as evidence (`pasteTrace.ts`).
+export interface EmptyComposerContract {
+  /** Measured to park the caret at the region's first text cell when empty, so an
+   *  empty-looking region with the caret anywhere else holds text the CLI does not
+   *  paint - trailing spaces, which Claude does not draw. */
+  caretParks: boolean
+  /** The empty-composer hint, for a harness that sometimes draws it *without* the
+   *  dim attribute that otherwise identifies it. Null when it is always dim. */
+  undimmedPlaceholder: RegExp | null
+}
+
+// Measured 2026-10-18 against Claude Code v2.1.302 and Codex v0.163.0: both park
+// the caret at column 2 of an empty composer. After any full-screen repaint
+// (leaving the agents view, among others) Claude draws every following frame's
+// `❯ Try "write a test for <filepath>"` with no SGR at all; Codex keeps its hint
+// dim. A harness absent here is never read as `placeholder` and its caret is not
+// consulted, so an undimmed hint there reads as a draft - which blocks a delivery
+// rather than permitting one.
+const EMPTY_COMPOSER_CONTRACTS = new Map<string, EmptyComposerContract>([
+  ['claude', { caretParks: true, undimmedPlaceholder: /^Try "[^"\n]{1,160}"$/ }],
+  ['codex', { caretParks: true, undimmedPlaceholder: null }],
+])
+
+/** This backend's measured empty-composer contract, or null when none was measured. */
+export function emptyComposerContractForBackend(backend: string): EmptyComposerContract | null {
+  return EMPTY_COMPOSER_CONTRACTS.get(backend) ?? null
 }
 
 /** Resolve a target that stays attached to the composer when popup height moves it. */

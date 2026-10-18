@@ -735,6 +735,8 @@ A new needle must be text every possible match contains; the same test checks ea
 
 `pty_tail_state` returns `working`, `approval`, `idle`, `uninformative`, or `unknown`.
 Agent-owned model pickers, transcript viewers, and resume lists are `uninformative` because their body text describes a selected item rather than the live agent state.
+So is Claude Code's agents view (`viewer.claude_agents`, measured on v2.1.302, opened by `←` on an empty composer), whose footer reads "enter to return" or "enter to create" beside "space to reply" or "esc to clear".
+Its own composer starts a *new* session, so an idle reading there would let a delivery land in the wrong conversation; the composer reader refuses the same screen (`terminal-input.md`).
 All three consumers withhold lifecycle conclusions from that outcome: delivery vetoes sending, watchdog recovery does nothing, and the unwitnessed first-turn fallback does nothing.
 The viewer fixtures and the prose false-positive fixture live under `tests/fixtures/pty_tails/`.
 

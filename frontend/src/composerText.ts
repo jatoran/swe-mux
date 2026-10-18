@@ -29,7 +29,7 @@
 // runner, which does not resolve extensionless specifiers.
 import { composerClearKeys } from './harnessRegistry.ts'
 import {
-  cellAt, composerRegionForBackend, contentBoundary,
+  cellAt, composerRegionForBackend, contentBoundary, emptyComposerContractForBackend,
   type ComposerRegion, type TerminalCaretSnapshot,
 } from './terminalCaretPlacement.ts'
 
@@ -114,6 +114,69 @@ export function readComposerText(
   const region = read(snapshot)
   if (!region) return null
   return joinComposerLines(composerLines(snapshot, region))
+}
+
+/**
+ * What a composer holds, as the daemon is told it (`composer_input.py`): one of
+ * four states and, for a draft, its visible length. Never the text itself.
+ *
+ * - `empty`: the region was found and holds nothing that is not dim.
+ * - `placeholder`: the region holds exactly the harness's empty-composer hint,
+ *   *undimmed*, with the caret parked in front of it. A screen cannot tell that
+ *   from an operator who typed the same words and moved the caret back, so the
+ *   daemon counts it as empty only beside an input-side estimate of zero.
+ * - `draft`: anything else that is drawn.
+ * - `unreadable`: no composer on this screen - a dialog, a picker, a scrolled
+ *   view, or a harness with no reader.
+ */
+export type ComposerScreenState = 'empty' | 'placeholder' | 'draft' | 'unreadable'
+export interface ComposerScreenReading {
+  state: ComposerScreenState
+  /** Visible characters, for a draft; zero otherwise. */
+  chars: number
+}
+
+function caretAtTextStart(snapshot: TerminalCaretSnapshot, region: ComposerRegion): boolean {
+  return snapshot.baseY + snapshot.cursorY === region.firstRow && snapshot.cursorX === region.textStart
+}
+
+/** Classify this backend's composer as the daemon's evidence reads it. */
+export function readComposerState(backend: string, snapshot: TerminalCaretSnapshot): ComposerScreenReading {
+  const read = composerRegionForBackend(backend)
+  const region = read ? read(snapshot) : null
+  if (!region) return { state: 'unreadable', chars: 0 }
+  const text = joinComposerLines(composerLines(snapshot, region))
+  const contract = emptyComposerContractForBackend(backend)
+  if (!text) {
+    if (!contract?.caretParks || caretAtTextStart(snapshot, region)) return { state: 'empty', chars: 0 }
+    // Nothing drawn, yet the caret is past the start: the composer holds text the
+    // CLI does not paint. At least one character, by the caret's own distance.
+    return { state: 'draft', chars: Math.max(1, snapshot.cursorX - region.textStart) }
+  }
+  // An undimmed hint (`EmptyComposerContract.undimmedPlaceholder`) is recognised
+  // only on a one-row region with the caret parked in front of it.
+  const placeholder = contract?.undimmedPlaceholder
+  if (
+    placeholder
+    && region.lastRow === region.firstRow
+    && caretAtTextStart(snapshot, region)
+    && placeholder.test(text)
+  ) return { state: 'placeholder', chars: 0 }
+  return { state: 'draft', chars: [...text].length }
+}
+
+/**
+ * The draft a person would want copied: `readComposerText`, with an undimmed
+ * placeholder read as the empty composer it almost certainly is. Copying a hint
+ * the operator never typed is the visible failure; the residual case (they typed
+ * the hint's exact wording and moved the caret to the front) costs a copy, not a
+ * delivery.
+ */
+export function readComposerDraft(backend: string, snapshot: TerminalCaretSnapshot): string | null {
+  const state = readComposerState(backend, snapshot)
+  if (state.state === 'unreadable') return null
+  if (state.state !== 'draft') return ''
+  return readComposerText(backend, snapshot)
 }
 
 /** Whether a Copy/Clear input control can do anything at all on this backend. */

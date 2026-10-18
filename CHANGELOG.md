@@ -40,6 +40,11 @@ The release procedure that maintains this file is [`RELEASING.md`](RELEASING.md)
 
 ### Fixed
 
+- **A queued message is no longer refused because you typed into the session and deleted it.**
+  The queue used to block any delivery once anything had been typed since the agent's last turn, so typing a line and erasing it held every message as "you typed in this terminal" until the next turn ended.
+  It now reads the composer off the screen of any pane showing the session: an empty composer lets the message through, and text still sitting there blocks it with "there is unsent text in this agent's composer", including text typed while the agent was working.
+  The sidebar's unsent-input mark is corrected from the same reading, so a word delete, a slash menu, or an erased draft no longer leaves it standing, and text recalled with `↑` now raises it.
+  **Copy input** on an empty composer no longer copies the agent's placeholder hint (`Try "…"` on Claude Code, "Ask Codex to do anything" on Codex).
 - **Reading a repository's diff no longer locks it.** The Git panel's line counts ran `git diff`, which takes `.git/index.lock` to refresh the index even when told not to take optional locks. In a large repository that read could hit its 4-second limit while holding the lock, and the lock it left behind blocked every commit there until someone deleted it by hand. Every read swe-mux makes now leaves the index alone.
 - **A one-point dip in a quota reading is no longer counted as a reset.** Codex sometimes reads a point or two lower inside the same window and climbs back, and each dip was booked as a fresh climb from zero, so a 57% to 56% dip added 56 points of usage to that account's attribution. Stored attribution is recomputed once at the next start.
 - **Quota → Attribution loads again.** Its request carried two query strings and was refused on every load.

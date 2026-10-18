@@ -25,14 +25,19 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from swe_mux.composer_input import clear_pending_submit, note_unsubmitted_delivery
+from swe_mux.composer_input import (
+    ComposerScreenReading,
+    clear_pending_submit,
+    note_composer_write,
+    note_unsubmitted_delivery,
+)
 from swe_mux.delivery_readiness import (
     AGENT_FIRST_PROMPT_SETTLE_SECONDS,
     READINESS_DEBOUNCE_SECONDS,
     DeliveryReadinessTracker,
 )
 from swe_mux.models import MuxEvent
-from swe_mux.prompt_queue import protected_reasons
+from swe_mux.prompt_queue import delivery_condition, protected_reasons
 from tests.support.detection_replay import ReplaySession, VirtualClock
 
 
@@ -450,16 +455,13 @@ def test_text_typed_after_completion_still_blocks() -> None:
     assert "terminal_input_after_completion" in evaluation["reasons"]
 
 
-def test_deleting_the_typed_text_does_not_clear_the_block() -> None:
-    """Backspaces advance the revision too, and that is the whole point.
+def test_deleting_the_typed_text_with_no_pane_reading_still_blocks() -> None:
+    """Backspaces advance the revision too, and with nothing else to go on that holds.
 
-    The operator-visible shape of this is the confusing one: the composer really
-    is empty, the session really does read idle, and the queue still refuses. It
-    holds because the finer-grained composer estimate — which *would* say "empty
-    again" — is deliberately not an input here (`composer_input.py`): a gate may
-    only be relaxed by evidence that cannot be wrong in the unsafe direction, and
-    an estimate that concluded empty would authorize a send on top of text nothing
-    can see. It resets at the next completion boundary, not before.
+    The estimate behind the sidebar mark *would* say "empty again" here, and it is
+    still not allowed to lift the block (`composer_input.py`): it is wrong exactly
+    where a key's effect is the CLI's business, including text it never counted.
+    Only a screen reading can say the composer is empty, and none is current.
     """
 
     session, tracker, clock = _idle_agent()
@@ -470,10 +472,142 @@ def test_deleting_the_typed_text_does_not_clear_the_block() -> None:
 
     assert "terminal_input_after_completion" in tracker.evaluate(session)["reasons"]
 
-    # A turn boundary is what clears it, and it clears completely.
+    # A turn boundary also clears it, and it clears completely.
     tracker.observe(_event("turn_started"), session)
     tracker.observe(_event("turn_ended", outcome="completed"), session)
     clock.advance(5.0)
+    assert tracker.evaluate(session)["delivery_state"] == "safe"
+
+
+def _screen(state: str, *, chars: int = 0, position: int = 400) -> ComposerScreenReading:
+    return ComposerScreenReading(state, chars, position, "replay-stream")
+
+
+def test_deleting_the_typed_text_clears_the_block_once_a_pane_reads_the_composer_empty() -> None:
+    """The reported failure: typed, deleted, and a peer's queued message refused for
+    as long as the session lived.
+
+    The revision moved and will not move back, but a current screen reading shows
+    the composer empty - and the screen is what the paste lands on. Because the
+    verdict needed that reading, it says which screen it judged, so the write can
+    re-check it (`WriteCondition.screen_position`).
+    """
+
+    session, tracker, clock = _idle_agent()
+    session.screen.feed(b"\x1b[?1049h")
+    session.input_revision += 10  # typed, then deleted
+    clock.advance(5.0)
+    assert "terminal_input_after_completion" in tracker.evaluate(session)["reasons"]
+
+    session.screen_reading = _screen("empty")
+    evaluation = tracker.evaluate(session)
+    assert evaluation["delivery_state"] == "safe"
+    assert evaluation["checks"]["partial_input_absent"] is True
+    assert evaluation["evidence"]["composer_screen"]["state"] == "empty"
+    assert evaluation["evidence"]["composer_screen_position"] == 400
+    condition = delivery_condition(evaluation)
+    assert condition.screen_position == 400
+    assert condition.input_revision == session.input_revision
+
+
+def test_a_clean_session_does_not_tie_its_delivery_to_the_screen() -> None:
+    """Untouched since the turn ended, the verdict needs no screen, and a write tied
+    to one would fail over a repaint that has nothing to do with the composer."""
+
+    session, tracker, _clock = _idle_agent()
+    session.screen.feed(b"\x1b[?1049h")
+    session.screen_reading = _screen("empty")
+    evaluation = tracker.evaluate(session)
+    assert evaluation["delivery_state"] == "safe"
+    assert evaluation["evidence"]["composer_screen_position"] is None
+    assert delivery_condition(evaluation).screen_position is None
+
+
+def test_text_the_screen_shows_blocks_even_with_the_revision_untouched() -> None:
+    session, tracker, _clock = _idle_agent()
+    session.screen.feed(b"\x1b[?1049h")
+    session.screen_reading = _screen("draft", chars=11)
+    evaluation = tracker.evaluate(session)
+    assert evaluation["delivery_state"] == "blocked"
+    assert evaluation["reasons"] == ["composer_holds_draft"]
+    assert "composer_holds_draft" not in protected_reasons(session.record, evaluation["reasons"])
+
+
+def test_text_typed_while_the_turn_ran_blocks_after_it_ends() -> None:
+    """A hole the revision alone left open.
+
+    Claude takes typing mid-turn, so the text sits in the composer when the turn
+    completes - and the completion boundary snapshots the revision *including*
+    those keystrokes, so the composer read as untouched and a delivery was pasted
+    onto the end of the operator's draft. The estimate counted them all along, and
+    it is allowed to block.
+    """
+
+    clock = VirtualClock()
+    session = ReplaySession("claude", clock)
+    tracker = DeliveryReadinessTracker(clock=clock.monotonic)
+    session.record.parser_status = "ready"
+    session.screen.feed(b"\x1b[?1049h")
+    tracker.observe(_event("turn_started"), session)
+    session.transition("working", None, source="hook", evidence="hook:UserPromptSubmit")
+    note_composer_write(session.composer, "actually, also check", time.time())
+    session.input_revision += 20
+    tracker.observe(_event("turn_ended", outcome="completed"), session)
+    session.transition("idle", None, source="hook", evidence="hook:Stop")
+    clock.advance(5.0)
+
+    evaluation = tracker.evaluate(session)
+    assert evaluation["delivery_state"] == "blocked"
+    assert "composer_holds_draft" in evaluation["reasons"]
+    assert evaluation["evidence"]["composer_estimate_pending"] is True
+
+    # A pane reading the composer empty (the operator cleared it) is the screen
+    # overruling the estimate.
+    session.screen_reading = _screen("empty")
+    assert tracker.evaluate(session)["delivery_state"] == "safe"
+
+
+def test_an_undimmed_hint_counts_as_empty_only_beside_an_empty_estimate() -> None:
+    """Claude Code v2.1.302 draws its `Try "…"` hint without the dim attribute after
+    a full repaint, so the pane can identify it only by its wording and the caret.
+    An operator could type those words; both sources have to agree."""
+
+    session, tracker, _clock = _idle_agent()
+    session.screen.feed(b"\x1b[?1049h")
+    session.input_revision += 4
+    session.screen_reading = _screen("placeholder")
+    assert tracker.evaluate(session)["delivery_state"] == "safe"
+
+    note_composer_write(session.composer, 'Try "x"', time.time())
+    evaluation = tracker.evaluate(session)
+    assert evaluation["delivery_state"] == "blocked"
+    assert "composer_holds_draft" in evaluation["reasons"]
+
+
+def test_an_unreadable_screen_proves_nothing() -> None:
+    session, tracker, _clock = _idle_agent()
+    session.screen.feed(b"\x1b[?1049h")
+    session.input_revision += 3
+    session.screen_reading = _screen("unreadable")
+    assert "terminal_input_after_completion" in tracker.evaluate(session)["reasons"]
+
+
+def test_a_new_session_typed_in_and_cleared_can_take_its_first_prompt() -> None:
+    clock = VirtualClock()
+    session = ReplaySession("claude", clock)
+    tracker = DeliveryReadinessTracker(clock=clock.monotonic)
+    _started(session, tracker)
+    session.screen.feed(b"\x1b[?1049h")
+    session.input_revision = 6
+    clock.advance(AGENT_FIRST_PROMPT_SETTLE_SECONDS + READINESS_DEBOUNCE_SECONDS + 1.0)
+    assert tracker.evaluate(session)["evidence"]["root_phase"] == "unknown"
+
+    session.screen_reading = _screen("empty")
+    adopted = tracker.evaluate(session)
+    assert adopted["evidence"]["root_reason"] == "agent_started_awaiting_first_prompt"
+    # Measured from now: anything typed after the adoption is a new collision.
+    assert adopted["evidence"]["completion_input_revision"] == 6
+    clock.advance(READINESS_DEBOUNCE_SECONDS + 0.1)
     assert tracker.evaluate(session)["delivery_state"] == "safe"
 
 
@@ -546,6 +680,16 @@ def test_an_unsubmitted_delivery_blocks_the_next_one_by_name() -> None:
     assert blocked["delivery_state"] == "blocked"
     assert "unsubmitted_delivery_in_composer" in blocked["reasons"]
     assert blocked["evidence"]["unsubmitted_delivery"] == "msg-1"
+    # The composer's contents *are* that delivery, so nothing else claims them -
+    # not even the input mux's own paste moved, or a pane read text there.
+    session.input_revision += 1
+    session.screen_reading = _screen("draft", chars=4186)
+    named = tracker.evaluate(session)["reasons"]
+    assert "unsubmitted_delivery_in_composer" in named
+    assert "composer_holds_draft" not in named
+    assert "terminal_input_after_completion" not in named
+    session.screen_reading = None
+    session.input_revision -= 1
     assert "unsubmitted_delivery_in_composer" not in protected_reasons(
         session.record, blocked["reasons"]
     )

@@ -9,7 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-from swe_mux.composer_input import PendingSubmit
+from swe_mux.composer_input import ComposerScreenReading, ComposerState, PendingSubmit
 from swe_mux.delivery_readiness import DeliveryReadinessTracker
 from swe_mux.event_bus import EventBus
 from swe_mux.harness import HARNESSES, is_agent_harness
@@ -173,6 +173,11 @@ class ReplaySession:
         # blocks on. `None` is the ordinary state and what every fixture that
         # says nothing about it means.
         self.pending_submit: PendingSubmit | None = None
+        # The input-side composer estimate, and a browser's current screen reading
+        # of the composer (`Session.composer_screen`). Empty and absent are what a
+        # fixture that says nothing about the composer means.
+        self.composer = ComposerState()
+        self.screen_reading: ComposerScreenReading | None = None
         # The daemon's own screen reading, which a live session feeds from the PTY
         # stream. A fixture that says nothing about the screen leaves it unknown,
         # exactly as a session whose switch predates the retained scrollback does.
@@ -219,6 +224,11 @@ class ReplaySession:
 
     def publish_update(self) -> None:
         return
+
+    def composer_screen(self) -> ComposerScreenReading | None:
+        """`Session.composer_screen`: a fixture's reading is current until it says
+        otherwise."""
+        return self.screen_reading
 
     def note_watchdog_recovery(
         self,

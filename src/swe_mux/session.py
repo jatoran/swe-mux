@@ -31,7 +31,13 @@ from .adapters.claude import claude_data_home
 from .agent_environment import capture_config_baseline
 from .background_tasks import background
 from .cli_state import CliStateMonitor, ConversationHolder, ParkedMove
-from .composer_input import ComposerState, PendingSubmit, clear_composer, clear_pending_submit
+from .composer_input import (
+    ComposerScreenReading,
+    ComposerState,
+    PendingSubmit,
+    clear_composer,
+    clear_pending_submit,
+)
 from .console_contention import (
     ConsoleCensus,
     ConsoleEvidence,
@@ -1403,6 +1409,22 @@ PTY_RULES: tuple[ScreenRule, ...] = (
         bottom_non_empty_lines(12),
         re.compile(r"(?is)transcript.*(?:esc to (?:close|go back)|press q to (?:quit|close))"),
     ),
+    # Claude Code's agents view, which `←` on an empty composer opens (measured
+    # 2026-10-18, v2.1.302): a list of every background session on the machine over
+    # a composer of its own whose Enter *creates a new session*. Its list rows carry
+    # the `…` the spinner rule keys on, so it used to read as `working`; and a
+    # delivery written into it would start a stray agent rather than reach this one.
+    # Keyed on its footer alone, whose two observed forms are its own.
+    ScreenRule(
+        "viewer.claude_agents",
+        "uninformative",
+        bottom_non_empty_lines(3),
+        re.compile(
+            r"(?i)\benter to (?:return|create)\b[^\n]*·[^\n]*(?:space to reply|esc to clear)"
+        ),
+        frozenset({"claude"}),
+        requires=("enter to",),
+    ),
     ScreenRule(
         "viewer.omp_model_picker",
         "uninformative",
@@ -2761,6 +2783,11 @@ class Session:
     def terminal_snapshot(self) -> tuple[dict[str, Any], int]:
         """The record snapshot and revision a terminal frame carries."""
         return self.record.snapshot(), self.revision
+
+    def composer_screen(self) -> ComposerScreenReading | None:
+        """A browser's current reading of the composer, wherever the core runs
+        (`TerminalCore.composer_screen`); None when nothing current is known."""
+        return self.terminal.composer_screen()
 
     @property
     def attended(self) -> bool:

@@ -610,6 +610,13 @@ async def _handle_client_message(
             await core.handle_client_repaint(host)
         elif frame.get("type") == "client_diagnostic":
             core.note_client_diagnostic(host, connection_id, frame)
+        elif frame.get("type") == "composer_reading":
+            # Any attached browser may report, owner or not: a reading is a fact
+            # about a screen every pane of this session draws identically, and the
+            # core keeps only one that is current (`TerminalCore.note_composer_reading`).
+            reading = core.note_composer_reading(frame)
+            if reading is not None:
+                host.note_composer_reading(reading)
         elif frame.get("type") == "output_ack":
             byte_count = frame.get("bytes")
             if isinstance(byte_count, int) and not isinstance(byte_count, bool):

@@ -20,7 +20,8 @@ nothing, and `ping`'s answer is empty - it exists to be answered.
 `input_revision`, the last input's age, the keystroke writes whose side effects
 the daemon owes (in order, because interrupt detection and the composer estimate
 read each write on its own), and the terminal's mode, owner, geometry and attach
-count; `event` for the event log; `write_result` and `repaint_result`;
+count, and the composer's screen reading while it is current; `event` for the
+event log; `write_result` and `repaint_result`;
 `broadcast`, typed text the daemon delivers to the rest of the broadcast set; and
 `metering`, the browser traffic the gateway carried, for the daemon's counters.
 
@@ -173,6 +174,7 @@ def condition_to_wire(condition: WriteCondition | None) -> dict[str, Any] | None
         "input_revision": condition.input_revision,
         "operator_quiet_seconds": condition.operator_quiet_seconds,
         "no_pending_submit": condition.no_pending_submit,
+        "screen_position": condition.screen_position,
     }
 
 
@@ -187,10 +189,14 @@ def condition_from_wire(value: Any) -> WriteCondition | None:
         raise ValueError("a condition's input_revision must be an integer")
     if quiet is not None and (not isinstance(quiet, int | float) or isinstance(quiet, bool)):
         raise ValueError("a condition's operator_quiet_seconds must be a number")
+    screen = value.get("screen_position")
+    if screen is not None and (not isinstance(screen, int) or isinstance(screen, bool)):
+        raise ValueError("a condition's screen_position must be an integer")
     return WriteCondition(
         input_revision=revision,
         operator_quiet_seconds=float(quiet) if quiet is not None else None,
         no_pending_submit=bool(value.get("no_pending_submit", False)),
+        screen_position=screen,
     )
 
 

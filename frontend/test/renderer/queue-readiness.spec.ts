@@ -6,9 +6,9 @@ import { expect, test } from 'playwright/test'
  *
  * The report this came from: a message armed at a session that read idle everywhere was
  * refused with `Not safe right now: terminal_input_after_completion`, after the operator
- * had typed something and then deleted it. Every part of that is working as designed —
- * the guard counts keystrokes, not composer contents — and none of it was sayable before
- * the press.
+ * had typed something and then deleted it. A pane's screen reading of the empty composer
+ * now clears that block (`composer_input.py`); what is left of the reason is the case no
+ * pane has read, and that has to be sayable before the press.
  *
  * Three of the properties that make the fix honest exist only in a browser:
  *
@@ -33,13 +33,14 @@ test('the strip paints from the row before the queue fetch resolves', async ({ p
 
   // The half that answers the confusion, not just the half that names the check.
   await expect(page.locator('.queue-readiness-clears').first())
-    .toContainText('Clearing the line does not clear this')
+    .toContainText('Open the session')
   await expect(page.locator('.queue-readiness-clears').first())
-    .toContainText('next turn ends')
+    .toContainText('next turn to end')
 
-  // And the narration that makes the block stop looking like a bug: the composer really
-  // is empty, and the block really does persist.
-  await expect(page.locator('.queue-readiness')).toContainText('Nothing is sitting in the composer now')
+  // And the narration that makes the block stop looking like a bug: nothing appears to
+  // be in the composer, and what clears the block is a pane confirming that.
+  await expect(page.locator('.queue-readiness'))
+    .toContainText('Nothing appears to be sitting in the composer')
 })
 
 test('the queue fetch corrects the row it painted from', async ({ page }) => {

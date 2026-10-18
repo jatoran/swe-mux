@@ -12,7 +12,14 @@ from contextlib import suppress
 from dataclasses import dataclass
 from typing import Any
 
-from ..composer_input import ComposerState, PendingSubmit
+from ..composer_input import (
+    ComposerScreenReading,
+    ComposerState,
+    PendingSubmit,
+    merge_screen_readings,
+    parse_screen_reading,
+    write_may_add_text,
+)
 from ..terminal_arbitration import OwnerState, effective_geometry, release_owner
 from .diagnostics import (
     CLIENT_DIAGNOSTIC_DETAIL_LIMIT,
@@ -57,6 +64,11 @@ class WriteCondition:
     the input revision the judgement saw, how long the human has been quiet, and
     no earlier delivery still sitting unsubmitted in the composer.
 
+    ``screen_position`` is set only when the judgement relied on a screen reading
+    of an empty composer (`composer_screen`): the write then also needs that
+    reading to still be current at that ring position, because anything drawn
+    since may be the composer filling up again.
+
     Times are durations, never clock readings, so a condition means the same in
     whichever process evaluates it.
     """
@@ -64,6 +76,7 @@ class WriteCondition:
     input_revision: int | None = None
     operator_quiet_seconds: float | None = None
     no_pending_submit: bool = False
+    screen_position: int | None = None
 
 
 class WriteRefused(Exception):
@@ -167,6 +180,14 @@ class TerminalCore:
         # daemon restart forgets it, which is the honest reading of "not
         # observed", and the block it carries is one a human can override.
         self.pending_submit: PendingSubmit | None = None
+        # What a browser last read in the composer, and the ring position of the
+        # last write that could have put text there (`write_may_add_text`). The
+        # reading counts only while it is current (`composer_screen`): its screen
+        # is where the ring ends, and the CLI drew it after that write. -1 is "no
+        # such write through this core", which is every write a previous process
+        # made - those are seconds old by the time any core exists to replace it.
+        self.composer_reading: ComposerScreenReading | None = None
+        self.additive_input_position = -1
         # xterm's active buffer, as the owning browser reports it: corroboration
         # for the daemon's own reading of the stream (`TerminalStream.screen`).
         self.terminal_mode: str | None = None
@@ -220,6 +241,10 @@ class TerminalCore:
                 return "operator_recently_typed"
         if condition.no_pending_submit and self.pending_submit is not None:
             return "unsubmitted_delivery_in_composer"
+        if condition.screen_position is not None:
+            current = self.composer_screen()
+            if current is None or current.position != condition.screen_position:
+                return "composer_screen_moved"
         return None
 
     def write(self, data: str | bytes, *, condition: WriteCondition | None = None) -> None:
@@ -229,6 +254,10 @@ class TerminalCore:
         voice, an approval - a single order, and what lets a condition be checked
         with nothing able to run between the check and the write. A guard test fails
         on any other `pty.write` or `pty.resize`.
+
+        It is also why the composer's screen reading is retired here: any write that
+        could put text in the composer makes the screen a browser read describe a
+        composer that may no longer exist, until the CLI draws again.
         """
         if self.retired is not None:
             raise WriteRefused("moved")
@@ -237,6 +266,78 @@ class TerminalCore:
             if reason is not None:
                 raise WriteRefused(reason)
         self.pty.write(data)
+        if write_may_add_text(data):
+            self.additive_input_position = self.stream.scrollback.position
+            if self.composer_reading is not None:
+                self.composer_reading = None
+                self._changed()
+
+    # --- the composer, as a browser read it ---------------------------------------
+
+    def composer_screen(self) -> ComposerScreenReading | None:
+        """The composer reading, while it still describes the composer.
+
+        Current means three things at once: it was taken in this ring's stream, its
+        screen is where the ring ends now (nothing has been drawn since), and that
+        screen came after the last write that could have added text. A reading that
+        fails any of them is not wrong about the past - it is simply no longer about
+        the present, and nothing may act on it.
+        """
+        reading = self.composer_reading
+        if reading is None:
+            return None
+        if reading.stream != self.stream.stream_id:
+            return None
+        if reading.position != self.stream.scrollback.position:
+            return None
+        if reading.position <= self.additive_input_position:
+            return None
+        return reading
+
+    def note_composer_reading(self, frame: dict[str, Any]) -> ComposerScreenReading | None:
+        """Take a browser's `composer_reading` frame; the reading kept, or None.
+
+        Refused unless it is current at the moment it arrives (`composer_screen`),
+        and unless it was read at the size the PTY is: a pane laid out at another
+        width wraps the composer somewhere the CLI did not, and its rectangle is not
+        the CLI's. A refusal is silent and costs nothing - the browser reads again
+        after the next output it parses.
+        """
+        reading = parse_screen_reading(frame)
+        if reading is None or self.retired is not None:
+            return None
+        if reading.stream != self.stream.stream_id:
+            return None
+        if reading.position != self.stream.scrollback.position:
+            return None
+        if reading.position <= self.additive_input_position:
+            return None
+        geometry = self.geometry
+        cols, rows = frame.get("cols"), frame.get("rows")
+        if geometry is not None and (cols, rows) != geometry:
+            return None
+        kept = merge_screen_readings(self.composer_screen(), reading)
+        if kept != self.composer_reading:
+            self.composer_reading = kept
+            self._changed()
+        return kept
+
+    def note_stream_reseeded(self) -> None:
+        """The ring was replaced: no reading taken against the old one is current,
+        and a write in flight before it may not have been drawn into the new one."""
+        self.composer_reading = None
+        self.additive_input_position = self.stream.scrollback.position
+        self._changed()
+
+    def note_output(self) -> bool:
+        """Output reached the ring. True when it retired the composer reading, which
+        a host that mirrors the reading elsewhere has to say (`gateway`)."""
+        reading = self.composer_reading
+        if reading is None or reading.position == self.stream.scrollback.position:
+            return False
+        self.composer_reading = None
+        self._changed()
+        return True
 
     def write_operator_input(
         self, data: str, *, condition: WriteCondition | None = None

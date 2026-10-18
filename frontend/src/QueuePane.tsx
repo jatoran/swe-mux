@@ -1109,15 +1109,17 @@ export function QueuePane({
           {verdict.state !== 'safe' && verdict.clears && (
             <p class="queue-readiness-clears">{verdict.clears}</p>
           )}
-          {/* Narration, never evidence. The composer estimate is deliberately not an
-              input to readiness (an estimate that concluded "empty" could authorize a
-              send on top of text nothing can see), but it is the one thing that makes
-              this particular block stop looking like a bug: the line really is clear,
-              and the block really does persist. */}
+          {/* Narration, never evidence. This reason now means "typed since the turn
+              ended, and no pane has read the composer since": the estimate behind
+              `unsent_input` can block a delivery but never lift one, so an estimate of
+              nothing is what makes the block look wrong - and a pane drawing the
+              composer is what actually clears it. */}
           {verdict.state === 'blocked'
             && readiness?.reasons?.includes('terminal_input_after_completion')
             && !session?.unsent_input && (
-              <p class="queue-readiness-clears">Nothing is sitting in the composer now.</p>
+              <p class="queue-readiness-clears">
+                Nothing appears to be sitting in the composer; a pane showing this session will confirm it.
+              </p>
             )}
           {verdict.protected && (
             <p class="queue-readiness-protected">

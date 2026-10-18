@@ -22,10 +22,12 @@ from typing import Any
 from .composer_input import (
     DEFAULT_CLEAR_KEYS,
     DEFAULT_NEWLINE_KEYS,
+    ComposerScreenReading,
     apply_composer_write,
     classify_composer_write,
     clear_pending_submit,
     composer_insertion,
+    reanchor_composer,
 )
 from .event_bus import EventBus
 from .harness import HARNESSES, composer_insertion_rules
@@ -88,8 +90,39 @@ def note_composer_write(events: EventBus, session: Any, data: str | bytes, sourc
                 source,
             )
     change = apply_composer_write(composer, write, time.time())
-    if change is None:
+    if change is not None:
+        _announce_composer_change(events, session, change, source)
+
+
+def note_composer_reading(events: EventBus, session: Any, reading: ComposerScreenReading) -> None:
+    """Correct the composer estimate from a current screen reading.
+
+    The terminal core has already established that ``reading`` describes the
+    composer as it is now (`TerminalCore.composer_screen`), so this is the screen
+    overruling a count wherever the two disagree: a word delete the estimate saw as
+    one key, a history recall it never counted, a slash menu that consumed the
+    keys. A reading of ``empty`` is also proof that the body a failed delivery left
+    in the composer is gone, the same proof an operator's own submit or clear is.
+    """
+    composer = getattr(session, "composer", None)
+    if composer is None:
         return
+    if reading.state == "empty":
+        retired = clear_pending_submit(session)
+        if retired is not None:
+            log.info(
+                "session %s: queue delivery %s is no longer in the composer (screen read empty)",
+                session.record.id,
+                retired.message_id,
+            )
+    change = reanchor_composer(composer, reading, time.time())
+    if change is not None:
+        _announce_composer_change(events, session, change, "screen")
+
+
+def _announce_composer_change(events: EventBus, session: Any, change: str, source: str) -> None:
+    """Ledger, log and announce one empty/non-empty crossing of the composer."""
+    composer = session.composer
     ledger = getattr(session, "state_transitions", None)
     if ledger is not None:
         ledger.append(

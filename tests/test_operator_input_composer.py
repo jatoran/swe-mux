@@ -17,7 +17,11 @@ from types import SimpleNamespace
 from typing import Any
 
 from swe_mux import operator_input
-from swe_mux.composer_input import ComposerState, note_unsubmitted_delivery
+from swe_mux.composer_input import (
+    ComposerScreenReading,
+    ComposerState,
+    note_unsubmitted_delivery,
+)
 
 NOW = 1_800_000_000.0
 
@@ -79,3 +83,52 @@ def test_the_queues_own_carriage_return_does_not_retire_it() -> None:
 
     standing = session.pending_submit
     assert standing is not None and standing.message_id == "msg-1"
+
+
+# --- a screen reading, which the core has already found current ------------------------
+
+
+def _read(session: Any, state: str, chars: int = 0) -> list[tuple[str, dict[str, Any]]]:
+    events = _Events()
+    operator_input.note_composer_reading(
+        events, session, ComposerScreenReading(state, chars, 100, "stream")
+    )
+    return events.emitted
+
+
+def test_a_pane_reading_the_composer_empty_retires_an_unsubmitted_delivery() -> None:
+    """A third proof the composer emptied, as good as a submit or a clear: the screen."""
+    session = _session()
+    note_unsubmitted_delivery(session, "msg-1", 4186, NOW)
+
+    _read(session, "draft", 30)
+    assert session.pending_submit is not None
+    _read(session, "placeholder")
+    assert session.pending_submit is not None
+    _read(session, "empty")
+    assert session.pending_submit is None
+
+
+def test_a_pane_reading_corrects_the_sidebar_mark_and_announces_the_crossing() -> None:
+    """The mark that "sometimes is not fully accurate": a word delete leaves the count
+    standing over an empty composer, and a history recall leaves it at zero over a
+    full one. The screen settles both, and only a crossing is announced."""
+    session = _session("claude")
+    _write(session, "abc def", "browser")
+    _write(session, "\x17\x17", "browser")  # Ctrl+W twice: the estimate cannot count it
+    assert session.composer.pending
+
+    emitted = _read(session, "empty")
+    assert not session.composer.pending
+    assert [kind for kind, _payload in emitted] == ["composer_input_changed"]
+    assert emitted[0][1]["source"] == "screen"
+    assert emitted[0][1]["pending"] is False
+    assert session.state_transitions[-1]["source"] == "screen"
+
+    # The same reading again changes nothing and says nothing.
+    assert _read(session, "empty") == []
+
+    # A history recall the estimate never counted.
+    emitted = _read(session, "draft", 42)
+    assert session.composer.pending and session.composer.chars == 42
+    assert emitted[0][1]["pending"] is True

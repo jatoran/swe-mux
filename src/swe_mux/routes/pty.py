@@ -20,6 +20,7 @@ from aiohttp import WSMsgType, web
 from .. import (
     app_keys as keys,
 )
+from ..composer_input import ComposerScreenReading
 from ..device_presence import DevicePresenceStore, parse_device_report
 from ..event_bus import EventBus
 from ..network_usage import metered_websocket
@@ -27,7 +28,7 @@ from ..observation import (
     cancel_pending_approval,
     note_interrupt_intent,
 )
-from ..operator_input import note_composer_write
+from ..operator_input import note_composer_reading, note_composer_write
 from ..session import (
     Session,
     note_remote_shell_submission,
@@ -83,6 +84,9 @@ class SessionTerminalHost:
     def note_typed_bytes(self, data: bytes) -> None:
         note_remote_shell_submission(self.session, data)
         note_composer_write(self._events, self.session, data, "browser")
+
+    def note_composer_reading(self, reading: ComposerScreenReading) -> None:
+        note_composer_reading(self._events, self.session, reading)
 
     def note_owner_submit(self, data: str) -> None:
         session = self.session

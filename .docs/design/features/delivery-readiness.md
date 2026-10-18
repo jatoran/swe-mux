@@ -216,10 +216,12 @@ it — so the only way to work is to override, every time, which is precisely ho
 confirmation that exists to stop a genuinely unsafe send stops being read. A false `blocked`
 is not the safe direction of a mistake; it is how the safety mechanism gets trained away.
 
-What carries the safety argument after those four is the composer-collision guard:
-`partial_input_absent` compares the input revision against its value when the root turn
-completed, so anything the operator typed since — including opening a pager, which takes
-typing — still blocks.
+What carries the safety argument after those four is the composer-collision guard,
+`partial_input_absent`, which asks whether the composer holds anything a delivery would land
+on (§ The composer).
+Without a current screen reading it compares the input revision against its value when the
+root turn completed and requires the composer estimate to be empty, so anything the operator
+typed since - including opening a pager, which takes typing - still blocks.
 
 **Closed 2026-07-28 (with Phase 4.5).** `POST /sessions/{id}/input` and broadcast fan-out
 previously wrote to the PTY without advancing `input_revision` / `last_input_event_ts`,
@@ -244,7 +246,8 @@ Every PTY write now goes through the session's terminal core (`TerminalCore.writ
 The reason is the race the terminal gateway will open.
 Readiness is judged and the paste written in two steps, and once keystrokes arrive in another process a keystroke can land between them, so the verdict the queue acted on is no longer the verdict for the composer it writes into.
 A delivery therefore passes a `WriteCondition` with its write: the `input_revision` the verdict saw, the operator-quiet window it relied on (`READINESS_DEBOUNCE_SECONDS`), and that no earlier delivery is still waiting for its submit.
-The core checks all three and writes with nothing able to run in between, or raises `WriteRefused` naming the part that moved and writes nothing.
+A verdict that needed a screen reading of an empty composer to be safe also carries that reading's ring position (`screen_position`, from `evidence.composer_screen_position`), so a repaint between the verdict and the write refuses it as `composer_screen_moved`; a verdict that did not need the screen carries none, because tying a clean delivery to an unrelated repaint would fail it for nothing.
+The core checks every part and writes with nothing able to run in between, or raises `WriteRefused` naming the part that moved and writes nothing.
 A refusal sends the queue back to judge again with the input it now sees, at most `DELIVERY_JUDGEMENT_ATTEMPTS` (3) times; input that keeps racing the write ends as `delivery_not_safe` with the refusal reasons, never as a paste over what the operator typed.
 The operator's quiet crosses as an age (`TerminalCore.last_input_age`) rather than as the monotonic stamp it is computed from, because a stamp means nothing in another process.
 A confirmed send carries no condition: the human override already says "write anyway", and a condition would only re-impose the check they overrode.
@@ -299,8 +302,8 @@ CLI transcript discovery, schema coverage, root start/completion, and child acti
 checking model prose. They should run on CLI upgrades and periodically in a protected
 authenticated lane, not on every pull request.
 
-**A delivery the CLI never took blocks the next one, by name.** The composer estimate described
-below cannot see this and never could: `prompt_queue` writes a body, presses Enter, watches for a turn to open,
+**A delivery the CLI never took blocks the next one, by name.** The composer estimate
+(§ The composer) cannot see this and never could: `prompt_queue` writes a body, presses Enter, watches for a turn to open,
 and sometimes sees none - the CLI kept the text and typed the carriage return into its composer
 (`prompt-queue.md`, the 2026-09-04 incident). The delivery path records that on the session as a
 `PendingSubmit`, and it is a hard block here under its own reason,
@@ -315,19 +318,81 @@ pasted on top of the stuck body and the agent received them as one prompt.
 It is a positive witnessed fact rather than an estimate, which is what earns it a place in this
 contract at all, and it is deliberately **overridable**: the automatic controller never confirms
 and so stops, while a human who has looked at the pane may still say the mark is wrong. It clears
-only on evidence that the composer emptied - a turn opening, or a non-queue operator write that
-submits or discards it - and never on a timer, because an unsubmitted paste does not become
-submitted by waiting.
+only on evidence that the composer emptied - a turn opening, a non-queue operator write that
+submits or discards it, or a current screen reading of an empty composer - and never on a timer,
+because an unsubmitted paste does not become submitted by waiting.
 
-**The unsent-composer estimate is not evidence here.** `composer_input.py` keeps a
-finer-grained reading of the same PTY writes — it decrements on backspace, clears on `Esc`, and
-treats a bracketed paste as content — and publishes it as `unsent_input` for the session row
-(`features/terminal-input.md`). This tracker keeps its own coarse `input_revision` boundary and
-never consults it. The two disagree exactly where it matters: an estimate that concluded "the
-composer is empty again" would clear `terminal_input_after_completion` and authorize a send into
-a composer whose contents nothing here can see, which is the false-safe the whole contract
-exists to prevent. A gate may only be relaxed by evidence that cannot be wrong in that
-direction.
+## The composer
+
+`partial_input_absent` asks whether the composer holds anything a delivery would land on.
+Two sources can answer, and they fail in opposite places (`src/swe_mux/composer_input.py`):
+
+- **A screen reading** is what an attached pane's own xterm draws in the composer's rectangle
+  (`frontend/src/composerText.ts`), sent as a `composer_reading` frame of `empty`,
+  `placeholder`, `draft` or `unreadable` plus a character count - never the text.
+  It exists only while some pane has the session, and it is the truth about what was drawn.
+- **The estimate** counts what every operator path wrote and publishes `unsent_input` for the
+  session row.
+  It exists for every session, and it is wrong wherever a key's effect is the CLI's business:
+  a word delete, a history recall, a slash menu that consumed the keys.
+
+The rule that combines them, and the reason for each half:
+
+- **A current screen reading decides.**
+  `empty` makes `partial_input_absent` true whatever the input revision says, which is what
+  lets a session whose operator typed and then deleted take a queued message again - the
+  revision moved and never moves back, but the screen the paste lands on shows nothing.
+  `draft` blocks as `composer_holds_draft`, even with the revision untouched.
+  `placeholder` is a screen showing only the harness's empty-composer hint *without* the dim
+  attribute that normally marks it, caret parked in front - what Claude Code v2.1.302 draws
+  after every full repaint - and it counts as empty only beside an estimate of zero, because the
+  hint was identified by its wording and an operator can type those words.
+- **Without one, the estimate can only ever add a block.**
+  The composer counts as untouched only when the revision is unchanged since completion *and*
+  the estimate is empty; an estimate of zero proves nothing alone, because text it never
+  counted is exactly where it is wrong.
+  The estimate half closes a hole the revision alone left open: text typed while a turn runs is
+  counted into the completion boundary, so it read as untouched and a delivery was pasted onto
+  the end of the operator's draft.
+  A pending estimate blocks as `composer_holds_draft`; a moved revision with an empty estimate
+  blocks as `terminal_input_after_completion`, which now means "typed since the turn ended, and
+  no pane has read the composer since".
+- **A stuck delivery names itself.**
+  With `pending_submit` standing, the composer's contents are that delivery, so neither
+  composer reason is added beside `unsubmitted_delivery_in_composer`.
+- **A first prompt may follow typing that was cleared.**
+  `_adopt_first_prompt_ready` still refuses a session with any input, unless a current reading
+  shows the composer empty; the completion boundary is then the revision at that moment.
+
+**Current is the terminal core's judgement, not the browser's** (`TerminalCore.composer_screen`).
+A reading counts only while three things hold together:
+
+- it was taken in the stream the core's ring counts, at exactly the position the ring ends at,
+  so nothing has been drawn since the screen it describes;
+- that position is after the last write that could have put text in the composer
+  (`write_may_add_text`), so a keystroke on its way through the CLI is never hidden behind a
+  screen drawn before it - Claude Code takes seconds to draw a large paste, and a timer would
+  have read that silence as empty;
+- it was read at the PTY's own size, since a pane laid out at another width wraps the
+  composer where the CLI did not.
+
+Only keys that remove or move are exempt from the second rule: erase, word and line kills,
+cursor movement, focus and mouse reports.
+Measured 2026-10-18 against Claude Code v2.1.302, an extra backspace on an empty composer draws
+nothing at all, so a rule that wanted fresh output after every keystroke would never clear the
+"typed it, held backspace a little long" case the operator reported.
+Everything else - Tab, `↑`, Ctrl+Y, a submit, any text - retires the reading at the write.
+
+Where the terminal gateway holds the core, the gateway judges currency and sends the reading in
+its `state` only while it holds; the daemon's mirror can lag one message, and also drops a
+reading its own ring has drawn past.
+A verdict that needed the screen carries the reading's position in its `WriteCondition`
+(`screen_position`), so the gateway refuses the write if anything was drawn in between
+(§ One writer).
+
+The residual exposure is bounded and stated: a CLI that receives a keystroke and draws
+something unrelated before echoing it, inside the pane's 120 ms read settle, with the delivery
+then also landing inside the two-second operator-quiet window.
 
 ## Watching readiness, without being able to change it
 
@@ -336,11 +401,11 @@ time and kept it until some *other* fact happened to trigger a refresh.
 That left three staleness regimes on one line of UI.
 Lifecycle reasons (`root_agent_working`, `awaiting_*`, `session_ended`) ride `state_changed`,
 which the browser already treats as a reason to re-read the fleet, so those were live.
-Composer and screen reasons (`terminal_input_after_completion`, `operator_recently_typed`,
-`unsubmitted_delivery_in_composer`,
-`screen_not_at_agent_prompt`) turn on `terminal_input` and `terminal_mode_changed`, both
-deliberately excluded from fleet refresh because they arrive at keystroke rate - so those
-were stale for up to the browser's sixty-second safety poll.
+Composer and screen reasons (`terminal_input_after_completion`, `composer_holds_draft`,
+`operator_recently_typed`, `unsubmitted_delivery_in_composer`,
+`screen_not_at_agent_prompt`) turn on `terminal_input`, `terminal_mode_changed` and a pane's
+composer reading, none of which drives fleet refresh because they arrive at keystroke or
+repaint rate - so those were stale for up to the browser's sixty-second safety poll.
 And the clock-driven transitions have no event at all and never will: `operator_quiet`
 becoming true is the *absence* of typing, and `readiness_debounce_pending` and
 `lifecycle_evidence_stale` are thresholds crossing.
@@ -428,7 +493,10 @@ actuation is unauthorized.
 - `frontend/src/deliveryReadiness.ts` (the reason vocabulary, worded once)
 - `tests/test_readiness_watch.py`, `tests/test_events_ws.py` (transient fanout)
 - `frontend/test/deliveryReadiness.test.ts`, `frontend/test/renderer/queue-readiness.spec.ts`
-- `src/swe_mux/composer_input.py` (display-only sibling; deliberately not an input here)
+- `src/swe_mux/composer_input.py` (the estimate, screen readings and `write_may_add_text`)
+- `src/swe_mux/terminal_core/core.py` (`composer_screen`, `note_composer_reading`, `WriteCondition.screen_position`)
+- `frontend/src/composerText.ts` (`readComposerState`), `frontend/src/terminalCellSnapshot.ts`
+- `tests/test_composer_screen_reading.py`, `frontend/test/composerCaptures.test.ts` (real CLI captures)
 - `src/swe_mux/screen_mode.py`
 - `src/swe_mux/event_bus.py`
 - `tests/test_delivery_readiness_evidence.py`, `tests/test_screen_mode.py`

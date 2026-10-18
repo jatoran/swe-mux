@@ -55,6 +55,8 @@ A resolver also returns that contract as a `ComposerRegion` rectangle, so readin
 `composerRegionForBackend` is the wider registry over the same measurements: it adds Claude, which negotiates mouse tracking and therefore needs no caret resolver but whose draft is still on screen.
 
 `composerText.ts` is the pure assembly on top: dim cells dropped so a placeholder hint and a ghost completion never reach the clipboard, soft wraps rejoined at the measured wrap column, trailing box padding discarded, and `null` reserved for "this screen is not showing a readable draft" as distinct from an empty one.
+`readComposerState` classifies the same region for the daemon as `empty`, `placeholder` (a harness's declared undimmed hint, with the caret parked), `draft`, or `unreadable`, and uses the caret to catch text it cannot see; `TerminalPane` sends it as a `composer_reading` frame once output settles and only when its parsed position equals the server's (`../../../design/features/terminal-input.md`).
+`terminalCellSnapshot.ts` is the one translation from xterm's buffer to the `TerminalCaretSnapshot` both read, and the place the `isDim()` bit flag is turned into a boolean.
 
 `composerInsertion.ts` is the other direction: the bytes that put authored text *into* a composer, for every path that pushes text somebody wrote elsewhere - a prompt template, a skill, a clipboard entry, a dictated draft, a note selection - plus the native paste handlers, all of which reach it through `pasteIntoTerminal`.
 It mirrors `composer_input.composer_insertion` in the daemon, and the pair is kept in step by the harness registry rather than by matching constants.

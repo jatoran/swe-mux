@@ -23,11 +23,20 @@ const reading = (patch: Partial<DeliveryReadiness> = {}): DeliveryReadiness => (
 test('the reason a person actually hits is explained, not printed as a code', () => {
   // The report this came from: "it says terminal_input_after_completion even though
   // that session is ready, cuz i had had input in there but i have since deleted it."
+  // Deleting it now does clear the block once any pane draws the composer empty
+  // (`composer_input.py`), so what is left of this reason is the unread case.
   const explained = explainReason('terminal_input_after_completion')
   assert.match(explained.summary, /typed in this terminal after its last turn ended/)
-  // The half that answers the actual confusion: deleting the text does not clear it.
-  assert.match(String(explained.clears), /Clearing the line does not clear this/)
-  assert.match(String(explained.clears), /next turn ends/)
+  assert.match(explained.summary, /composer has not been read/)
+  // The half that answers the actual confusion: what clears it, and why it waits.
+  assert.match(String(explained.clears), /Open the session/)
+  assert.match(String(explained.clears), /next turn to end/)
+})
+
+test('text proven to be in the composer is named as that, not as typing', () => {
+  const explained = explainReason('composer_holds_draft')
+  assert.match(explained.summary, /unsent text in this agent’s composer/)
+  assert.match(String(explained.clears), /Send it or clear it/)
 })
 
 test('an unmapped reason survives as itself rather than disappearing', () => {
@@ -155,12 +164,13 @@ test('readiness is advisory and never disables the send', () => {
 })
 
 test('the composer estimate narrates the block but never clears it', () => {
-  // `unsent_input` is deliberately not an input to readiness: an estimate that
-  // concluded "empty" would authorize a send on top of text nothing can see. It is
-  // allowed to explain why the block looks wrong, and nothing more.
+  // `unsent_input` is not an input to the browser's verdict at all: the daemon
+  // decides, from a screen reading where one is current, and the estimate behind
+  // `unsent_input` can only ever add a block there. Here it may explain why a
+  // block looks wrong, and nothing more.
   const queuePane = src('QueuePane.tsx')
   assert.match(queuePane, /!session\?\.unsent_input/)
-  assert.match(queuePane, /Nothing is sitting in the composer now/)
+  assert.match(queuePane, /Nothing appears to be sitting in the composer/)
   // It never participates in deciding what to show as the verdict.
   const module = src('deliveryReadiness.ts')
   assert.ok(!module.includes('unsent_input'))

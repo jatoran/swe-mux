@@ -347,6 +347,7 @@ class SupervisorLink:
         session = self.hub.sessions.get(sid)
         if session is not None:
             session.core.stream.reseed(b"", 0)
+            session.core.note_stream_reseeded()
         subscription.stream, subscription.position = "", 0
         log.debug("terminal gateway released idle session %s", sid)
 
@@ -397,8 +398,10 @@ class SupervisorLink:
                 ring = session.core.stream
                 if delta:
                     ring.feed(payload)
+                    session.core.note_output()
                 else:
                     ring.reseed(payload, position)
+                    session.core.note_stream_reseeded()
             subscription.stream, subscription.position = stream, position
             subscription.alive = bool(reply.get("alive", True))
             subscription.ready.set()

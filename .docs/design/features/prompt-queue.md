@@ -176,10 +176,11 @@ separately opt-in.
   `GET /api/sessions` carries it on every session row; `GET /api/queue/messages` carries the target's own reading, so opening the tab never paints a verdict it corrects a moment later; and the daemon's readiness watcher pushes changes in between.
   Neither of the first two is reliably the newer one, so the freshest stamp wins and an unstamped payload loses by construction.
   A reading older than a few seconds renders its age, which is not decoration: `sessionSnapshots.ts` preserves the last known readiness across raw PTY snapshots, so without a stamp a minute-old verdict renders identically to a current one.
-- **The composer estimate narrates a block and never clears one.**
-  `terminal_input_after_completion` is the reason an operator is most likely to read as a bug: the composer really is empty, the session really does read idle, and the queue still refuses, because the guard counts keystrokes and backspaces advance the count too.
-  The strip is allowed to say "nothing is sitting in the composer now" beside it, using `unsent_input`, precisely because that is the fact making it look wrong - and it is allowed to do nothing else.
-  An estimate that concluded "empty" must never be an input to the verdict (`delivery-readiness.md`, and `composer_input.py`).
+- **A pane showing the session is what clears a typed-then-deleted composer, and the strip says so.**
+  `terminal_input_after_completion` used to be the reason an operator was most likely to read as a bug: the composer really was empty, the session really did read idle, and the queue still refused until the next turn, because the guard counted keystrokes and backspaces advanced the count too.
+  Since 2026-10-18 a pane's screen reading of an empty composer lifts it (`delivery-readiness.md` § The composer), so the reason now means "typed since the turn ended, and nothing has read the composer since" and lasts only until a pane looks.
+  The strip may still say "nothing appears to be sitting in the composer" beside it, using `unsent_input`, and adds that a pane showing the session will confirm it - and that is all the estimate may do here.
+  An estimate that concluded "empty" is never an input that permits a delivery; a pending one blocks it as `composer_holds_draft`.
 - **The focused Queue draft editor is a named Conversation text sink.**
   Voice Send fills the open editor at its caret but never stages, arms, delivers, or presses Enter; those remain explicit Queue acts.
   With no editor open the handle reports itself detached, so a dictation falls back to the focused terminal rather than being swallowed by a pane with nowhere to put it.
