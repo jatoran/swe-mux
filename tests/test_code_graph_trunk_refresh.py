@@ -1,7 +1,7 @@
 """W4.5.1 - the code graph after a branch lands on the trunk.
 
-The seed runs once per Project per process and incremental maintenance only ever
-sees files *this daemon's own sessions* wrote, so everything arriving by
+The graph is synced with the tree once per Project per process and incremental
+maintenance only ever sees files *this daemon's own sessions* wrote, so everything arriving by
 `git merge` - which is every landing - used to be invisible to the graph until
 some session happened to edit it (D3 soak, 2026-08-24: three modules absent from
 `code_context` outright, `logsetup.py` answering with its pre-S7 symbols).
@@ -133,22 +133,30 @@ async def test_a_documentation_only_merge_is_recorded_rather_than_repeated(
     store.close()
 
 
-async def test_a_delta_larger_than_the_bound_reseeds_instead(tmp_path: Path) -> None:
+async def test_a_delta_larger_than_the_bound_syncs_instead(tmp_path: Path) -> None:
+    """Past the bound the tree is synced by stat, which still parses only what moved.
+
+    It used to re-seed - clear and re-parse every file - which is the cost
+    `sync_project` exists to remove.
+    """
     root = _repository(tmp_path / "repo")
     store = CodeGraphStore(tmp_path / "graph.db")
     await index_project(store, "p1", str(root))
     _land_a_branch(root)
 
     outcome, count = await refresh_indexed_project(store, "p1", str(root), delta_limit=1)
-    assert outcome == "reindex"
-    assert count >= 3  # the whole tree, not the two changed files
+    assert outcome == "sync"
+    assert count == 2  # the new module and the caller the merge rewrote, not the tree
     assert [row["path"] for row in await store.definitions("p1", "brand_new")] == [
         "pkg/extra.py"
     ]
+    assert "pkg/extra.py" in await store.imports_of("p1", "app.py")
+    state = await store.index_state("p1")
+    assert state is not None and state[0] == await repo_head(str(root))
     store.close()
 
 
-async def test_an_unanswerable_delta_reseeds_rather_than_trusting_the_graph(
+async def test_an_unanswerable_delta_syncs_rather_than_trusting_the_graph(
     tmp_path: Path,
 ) -> None:
     """A commit git can no longer resolve must not read as "nothing changed"."""
@@ -160,9 +168,10 @@ async def test_an_unanswerable_delta_reseeds_rather_than_trusting_the_graph(
     _land_a_branch(root)
 
     outcome, count = await refresh_indexed_project(store, "p1", str(root))
-    assert outcome == "reindex"
-    assert count >= 3
+    assert outcome == "sync"
+    assert count == 2
     assert await store.definitions("p1", "brand_new") != []
+    assert await refresh_indexed_project(store, "p1", str(root)) == ("current", 0)
     store.close()
 
 

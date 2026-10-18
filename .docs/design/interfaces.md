@@ -2316,7 +2316,9 @@ another's identity.
 seconds since progress), `degraded[]`, and per-subscriber `event_bus` drop counts and queue
 depths plus `tier0_capture` (captured/dropped, last error) and `deterministic_consumers`
 (findings, last error, loop liveness — a detector that stopped producing findings is
-otherwise indistinguishable from a quiet fleet) plus `project_contexts` (fixed path, size bound,
+otherwise indistinguishable from a quiet fleet — and `code_graph_sync`, each Project's last
+code-graph sync with the tree: `outcome` `seeded`/`synced`, `reason`, `files`, `stale`,
+`parsed`, `removed`, `relinked`, `elapsed_s`) plus `project_contexts` (fixed path, size bound,
 reads, writes, blank-file creates, and last read error). Both are in-memory per daemon
 boot and do not survive a restart.
 `git_monitor` reports the Git monitor's own account (`features/git.md`): `cadence_seconds`,

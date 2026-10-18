@@ -1116,9 +1116,11 @@ class DeterministicConsumerService:
         #: is not constructed. When present, the `code_graph` consumer maintains it
         #: off this same turn-boundary stream and reads it for blast-radius findings.
         self.code_graph = code_graph
-        #: Projects whose source tree has had its one-time index. The consumer loop
-        #: is serial, so a plain set needs no lock.
-        self._graph_indexed: set[str] = set()
+        #: Projects whose graph this process has synced with the tree. The consumer
+        #: loop is serial, so a plain set needs no lock.
+        self._graph_synced: set[str] = set()
+        #: The last sync per Project, for the diagnostics block.
+        self._graph_syncs: dict[str, dict[str, Any]] = {}
         self._queue: asyncio.Queue[Any] | None = None
         self.findings = 0
         self.last_error: str | None = None
@@ -1359,14 +1361,17 @@ class DeterministicConsumerService:
 
         pid = context.project_id
         root = context.project_root
-        # One-time index so reverse-dependency edges exist for importers this
-        # session never edited. Runs at most once per project per process.
-        if pid not in self._graph_indexed:
-            self._graph_indexed.add(pid)
+        # Once per Project per process, bring the persisted graph up to the tree:
+        # seeded the first time ever (so reverse-dependency edges exist for
+        # importers this session never edited), and after that a stat-based sync
+        # that reads only the files whose stamp moved while no daemon was watching.
+        if pid not in self._graph_synced:
+            self._graph_synced.add(pid)
             try:
-                await cg.index_project(self.code_graph, pid, root)
+                synced = await cg.sync_project(self.code_graph, pid, root, reason="first_turn")
+                self._graph_syncs[pid] = synced.snapshot()
             except Exception as exc:  # noqa: BLE001 - graph upkeep never kills the loop
-                self.last_error = f"code_graph index: {exc}"[:200]
+                self.last_error = f"code_graph sync: {exc}"[:200]
         else:
             # Everything that arrives by `git merge` was written by no session
             # here, so incremental maintenance never sees it and the seed above
@@ -1601,4 +1606,5 @@ class DeterministicConsumerService:
             "findings": self.findings,
             "last_error": self.last_error,
             "running": running,
+            "code_graph_sync": dict(self._graph_syncs),
         }

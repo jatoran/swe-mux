@@ -27,16 +27,27 @@ It powers three surfaces: pull-only agent MCP tools (blast radius, navigation, c
 - Nodes are file-level by default; symbol detail (`code_graph_symbols`) is resolved on demand.
 - Edges are `imports` (file to file), `calls` and `references` (symbol to symbol, or to an unresolved name), and `defines` (file to symbol).
 - A `file_write` fact re-parses that one file and replaces its edges; the parse is skipped when the file's bytes already match the stored content hash.
-- A **one-time bounded seed index** parses a Project's existing source tree once, because a reverse-dependency query needs the importers in the graph and an importer a session never edited would otherwise be invisible.
-  This is not the rejected full-rebuild-per-edit watcher: it runs at most once per Project per process, on a worker thread, bounded by file count and wall-clock.
-- **The trunk moving is the third maintenance trigger, beside the write stream and the seed.**
+  The files one turn wrote are all parsed before any is resolved, and each is resolved against the others' new symbols, so a call written before its definition in the same turn still resolves.
+- A **bounded seed index** parses a Project's existing source tree once, because a reverse-dependency query needs the importers in the graph and an importer a session never edited would otherwise be invisible.
+  This is not the rejected full-rebuild-per-edit watcher: it runs once per Project, ever, on worker threads, bounded by file count (`MAX_INDEX_FILES`, 6,000).
+- **The graph persists, so a restart syncs it rather than re-seeding it** (`sync_project`, schema version 3).
+  The first turn in each process walks the tree exactly as the seed does, compares each file's stat from the directory listing with the stamp it was parsed at (`source_mtime_ns`, `source_size`), reads and hashes only the files whose stamp moved, parses only those whose bytes moved, and drops the files the tree no longer holds.
+  It replaced a re-seed at the first turn of every process: on the development host's largest Project that was 6,000 files, 141 s and 82 s of CPU in the daemon, at every restart, on a tree that had usually not changed; the sync of the same tree is 0.6-0.8 s (`development/DAEMON_LOAD_ISOLATION.md` item 22a).
+  A stamp taken within three seconds of its file's modification time is recorded as unknown (`RACY_STAMP_NS`, git's "racily clean" rule), because a write landing in the same timestamp tick could otherwise leave a stamp that matches bytes the graph never saw; an unknown stamp costs the next sync one read and hash, never a parse.
+  A version-2 graph keeps every row and starts with unknown stamps, so its first sync reads each file once (2.4 s for the 6,000) and parses none.
+- **Files that were not re-parsed are re-linked against the ones that were** (`_relink_importers`), which is what lets a persisted graph equal the graph a seed of the same tree would build.
+  A file's edges are resolved when it is parsed, against the filesystem (which file an import names) and against its imports' symbols (which module defines a name it calls), so an unchanged file goes stale when a module it imports gains or loses a symbol, disappears, or is joined by a file its import now names instead (`util.py` appearing beside `util/__init__.py`).
+  The per-start re-seed used to hide that until the next restart; now every write, delta and sync re-resolves exactly the importers affected, from their stored edges and without reading or parsing them.
+  The one case it cannot see is an import that resolves to a file the walk never indexes (a non-source file, or one under a skipped directory) appearing.
+  Measured on the swe-mux tree: 29-78 ms for its three largest hubs (up to 145 importers), and 17 ms for a new file.
+- **The trunk moving is the third maintenance trigger, beside the write stream and the sync.**
   A `file_write` fact only ever covers what *this daemon's own sessions* wrote, and the seed predates whatever landed after it - so everything arriving by `git merge`, which is every landing, was invisible to the graph until some session happened to edit it.
   Measured on the D3 soak (2026-08-24): `errors.py`, `bounded_subprocess.py` and `cli_version.py` were absent from `code_context` outright and `logsetup.py` answered with its pre-S7 symbol set, a stale-but-plausible answer that is worse than the empty one the tools already warn about.
   So the graph records **which commit it reflects** (`code_graph_index_state`, one row per Project), and each turn boundary compares it against the checkout's `HEAD`.
   Unmoved is one `rev-parse` and nothing else; moved is one `git diff --name-only --no-renames --relative -z <indexed>..<head>` plus the ordinary per-file re-parse of exactly what changed.
-  Only an *unusable* delta re-seeds the tree: a commit git can no longer resolve (a rewritten history, a pruned object) or one larger than `MAX_TRUNK_DELTA_FILES`, past which parsing one file at a time has nothing left to win.
-  Three distinctions are load-bearing. A delta git cannot answer is `None`, never an empty list, because "nothing changed" and "I cannot tell" must not collapse. `--no-renames` is required, since rename detection reports only the new path while the old one has to *leave* the graph. And the head is read **before** the seed walks the tree, so a commit landing mid-parse is recorded as not-yet-indexed - costing one delta pass - rather than as indexed, which would be permanent staleness because nothing would ever see HEAD move again.
-  What this deliberately does not cover is an *uncommitted* edit made by a tool other than a session in this daemon; that file is refreshed when it is next written or when a commit carries it.
+  Only an *unusable* delta falls back to a sync of the tree: a commit git can no longer resolve (a rewritten history, a pruned object) or one larger than `MAX_TRUNK_DELTA_FILES`, past which asking git one file at a time has nothing left to win; the sync still parses only what moved.
+  Three distinctions are load-bearing. A delta git cannot answer is `None`, never an empty list, because "nothing changed" and "I cannot tell" must not collapse. `--no-renames` is required, since rename detection reports only the new path while the old one has to *leave* the graph. And the head is read **before** the seed or the sync walks the tree, so a commit landing mid-walk is recorded as not-yet-indexed - costing one delta pass - rather than as indexed, which would be permanent staleness because nothing would ever see HEAD move again.
+  An *uncommitted* edit made by a tool other than a session in this daemon is picked up by the next process's sync, or sooner when it is next written or a commit carries it.
 - The reverse-dependency query is a bounded SQLite recursive CTE over `imports`/`calls` edges, N hops.
 - The **git co-change net** is mined from `git_provenance` contributor rows grouped by commit: files repeatedly committed together are coupled whether or not a static edge exists.
   It is the required recall net for the dynamic edges tree-sitter misses, not decorative.
@@ -173,7 +184,7 @@ automations = { raw_store = true, tier0 = true, code_graph = true }
 ## Key files
 
 - Engine, store, resolution, queries, co-change net: `src/swe_mux/code_graph.py`
-  (`index_project` seeds, `maintain_files` follows the write stream, `refresh_indexed_project`/`repo_head`/`changed_between` follow the trunk)
+  (`index_project` seeds, `sync_project` catches a persisted graph up with the tree, `maintain_files` follows the write stream, `refresh_indexed_project`/`repo_head`/`changed_between` follow the trunk, `_relink_importers` re-resolves what none of them re-parsed)
 - Turn-boundary maintenance and the human-passive detectors: `src/swe_mux/deterministic_consumers.py` (`_code_graph`, `_blast_radius`, `_unexamined_callers`, `_code_structure`)
 - Agent pull tools: `src/swe_mux/mcp.py`, `src/swe_mux/mcp_contract.py`
 - Change-map endpoint: `src/swe_mux/server.py` (`session_change_map`, `_change_map_checkout`, `_SeedAdmission`, `_change_map_scope`)
@@ -182,7 +193,7 @@ automations = { raw_store = true, tier0 = true, code_graph = true }
 - Registry entry: `src/swe_mux/automation_registry.py`
 - Packaging: `packaging/swe_mux.spec`
 - Frontend change map: `frontend/src/ChangeMapPane.tsx`, `frontend/src/changeMap.ts`, `frontend/src/changeMapLayout.worker.ts`
-- Tests: `tests/test_code_graph.py`, `tests/test_code_graph_detectors.py`, `tests/test_mcp_code_graph.py`, `tests/test_change_map_endpoint.py` (which builds **real** git worktrees — a stubbed `git worktree list` proves nothing about a checkout being mistaken for another), `tests/test_code_graph_trunk_refresh.py` (real repositories and real merges, for the same reason), `tests/test_git_review.py`
+- Tests: `tests/test_code_graph.py`, `tests/test_code_graph_detectors.py`, `tests/test_mcp_code_graph.py`, `tests/test_change_map_endpoint.py` (which builds **real** git worktrees — a stubbed `git worktree list` proves nothing about a checkout being mistaken for another), `tests/test_code_graph_trunk_refresh.py` (real repositories and real merges, for the same reason), `tests/test_code_graph_sync.py` (a synced or incrementally maintained graph compared row for row with a fresh seed of the same tree), `tests/test_git_review.py`
 
 ## Relates to
 

@@ -35,7 +35,7 @@ import os
 import re
 import sqlite3
 import time
-from collections.abc import Callable, Iterable, Iterator, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TypeVar
@@ -45,6 +45,7 @@ from .executor_accounting import AccountedThreadPoolExecutor
 from .sqlite_store import (
     connect_or_quarantine,
     database_operation_lock,
+    like_contains,
     run_sqlite_operation,
     write_schema_version,
 )
@@ -56,7 +57,10 @@ T = TypeVar("T")
 #: 2 adds `code_graph_index_state`: which commit each Project's graph reflects,
 #: so a branch that arrived by `git merge` can be detected and re-parsed instead
 #: of being answered from a seed taken before it landed.
-CODE_GRAPH_SCHEMA_VERSION = 2
+#: 3 adds each file's stat stamp (`source_mtime_ns`, `source_size`), so a graph that
+#: persisted across a daemon restart is brought up to the tree by reading only the
+#: files whose stamp moved, instead of being cleared and re-parsed whole.
+CODE_GRAPH_SCHEMA_VERSION = 3
 
 #: Edge kinds. `defines` is file -> symbol; `imports` is file -> file; `calls`
 #: and `references` are symbol -> symbol (or symbol -> unresolved name).
@@ -448,24 +452,32 @@ def resolve_import(
     filesystem, so it never depends on parse order.
     """
     root = Path(project_root)
-    from_dir = (root / from_path).parent
-
-    def try_candidates(base: Path) -> str | None:
-        for suffix in spec.module_suffixes:
-            candidate = base.with_suffix("." + suffix) if base.suffix == "" else Path(
-                str(base) + "." + suffix
-            )
-            if candidate.is_file():
-                return _rel(candidate, root)
-        for index in spec.index_basenames:
-            candidate = base / index
-            if candidate.is_file():
-                return _rel(candidate, root)
-        # A file that already carries its extension (JS/TS "./mod.js").
-        if base.is_file():
-            return _rel(base, root)
+    base = _import_base(module, from_path, root, spec=spec)
+    if base is None:
         return None
+    for suffix in spec.module_suffixes:
+        candidate = base.with_suffix("." + suffix) if base.suffix == "" else Path(
+            str(base) + "." + suffix
+        )
+        if candidate.is_file():
+            return _rel(candidate, root)
+    for index in spec.index_basenames:
+        candidate = base / index
+        if candidate.is_file():
+            return _rel(candidate, root)
+    # A file that already carries its extension (JS/TS "./mod.js").
+    if base.is_file():
+        return _rel(base, root)
+    return None
 
+
+def _import_base(module: str, from_path: str, root: Path, *, spec: LanguageSpec) -> Path | None:
+    """The path an import names, before any suffix or index file is tried.
+
+    None for an import that can never be in-project: a bare JS/TS specifier is a
+    `node_modules` package, and a relative one may climb out of the root.
+    """
+    from_dir = (root / from_path).parent
     if spec.name == "python":
         if module.startswith("."):
             # Relative import: leading dots count parent hops.
@@ -476,9 +488,8 @@ def resolve_import(
                 base = base.parent
             if rest:
                 base = base / Path(rest.replace(".", "/"))
-            return try_candidates(base)
-        base = root / Path(module.replace(".", "/"))
-        return try_candidates(base)
+            return base
+        return root / Path(module.replace(".", "/"))
 
     # JS/TS: only path-like specifiers ("./x", "../x", "/x") are in-project;
     # bare "pkg" specifiers are node_modules and resolve to no edge.
@@ -488,8 +499,47 @@ def resolve_import(
             base.relative_to(root.resolve())
         except ValueError:
             return None
-        return try_candidates(base)
+        return base
     return None
+
+
+def _import_tail(module: str, from_path: str, root: Path, *, spec: LanguageSpec) -> str | None:
+    """The last component of the path an import names, casefolded, or None.
+
+    Every file an import could resolve to is named by that component: its stem,
+    its whole name, or - for a package index - its directory's name
+    (`_resolution_keys`). That is what lets a file that appeared find the imports
+    it may now answer without re-resolving every import in the Project. The
+    common shapes are read straight off the string; anything else asks
+    `_import_base`, which is the authority.
+    """
+    if spec.name == "python":
+        rest = module.lstrip(".")
+        if rest:
+            return rest.rsplit(".", 1)[-1].casefold()
+    elif module.startswith("."):
+        last = module.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
+        if last not in ("", ".", ".."):
+            return last.casefold()
+    else:
+        return None
+    base = _import_base(module, from_path, root, spec=spec)
+    return base.name.casefold() if base is not None else None
+
+
+def _resolution_keys(identity: str, root: Path) -> set[str]:
+    """The import tails (`_import_tail`) that could resolve to this file."""
+    name = identity.rsplit("/", 1)[-1].casefold()
+    keys = {name, Path(name).stem}
+    if name.endswith(".d.ts"):
+        keys.add(name[: -len(".d.ts")])
+    spec = spec_for_path(name)
+    if spec is not None and name in spec.index_basenames:
+        # A package index answers for its directory, which at the top level is the
+        # Project root itself.
+        parent = identity.rsplit("/", 2)[-2] if "/" in identity else root.resolve().name
+        keys.add(parent.casefold())
+    return keys
 
 
 def _rel(path: Path, root: Path) -> str | None:
@@ -533,7 +583,7 @@ def resolve_edges(
     parsed: ParsedFile,
     project_root: str,
     *,
-    known_symbols: dict[str, set[str]] | None = None,
+    known_symbols: Mapping[str, set[str]] | None = None,
 ) -> list[ResolvedEdge]:
     """Turn a parsed file's raw refs/imports into resolved graph edges.
 
@@ -636,6 +686,67 @@ def resolve_edges(
 # Store.                                                                       #
 # --------------------------------------------------------------------------- #
 
+#: A stamp this close to the moment it was taken cannot tell a write landing later
+#: in the same timestamp tick from no write at all, so it is recorded as unknown and
+#: its file is verified by content at the next sync - git's "racily clean" rule.
+#: Generous on purpose: a file timestamp's real granularity is the filesystem's
+#: (two seconds on FAT) and the writer's clock tick, not the 100 ns NTFS stores, and
+#: the price of a racy stamp is one extra read and hash, never a parse.
+RACY_STAMP_NS = 3_000_000_000
+
+
+@dataclass(frozen=True, slots=True)
+class SourceStamp:
+    """What a file's stat said when it was read: modification time and size.
+
+    ``mtime_ns`` is None when the stamp was too fresh to trust (``RACY_STAMP_NS``),
+    which makes the next sync read the file and compare its content hash.
+    """
+
+    mtime_ns: int | None
+    size: int
+
+
+@dataclass(frozen=True, slots=True)
+class FileStamp:
+    """A graph row's content hash and the stamp of the bytes it was parsed from."""
+
+    content_hash: str | None
+    mtime_ns: int | None
+    size: int | None
+
+    def matches(self, stamp: SourceStamp) -> bool:
+        """True when a fresh stat says the file is the one this row was parsed from.
+
+        An unknown recorded time never matches, so a legacy row or a racy stamp is
+        verified by content rather than trusted.
+        """
+        return (
+            self.mtime_ns is not None
+            and stamp.mtime_ns is not None
+            and self.mtime_ns == stamp.mtime_ns
+            and self.size == stamp.size
+        )
+
+
+def stamp_of(st: os.stat_result, now_ns: int) -> SourceStamp:
+    """The stamp to record for a stat taken at ``now_ns``."""
+    mtime_ns = st.st_mtime_ns
+    if now_ns - mtime_ns < RACY_STAMP_NS:
+        return SourceStamp(None, st.st_size)
+    return SourceStamp(mtime_ns, st.st_size)
+
+
+#: Bound on the parameters one ``IN (...)`` list carries, well under SQLite's
+#: default host-parameter limit.
+_IN_CHUNK = 500
+
+
+def _chunks[V](items: Sequence[V], size: int) -> Iterator[Sequence[V]]:
+    for start in range(0, len(items), size):
+        yield items[start : start + size]
+
+
 _SCHEMA = """
 PRAGMA journal_mode=WAL;
 CREATE TABLE IF NOT EXISTS code_graph_files (
@@ -646,6 +757,8 @@ CREATE TABLE IF NOT EXISTS code_graph_files (
   symbol_count INTEGER NOT NULL DEFAULT 0,
   truncated INTEGER NOT NULL DEFAULT 0,
   parsed_at REAL NOT NULL,
+  source_mtime_ns INTEGER,
+  source_size INTEGER,
   PRIMARY KEY (project_id, path)
 );
 CREATE TABLE IF NOT EXISTS code_graph_symbols (
@@ -718,6 +831,14 @@ class CodeGraphStore:
         with self._operation_lock:
             self._db = connect_or_quarantine(self.path, self._open)
             self._db.executescript(_SCHEMA)
+            columns = {
+                str(row["name"]) for row in self._db.execute("PRAGMA table_info(code_graph_files)")
+            }
+            # A version-2 graph keeps every row; its stamps start unknown, so the
+            # first sync reads each file once and compares hashes rather than parsing.
+            for column in ("source_mtime_ns", "source_size"):
+                if column not in columns:
+                    self._db.execute(f"ALTER TABLE code_graph_files ADD COLUMN {column} INTEGER")
             write_schema_version(self._db, "code_graph", CODE_GRAPH_SCHEMA_VERSION)
             self._db.commit()
 
@@ -756,8 +877,65 @@ class CodeGraphStore:
 
         return await self._run(op)
 
+    def _leaf_sets_sync(self, project_id: str, paths: Iterable[str]) -> dict[str, set[str]]:
+        wanted = sorted(set(paths))
+        out: dict[str, set[str]] = {path: set() for path in wanted}
+        for chunk in _chunks(wanted, _IN_CHUNK):
+            marks = ",".join("?" * len(chunk))
+            for row in self._db.execute(
+                "SELECT path, name FROM code_graph_symbols "
+                f"WHERE project_id=? AND path IN ({marks})",
+                (project_id, *chunk),
+            ):
+                out[str(row["path"])].add(str(row["name"]).split(".")[-1])
+        return out
+
+    async def leaf_sets(self, project_id: str, paths: Iterable[str]) -> dict[str, set[str]]:
+        """Each path's symbol leaf names (empty for a file the graph does not hold)."""
+        wanted = list(paths)
+        return await self._run(lambda: self._leaf_sets_sync(project_id, wanted))
+
+    async def file_stamps(self, project_id: str) -> dict[str, FileStamp]:
+        """Every file this Project's graph holds, with the stamp it was parsed at."""
+
+        def op() -> dict[str, FileStamp]:
+            rows = self._db.execute(
+                "SELECT path, content_hash, source_mtime_ns, source_size "
+                "FROM code_graph_files WHERE project_id=?",
+                (project_id,),
+            ).fetchall()
+            return {
+                str(row["path"]): FileStamp(
+                    row["content_hash"], row["source_mtime_ns"], row["source_size"]
+                )
+                for row in rows
+            }
+
+        return await self._run(op)
+
+    async def record_stamps(
+        self, project_id: str, stamps: Sequence[tuple[str, SourceStamp]]
+    ) -> None:
+        """Re-stamp files whose bytes were read and found to be the ones parsed."""
+        if not stamps:
+            return
+
+        def op() -> None:
+            self._db.executemany(
+                "UPDATE code_graph_files SET source_mtime_ns=?, source_size=? "
+                "WHERE project_id=? AND path=?",
+                [(stamp.mtime_ns, stamp.size, project_id, path) for path, stamp in stamps],
+            )
+            self._db.commit()
+
+        await self._run(op)
+
     def _replace_file_sync(
-        self, project_id: str, parsed: ParsedFile, edges: Sequence[ResolvedEdge]
+        self,
+        project_id: str,
+        parsed: ParsedFile,
+        edges: Sequence[ResolvedEdge],
+        stamp: SourceStamp | None = None,
     ) -> None:
         db = self._db
         db.execute(
@@ -770,10 +948,11 @@ class CodeGraphStore:
         )
         db.execute(
             "INSERT INTO code_graph_files(project_id,path,lang,content_hash,symbol_count,"
-            "truncated,parsed_at) VALUES(?,?,?,?,?,?,?) "
+            "truncated,parsed_at,source_mtime_ns,source_size) VALUES(?,?,?,?,?,?,?,?,?) "
             "ON CONFLICT(project_id,path) DO UPDATE SET lang=excluded.lang,"
             "content_hash=excluded.content_hash,symbol_count=excluded.symbol_count,"
-            "truncated=excluded.truncated,parsed_at=excluded.parsed_at",
+            "truncated=excluded.truncated,parsed_at=excluded.parsed_at,"
+            "source_mtime_ns=excluded.source_mtime_ns,source_size=excluded.source_size",
             (
                 project_id,
                 parsed.path,
@@ -782,6 +961,8 @@ class CodeGraphStore:
                 len(parsed.symbols),
                 1 if parsed.truncated else 0,
                 time.time(),
+                stamp.mtime_ns if stamp is not None else None,
+                stamp.size if stamp is not None else None,
             ),
         )
         # One file can legitimately define the same qualname twice — @overload
@@ -840,31 +1021,168 @@ class CodeGraphStore:
         db.commit()
 
     async def replace_file(
-        self, project_id: str, parsed: ParsedFile, edges: Sequence[ResolvedEdge]
+        self,
+        project_id: str,
+        parsed: ParsedFile,
+        edges: Sequence[ResolvedEdge],
+        stamp: SourceStamp | None = None,
     ) -> None:
-        await self._run(lambda: self._replace_file_sync(project_id, parsed, edges))
+        await self._run(lambda: self._replace_file_sync(project_id, parsed, edges, stamp))
 
     async def remove_file(self, project_id: str, path: str) -> bool:
         """Drop a file and its edges from the graph. Returns True if it existed."""
+        return await self.remove_files(project_id, [path]) > 0
 
-        def op() -> bool:
-            cur = self._db.execute(
-                "DELETE FROM code_graph_files WHERE project_id=? AND path=?",
-                (project_id, path),
-            )
-            existed = cur.rowcount > 0
-            self._db.execute(
-                "DELETE FROM code_graph_edges WHERE project_id=? AND src_path=?",
-                (project_id, path),
-            )
-            self._db.execute(
-                "DELETE FROM code_graph_symbols WHERE project_id=? AND path=?",
-                (project_id, path),
-            )
+    async def remove_files(self, project_id: str, paths: Sequence[str]) -> int:
+        """Drop files and the edges they own. Returns how many the graph held."""
+        if not paths:
+            return 0
+
+        def op() -> int:
+            removed = 0
+            for path in paths:
+                cur = self._db.execute(
+                    "DELETE FROM code_graph_files WHERE project_id=? AND path=?",
+                    (project_id, path),
+                )
+                removed += max(cur.rowcount, 0)
+                self._db.execute(
+                    "DELETE FROM code_graph_edges WHERE project_id=? AND src_path=?",
+                    (project_id, path),
+                )
+                self._db.execute(
+                    "DELETE FROM code_graph_symbols WHERE project_id=? AND path=?",
+                    (project_id, path),
+                )
             self._db.commit()
-            return existed
+            return removed
 
         return await self._run(op)
+
+    async def import_edges(
+        self,
+        project_id: str,
+        *,
+        targets: Iterable[str] | None = None,
+        naming: Iterable[str] | None = None,
+    ) -> list[tuple[int, str, str, str | None]]:
+        """``(id, src_path, module, dst_path)`` for import edges.
+
+        Every import edge in the Project; or only those currently resolved to one
+        of ``targets``; or only those whose module string could name a file with
+        one of the ``naming`` tails (`_import_tail`): it contains one, or it ends
+        in a dot or a separator (`.`, `..`, `./`), whose tail is a directory's
+        name the string does not spell.
+        The ``naming`` filter is a superset by construction for ASCII tails - SQL
+        ``LIKE`` folds ASCII case only - so it is applied only when every tail is
+        ASCII, and the caller still checks each row exactly.
+        """
+        wanted = None if targets is None else sorted(set(targets))
+        tails = None if naming is None else sorted(set(naming))
+        if tails is not None and not all(tail.isascii() for tail in tails):
+            tails = None
+
+        def op() -> list[tuple[int, str, str, str | None]]:
+            select = (
+                "SELECT id, src_path, dst_name, dst_path FROM code_graph_edges "
+                "WHERE project_id=? AND kind='imports'"
+            )
+            rows: list[sqlite3.Row] = []
+            if wanted is not None:
+                for chunk in _chunks(wanted, _IN_CHUNK):
+                    marks = ",".join("?" * len(chunk))
+                    rows.extend(
+                        self._db.execute(
+                            f"{select} AND dst_path IN ({marks})", (project_id, *chunk)
+                        )
+                    )
+            elif tails is not None:
+                for chunk in _chunks(tails, _IN_CHUNK):
+                    likes = " OR ".join(["dst_name LIKE ? ESCAPE '\\'"] * len(chunk))
+                    rows.extend(
+                        self._db.execute(
+                            f"{select} AND ({likes} OR dst_name LIKE '%.' "
+                            "OR dst_name LIKE '%/' OR dst_name LIKE '%\\')",
+                            (project_id, *(like_contains(tail) for tail in chunk)),
+                        )
+                    )
+            else:
+                rows = list(self._db.execute(select, (project_id,)))
+            unique = {int(row["id"]): row for row in rows}
+            return [
+                (edge_id, str(row["src_path"]), str(row["dst_name"]), row["dst_path"])
+                for edge_id, row in unique.items()
+            ]
+
+        return await self._run(op)
+
+    async def relink(
+        self, project_id: str, importers: Sequence[str], import_targets: Mapping[int, str | None]
+    ) -> int:
+        """Re-resolve the edges of files that were not re-parsed.
+
+        ``import_targets`` carries the new resolution of each import edge, by id,
+        that the filesystem now answers differently. Every other edge of each
+        importer is re-resolved the way ``resolve_edges`` resolves a fresh parse:
+        a name the file defines stays local, and any other name goes to the first
+        imported module that defines it, in import order, or to nothing.
+        Returns how many edge rows changed.
+        """
+
+        def op() -> int:
+            changed = 0
+            for src in importers:
+                changed += self._relink_file_sync(project_id, src, import_targets)
+            self._db.commit()
+            return changed
+
+        return await self._run(op)
+
+    def _relink_file_sync(
+        self, project_id: str, src: str, import_targets: Mapping[int, str | None]
+    ) -> int:
+        db = self._db
+        changed = 0
+        modules: list[str] = []
+        # Edge ids follow insertion order, which is the order the parse produced
+        # the imports in - the order `resolve_edges` searches them.
+        for row in db.execute(
+            "SELECT id, dst_path FROM code_graph_edges "
+            "WHERE project_id=? AND src_path=? AND kind='imports' ORDER BY id",
+            (project_id, src),
+        ).fetchall():
+            dst = row["dst_path"]
+            edge_id = int(row["id"])
+            if edge_id in import_targets and import_targets[edge_id] != dst:
+                dst = import_targets[edge_id]
+                db.execute(
+                    "UPDATE code_graph_edges SET dst_path=?, resolved=? WHERE id=?",
+                    (dst, 1 if dst is not None else 0, edge_id),
+                )
+                changed += 1
+            if dst is not None:
+                modules.append(str(dst))
+        local = self._leaf_sets_sync(project_id, [src])[src]
+        leaves = self._leaf_sets_sync(project_id, modules)
+        updates: list[tuple[str | None, str | None, int, int]] = []
+        for row in db.execute(
+            "SELECT id, dst_name, dst_path, dst_symbol, resolved FROM code_graph_edges "
+            "WHERE project_id=? AND src_path=? AND kind IN (?, ?)",
+            (project_id, src, EDGE_CALLS, EDGE_REFERENCES),
+        ).fetchall():
+            name = str(row["dst_name"])
+            if name in local:
+                continue  # resolved to this file's own definition, which did not change
+            target = next((module for module in modules if name in leaves[module]), None)
+            wanted = (target, name if target is not None else None, 1 if target else 0)
+            if wanted != (row["dst_path"], row["dst_symbol"], int(row["resolved"])):
+                updates.append((*wanted, int(row["id"])))
+        if updates:
+            db.executemany(
+                "UPDATE code_graph_edges SET dst_path=?, dst_symbol=?, resolved=? WHERE id=?",
+                updates,
+            )
+        return changed + len(updates)
 
     async def clear_project(self, project_id: str) -> None:
         """Drop the whole graph for a Project. Used before a fresh seed so stale
@@ -1321,19 +1639,48 @@ def iter_source_files(project_root: str, *, limit: int = MAX_INDEX_FILES) -> Ite
     repository stays cheap. Hidden directories (``.git``, ``.venv``, ``.claude``,
     ``.mux``) are skipped wholesale.
     """
-    root = Path(project_root)
+    for entry in _iter_source_entries(project_root, limit=limit):
+        yield Path(entry.path)
+
+
+def _iter_source_entries(project_root: str, *, limit: int) -> Iterator[os.DirEntry[str]]:
+    """The directory entries ``iter_source_files`` names, in the same order.
+
+    The walk is ``os.walk``'s, top-down and depth-first with each directory's
+    files before its subdirectories, because the order decides which files a tree
+    past ``limit`` keeps and the seed and the sync must keep the same ones. It is
+    written out rather than borrowed so the sync gets each file's ``DirEntry``:
+    on Windows its ``stat()`` comes from the directory listing and costs no call
+    per file.
+    """
     count = 0
-    for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [
-            d for d in dirnames if d not in _SKIP_DIRS and not d.startswith(".")
-        ]
-        for filename in filenames:
-            if spec_for_path(filename) is None:
+    stack = [str(Path(project_root))]
+    while stack:
+        top = stack.pop()
+        files: list[os.DirEntry[str]] = []
+        subdirs: list[os.DirEntry[str]] = []
+        try:
+            with os.scandir(top) as scan:
+                for entry in scan:
+                    try:
+                        is_dir = entry.is_dir()
+                    except OSError:
+                        is_dir = False
+                    (subdirs if is_dir else files).append(entry)
+        except OSError:
+            continue  # os.walk skips a directory it cannot list; so does the seed
+        for entry in files:
+            if spec_for_path(entry.name) is None:
                 continue
-            yield Path(dirpath) / filename
+            yield entry
             count += 1
             if count >= limit:
                 return
+        for entry in reversed(subdirs):
+            name = entry.name
+            if name in _SKIP_DIRS or name.startswith(".") or entry.is_symlink():
+                continue
+            stack.append(entry.path)
 
 
 def _abspath(project_root: str, target: str) -> Path:
@@ -1512,14 +1859,71 @@ def resolve_display_paths(project_root: str, identities: Iterable[str]) -> dict[
     return resolved
 
 
-def _read_and_parse(path: str, project_root: str) -> ParsedFile | None:
-    """Read a file's bytes and parse it — the CPU-bound half, run on a worker
-    thread so a large index never blocks the event loop."""
+@dataclass(frozen=True, slots=True)
+class _Loaded:
+    """One file read for upkeep.
+
+    ``parsed`` is None when ``unchanged`` (the bytes hash to what the graph already
+    holds, so only the stamp is news) and also when a changed file failed to parse,
+    which leaves its row as it was and its stamp unrecorded.
+    """
+
+    identity: str
+    stamp: SourceStamp
+    unchanged: bool
+    parsed: ParsedFile | None
+
+
+def _load(
+    path: str,
+    project_root: str,
+    identity: str,
+    known_hash: str | None,
+    stamp: SourceStamp | None,
+) -> _Loaded | None:
+    """Read a file, and parse it only when its bytes are not the ones the graph holds.
+
+    The CPU-bound half of upkeep, run on a worker thread so a large index never
+    blocks the event loop. The stamp is taken *before* the read (by the walk, or
+    here when there was no walk), so a write landing in between leaves a stamp
+    older than the bytes - which the next sync reads again - and never a newer
+    one, which would hide that write for good.
+    """
     try:
+        if stamp is None:
+            stamp = stamp_of(os.stat(path), time.time_ns())
         source = Path(path).read_bytes()
     except OSError:
         return None
-    return parse_source(path, source, project_root=project_root)
+    if known_hash is not None and content_hash(source) == known_hash:
+        return _Loaded(identity, stamp, True, None)
+    return _Loaded(identity, stamp, False, parse_source(path, source, project_root=project_root))
+
+
+def _scan_tree(project_root: str, limit: int) -> list[tuple[str, str, SourceStamp | None]]:
+    """``(path, identity, stamp)`` for each file the seed indexes, in walk order.
+
+    The stamp is None where the stat failed, which makes the read stat again. Two
+    names that fold to one identity (only possible on a case-sensitive host) keep
+    the later one, which is the row a seed's last write would have left.
+    """
+    now_ns = time.time_ns()
+    found: dict[str, tuple[str, str, SourceStamp | None]] = {}
+    for entry in _iter_source_entries(project_root, limit=limit):
+        identity = normalize_target(entry.path, project_root)
+        if identity is None:
+            continue
+        try:
+            stamp: SourceStamp | None = stamp_of(entry.stat(), now_ns)
+        except OSError:
+            stamp = None
+        found.pop(identity, None)
+        found[identity] = (entry.path, identity, stamp)
+    return list(found.values())
+
+
+def _leaves(parsed: ParsedFile) -> set[str]:
+    return {symbol.name.split(".")[-1] for symbol in parsed.symbols}
 
 
 #: Files a trunk move may bring in before a whole-tree re-seed is the cheaper
@@ -1620,12 +2024,14 @@ async def refresh_indexed_project(
 
     Cheap by construction, because a stale graph is not the only failure mode a
     reindex-per-request would have: one `rev-parse` when nothing moved, one `diff`
-    plus one parse per changed file when it did, and a whole-tree re-seed only when
-    the delta is unusable or larger than parsing one file at a time is worth.
+    plus one parse per changed file when it did, and a stat-based `sync_project`
+    only when the delta is unusable or larger than going one file at a time is
+    worth.
 
     Returns `(outcome, files)` where outcome is one of `unversioned` (not a git
     checkout), `unseeded` (no recorded state - the caller has not seeded it yet),
-    `current` (HEAD has not moved), `delta`, or `reindex`.
+    `current` (HEAD has not moved), `delta`, or `sync`; `files` is how many were
+    re-parsed.
     """
     head = await repo_head(project_root)
     if head is None:
@@ -1638,16 +2044,14 @@ async def refresh_indexed_project(
         return ("current", 0)
     paths = await changed_between(project_root, previous, head) if previous else None
     if paths is None or len(paths) > delta_limit:
-        count = await index_project(store, project_id, project_root, limit=limit)
-        log.info(
-            "code_graph_reindexed project=%s previous_head=%s head=%s files=%d reason=%s",
+        result = await sync_project(
+            store,
             project_id,
-            previous or "",
-            head,
-            count,
-            "delta_unavailable" if paths is None else f"delta_over_limit:{len(paths)}",
+            project_root,
+            limit=limit,
+            reason="delta_unavailable" if paths is None else f"delta_over_limit:{len(paths)}",
         )
-        return ("reindex", count)
+        return ("sync", result.parsed)
     updated = await maintain_files(store, project_id, project_root, paths)
     # Recorded even when `updated` is zero: a merge of documentation alone changes
     # no node, and not recording it would re-run the same diff on every turn
@@ -1667,16 +2071,16 @@ async def refresh_indexed_project(
 async def index_project(
     store: CodeGraphStore, project_id: str, project_root: str, *, limit: int = MAX_INDEX_FILES
 ) -> int:
-    """One-time bounded parse of a project's source tree.
+    """Bounded parse of a project's whole source tree, from nothing.
 
     The maintenance model is incremental (re-parse one file on each write), but a
     reverse-dependency query needs the *importers* in the graph too, and an
     importer a session never edited would otherwise be invisible. This seeds those
-    edges once; every later edit refreshes its own file. It is not the rejected
-    full-rebuild-on-every-change watcher — it runs at most once per project per
-    process, and `refresh_indexed_project` keeps it current after that without
-    walking the tree again unless a delta is too large to be worth parsing one
-    file at a time.
+    edges; every later edit refreshes its own file. It is not the rejected
+    full-rebuild-on-every-change watcher: it runs once per Project, ever, unless
+    its graph is lost. The graph and each file's stamp persist, so a later process
+    brings it up to the tree with `sync_project`, and `refresh_indexed_project`
+    follows the trunk after that.
     """
     # Read before the walk, never after: a commit landing while this parses would
     # otherwise be recorded as indexed when its files were not, and that staleness
@@ -1687,25 +2091,26 @@ async def index_project(
     # build's stale rows (a since-deleted file, or worktree copies the incremental
     # path leaked in before this rule existed) must not survive as phantom nodes.
     await store.clear_project(project_id)
-    files = await asyncio.to_thread(lambda: list(iter_source_files(project_root, limit=limit)))
-    parsed_files: list[ParsedFile] = []
-    leaf_index: dict[str, set[str]] = {}
+    entries = await asyncio.to_thread(_scan_tree, project_root, limit)
+    loaded: list[tuple[ParsedFile, SourceStamp]] = []
     # Read and parse each file off the event loop: tree-sitter parsing is CPU-bound
     # and a one-time index of a large tree would otherwise stall the daemon loop.
-    for path in files:
-        parsed = await asyncio.to_thread(_read_and_parse, str(path), project_root)
-        if parsed is None:
-            continue
-        parsed_files.append(parsed)
-        leaf_index[parsed.path] = {s.name.split(".")[-1] for s in parsed.symbols}
+    for path, identity, stamp in entries:
+        item = await asyncio.to_thread(_load, path, project_root, identity, None, stamp)
+        if item is not None and item.parsed is not None:
+            loaded.append((item.parsed, item.stamp))
+    leaf_index = {parsed.path: _leaves(parsed) for parsed, _ in loaded}
     indexed = 0
-    for parsed in parsed_files:
-        edges = resolve_edges(parsed, project_root, known_symbols=leaf_index)
-        try:
-            await store.replace_file(project_id, parsed, edges)
-            indexed += 1
-        except Exception as exc:  # noqa: BLE001 - one bad file must not abort the seed
-            log.warning("code-graph: skipped %s during index: %s", parsed.path, exc)
+    for chunk in _chunks(loaded, RESOLVE_CHUNK):
+        # Resolution reads the filesystem for every import, so it runs off the
+        # loop too.
+        resolved = await asyncio.to_thread(_resolve_all, chunk, project_root, leaf_index)
+        for (parsed, stamp), edges in zip(chunk, resolved, strict=True):
+            try:
+                await store.replace_file(project_id, parsed, edges, stamp)
+                indexed += 1
+            except Exception as exc:  # noqa: BLE001 - one bad file must not abort the seed
+                log.warning("code-graph: skipped %s during index: %s", parsed.path, exc)
     await store.record_index_state(project_id, head=head, file_count=indexed)
     log.info(
         "code_graph_indexed project=%s files=%d head=%s",
@@ -1721,17 +2126,18 @@ async def maintain_files(
 ) -> int:
     """Re-parse each written file and replace its edges. A vanished file is
     removed from the graph rather than left stale. Returns the count re-parsed."""
-    seen: set[str] = set()
-    updated = 0
+    seen: list[str] = []
+    loaded: list[_Loaded] = []
+    removed: list[str] = []
     for raw in paths:
         identity = normalize_target(raw, project_root)
         if identity is None or identity in seen:
             continue
-        seen.add(identity)
+        seen.append(identity)
         if not is_indexable_path(identity):
             # A worktree copy or generated file the seed would never walk: keep it
             # out of the canonical graph, and remove any copy a prior build leaked.
-            await store.remove_file(project_id, identity)
+            removed.append(identity)
             continue
         abspath = _abspath(project_root, raw)
         try:
@@ -1739,22 +2145,269 @@ async def maintain_files(
         except OSError:
             exists = False
         if not exists:
-            await store.remove_file(project_id, identity)
+            removed.append(identity)
             continue
-        parsed = await asyncio.to_thread(_read_and_parse, str(abspath), project_root)
-        if parsed is None:
+        known_hash = await store.known_hash(project_id, identity)
+        item = await asyncio.to_thread(
+            _load, str(abspath), project_root, identity, known_hash, None
+        )
+        if item is not None:
+            loaded.append(item)
+    known = await store.known_files(project_id, seen)
+    parsed, _ = await _apply(store, project_id, project_root, loaded, removed, known)
+    return parsed
+
+
+#: Files resolved per thread hop during a seed: enough to amortise the hop, few
+#: enough that the store's writes interleave with other work.
+RESOLVE_CHUNK = 200
+#: Unchanged files re-linked per store operation, so a hub's many importers never
+#: hold the shared database lock in one long stretch.
+RELINK_CHUNK = 50
+
+
+def _resolve_all(
+    chunk: Sequence[tuple[ParsedFile, SourceStamp]],
+    project_root: str,
+    leaf_index: Mapping[str, set[str]],
+) -> list[list[ResolvedEdge]]:
+    return [resolve_edges(parsed, project_root, known_symbols=leaf_index) for parsed, _ in chunk]
+
+
+async def _apply(
+    store: CodeGraphStore,
+    project_id: str,
+    project_root: str,
+    loaded: Sequence[_Loaded],
+    removed: Sequence[str],
+    known: set[str],
+) -> tuple[int, int]:
+    """Write what upkeep read, then re-link the files that were not re-parsed.
+
+    Every changed file is parsed before any is resolved, and resolved against the
+    others' *new* symbols, so the order the files arrive in cannot leave a call
+    unresolved - the seed's rule, kept for a batch of any size. ``known`` is the
+    set of these paths the graph held before. Returns ``(parsed, relinked)``.
+    """
+    await store.record_stamps(
+        project_id, [(item.identity, item.stamp) for item in loaded if item.unchanged]
+    )
+    batch = [(item.parsed, item.stamp) for item in loaded if item.parsed is not None]
+    if not batch and not removed:
+        return (0, 0)
+    paths = {parsed.path for parsed, _ in batch}
+    before = await store.leaf_sets(project_id, paths)
+    fresh = {parsed.path: _leaves(parsed) for parsed, _ in batch}
+    targets = await asyncio.to_thread(
+        lambda: {target for parsed, _ in batch for target in import_targets(parsed, project_root)}
+    )
+    leaf_index = await store.leaf_sets(project_id, targets - paths)
+    leaf_index.update(fresh)
+    edges = await asyncio.to_thread(_resolve_all, batch, project_root, leaf_index)
+    written = 0
+    for (parsed, stamp), file_edges in zip(batch, edges, strict=True):
+        try:
+            await store.replace_file(project_id, parsed, file_edges, stamp)
+            written += 1
+        except Exception as exc:  # noqa: BLE001 - one bad file must not abort the pass
+            log.warning("code-graph: skipped %s during upkeep: %s", parsed.path, exc)
+    await store.remove_files(project_id, removed)
+    relinked = await _relink_importers(
+        store,
+        project_id,
+        project_root,
+        leaves_changed={path for path in paths if path in known and before[path] != fresh[path]},
+        appeared=paths - known,
+        removed={path for path in removed if path in known},
+        exclude=paths,
+    )
+    return (written, relinked)
+
+
+async def _relink_importers(
+    store: CodeGraphStore,
+    project_id: str,
+    project_root: str,
+    *,
+    leaves_changed: set[str],
+    appeared: set[str],
+    removed: set[str],
+    exclude: set[str],
+) -> int:
+    """Re-resolve the unchanged files whose edges depended on files that changed.
+
+    A file's edges are resolved when it is parsed, against the filesystem (which
+    file an import names) and against its imports' symbols (which module defines a
+    name it calls). So a file nobody re-parses goes stale when a module it imports
+    gains or loses a symbol, disappears, or is joined by a file its import now
+    names instead. The per-start re-seed used to heal that at every restart; with
+    the graph persisting, this heals it at the moment it happens, which also fixes
+    the live case of a caller written in one turn and its callee in the next.
+
+    Exact except where an import resolves to a file the walk never indexes (a
+    non-source file, or one under a skipped directory), whose appearance nothing
+    here observes. Returns how many edge rows changed.
+    """
+    if not (leaves_changed or appeared or removed):
+        return 0
+    importers: set[str] = set()
+    pending: list[tuple[int, str, str, str | None]] = []
+    for edge in await store.import_edges(project_id, targets=leaves_changed | removed):
+        if edge[1] in exclude:
             continue
-        if await store.known_hash(project_id, parsed.path) == parsed.content_hash:
-            continue  # unchanged since last parse — nothing to do
-        # Prefetch each imported module's symbol leaves (async store reads) so the
-        # pure resolver gets a plain dict, never a callback into the worker thread.
-        leaf_index: dict[str, set[str]] = {}
-        for target in import_targets(parsed, project_root):
-            leaf_index[target] = await store.leaf_names(project_id, target)
-        edges = resolve_edges(parsed, project_root, known_symbols=leaf_index)
-        await store.replace_file(project_id, parsed, edges)
-        updated += 1
-    return updated
+        importers.add(edge[1])
+        if edge[3] in removed:
+            pending.append(edge)  # its import may now resolve to another candidate
+    if appeared:
+        root = Path(project_root)
+        keys = set().union(*(_resolution_keys(path, root) for path in appeared))
+        named = await store.import_edges(project_id, naming=keys)
+
+        def matching() -> list[tuple[int, str, str, str | None]]:
+            out = []
+            for edge in named:
+                _, src, module, dst = edge
+                spec = spec_for_path(src)
+                if src in exclude or dst in removed or spec is None:
+                    continue
+                if _import_tail(module, src, root, spec=spec) in keys:
+                    out.append(edge)
+            return out
+
+        pending.extend(await asyncio.to_thread(matching))
+    retarget: dict[int, str | None] = {}
+    if pending:
+
+        def resolve_pending() -> dict[int, str | None]:
+            answers: dict[int, str | None] = {}
+            for edge_id, src, module, _ in pending:
+                spec = spec_for_path(src)
+                answers[edge_id] = (
+                    resolve_import(module, src, project_root, spec=spec) if spec else None
+                )
+            return answers
+
+        answers = await asyncio.to_thread(resolve_pending)
+        for edge_id, src, _, dst in pending:
+            if answers[edge_id] != dst:
+                retarget[edge_id] = answers[edge_id]
+                importers.add(src)
+    changed = 0
+    for chunk in _chunks(sorted(importers), RELINK_CHUNK):
+        changed += await store.relink(project_id, chunk, retarget)
+    return changed
+
+
+@dataclass(frozen=True, slots=True)
+class GraphSync:
+    """What one `sync_project` did, for its log line and the diagnostics block."""
+
+    outcome: str  # seeded | synced
+    reason: str
+    files: int  # source files the tree holds, within the bound
+    stale: int  # files whose stamp did not match, so were read and hashed
+    parsed: int  # of those, re-parsed because their bytes had changed
+    removed: int  # files the graph held that the tree no longer does
+    relinked: int  # edge rows of unchanged files re-resolved
+    elapsed_s: float
+
+    def snapshot(self) -> dict[str, Any]:
+        return {
+            "outcome": self.outcome,
+            "reason": self.reason,
+            "files": self.files,
+            "stale": self.stale,
+            "parsed": self.parsed,
+            "removed": self.removed,
+            "relinked": self.relinked,
+            "elapsed_s": self.elapsed_s,
+        }
+
+
+async def sync_project(
+    store: CodeGraphStore,
+    project_id: str,
+    project_root: str,
+    *,
+    limit: int = MAX_INDEX_FILES,
+    reason: str = "",
+) -> GraphSync:
+    """Bring a persisted graph up to the tree on disk, reading only what moved.
+
+    The graph lives in `mux.db` and outlives the process, so a daemon start owes it
+    only what changed while nobody was watching: the walk the seed takes, a stat of
+    each file from the directory listing, a read and hash of each file whose stamp
+    differs from the one it was parsed at, and a parse of each whose bytes differ.
+    It replaced a re-seed at the first turn of every process, which cleared and
+    re-parsed every file - 6,000 of them, about a minute of CPU in the daemon -
+    at every restart, on a tree that had usually not changed at all.
+
+    Seeds instead when the Project has never been seeded. Files the tree no longer
+    holds leave the graph, and every file that was not re-parsed is re-linked
+    against the ones that were (`_relink_importers`), so the result is the graph a
+    seed of the same tree would build.
+    """
+    started = time.perf_counter()
+    if await store.index_state(project_id) is None:
+        count = await index_project(store, project_id, project_root, limit=limit)
+        return GraphSync(
+            "seeded", reason, count, count, count, 0, 0, round(time.perf_counter() - started, 3)
+        )
+    # Before the walk, as the seed reads it: a commit landing mid-sync is recorded
+    # as not yet seen, which costs one delta pass, never as seen.
+    head = await repo_head(project_root)
+    entries = await asyncio.to_thread(_scan_tree, project_root, limit)
+    known = await store.file_stamps(project_id)
+    present = {identity for _, identity, _ in entries}
+    stale = [
+        (path, identity, stamp)
+        for path, identity, stamp in entries
+        if stamp is None or identity not in known or not known[identity].matches(stamp)
+    ]
+    removed = sorted(set(known) - present)
+    loaded: list[_Loaded] = []
+    for path, identity, stamp in stale:
+        recorded = known.get(identity)
+        item = await asyncio.to_thread(
+            _load,
+            path,
+            project_root,
+            identity,
+            recorded.content_hash if recorded is not None else None,
+            stamp,
+        )
+        if item is not None:
+            loaded.append(item)
+    parsed, relinked = await _apply(
+        store, project_id, project_root, loaded, removed, set(known)
+    )
+    await store.record_index_state(
+        project_id, head=head, file_count=await store.file_count(project_id)
+    )
+    result = GraphSync(
+        "synced",
+        reason,
+        len(entries),
+        len(stale),
+        parsed,
+        len(removed),
+        relinked,
+        round(time.perf_counter() - started, 3),
+    )
+    log.info(
+        "code_graph_synced project=%s reason=%s files=%d stale=%d parsed=%d removed=%d "
+        "relinked=%d head=%s elapsed_s=%.2f",
+        project_id,
+        reason,
+        result.files,
+        result.stale,
+        result.parsed,
+        result.removed,
+        result.relinked,
+        head or "",
+        result.elapsed_s,
+    )
+    return result
 
 
 def co_change_net(

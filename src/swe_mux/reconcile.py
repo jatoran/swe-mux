@@ -791,11 +791,5 @@ async def reconcile_external_history(
         progress.imported,
         skipped,
         elapsed,
-        extra={
-            "discovered": len(transcripts),
-            "summarized": summarized,
-            "owned_unchanged": owned_unchanged,
-            "elapsed_s": round(elapsed, 2),
-        },
     )
     return len(transcripts)
