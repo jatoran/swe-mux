@@ -472,6 +472,19 @@ async def telemetry_otlp_logs(request: web.Request) -> web.Response:
     supplied = request.headers.get("X-Mux-Hook-Secret", "")
     if not secrets.compare_digest(supplied, session.hook_secret):
         raise web.HTTPForbidden(text="invalid telemetry secret")
+    service = request.app[keys.CANONICAL_TELEMETRY]
+    if service.forwards_otlp:
+        # Parsed in the worker process, not on this loop: a body is up to
+        # `OTLP_BODY_BYTES` of JSON (`DAEMON_LOAD_ISOLATION.md` item 21).
+        body = await request.read()
+        try:
+            forwarded = await service.ingest_otlp(session, body)
+        except ValueError as exc:
+            raise web.HTTPBadRequest(text=str(exc)) from None
+        if forwarded is not None:
+            partial = {"rejectedLogRecords": forwarded["rejected"], "errorMessage": ""}
+            return json_response({"partialSuccess": partial})
+        # No worker right now: parse it here and let the events wait in the buffer.
     try:
         payload = await request.json()
         reduction = otlp_reduction(
@@ -481,7 +494,6 @@ async def telemetry_otlp_logs(request: web.Request) -> web.Response:
         )
     except (ValueError, json.JSONDecodeError) as exc:
         raise web.HTTPBadRequest(text=str(exc)) from None
-    service = request.app[keys.CANONICAL_TELEMETRY]
     # The raw body is dropped here. What survives is the reduced events and a
     # count of which provider event names arrived, so a renamed attribute shows
     # up as drift in the quality view rather than as a quietly emptier ledger.

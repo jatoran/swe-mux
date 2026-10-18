@@ -182,7 +182,18 @@ new ledger.
   A start derived from a placeable observation is held to the same rule: a declared run start the ledger cannot place (a history row's zero) is treated as no declaration, and a model request whose start (its time minus its duration) is implausible is homed in its result's month.
   An epoch-zero Codex OTel time from before that fix (commit `08cbc46a`, 2026-10-10) filed 181,110 observations into a `1970-01` segment, and the model requests among them, started a duration before the epoch, opened a `1969-12` segment that holds no evidence at all.
   Both files stay on disk and in the catalog, and storage health ignores them when it reports the oldest observation.
-- Live ingestion, maintenance (legacy imports, native reconciliation, rollups, seals, the startup schema check), and queries each run on their own worker thread with their own ledger and SQLite connections (`telemetry_service.py`).
+- **The ledgers run in the worker process** (`design/features/worker-process.md`, `telemetry_worker.py`) whenever `worker_process_enabled` is on, which is the default; with it off they run in the daemon exactly as described below.
+  The daemon keeps what decides *when*: the bus subscription and its batching, the backfill, rollup and reconcile loops with their pacing and load shedding, and health.
+  What runs on the worker's interpreter is everything that touches SQLite: the reducer and its writes, the legacy importer, native reconciliation, rollups, seals, and every query a route makes, reached by method name.
+  An OTLP body is forwarded to the worker unparsed and parsed, reduced and recorded there in one call, signatures included.
+  Moved 2026-10-17 (`development/DAEMON_LOAD_ISOLATION.md` item 21): at 1,000 observations a second, ingestion cost the daemon a median 10.4 s of CPU per 30 s in process and 1.9 s with the ledgers in the worker (`development/TELEMETRY_HARDENING.md` § The ledgers in the worker process).
+  - **One process writes the root.** In worker mode the daemon never opens a ledger file, not even while the worker restarts, because `LedgerShared` orders the catalog and segment locks inside one process and cannot order them across two.
+  - **Ingestion waits rather than drops.** A batch no worker can take waits in a buffer of at most 50,000 observations and is offered again every second, ahead of anything newer; past the bound the oldest batches go first and are counted in `buffer_dropped`.
+    Resending is safe: the evidence id is a digest of session, type, source, sequence and payload under `INSERT OR IGNORE`, and the wire encodes a payload with the digest's own `default=str`.
+  - **A query waits up to 10 s for a starting worker**, then answers `503 telemetry_unavailable`; a bad argument is the same `ValueError` and 400 it is in process.
+  - **Equivalence is tested, not argued.** `tests/test_telemetry_worker.py` replays one stream - bus events and the scrubbed real OTLP captures - into ledgers in process and through a real worker and compares every row of every ledger file and every query answer.
+    The only columns that differ are the five a ledger stamps from its own clock (`telemetry_evidence.received_at`, `ledger_segments.last_written_at`, `parser_signatures.first_seen_at`/`last_seen_at`, `rollup_dirty_days`/`rollup_dirty_hours.dirtied_at`), and the test holds each to a reading taken during its own run.
+- Live ingestion, maintenance (legacy imports, native reconciliation, rollups, seals, the startup schema check), and queries each run on their own worker thread with their own ledger and SQLite connections (`telemetry_service.py`, `TelemetryLedgers`), in whichever process hosts the ledgers.
   They shared one thread until 2026-10-12, so a seal or a first read of a long transcript held every live observation behind it, and the bounded ingest queue dropped 710 of them on the live daemon.
   The three ledgers share one re-entrant write lock held around every write transaction, so writes never interleave inside SQLite, and long reads (a rollup's entity scan, a seal's integrity check and hash) hold nothing.
   Rollups read first and write in one short locked transaction, and a dirty mark that moved during the read survives it.
@@ -507,10 +518,11 @@ or session lifecycle.
 - Legacy stream importers: `src/swe_mux/telemetry_imports.py`
 - Direct native-store reconciliation: `src/swe_mux/telemetry_reconcile.py`
 - Incremental transcript reads for both reconcilers (cursor, samples, absolute line numbers): `src/swe_mux/telemetry_cursor.py`
-- Daemon adapter (the three worker threads, batching, catch-up, reconciliation, rollup worker, health): `src/swe_mux/telemetry_service.py`
+- Daemon adapter (the three ledger threads, batching, the worker buffer, catch-up, reconciliation, rollup worker, health, the wire): `src/swe_mux/telemetry_service.py`
+- The ledgers' worker-process service (open, record, maintain, query, OTLP): `src/swe_mux/telemetry_worker.py`
 - Provider OTLP normalization: `src/swe_mux/telemetry_otlp.py`
 - Query benchmark on a seeded scratch ledger (`--fast-seed` for ten million calls): `tools/telemetry_benchmark.py`
-- Event-loop lag under an ingestion flood, with a no-ledger control: `tools/telemetry_ingest_latency.py`
+- Event-loop lag and daemon CPU under an ingestion flood, with a no-ledger control and the ledgers in a real worker (`--worker`): `tools/telemetry_ingest_latency.py`
 - Call-by-call audit of a window against the providers' own records: `tools/telemetry_audit_window.py`
 - Process reconciliation/actions: `src/swe_mux/processes.py`
 - Event-loop stall explanation: `src/swe_mux/stall_watchdog.py`
@@ -526,6 +538,7 @@ or session lifecycle.
   fixtures), `tests/test_telemetry_otlp.py`, `tests/test_telemetry_ledger.py`,
   `tests/test_telemetry_hardening.py`, `tests/test_telemetry_reconcile.py`,
   `tests/test_telemetry_storage.py` (seals, write stamps, refused times, the thread split),
+  `tests/test_telemetry_worker.py` (the ledgers in and out of process, the buffer, the 503),
   `tests/test_telemetry_incremental.py` (cursor reads for both reconcilers),
   `tests/test_telemetry_analytics.py`, `tests/test_operational_telemetry_phase2.py`,
   `tests/test_live_agent_conformance.py`, `tests/test_live_otlp.py`

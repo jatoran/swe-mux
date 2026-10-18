@@ -183,6 +183,45 @@ async def test_process_sampling_runs_in_the_worker_process(tmp_path: Path) -> No
         assert worker.pid in members, f"the worker {worker.pid} is not among {members}"
 
 
+@pytest.mark.asyncio
+async def test_canonical_telemetry_runs_in_the_worker_process(tmp_path: Path) -> None:
+    """`DAEMON_LOAD_ISOLATION.md` item 21, on the daemon a default install builds.
+
+    The unit tier proves the ledgers record the same rows in and out of process;
+    this proves a default daemon puts them in its worker and serves its routes from
+    there: an observation on the daemon's own bus is recorded by the worker and
+    read back over HTTP, with nothing left waiting in the daemon's buffer.
+    """
+    run_id = f"live-{uuid.uuid4().hex[:8]}"
+    async with isolated_daemon(tmp_path) as daemon:
+        service = daemon.app[keys.CANONICAL_TELEMETRY]
+        assert service.in_worker and service.forwards_otlp
+        await daemon.app[keys.EVENTS].emit(
+            "tool_use",
+            session_id=f"stray-{run_id}",
+            source="transcript",
+            tool="Read",
+            call_id="live-call-1",
+            agent_run_id=run_id,
+            backend="claude",
+        )
+        audit: dict[str, object] | None = None
+        async with asyncio.timeout(120.0):
+            while audit is None:
+                response = await daemon.client.get(f"/api/telemetry/v2/runs/{run_id}")
+                if response.status == 200:
+                    audit = await response.json()
+                else:
+                    assert response.status in (404, 503), await response.text()
+                    await asyncio.sleep(0.1)
+        run = audit["run"]
+        assert isinstance(run, dict) and run["run_id"] == run_id
+        health = service.health()
+        assert health["in_worker"] is True and health["worker_opens"] >= 1, health
+        assert health["buffered_events"] == 0 and health["buffer_dropped"] == 0, health
+        assert "telemetry" in daemon.app[keys.WORKER].health()["services"]
+
+
 # ----------------------------------------------------------------- session round trip
 
 

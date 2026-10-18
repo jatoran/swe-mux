@@ -479,6 +479,7 @@ The canonical ledger under `<data_dir>/telemetry/` is not a `mux.db` store and d
 It is one catalog plus a file per UTC month, so one write transaction touches several files, and each file has its own writer slot.
 `telemetry_service.py` runs three ledgers over the same files, each on its own worker thread with its own connections: live ingestion, maintenance (legacy imports, native reconciliation, rollups, seals), and queries.
 No connection is used by more than one thread, which is the rule above applied per ledger.
+They run in the worker process by default (`telemetry_worker.py`, `design/features/worker-process.md`) and in the daemon with it off, and only ever in one of the two: the lock below is per process, so the daemon never opens the root while the worker owns it.
 
 They share one re-entrant lock (`telemetry_ledger.LedgerShared.write_lock`), held around every write transaction.
 SQLite's own locking is per file, so without it a batch that has written a segment and wants the catalog, against a rollup that holds the catalog and wants that segment, is a lock-order deadlock SQLite cannot see; both would sit out their 30-second busy timeout.
@@ -516,8 +517,9 @@ what is being reproduced is contention the per-file lock cannot see.
 - `src/swe_mux/history.py`
 - `src/swe_mux/automation_store.py`
 - `src/swe_mux/operational_telemetry.py`
-- `src/swe_mux/telemetry_ledger.py`, `src/swe_mux/telemetry_service.py` - the canonical ledger's
-  shared write lock and its three worker threads (§ The canonical telemetry ledger).
+- `src/swe_mux/telemetry_ledger.py`, `src/swe_mux/telemetry_service.py`,
+  `src/swe_mux/telemetry_worker.py` - the canonical ledger's shared write lock, its three
+  worker threads, and the worker process that hosts them (§ The canonical telemetry ledger).
 - `src/swe_mux/voice.py`
 - `src/swe_mux/prompt_queue.py`
 - `src/swe_mux/land_store.py` — land requests, their audit trail, and the `LandEvent` pairing that

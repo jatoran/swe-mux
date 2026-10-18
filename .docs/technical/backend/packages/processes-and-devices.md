@@ -132,6 +132,11 @@ background loop, the startup catch-up, the series/snapshot reads, and each accou
 current-window split (`_window_sources`, read by `latest_quota_by_account`).
 Its ledger side is two methods on `LedgerQueryMixin`, reached through
 `CanonicalTelemetryService`; it never opens a ledger file itself.
+The ledger is in the worker process by default, so a read can raise
+`errors.TelemetryUnavailable` while that worker restarts: catch-up and per-sample attribution
+both wait and ask again (`QUOTA_USAGE_RETRY_SECONDS`) rather than letting the refusal skip an
+interval, and both catch it inside their `background.iteration` blocks, which would otherwise
+absorb it as a fault.
 
 **Not:** quota polling (`provider_accounts.py`), which account a provider bills
 (`provider_accounts.switch_reaches_live` owns that), or any read of transcripts.
@@ -221,15 +226,35 @@ the quality readout by backend and by harness version.
 
 ## `telemetry_service.py`
 
-The daemon adapter: three worker threads, each owning one ledger over the same files - live
-ingestion, maintenance, and queries - sharing one `LedgerShared` write lock; batched EventBus
-ingestion, the legacy catch-up loop, the five-minute native reconciliation loop, the rollup
-(days, then hours) and sealing worker, storage status refreshed every ten minutes or after a
-seal, schema-drift logging, and the health block `GET /api/diagnostics/background` reports
-(seal and invalidation counts, the last seal's duration, refused observations, the last
-reconciliation's elapsed time).
+The daemon adapter, wherever the ledgers run.
+`TelemetryLedgers` is the three ledgers over one root, each on its own thread - live
+ingestion, maintenance, and queries - sharing one `LedgerShared` write lock; it runs in the
+daemon with the worker process off and in the worker (`telemetry_worker.py`) with it on.
+`CanonicalTelemetryService` keeps batched EventBus ingestion, the legacy catch-up loop, the
+five-minute native reconciliation loop, the rollup (days, then hours) and sealing worker,
+storage status refreshed every ten minutes or after a seal, schema-drift logging, and the
+health block `GET /api/diagnostics/background` reports (seal and invalidation counts, the last
+seal's duration, refused observations, the last reconciliation's elapsed time, and in worker
+mode the buffer and the worker opens), and reaches the ledgers through `WorkerLedgers` by
+method name when they are in the worker.
+In worker mode it never opens a ledger file: a worker that is away means a bounded buffer for
+ingestion and `errors.TelemetryUnavailable` (503) for a query.
+The wire (`encode_batch`, `decode_batch`, `encode_call`, `decode_call`, `adapt_result`) lives
+here, beside the one place both ends import.
 
 **Not:** the reducer's rules; it only schedules them.
+
+## `telemetry_worker.py`
+
+The worker process's `telemetry` service: opens `TelemetryLedgers` at the root the daemon
+names (once per worker, refusing every other call until then), records batches, runs the
+whitelisted maintenance and query methods (`MAINTENANCE_METHODS`, `QUERY_METHODS`) and returns
+a query's `ValueError` as a refusal the daemon raises again, and parses, reduces and records a
+raw OTLP body in one call.
+It writes the telemetry root and nothing else; `mux.db` is only ever read here, by the legacy
+importers.
+
+**Not:** scheduling - when to record, rebuild, seal or reconcile is still the daemon's.
 
 ## `telemetry_otlp.py`
 

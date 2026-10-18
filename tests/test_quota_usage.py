@@ -17,6 +17,8 @@ from typing import Any
 
 import pytest
 
+from swe_mux import quota_usage
+from swe_mux.errors import TelemetryUnavailable
 from swe_mux.history import HistoryIndex
 from swe_mux.models import MuxEvent
 from swe_mux.operational_telemetry import OperationalTelemetryStore
@@ -442,6 +444,71 @@ async def test_catch_up_fills_covered_history_and_leaves_the_uncovered_alone(
     finally:
         await store.stop_quota_usage()
         store.close()
+
+
+class AwayLedger(FakeLedger):
+    """A ledger in a worker that is away for its next `away` evidence reads."""
+
+    def __init__(self, coverage: float | None = 0.0, *, away: int = 0) -> None:
+        super().__init__(coverage)
+        self.away = away
+        self.refused = 0
+
+    async def quota_usage_evidence(
+        self, backend: str, from_ts: float, to_ts: float
+    ) -> dict[str, list[tuple[Any, ...]]]:
+        if self.away > 0:
+            self.away -= 1
+            self.refused += 1
+            raise TelemetryUnavailable("the worker process is not running")
+        return await super().quota_usage_evidence(backend, from_ts, to_ts)
+
+
+async def test_catch_up_waits_out_a_ledger_that_is_away_rather_than_leaving_the_gap(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A chunk refused part-way through catch-up is asked again, not counted as done.
+
+    The chunk runs inside a background iteration, which absorbs what it raises; a
+    refusal absorbed there would skip the chunk and let catch-up report itself
+    finished, leaving those intervals unattributed until the next start.
+    """
+    monkeypatch.setattr(quota_usage, "QUOTA_USAGE_RETRY_SECONDS", 0.01)
+    HistoryIndex(db_path).close()
+    store = OperationalTelemetryStore(db_path)
+    base = 1_800_000_000.0
+    ledger = AwayLedger(away=2)
+    ids = [
+        await sample(store, account="a", at=base + step * 900, session=step * 1.0, active=True)
+        for step in range(4)
+    ]
+    try:
+        store.start_quota_usage(ledger)
+        rows = await settled(db_path, ids[1:])
+        assert all(parts(row) == {"outside": 1.0} for row in rows.values())
+        assert ledger.refused == 2
+    finally:
+        await store.stop_quota_usage()
+        store.close()
+
+
+async def test_a_sample_that_lands_while_the_ledger_is_away_is_attributed_when_it_returns(
+    store: OperationalTelemetryStore, db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(quota_usage, "QUOTA_USAGE_RETRY_SECONDS", 0.01)
+    ledger = AwayLedger()
+    store.start_quota_usage(ledger)
+    base = 1_800_000_000.0
+    await sample(store, account="a", at=base, session=0.0, active=True)
+    first = await sample(store, account="a", at=base + 900, session=2.0, active=True)
+    await settled(db_path, [first])
+    ledger.away = 1
+    ledger.request("claude", base + 1000, "run-1")
+    second = await sample(store, account="a", at=base + 1800, session=5.0, active=True)
+
+    rows = await settled(db_path, [second])
+    assert ledger.refused == 1, "the sample was refused once, then attributed"
+    assert parts(rows[second]) == {"swe_mux": 3.0}
 
 
 async def test_daily_series_sums_each_utc_day_by_source(

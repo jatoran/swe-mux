@@ -671,7 +671,7 @@ Items are worked in order, and an item may reorder, split or remove later items 
     `tests/test_worker_host.py`: the generation counts each connected worker.
   - **Where:** `process_service.py`, `process_fingerprint.py`, `processes.py`, `ghost_windows.py`, `worker.py`, `worker_host.py`, `server.py`, `routes/diagnostics.py`, `operational_telemetry.py`, `tools/fleet_load_harness.py` (now reports `process_sampling` and `worker`), `design/features/{processes-and-previews,worker-process,ghost-windows}.md`, `design/interfaces.md`, `technical/backend/packages/{processes-and-devices,daemon-runtime}.md`.
 
-- [ ] **21. Canonical telemetry into the worker.**
+- [x] **21. Canonical telemetry into the worker.**
   - **Why:** the reducer, reconcile, rollups and seals run in daemon threads, OTLP bodies of up to 4 MiB are parsed on the loop, and `_dimensions` runs on the loop for every event (`telemetry_service.py:151-368`; `routes/agent_ingress.py:433-476`).
   - **Change:**
     - Move all three ledgers together (catalog, segments and the `LedgerShared` write lock) with their maintenance and queries.
@@ -681,6 +681,51 @@ Items are worked in order, and an item may reorder, split or remove later items 
     - Usage queries and the `canonical_telemetry` diagnostics block are answered over RPC.
   - **Where:** `telemetry_service.py`, `telemetry_ledger.py`, `routes/agent_ingress.py`, `design/features/operational-telemetry.md`, `development/TELEMETRY_HARDENING.md`.
   - **Done when:** replaying a recorded event stream yields identical ledger rows in and out of process (`tools/telemetry_benchmark.py`, `tools/telemetry_ingest_latency.py`).
+  - **Done (2026-10-17).** Design: `design/features/worker-process.md` § A service whose state is a store, and `design/features/operational-telemetry.md`.
+    - **The worker runs the daemon's own ledgers.** `TelemetryLedgers` - the three ledgers over one root, each on its own thread under one `LedgerShared` - runs in the daemon with the worker off and in the worker's `telemetry` service (`telemetry_worker.py`) with it on.
+      `CanonicalTelemetryService` keeps the bus subscription, the batching, the backfill, rollup and reconcile loops with their pacing and shedding, and health, and calls the ledgers by method name through `WorkerLedgers`; a method outside the two whitelists (`MAINTENANCE_METHODS`, `QUERY_METHODS`) is refused in the worker.
+    - **One writer per root, so no daemon fallback.** In worker mode the daemon never opens a ledger file, even for one call while the worker restarts: `LedgerShared` orders locks inside a process and cannot order them across two.
+      Ingestion waits in a buffer of at most 50,000 observations, offered again every second ahead of anything newer, oldest dropped first past the bound; a query waits up to 10 s for a starting worker and then raises `errors.TelemetryUnavailable`, which the middleware answers `503 telemetry_unavailable`.
+    - **Replay is what makes waiting enough.** The evidence id digests session, type, source, sequence and payload under `INSERT OR IGNORE`, and the wire encodes a payload with the digest's own `default=str`, so a resent batch records nothing twice.
+    - **Opened per worker generation, as item 20's mirror is loaded:** an unopened worker refuses every call, and the daemon reopens it rather than counting the refusal as a fault.
+    - **OTLP crosses as the raw body** with the session's dimensions and is parsed, reduced and recorded in the worker in one call, signatures included; with no worker the route parses it as before and the events wait in the buffer.
+    - **Quota attribution waits for the ledger.** It is the one internal consumer of query answers; catch-up and per-sample attribution both retry on `TelemetryUnavailable` instead of skipping the interval.
+  - **Three departures from the text above.**
+    - **Each batch carries its own dimensions rather than the worker keeping a session table.** The daemon resolves them per event exactly as before (`_dimensions`, 2.5 us an event measured) and the batch crosses self-describing, so a restarted worker needs no table pushed before it can record, and nothing about session lifecycle has to be mirrored into it.
+      `_dimensions` therefore stays on the loop, which the measurement below shows is not where the cost was.
+    - **Buffer losses are counted on their own, in `buffer_dropped`**, beside `buffered_events` and `worker_unavailable`; `provider_dropped` keeps meaning what it meant, the bounded ingress queue refusing an event.
+    - **The equivalence is a test rather than a benchmark run**, because it has to hold on every push: `tests/test_telemetry_worker.py` replays one stream into ledgers in process and through a real worker and compares every row of every ledger file and fifteen query answers.
+      Every column matched except five a ledger stamps from its own clock (`telemetry_evidence.received_at`, `ledger_segments.last_written_at`, `parser_signatures.first_seen_at`/`last_seen_at`, `dirtied_at` on both rollup dirty tables), found by running the comparison with none excluded, and the test holds each to a reading taken during its own run.
+      `tools/telemetry_ingest_latency.py` gained `--worker` for the cost half.
+  - **Two faults found on the way, both fixed here.**
+    - **The teardown stopped the worker before canonical telemetry**, which stops after the sessions so that their shutdown evidence is recorded; in worker mode that final drain would have been left in the daemon's buffer as it exited.
+      The worker now stops last, and `tests/test_shutdown_teardown.py` holds it after every service that calls it.
+    - **Quota catch-up ran each chunk inside `background.iteration`, which absorbs what it raises**, so a worker restart mid-catch-up would have skipped those chunks and reported catch-up finished; the refusal is caught inside the block and re-raised after it, and the test for it fails against the old code.
+  - **Measured, ingestion alone** (`tools/telemetry_ingest_latency.py`, 30,000 observations at 1,000 a second, three alternating rounds; `development/TELEMETRY_HARDENING.md` § The ledgers in the worker process): ingestion cost the daemon a median 10.4 s of CPU in process and 1.9 s with the ledgers in the worker, between a fifth and two fifths in every round, with the worker spending 7.2 s; at 2,000 a second the bus dropped 15,123 of 50,000 observations in process and 2,327 with the worker.
+  - **Measured, the item 4 configuration** (36 `scroll` sessions at 20 KB/s, 3 hooks, 1 decision and 1.5 OTLP posts a second, no burners, `py-spy --gil` on the daemon for 45 s), against the last item 20 run (worker on, the same configuration including the 7 s decision follow-up):
+
+    | | Item 20 build | Item 21 build |
+    | --- | --- | --- |
+    | Canonical telemetry share of the daemon's GIL samples | 5.9% (49 of 831) | 0.9% (7 of 792: batch encoding, the consume loop, the call) |
+    | `CanonicalTelemetryService._record_batch` CPU in the daemon | 3.86 s over 1,207 batches | none |
+    | `canonical-telemetry` loop busy in the window | 16.3 s | 8.7 s |
+    | Keystroke echo p50 / p95 / p99 | 7.0 / 48.9 / 59.1 ms | 4.5 / 20.3 / 71.7 ms |
+    | `GET /api/sessions` p99 | 67.5 ms | 68.8 ms |
+    | Hook / decision p99 | 21.5 / 30.3 ms | 20.1 / 18.6 ms |
+    | OTLP round trip p50 / p99 | 8.8 / 37.2 ms | 12.1 / 114 ms |
+    | Lag samples >= 100 ms | 0 / 241 | 0 / 241 |
+
+    The share and the executor CPU are the measurement this item was for: the reducer and its writes are gone from the daemon, and what is left is encoding a batch, the consume loop and the call (0.9%), plus the OTLP route reading a body and handing it over (0.3%, where parsing it was 0.1% before - the body is read either way).
+    The echo and fleet-read tails are one run each and move both ways, so they are recorded rather than claimed.
+    **The OTLP round trip grew on purpose.** The route used to answer once the parsed events were queued in the daemon; it now answers once the worker has recorded them, behind whatever live ingestion is ahead on the worker's single ingest thread.
+    The daemon's loop is not in that wait - hook and decision round trips are unchanged and no lag sample reached 100 ms - and an exporter sends in the background, so nothing waits on that reply but the exporter's own next batch.
+    In exchange a body is acknowledged only once it is recorded, so a worker that dies mid-call costs the exporter a retry, whose events carry the same evidence ids, rather than costing the body.
+  - **Tests:** `tests/test_telemetry_worker.py`, 9: the in- and out-of-process replay above, including the scrubbed real Claude 2.1.259 and Codex 0.153.0 OTLP captures and a known, a second known and an unknown session; the wire keeping every evidence-id input (a `Path` and a tuple in the payload, a float timestamp, a transient event with no session) and refusing a batch whose dimensions do not match its events; a call's path argument restored and quota rows returned as tuples; a batch recorded twice recorded once, a malformed or foreign OTLP body the same `ValueError`, a method outside the whitelist refused; a worker killed and restarted, with observations buffered while it was away, a query waiting for its successor, the successor opened before it recorded and every observation delivered; a buffer past its bound keeping the newest observations, and keeping a single batch larger than the bound; a query with no worker raising `TelemetryUnavailable` and the middleware answering it 503; worker mode refusing to start with no worker attached.
+    `tests/test_quota_usage.py`: catch-up waits out a ledger that refuses part-way through, and a sample refused once is attributed when the ledger returns.
+    `tests/test_shutdown_teardown.py`: the worker stops after every service that calls it.
+    `tests/test_live_daemon.py`: a default daemon records an event from its own bus in the worker and serves it back over `/api/telemetry/v2/runs/{id}` with nothing buffered.
+    `tests/test_telemetry_otlp.py`: the route forwards the unparsed body when the ledgers are in the worker, and parses it itself when no worker takes it.
+  - **Where:** `telemetry_service.py`, `telemetry_worker.py`, `worker.py`, `errors.py`, `server.py` (the attach, the 503, the teardown order), `routes/agent_ingress.py`, `quota_usage.py`, `tools/telemetry_ingest_latency.py`, `design/features/{worker-process,operational-telemetry}.md`, `design/interfaces.md`, `development/TELEMETRY_HARDENING.md`, `technical/backend/packages/processes-and-devices.md`, `technical/backend/sqlite.md`.
 
 - [ ] **22. Transcript I/O into the worker, if item 4 still ranks it after item 6.**
   - **Why:** tailing every transcript reads and JSON-decodes in daemon threads and dispatches every record on the loop (`observation.py:946-1093,1206-1306`).

@@ -73,7 +73,7 @@ from .db_maintenance import read_request as read_maintenance_request
 from .db_maintenance import run_maintenance
 from .deterministic_consumers import ConsumerContext, DeterministicConsumerService
 from .device_presence import DevicePresenceStore
-from .errors import NotFound
+from .errors import NotFound, TelemetryUnavailable
 from .event_bus import EventBus
 from .factory_reset import clear_request as clear_factory_reset_request
 from .factory_reset import describe as describe_factory_reset
@@ -357,6 +357,17 @@ async def error_middleware(request: web.Request, handler: Handler) -> web.Stream
             exc.budget_ms,
         )
         return json_response({"error": str(exc), "code": "search_budget_exceeded"}, 503)
+    except TelemetryUnavailable as exc:
+        # The ledgers live in the worker process and it is restarting: a retry
+        # in a moment is the remedy, not a different request.
+        log.info("telemetry_unavailable path=%s reason=%s", request.path, exc)
+        return json_response(
+            {
+                "error": "telemetry is unavailable while its worker restarts",
+                "code": "telemetry_unavailable",
+            },
+            503,
+        )
     except ProviderAccountConflict as exc:
         # Distinct from a bad request: the caller must resolve an ownership
         # clash or explicitly force the action.
@@ -1536,9 +1547,13 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
     # analytics never depend on the capped WebSocket event history or inflate the
     # already multi-gigabyte application database. The legacy store stays live
     # until corpus reconciliation proves the replacement's per-harness coverage.
+    # With the worker process on, the ledgers open in the worker rather than here
+    # (`telemetry_service.py`); the worker host is attached below, before `start`.
     canonical_telemetry = await _open_store(
         "CanonicalTelemetryService",
-        lambda: CanonicalTelemetryService(config.data_dir / "telemetry"),
+        lambda: CanonicalTelemetryService(
+            config.data_dir / "telemetry", in_worker=config.worker_process_enabled
+        ),
     )
     # Retention is housekeeping and belongs to `TELEMETRY_RETENTION_LOOP`, which
     # runs it 5s after start and hourly after that. The identity repair below is
@@ -1784,6 +1799,7 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
     worker_host = WorkerHost(config)
     await worker_host.start()
     publish(app, {keys.WORKER: worker_host})
+    canonical_telemetry.attach_worker(worker_host)
 
     # The monitor's branch-scoped diff is measured against the same base the Git
     # drawer uses, so the sidebar and the drawer cannot report a session's branch
@@ -3100,9 +3116,6 @@ async def _teardown_runtime(app: web.Application) -> None:  # noqa: PLR0912, PLR
         keys.GIT_MONITOR,
         keys.GIT_PROVENANCE,
         keys.STALL_WATCHDOG,
-        # After every service that calls it, so none of them loses its worker
-        # part-way through stopping.
-        keys.WORKER,
     ):
         await _stop_handle(app, key)
     # Shutdown intent (SESSION_PRESERVING_RELOAD §5.3): "quit" reaps everything
@@ -3138,6 +3151,10 @@ async def _teardown_runtime(app: web.Application) -> None:  # noqa: PLR0912, PLR
         keys.CANONICAL_TELEMETRY,
         keys.TIER0,
         keys.CLIPBOARD,
+        # After every service that calls it, so none of them loses its worker
+        # part-way through stopping - canonical telemetry above included, whose
+        # ledgers live in the worker and record the final drain on the way down.
+        keys.WORKER,
     ):
         await _stop_handle(app, key)
     for key in (

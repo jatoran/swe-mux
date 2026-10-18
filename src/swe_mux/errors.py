@@ -47,3 +47,13 @@ class NotFound(KeyError):
         # `KeyError.__str__` is `repr(args[0])`, so anything that formats this
         # exception into a message would leak the key it was told not to echo.
         return self.message
+
+
+class TelemetryUnavailable(Exception):
+    """The canonical telemetry ledgers live in the worker process, and no worker can
+    answer right now (`telemetry_service.py`); the transport answers 503.
+
+    Here rather than beside the service because a consumer of the ledger's
+    answers (`quota_usage.py`) sits underneath the ledger's own imports, and a
+    refusal it must catch cannot live above it.
+    """

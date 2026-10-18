@@ -669,6 +669,7 @@
 - Working on daemon load isolation - the load harness, GIL mitigations, load shedding, the supervisor's non-blocking fanout update, the worker process, the terminal core, or the terminal gateway: `development/DAEMON_LOAD_ISOLATION.md` (the ordered checklist and its evidence), plus the documents each checklist item names.
 - Changing the worker process - its lifecycle, what it hosts, how a service moves into it, or its protocol: `design/features/worker-process.md`, `design/interfaces.md` (the `worker` diagnostics block), `technical/backend/packages/daemon-runtime.md` (`worker_host.py`, `worker.py`, `framed_ipc.py`), `technical/backend/packages/runtime-rules.md`, `development/OPERATOR_LIFECYCLE.md` (its logs).
   The rule the design turns on: a service in the worker keeps a daemon fallback and holds only state the daemon can push back, because one worker hosts everything and a restart forgets it all.
+  The exception is a service whose state is a store with a single-writer rule (canonical telemetry): there the fallback would be a second writer, so the daemon buffers and replays idempotently instead and never opens the store while the worker owns it.
 - Changing background-loop supervision, per-loop cost accounting, event-loop lag sampling,
   or the performance investigation procedure: `development/PERFORMANCE_RUNBOOK.md`,
   `technical/backend/packages.md`, `design/interfaces.md`

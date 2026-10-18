@@ -160,6 +160,55 @@ async def test_the_teardown_names_only_appkeys_and_reaches_every_one_of_them(
     )
 
 
+#: The services whose work runs in the worker process (`worker.SERVICES`), by the
+#: handle the daemon keeps for each.
+_WORKER_CLIENTS = ("PROCESS_INSPECTOR", "GHOST_WINDOWS", "CANONICAL_TELEMETRY")
+
+
+async def test_the_worker_stops_after_every_service_that_calls_it(tmp_path: Path) -> None:
+    """A service stopped after its worker records its last work nowhere.
+
+    Canonical telemetry is the one that made this an ordering question rather than
+    a list: it stops after the sessions do, so the observations their shutdown
+    emits reach the ledgers - which live in the worker
+    (`DAEMON_LOAD_ISOLATION.md` item 21). A worker stopped earlier would leave that
+    final drain buffered in a daemon that is about to exit.
+    """
+    order: list[str] = []
+
+    class Ordered(Recorder):
+        def __init__(self, name: str) -> None:
+            super().__init__()
+            self.name = name
+
+        async def stop(self) -> None:
+            order.append(self.name)
+            await super().stop()
+
+    handles = teardown_handles()
+    data_dir = tmp_path / ".mux"
+    data_dir.mkdir()
+    app = web.Application()
+    published: dict[web.AppKey[Any], Any] = {
+        keys.CONFIG: Config(data_dir=data_dir),
+        keys.SHUTDOWN_STATE: {"intent": "quit"},
+    }
+    for name in handles["stop"] | handles["close"]:
+        published[getattr(keys, name)] = Ordered(name)
+    server.publish(app, published)
+    try:
+        await server._teardown_runtime(app)
+    finally:
+        end_shutdown_drain()
+
+    assert "WORKER" in order
+    for client in _WORKER_CLIENTS:
+        assert client in order, f"the teardown no longer stops {client}"
+        assert order.index(client) < order.index("WORKER"), (
+            f"{client} is stopped after the worker it calls: {order}"
+        )
+
+
 def test_the_teardown_reads_no_key_the_daemon_never_publishes() -> None:
     """A handle torn down under a key nothing writes is a teardown that does nothing.
 

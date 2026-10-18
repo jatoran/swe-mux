@@ -435,6 +435,8 @@ async def test_otlp_ingress_is_session_authenticated_and_queues_reduced_events()
     app = web.Application()
     app[keys.SESSIONS] = SimpleNamespace(resolve=lambda _sid: session)
     app[keys.CANONICAL_TELEMETRY] = SimpleNamespace(
+        # The ledgers in this process: the body is parsed and reduced here.
+        forwards_otlp=False,
         enqueue_provider_event=lambda event: not accepted.append(event),
         note_parser_signatures=lambda **kwargs: noted.append(kwargs),
     )
@@ -471,6 +473,87 @@ async def test_otlp_ingress_is_session_authenticated_and_queues_reduced_events()
             "signatures": {("tool_result", True): 1},
         }
     ]
+
+
+async def test_otlp_ingress_forwards_the_unparsed_body_when_the_ledgers_are_in_the_worker() -> None:
+    """The loop reads bytes and hands them on; it never parses them or reduces them."""
+    forwarded: list[bytes] = []
+    fallback: list[object] = []
+    session = SimpleNamespace(
+        record=SimpleNamespace(id="session-1", backend="claude"),
+        hook_secret="secret",
+    )
+
+    async def ingest_otlp(_session: Any, body: bytes) -> dict[str, int] | None:
+        if body.startswith(b"not json"):
+            raise ValueError("Expecting value: line 1 column 1 (char 0)")
+        forwarded.append(body)
+        return {"accepted": 1, "rejected": 0}
+
+    app = web.Application()
+    app[keys.SESSIONS] = SimpleNamespace(resolve=lambda _sid: session)
+    app[keys.CANONICAL_TELEMETRY] = SimpleNamespace(
+        forwards_otlp=True,
+        ingest_otlp=ingest_otlp,
+        enqueue_provider_event=lambda event: not fallback.append(event),
+        note_parser_signatures=lambda **kwargs: fallback.append(kwargs),
+    )
+    app.router.add_post("/api/telemetry/otlp/{sid}/v1/logs", telemetry_otlp_logs)
+    payload = batch(attribute("event.name", "claude_code.tool_result"))
+
+    async with TestClient(TestServer(app)) as client:
+        response = await client.post(
+            "/api/telemetry/otlp/session-1/v1/logs",
+            json=payload,
+            headers={"X-Mux-Hook-Secret": "secret"},
+        )
+        body = await response.json()
+        malformed = await client.post(
+            "/api/telemetry/otlp/session-1/v1/logs",
+            data=b"not json",
+            headers={"X-Mux-Hook-Secret": "secret"},
+        )
+
+    assert response.status == 200
+    assert body == {"partialSuccess": {"rejectedLogRecords": 0, "errorMessage": ""}}
+    assert len(forwarded) == 1 and json.loads(forwarded[0]) == payload
+    assert fallback == [], "nothing was parsed or queued on the daemon's side"
+    assert malformed.status == 400, "a body the worker cannot parse is the caller's 400"
+
+
+async def test_otlp_ingress_parses_here_when_no_worker_can_take_the_body() -> None:
+    accepted: list[object] = []
+    session = SimpleNamespace(
+        record=SimpleNamespace(id="session-1", backend="claude"),
+        hook_secret="secret",
+    )
+
+    async def ingest_otlp(_session: Any, _body: bytes) -> dict[str, int] | None:
+        return None
+
+    app = web.Application()
+    app[keys.SESSIONS] = SimpleNamespace(resolve=lambda _sid: session)
+    app[keys.CANONICAL_TELEMETRY] = SimpleNamespace(
+        forwards_otlp=True,
+        ingest_otlp=ingest_otlp,
+        enqueue_provider_event=lambda event: not accepted.append(event),
+        note_parser_signatures=lambda **_kwargs: None,
+    )
+    app.router.add_post("/api/telemetry/otlp/{sid}/v1/logs", telemetry_otlp_logs)
+    payload = batch(
+        attribute("event.name", "claude_code.tool_result"),
+        attribute("tool_name", "Read"),
+        attribute("tool_use_id", "call-1"),
+        attribute("success", True),
+    )
+    async with TestClient(TestServer(app)) as client:
+        response = await client.post(
+            "/api/telemetry/otlp/session-1/v1/logs",
+            json=payload,
+            headers={"X-Mux-Hook-Secret": "secret"},
+        )
+    assert response.status == 200
+    assert len(accepted) == 1, "reduced here and queued for the worker's return"
 
 
 def test_codex_sandbox_outcome_is_a_denial_the_later_failed_result_cannot_unknow(

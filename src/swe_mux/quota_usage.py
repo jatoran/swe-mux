@@ -48,6 +48,7 @@ from functools import partial
 from typing import TYPE_CHECKING, Any, Protocol, TypeVar
 
 from .background_tasks import background
+from .errors import TelemetryUnavailable
 from .provider_accounts import switch_reaches_live
 from .telemetry_queries import QUOTA_TURN_LOOKBACK
 
@@ -56,6 +57,8 @@ log = logging.getLogger(__name__)
 T = TypeVar("T")
 
 QUOTA_USAGE_LOOP = "quota-usage-attribution"
+#: How long attribution waits before asking a ledger that was unavailable again.
+QUOTA_USAGE_RETRY_SECONDS = 5.0
 #: Rows older than this are recomputed by the next catch-up. 2: a small fall inside one
 #: window stopped counting as a reset (`window_rise`).
 QUOTA_USAGE_VERSION = 2
@@ -448,15 +451,33 @@ class QuotaUsageMixin:
         queue = self._quota_usage_queue
         assert queue is not None
         # Samples that land during catch-up wait in the queue, so they are attributed
-        # with the rates catch-up has just made available.
-        await self.catch_up_quota_usage()
+        # with the rates catch-up has just made available. The ledger lives in the
+        # worker process by default and is not there for the first seconds of a
+        # start or across a worker restart; catch-up waits for it rather than
+        # leaving the gap it exists to fill (`errors.TelemetryUnavailable`).
+        while True:
+            try:
+                await self.catch_up_quota_usage()
+                break
+            except TelemetryUnavailable:
+                await asyncio.sleep(QUOTA_USAGE_RETRY_SECONDS)
         while True:
             ids = [await queue.get()]
             while not queue.empty():
                 ids.append(queue.get_nowait())
+            unattributed: list[int] = []
             with background.iteration(QUOTA_USAGE_LOOP):
-                for sample_id in ids:
-                    await self.attribute_quota_sample(sample_id)
+                for index, sample_id in enumerate(ids):
+                    try:
+                        await self.attribute_quota_sample(sample_id)
+                    except TelemetryUnavailable:
+                        unattributed = ids[index:]
+                        break
+            if unattributed:
+                # Attributed once the ledger answers again, not lost until the next start.
+                await asyncio.sleep(QUOTA_USAGE_RETRY_SECONDS)
+                for sample_id in unattributed:
+                    queue.put_nowait(sample_id)
 
     async def _usage_coverage(self, provider: str) -> float | None:
         """When the ledger's evidence for `provider` begins, cached for the daemon's life.
@@ -510,9 +531,18 @@ class QuotaUsageMixin:
                 partial(self._missing_usage_pairs, provider, account_id, coverage)
             )
             for chunk in catch_up_chunks(missing):
+                unavailable: TelemetryUnavailable | None = None
                 with background.iteration(QUOTA_USAGE_LOOP):
-                    pairs = await self._run(partial(self._usage_pair_rows, chunk))
-                    written += await self._attribute_pairs(pairs)
+                    try:
+                        pairs = await self._run(partial(self._usage_pair_rows, chunk))
+                        written += await self._attribute_pairs(pairs)
+                    except TelemetryUnavailable as exc:
+                        # Not a fault for the iteration to absorb: the chunk would be
+                        # skipped and the catch-up would report itself done. The
+                        # caller asks again, and recomputes what is still missing.
+                        unavailable = exc
+                if unavailable is not None:
+                    raise unavailable
                 await background.pace(QUOTA_USAGE_LOOP, CATCH_UP_PAUSE_SECONDS, deferrable=True)
         elapsed = time.perf_counter() - started
         log.info(

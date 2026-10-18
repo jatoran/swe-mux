@@ -46,6 +46,7 @@ Schema 5 (2026-10-12) fixed a segment re-seal loop and the whole-file transcript
 - [x] Content-free output hashes and byte/character counts.
 - [x] Batched EventBus ingestion and background health reporting.
   Since schema 5 ingestion has its own worker thread and ledger, beside a maintenance and a query thread that share its write lock.
+  Since 2026-10-17 all three run in the worker process by default, with the daemon keeping the batching, the loops, and a bounded buffer for a worker that is away (§ The ledgers in the worker process).
 - [x] Content-sensitive hook result delivery only to the canonical consumer.
 - [x] Resumable, non-destructive import of legacy tool rows, run identities, and Tier 0 test
   outcomes.
@@ -326,6 +327,30 @@ The fixes, all on schema 5:
 
 The tests are `tests/test_telemetry_storage.py` and `tests/test_telemetry_incremental.py`.
 The duplicate-evidence, result-naming, window-edge, and live-twin tests were each run once with their mechanism reverted, and failed.
+
+## The ledgers in the worker process (2026-10-17)
+
+`development/DAEMON_LOAD_ISOLATION.md` item 21 moved the three ledgers, their maintenance and their queries into the worker process (`design/features/worker-process.md`), because with process inspection gone canonical telemetry was the daemon's costliest loop and 5.9% of its GIL samples under the load harness.
+The design rules are in `design/features/operational-telemetry.md` and `design/features/worker-process.md` § A service whose state is a store; the measurements are here.
+
+`tools/telemetry_ingest_latency.py` gained `--worker`, which spawns a real worker under a scratch data directory exactly as the daemon does, and reports the CPU the driving process (the daemon's stand-in) spent and the CPU the worker spent.
+Thirty thousand observations at 1,000 a second, three rounds alternating control, in process and worker, medians, on a host carrying the live fleet:
+
+| ledger | daemon CPU | ingestion's share of it, against its round's control | worker CPU | dropped by the bus | loop lag p99 |
+| --- | --- | --- | --- | --- | --- |
+| control (none subscribed) | 3.09 s | - | - | - | 13.1 ms |
+| in this process | 13.52 s | 10.4 s (4.6-10.6) | - | 0 | 17.9 ms |
+| in the worker | 5.83 s | 1.9 s (0.9-4.2) | 7.16 s | 0 | 15.8 ms |
+
+What stays in the daemon is the per-event dimension lookup (2.5 us an event), the batch encoding (4.2 us an event, about 600 bytes), and the batching and IPC around them; a profile of the worker run puts the consume loop at 0.43 s of the main thread in 30 s.
+At 2,000 a second, a rate no fleet approaches, the in-process run dropped 15,123 of 50,000 observations at the bus's bounded queue and the worker run 2,327: the consumer's turnaround, not the loop, is what the queue protects, and it is shorter when the reducer is not competing for the daemon's GIL.
+The run-to-run spread is wide, so the ratio is the claim, not the seconds: in every round the worker run cost the daemon between a fifth and two fifths of what the in-process run did.
+The control's own CPU is mostly `EventBus.emit` pruning its semantic-dedupe map at this synthetic rate, the effect § Measured ingestion cost records.
+
+Equivalence is `tests/test_telemetry_worker.py`: one stream of bus events from known and unknown sessions plus the scrubbed real Claude 2.1.259 and Codex 0.153.0 OTLP captures, into ledgers in process and through a real worker.
+Every row of every table of every ledger file matched except five clock columns, found by running the comparison with none excluded: `telemetry_evidence.received_at`, `ledger_segments.last_written_at`, `parser_signatures.first_seen_at` and `last_seen_at`, and `dirtied_at` on both rollup dirty tables.
+The test holds each of those to a wall-clock reading taken during its own run, and compares fifteen query answers the same way.
+One behavioural difference showed up and is kept: in process, an OTLP body that reduces to no events leaves its parser signatures waiting for the next batch, while the worker records them with the body.
 
 ## Remaining implementation
 
