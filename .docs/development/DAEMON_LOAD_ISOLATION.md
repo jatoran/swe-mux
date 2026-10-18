@@ -429,7 +429,7 @@ Items are worked in order, and an item may reorder, split or remove later items 
     Generator throughput did not move in any run (606-609 KB/s), because at 20 KB/s a session takes longer than the window to fill its 1,024-chunk reader queue; agent throttling is item 17's measurement.
   - **Harness:** `--stalled-subscriber {none,direct,gap}`. The harness also resolves `--workdir` now: a relative one made the scratch daemon, whose cwd is its data dir, miss its config and fall back to port 8765.
 
-- [ ] **13. Supervisor: subscribe-since, stream identity, terminal scope, notices.**
+- [x] **13. Supervisor: subscribe-since, stream identity, terminal scope, notices.**
   - **Why:** the gateway needs delta resubscription, cursors that cannot cross streams and no session secrets, and the daemon needs true geometry when another connection resizes.
   - **Change:**
     - `subscribe` accepts `since` and replies with `bytes_since(since)` and `delta: true` when those bytes are retained, and with the full buffer otherwise (`supervisor.py:493-510`).
@@ -437,6 +437,16 @@ Items are worked in order, and an item may reorder, split or remove later items 
     - `hello` accepts `scope: "terminal"`: its replies omit `meta`, which carries `hook_secret` and `mcp_token`, and the connection may only `subscribe`, `unsubscribe`, `write`, `resize` and `list`.
     - An unsolicited `resized {sid, cols, rows}` goes to every subscriber after any resize, and `removed {sid}` goes out before `remove` cancels a fanout (`supervisor.py:850-879`).
   - **Done when:** tests cover each message, and an unmodified daemon still drives the new supervisor.
+  - **Done (2026-10-17), with three deliberate departures from the text above.**
+    - `stream` is the session id plus the reservation's wall-clock milliseconds and a random suffix, minted when the spawn is reserved: `started_at` does not exist until the child does, and a cursor taken while a spawn is in flight must still name its stream.
+    - `since` is honoured only when the request also carries the matching `stream`; a bare `since` gets the whole buffer, because a cursor that cannot be checked against its stream cannot be trusted.
+      Item 15 sends the pair anyway.
+    - `resized` and `removed` go to every subscriber *except* the connection that acted: the resizer knows what it asked for, and an echo of an earlier resize arriving after its next one would set the daemon's mirror back to a stale size.
+    - A terminal-scope connection may also `ping`. A refused message is answered with an error and the connection stays, so a gateway probing for a capability does not lose its terminals; an unknown scope is refused and the connection closed, failing closed rather than widening to the daemon's scope; and a connection's scope cannot change on a second `hello`.
+    The `hello` reply lists `subscribe_since`, `terminal_scope` and `notices` beside `output_gap`, and echoes `scope`.
+  - **Tests:** `tests/test_supervisor_streams.py`: `stream` on hello, `list` and `subscribe`, and a new one for a respawned id; a delta while retained and an empty delta at the end; the whole buffer for an evicted cursor, one from the future, another stream, no stream, a non-number and a negative; a terminal connection never sees `meta` (and the daemon's still does), may drive the terminal, is refused nine daemon-only messages without disconnecting or side effects, and an unknown scope is dropped; the capability list; `resized` with the clamped geometry to another subscriber only; `removed` before the fanout stops and a live session stopped rather than released; and a client sending none of the new fields gets every key it read before.
+    Dropping the stream check fails the two fallback cases it guards.
+    The unmodified daemon is `tests/test_pty_supervisor.py`: its 20 real-ConPTY tests run today's `SupervisorClient`, which sends none of the new fields, against this supervisor, and all pass.
 
 - [ ] **14. Daemon side of the supervisor changes.**
   - **Why:** the daemon must use the new capabilities and keep working against the older supervisor that is running until item 17.

@@ -625,6 +625,29 @@ deliberately left unbounded, because a legitimate `subscribe` reply carries a wh
 buffer sized by `scrollback_bytes`. A refused frame closes the connection rather than being
 skipped: the stream is desynced at an unknown offset.
 
+Additive capabilities, none of which touches the protocol version
+(`development/DAEMON_LOAD_ISOLATION.md` items 12 and 13). The `hello` reply lists
+`capabilities` (`output_gap`, `subscribe_since`, `terminal_scope`, `notices`) and echoes the
+connection's `scope`; a supervisor that predates them sends neither, which is how a client knows
+to keep the old behaviour.
+
+- `hello` with `capabilities: ["output_gap"]`: the supervisor never waits on this connection.
+  Past 8 MiB of its queued output, each session's further output is dropped for it and one
+  unsolicited `gap {sid, position}` names the stream position its copy stops at; it resubscribes
+  to recover. Replies and `pty_exit` are never dropped.
+- Every session info and `subscribe` reply carries `stream`, one incarnation of the session id
+  (a respawn reuses the id and restarts positions, and gets a new `stream`).
+- `subscribe {sid, since, stream}` answers `delta: true` with only the bytes after `since` when
+  `stream` matches and they are still retained, and `delta: false` with the whole buffer
+  otherwise; `position` is the stream position at the end of the payload either way.
+- `hello` with `scope: "terminal"`: replies omit `meta` (it carries `hook_secret` and
+  `mcp_token`), and only `subscribe / unsubscribe / write / resize / list / ping` are accepted;
+  anything else is answered with an error and the connection stays. An unknown scope is refused
+  and the connection closed.
+- Unsolicited `resized {sid, cols, rows}` goes to every subscriber but the one that resized, with
+  the geometry the host applied, and `removed {sid}` goes to every subscriber but the remover
+  before the session's output stops.
+
 ## Canonical Projects and Groups
 
 ```text

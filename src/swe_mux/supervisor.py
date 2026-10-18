@@ -25,6 +25,12 @@ each session's further output is dropped for that client and one ``gap {sid,
 position}`` frame says where its copy stops, and the client resubscribes to
 recover. Every other client is written to directly and waited on when it falls
 behind, which is the behaviour an older daemon was built against.
+
+Item 13 adds, all additively: a ``stream`` id per session incarnation on every
+session info and ``subscribe`` reply; ``subscribe`` with ``since`` and that
+``stream``, answered with only the newer bytes while they are retained; a
+``terminal`` scope that never receives a session's mirrored metadata and may only
+drive terminals; and unsolicited ``resized`` and ``removed`` notices.
 """
 
 from __future__ import annotations
@@ -86,9 +92,26 @@ AUTH_DEADLINE_SECONDS = 15.0
 WRITE_BUFFER_HIGH_WATER = 2 * 1024 * 1024
 # What a client advertises in `hello` to be dropped from rather than waited on.
 CAPABILITY_OUTPUT_GAP = "output_gap"
+# `subscribe` honours `since` together with the `stream` it was taken against.
+CAPABILITY_SUBSCRIBE_SINCE = "subscribe_since"
+# `hello` accepts `scope: "terminal"`.
+CAPABILITY_TERMINAL_SCOPE = "terminal_scope"
+# Unsolicited `resized` and `removed` frames.
+CAPABILITY_NOTICES = "notices"
 # Every capability this supervisor understands, announced in the `hello` reply so
 # a client can tell an older supervisor (no list) from one that declined it.
-SUPERVISOR_CAPABILITIES = (CAPABILITY_OUTPUT_GAP,)
+SUPERVISOR_CAPABILITIES = (
+    CAPABILITY_OUTPUT_GAP,
+    CAPABILITY_SUBSCRIBE_SINCE,
+    CAPABILITY_TERMINAL_SCOPE,
+    CAPABILITY_NOTICES,
+)
+# A connection's scope, chosen in `hello`. The daemon's is the default; a terminal
+# gateway asks for `terminal`, which never receives a session's mirrored metadata
+# (it carries `hook_secret` and `mcp_token`) and may only drive terminals.
+SCOPE_DAEMON = "daemon"
+SCOPE_TERMINAL = "terminal"
+TERMINAL_SCOPE_MESSAGES = frozenset({"subscribe", "unsubscribe", "write", "resize", "list", "ping"})
 # Output an `output_gap` connection may have queued and unwritten before each
 # session's further output is dropped for it with a `gap`. Sized to ride out a
 # daemon stall of several seconds at fleet output rates (36 sessions at 20 KB/s
@@ -163,6 +186,21 @@ async def read_frame(
     return header, payload
 
 
+def new_stream_id(sid: str) -> str:
+    """One incarnation of a session id, so a byte cursor cannot cross into another.
+
+    A respawn reuses the id and restarts the byte positions at its seed, so a cursor
+    taken against the previous incarnation would be answered with the wrong bytes.
+    Minted at reservation rather than from `started_at`, which does not exist until
+    the child does, and suffixed so two reservations in one millisecond still differ.
+    """
+    return f"{sid}@{int(time.time() * 1000)}.{secrets.token_hex(4)}"
+
+
+class ScopeRefused(Exception):
+    """A message this connection's scope does not allow; refused, not disconnected."""
+
+
 def instance_key(config_path: Path) -> str:
     normalized = str(config_path.resolve()).casefold().encode("utf-8")
     return hashlib.sha256(normalized).hexdigest()[:20]
@@ -234,6 +272,11 @@ class SupervisedSession:
     spawn_done: asyncio.Event = field(default_factory=asyncio.Event)
     spawn_error: str | None = None
     started_at: float | None = None
+    stream: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.stream:
+            self.stream = new_stream_id(self.sid)
 
     def spawn_state(self) -> str:
         if not self.spawn_done.is_set():
@@ -247,6 +290,8 @@ class Connection:
     writer: asyncio.StreamWriter
     authenticated: bool = False
     peer: str = ""
+    scope: str = SCOPE_DAEMON
+    scope_refusals: int = 0
     # Negotiated in `hello`. A lossy connection's frames are queued in `_outbox`
     # and written by `_writer_task`, so nothing that sends to it ever waits on it.
     output_gap: bool = False
@@ -584,6 +629,14 @@ class SupervisorServer:
                     with contextlib.suppress(ConnectionError):
                         await connection.flush()
                     break
+                except ScopeRefused as exc:
+                    # The connection stays: a gateway asking for something it may
+                    # not have is a bug to log, not a reason to drop its terminals.
+                    connection.scope_refusals += 1
+                    if connection.scope_refusals == 1:
+                        log.warning("supervisor: %s from %s", exc, peer)
+                    if header.get("id") is not None:
+                        connection.send({"id": header["id"], "ok": False, "error": str(exc)})
                 except Exception as exc:
                     request_id = header.get("id")
                     log.exception("failed handling %s", header.get("t"))
@@ -641,6 +694,8 @@ class SupervisorServer:
             return
         if not connection.authenticated:
             raise PermissionError("hello with a valid token is required first")
+        if connection.scope == SCOPE_TERMINAL and kind not in TERMINAL_SCOPE_MESSAGES:
+            raise ScopeRefused(f"{kind!r} is not available to a terminal-scope connection")
         if kind == "spawn":
             if self.refusing_spawns:
                 raise RuntimeError("supervisor is shutting down; spawn refused")
@@ -677,7 +732,16 @@ class SupervisorServer:
         elif kind == "write":
             self._require(header).host.write(payload)
         elif kind == "resize":
-            self._require(header).host.resize(int(header["cols"]), int(header["rows"]))
+            entry = self._require(header)
+            entry.host.resize(int(header["cols"]), int(header["rows"]))
+            # What the host applied, to everyone but the connection that asked: it
+            # knows what it asked for, and an echo would race its next resize.
+            cols, rows = entry.host.cols, entry.host.rows
+            self._notify_subscribers(
+                entry,
+                {"t": "resized", "sid": entry.sid, "cols": cols, "rows": rows},
+                exclude=connection,
+            )
         elif kind == "set_graceful_exit":
             self._require(header).host.graceful_exit = str(header.get("keys") or "exit\r")
         elif kind == "set_meta":
@@ -688,6 +752,7 @@ class SupervisorServer:
                     existing.meta = meta
         elif kind == "subscribe":
             entry = self._require(header)
+            delta = self._honours_since(entry, header)
             # Snapshot and subscription registration are synchronous, so the
             # fanout task cannot interleave a chunk between them: the client
             # neither misses nor duplicates the boundary chunk (the same
@@ -695,16 +760,22 @@ class SupervisorServer:
             # step ends a gap: the reply carries everything the gap dropped.
             entry.subscribers.add(connection)
             connection.resume(entry.sid)
+            reply: dict[str, Any] = {
+                "id": request_id,
+                "ok": True,
+                "alive": entry.alive,
+                "exit_code": entry.exit_code,
+                "position": entry.scrollback.position,
+                "stream": entry.stream,
+                "delta": delta,
+            }
+            if connection.scope == SCOPE_DAEMON:
+                reply["meta"] = entry.meta
             connection.send(
-                {
-                    "id": request_id,
-                    "ok": True,
-                    "alive": entry.alive,
-                    "exit_code": entry.exit_code,
-                    "position": entry.scrollback.position,
-                    "meta": entry.meta,
-                },
-                entry.scrollback.bytes(),
+                reply,
+                entry.scrollback.bytes_since(header["since"])
+                if delta
+                else entry.scrollback.bytes(),
             )
         elif kind == "unsubscribe":
             existing = self.sessions.get(str(header.get("sid")))
@@ -730,7 +801,13 @@ class SupervisorServer:
                 self._remove_and_reply(connection, header, request_id), connection, request_id
             )
         elif kind == "list":
-            connection.send({"id": request_id, "ok": True, "sessions": self._session_infos()})
+            connection.send(
+                {
+                    "id": request_id,
+                    "ok": True,
+                    "sessions": self._session_infos(meta=connection.scope == SCOPE_DAEMON),
+                }
+            )
         elif kind == "job_pids":
             connection.send({"id": request_id, "ok": True, "jobs": self._job_pids()})
         elif kind == "ping":
@@ -757,6 +834,14 @@ class SupervisorServer:
             raise PermissionError(
                 f"protocol mismatch: supervisor={PROTOCOL_VERSION} client={protocol}"
             )
+        scope = header.get("scope", SCOPE_DAEMON)
+        if scope not in (SCOPE_DAEMON, SCOPE_TERMINAL):
+            # Fails closed: a scope this supervisor does not know cannot be honoured
+            # by widening it to the daemon's.
+            raise PermissionError(f"unknown connection scope: {scope!r}")
+        if connection.authenticated and scope != connection.scope:
+            raise PermissionError("a connection's scope cannot change after hello")
+        connection.scope = str(scope)
         connection.authenticated = True
         # Capabilities are additive and never gate the protocol version: an older
         # supervisor ignores the list it does not understand and announces none,
@@ -775,9 +860,42 @@ class SupervisorServer:
                 "protocol": PROTOCOL_VERSION,
                 "pid": os.getpid(),
                 "capabilities": list(SUPERVISOR_CAPABILITIES),
-                "sessions": self._session_infos(),
+                "scope": connection.scope,
+                "sessions": self._session_infos(meta=connection.scope == SCOPE_DAEMON),
             }
         )
+
+    @staticmethod
+    def _honours_since(entry: SupervisedSession, header: dict[str, Any]) -> bool:
+        """Whether a `subscribe` can be answered with only the bytes after its cursor.
+
+        Only for the stream the cursor was taken against, and only while every byte
+        after it is still retained; anything else gets the whole buffer, which is
+        always correct and only ever larger.
+        """
+        since = header.get("since")
+        if not isinstance(since, int) or isinstance(since, bool):
+            return False
+        if header.get("stream") != entry.stream:
+            return False
+        position = entry.scrollback.position
+        return position - entry.scrollback.size <= since <= position
+
+    @staticmethod
+    def _notify_subscribers(
+        entry: SupervisedSession, header: dict[str, Any], *, exclude: Connection | None
+    ) -> None:
+        """Send an unsolicited control frame to a session's subscribers.
+
+        An older client ignores a frame type it does not know, so a notice needs no
+        capability check on the way out.
+        """
+        frame = encode_frame(header)
+        for subscriber in tuple(entry.subscribers):
+            if subscriber is exclude:
+                continue
+            with contextlib.suppress(Exception):
+                subscriber.send_frame(frame)
 
     def _job_pids(self) -> dict[str, list[int]]:
         """Per-session job membership, for the daemon's process attribution.
@@ -835,9 +953,10 @@ class SupervisorServer:
         log.info("spawn_status sid=%s state=%s pid=%s", sid, state, status.get("pid"))
         return status
 
-    def _session_infos(self) -> list[dict[str, Any]]:
-        return [
-            {
+    def _session_infos(self, *, meta: bool = True) -> list[dict[str, Any]]:
+        infos: list[dict[str, Any]] = []
+        for entry in self.sessions.values():
+            info: dict[str, Any] = {
                 "sid": entry.sid,
                 "alive": entry.alive,
                 "exit_code": entry.exit_code,
@@ -845,8 +964,8 @@ class SupervisorServer:
                 "cols": entry.host.cols,
                 "rows": entry.host.rows,
                 "reaper_assignment": entry.host.reaper_assignment,
-                "meta": entry.meta,
                 "started_at": entry.started_at,
+                "stream": entry.stream,
                 # Read failures the reader swallows and keeps going from (F14).
                 # A session that is alive and silent is otherwise indistinguishable
                 # from one whose agent is simply thinking, and the daemon cannot
@@ -855,8 +974,10 @@ class SupervisorServer:
                 "last_read_error": entry.host.last_read_error,
                 "last_read_error_at": entry.host.last_read_error_at,
             }
-            for entry in self.sessions.values()
-        ]
+            if meta:
+                info["meta"] = entry.meta
+            infos.append(info)
+        return infos
 
     def _require(self, header: dict[str, Any]) -> SupervisedSession:
         sid = str(header.get("sid"))
@@ -1063,6 +1184,9 @@ class SupervisorServer:
         sid = str(header.get("sid"))
         entry = self.sessions.pop(sid, None)
         if entry is not None:
+            # Before the fanout stops, so nothing a subscriber receives afterwards
+            # can be mistaken for the session still being here.
+            self._notify_subscribers(entry, {"t": "removed", "sid": sid}, exclude=connection)
             for subscriber in tuple(entry.subscribers):
                 subscriber.resume(sid)
             if entry.fanout_task and not entry.fanout_task.done():

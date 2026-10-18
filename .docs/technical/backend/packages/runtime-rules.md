@@ -245,6 +245,9 @@ Replies are never dropped and do not count toward that cap, so a large `subscrib
 A connection that does not advertise the capability keeps the old contract, lossless and waited on, because an older daemon cannot recover from a gap - which also means it keeps the coupling: one such client that stops reading stalls each session's fanout and, once the 1,024-chunk reader queue fills, the agent.
 The `hello` reply lists `capabilities`, so a client can tell a supervisor that declined from one that predates the list.
 
+A `terminal`-scope connection (item 13, for the terminal gateway) never receives `meta` and may only `subscribe`, `unsubscribe`, `write`, `resize`, `list` and `ping`; it is a guard against a gateway holding session secrets and acting outside its job, not a security boundary, because anything holding the supervisor token could connect with the daemon's scope instead.
+`subscribe` honours `since` only together with the `stream` it was taken against, and a byte cursor is meaningful only within one stream: a respawn reuses the session id and restarts positions at its seed.
+
 The frozen supervisor ships as its own bundle (`dist/swe-mux-supervisor`), never inside `dist/swe-mux`, so app rebuilds cannot collide with a running supervisor's image.
 Keep the supervisor's import closure inside the hash-gated source list in `packaging/build_desktop.py`; adding an import to `supervisor.py` or `pty_host.py` without updating that list ships a stale bundle.
 A module the daemon *also* wants (`nested_job.py` is the one) may be shared only while its own imports are already in the closure - otherwise the daemon's need drags volatile code into the near-frozen half, and every future change to it costs a session reap.
