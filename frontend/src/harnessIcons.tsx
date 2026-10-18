@@ -1,6 +1,6 @@
 // One mark per harness, for every surface that needs to say *which CLI* something is:
-// the sidebar row's provider prefix, the session tab strip, the account switcher, and the
-// Project Run menu's launch rows.
+// the sidebar row's provider prefix, the session tab strip, the account switcher, the
+// Project Run menu's launch rows, and the account names in the Usage dialog's Quota views.
 //
 // Single source on purpose. The marks used to live beside the account switcher, which only
 // ever knew the two harnesses that have provider accounts (claude, codex); everything else

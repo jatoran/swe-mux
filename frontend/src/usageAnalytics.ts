@@ -186,9 +186,17 @@ export function modelPeriodRows(
   })).sort((a,b)=>b.period.localeCompare(a.period)||a.source_id.localeCompare(b.source_id)||a.model.localeCompare(b.model))
 }
 
-export function accountDisplayLabel(account:Pick<ProviderAccount,'label'|'email'|'provider'>):string {
+/** An account's name and, when it differs, its email - for a surface that shows the provider
+ *  as a mark beside it rather than in words. */
+export function accountNameLabel(account:Pick<ProviderAccount,'label'|'email'>):string {
   const detail = account.email&&account.email!==account.label?` · ${account.email}`:''
-  return `${account.label}${detail} · ${account.provider}`
+  return `${account.label}${detail}`
+}
+
+/** The same name with its provider in words, for text that cannot carry a mark: a select
+ *  option, a tooltip, an accessible name. */
+export function accountDisplayLabel(account:Pick<ProviderAccount,'label'|'email'|'provider'>):string {
+  return `${accountNameLabel(account)} · ${account.provider}`
 }
 
 export function quotaSeriesPath(options:{

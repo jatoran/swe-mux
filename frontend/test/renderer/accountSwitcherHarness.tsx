@@ -25,6 +25,12 @@ const many = params.get('accounts') === 'multi'
 // A Codex switch that left sessions behind: the one scenario that draws a notice at all.
 const stranded = params.get('accounts') === 'stranded'
 const outcome = params.get('outcome') || 'succeeded'
+// A saved Codex account beside `multi`'s Claude ones: a section with no Fable column, whose
+// 5h and weekly columns must still land under Claude's.
+const withCodex = params.get('codex') === '1'
+// The chrome scale. The popover is a fixed width while its text scales, which is what
+// decides whether a Fable row's columns fit at full width.
+const scale = params.get('scale') || '1'
 
 const NOW = Math.floor(Date.now() / 1000)
 type Login = { provider: string; state: string; started_at: number; finished_at?: number; account_id?: string | null; label?: string | null; error?: string | null } | null
@@ -68,6 +74,17 @@ const MANY = [
   },
 ]
 
+// A Codex weekly window long enough to print the widest countdown either provider produces.
+const CODEX = {
+  id: 'account-codex', provider: 'codex', label: 'team', created_at: NOW, updated_at: NOW,
+  identity_source: 'token', email: 'team@example.com',
+  quota: {
+    status: 'ok', refreshed_at: NOW,
+    session: { used_percent: 41, window_minutes: 300, resets_at: NOW + 2 * 3600 + 5 * 60 },
+    weekly: { used_percent: 55, window_minutes: 43200, resets_at: NOW + 29 * 86400 + 23 * 3600 },
+  },
+}
+
 // Two Codex accounts, the second just selected, with seventeen sessions still on the
 // first and one on a login mux never saved. The email is long on purpose: the collapsed
 // line has to ellipsize it, not wrap into the paragraph it replaced.
@@ -89,12 +106,12 @@ let login: Record<string, Login> = { claude: null, codex: null }
 
 const snapshot = () => ({
   providers: ['claude', 'codex'],
-  selected: { claude: saved || many || stranded ? 'account-claude' : null, codex: stranded ? 'account-codex-2' : null },
+  selected: { claude: saved || many || stranded ? 'account-claude' : null, codex: stranded ? 'account-codex-2' : withCodex ? 'account-codex' : null },
   current: {
     claude: { state: saved || many || stranded ? 'saved' : 'signed_out', account_id: saved || many || stranded ? 'account-claude' : null },
-    codex: stranded ? { state: 'saved', account_id: 'account-codex-2' } : { state: 'signed_out', account_id: null },
+    codex: stranded ? { state: 'saved', account_id: 'account-codex-2' } : withCodex ? { state: 'saved', account_id: 'account-codex' } : { state: 'signed_out', account_id: null },
   },
-  accounts: many ? MANY : stranded ? STRANDED : saved ? ACCOUNTS : [],
+  accounts: [...(many ? MANY : stranded ? STRANDED : saved ? ACCOUNTS : []), ...(withCodex ? [CODEX] : [])],
   poll_minutes: 5,
   stale_minutes: 30,
   refreshing: false,
@@ -146,7 +163,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
 
 document.body.style.margin = '0'
 document.body.style.width = '220px'
-document.documentElement.style.setProperty('--ui-scale', '1')
+document.documentElement.style.setProperty('--ui-scale', scale)
 // The status block sits at the *bottom* of the sidebar in the real shell, and the full
 // switcher's popover opens upward from wherever its trigger is. Rendered against the top of
 // the viewport it would be placed off-screen, so the column is given its real height.

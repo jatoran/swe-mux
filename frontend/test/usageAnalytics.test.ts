@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
   accountDisplayLabel,
+  accountNameLabel,
   modelPeriodRows,
   quotaPointValue,
   quotaSeriesPath,
@@ -86,4 +87,10 @@ test('quota point readers handle raw samples and daily rollups',()=>{
 test('account labels use the friendly label and disambiguating email',()=>{
   assert.equal(accountDisplayLabel({label:'Work',email:'dev@example.com',provider:'codex'}),'Work · dev@example.com · codex')
   assert.equal(accountDisplayLabel({label:'Personal',email:null,provider:'claude'}),'Personal · claude')
+})
+
+test('an account name drawn beside its provider mark leaves the provider out of the words',()=>{
+  assert.equal(accountNameLabel({label:'Work',email:'dev@example.com'}),'Work · dev@example.com')
+  assert.equal(accountNameLabel({label:'dev@example.com',email:'dev@example.com'}),'dev@example.com')
+  assert.equal(accountNameLabel({label:'Personal',email:null}),'Personal')
 })

@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'preact/hooks'
 import { api } from './api'
 import { AnalyticsNav, useChartWidth } from './AnalyticsPrimitives'
+import { harnessMark } from './harnessIcons'
+import { harnessDisplayName } from './harnessRegistry'
 import { formatResetRemaining } from './providerAccountDisplay'
 import { OPERATIONAL_TELEMETRY_PATH, type OperationalStatus } from './operationalTelemetry'
 import { serverNow } from './serverClock.ts'
@@ -41,6 +43,7 @@ import {
 } from './quotaTimeline'
 import {
   accountDisplayLabel,
+  accountNameLabel,
   quotaPointTime,
   quotaSeriesPath,
   type QuotaDailyPoint,
@@ -66,11 +69,33 @@ function accountFor(accounts:ProviderAccount[],series:QuotaSeries):ProviderAccou
   return accounts.find(account=>account.id===series.account_id)
 }
 
+const legacyOwner=(series:QuotaSeries)=>series.provider_account_uuid?'':' · unverified legacy identity'
+
+/** A series' account with its provider in words, for text that cannot carry a mark. */
 function seriesLabel(accounts:ProviderAccount[],series:QuotaSeries):string {
   const account=accountFor(accounts,series)
   const label=account?accountDisplayLabel(account):`${series.provider} · ${series.account_id.slice(0,8)}`
-  const owner=series.provider_account_uuid?'':' · unverified legacy identity'
-  return `${label}${owner}`
+  return `${label}${legacyOwner(series)}`
+}
+
+/** The same without the provider, for a row that draws it as `AccountName`'s mark. */
+function seriesName(accounts:ProviderAccount[],series:QuotaSeries):string {
+  const account=accountFor(accounts,series)
+  return `${account?accountNameLabel(account):series.account_id.slice(0,8)}${legacyOwner(series)}`
+}
+
+/**
+ * An account's name led by its provider's mark - Anthropic's burst or OpenAI's knot - so
+ * every place this view names an account says whose quota it is without spelling the
+ * provider out. The mark carries the provider's accessible name, because the words no
+ * longer do.
+ */
+function AccountName({provider,name}:{provider:string;name:string}) {
+  const vendor=harnessDisplayName(provider)
+  return <span class="quota-account-name">
+    <i class={`provider-glyph ${provider}`} role="img" aria-label={vendor} title={vendor}>{harnessMark(provider)}</i>
+    <span>{name}</span>
+  </span>
 }
 
 const seriesKey=(series:QuotaSeries)=>`${series.provider}-${series.account_id}-${series.provider_account_uuid||''}`
@@ -114,29 +139,35 @@ function usageTitle(label:string,cell:UsageCell,daily:boolean,now:number):string
 }
 
 /**
- * One account's current window, split by where its usage came from: a bar on the quota's
- * own 0-100 scale, so each part's width is its share of the whole limit, and the same
- * parts in words.
+ * One account's window as one bar on the quota's own 0-100 scale, so the fill ends where
+ * the window's used percentage does and the empty rest is what is left - there is no second
+ * bar for remaining capacity to read against this one.
+ *
+ * Where attribution reaches the window the fill is split by where its usage came from: each
+ * part's width is its share of the whole limit, the parts sum to the reading
+ * (`quota_usage.window_shares` scales them to it), and the same parts follow in words. Where
+ * it does not, the fill is the plain reading and nothing is said about its origin.
  */
-function WindowShares({sources,windowLabel}:{sources:QuotaWindowSources;windowLabel:string}) {
-  const shares=windowShares(sources)
-  if(!shares.length)return null
+function WindowShares({used,sources,windowLabel}:{used:number;sources?:QuotaWindowSources|null;windowLabel:string}) {
+  const shares=sources?windowShares(sources):[]
   const now=serverNow()
   const words=describeWindowShares(shares)
-  const began=`${sources.reset_seen?'since its reset':'since it began'}, ${formatQuotaInstant(sources.since,now)}`
+  const began=sources?`${sources.reset_seen?'since its reset':'since it began'}, ${formatQuotaInstant(sources.since,now)}`:''
   return <div class="quota-window-shares">
-    <div class="quota-share-bar" role="img" aria-label={`${windowLabel} window ${began}: ${words}`}>
-      {shares.map(share=><span
-        key={share.source}
-        class={`quota-source-${share.source}`}
-        style={{width:`${Math.min(100,share.points)}%`}}
-        title={`${formatQuotaPercent(share.points)} ${QUOTA_SHARE_LABELS[share.source]}: ${QUOTA_SHARE_DETAIL[share.source]}`}
-      />)}
+    <div class="quota-share-bar" role="img" aria-label={shares.length?`${windowLabel} window ${began}: ${words}`:`${windowLabel} window: ${formatQuotaPercent(used)} used`}>
+      {shares.length
+        ?shares.map(share=><span
+          key={share.source}
+          class={`quota-source-${share.source}`}
+          style={{width:`${Math.min(100,share.points)}%`}}
+          title={`${formatQuotaPercent(share.points)} ${QUOTA_SHARE_LABELS[share.source]}: ${QUOTA_SHARE_DETAIL[share.source]}`}
+        />)
+        :<span class="quota-share-used" style={{width:`${Math.max(0,Math.min(100,used))}%`}} title={`${formatQuotaPercent(used)} used`}/>}
     </div>
-    <small>
+    {shares.length>0&&<small>
       {shares.map(share=><span key={share.source} class="quota-share-part"><i class={`quota-source-${share.source}`}/>{describeWindowShares([share])}</span>)}
       <span class="quota-share-since">{began}</span>
-    </small>
+    </small>}
   </div>
 }
 
@@ -159,6 +190,8 @@ function QuotaChart({
     return {
       key:seriesKey(series),
       label:seriesLabel(accounts,series),
+      name:seriesName(accounts,series),
+      provider:series.provider,
       account:accountFor(accounts,series),
       color:palette[index%palette.length],
       readings:quotaReadings(series.points,windowName),
@@ -291,8 +324,8 @@ function QuotaChart({
       </div>
       {windowsNow.length>0&&<div class="quota-sources quota-window-now">
         <table><caption>Each account's {windowLabel.toLowerCase()} window now: what it has used since the window began, by source</caption><tbody>{windowsNow.map(({line,used,sources:split})=><tr key={line.key}>
-          <th scope="row"><i style={{background:line.color}}/>{line.label}</th>
-          <td><WindowShares sources={split} windowLabel={windowLabel}/></td>
+          <th scope="row"><i style={{background:line.color}}/><AccountName provider={line.provider} name={line.name}/></th>
+          <td><WindowShares used={used} sources={split} windowLabel={windowLabel}/></td>
           <td class="quota-value">{formatQuotaPercent(used)} used</td>
         </tr>)}</tbody></table>
       </div>}
@@ -303,7 +336,7 @@ function QuotaChart({
         <table><caption>Where each account's {windowLabel.toLowerCase()} rise in this range came from</caption><tbody>{lanes.map(line=>{
           const totals=usageTotals(line.lane)
           return <tr key={line.key}>
-            <th scope="row"><i style={{background:line.color}}/>{line.label}</th>
+            <th scope="row"><i style={{background:line.color}}/><AccountName provider={line.provider} name={line.name}/></th>
             <td>{describeShares(totals.parts,totals.total)}</td>
             <td class="quota-value">{Math.round(totals.total)} pts</td>
           </tr>
@@ -315,7 +348,7 @@ function QuotaChart({
           {atLatest?<span class="analytics-badge">Latest</span>:<button type="button" onClick={()=>setInspected(null)}>Show latest</button>}
         </header>
         <table><tbody>{current.map(({line,reading})=><tr key={line.key}>
-          <th scope="row"><i style={{background:line.color}}/>{line.label}</th>
+          <th scope="row"><i style={{background:line.color}}/><AccountName provider={line.provider} name={line.name}/></th>
           <td class="quota-value">{reading?`${formatQuotaPercent(reading.used)} used`:daily?'no reading that day':'no reading yet'}</td>
           <td class="quota-detail">{reading&&active!=null?[readingDetail(reading,active,daily,now),usageDetail(usageCellAt(line.cells,reading.time,daily),daily)].filter(Boolean).join(' · '):''}</td>
         </tr>)}</tbody></table>
@@ -359,12 +392,12 @@ function QuotaReadings({status,accounts,windowName}:{status:QuotaSeriesStatus;ac
       <tbody>{rows.slice(0,limit).map(({series,point})=>'sampled_at' in point
         ?<tr key={`${seriesKey(series)}-${point.id}`}>
           <td>{formatQuotaInstant(point.sampled_at,now)}{point.freshness!=='fresh'&&<small>{point.error||point.freshness}</small>}</td>
-          <td>{seriesLabel(accounts,series)}</td>
+          <td><AccountName provider={series.provider} name={seriesName(accounts,series)}/></td>
           {windows.map(window=><td key={window} class="quota-value">{formatQuotaPercent(point[window]?.used_percent)}</td>)}
         </tr>
         :<tr key={`${seriesKey(series)}-${point.day}`}>
           <td>{formatQuotaDay(point.day,now)}{point.errors>0&&<small>{point.errors} of {point.samples} readings failed</small>}</td>
-          <td>{seriesLabel(accounts,series)}</td>
+          <td><AccountName provider={series.provider} name={seriesName(accounts,series)}/></td>
           {windows.map(window=><td key={window} class="quota-value">{dailyCell(point,window)}</td>)}
         </tr>)}</tbody>
     </table></div>
@@ -376,8 +409,11 @@ function ResetLog({items,accounts}:{items:ResetEvent[];accounts:ProviderAccount[
   const now=serverNow()
   return <section class="reset-log"><h3>Reset evidence log</h3>{items.length?items.map(item=>{
     const account=accountName(accounts,item.account_id,item.account_id),window=quotaWindowLabel(item.window).toLowerCase()
+    // A review that ruled the movement out names no account: it is no longer a fact about one.
+    const reviewedAway=item.review_status==='manual_usage'||item.review_status==='discarded'
+    const heading=item.review_status==='manual_usage'?'manual Codex usage':item.review_status==='discarded'?'discarded detection error':item.review_status==='seen'?`acknowledged ${window} reset`:`${item.classification} ${window} reset`
     return <article key={item.id} class={item.classification==='unexpected'&&item.confirmed&&!item.suppression_reason&&!item.review_status?'confirmed-unexpected':''}>
-      <strong>{item.review_status==='manual_usage'?'manual Codex usage':item.review_status==='discarded'?'discarded detection error':item.review_status==='seen'?`acknowledged ${window} reset · ${account}`:`${item.classification} ${window} reset · ${account}`}</strong>
+      <strong>{heading}{!reviewedAway&&<> · <AccountName provider={item.provider} name={account}/></>}</strong>
       <span>{formatQuotaPercent(item.before_value)} → {formatQuotaPercent(item.after_value)} used · {formatQuotaInstant(item.observed_at,now)}</span>
       <small>confidence {item.confidence} · {item.confirmed?'confirmed':'awaiting confirmation'}{item.suppression_reason?` · suppressed: ${item.suppression_reason}`:''}{item.expected_reset_at?` · expected ${formatQuotaInstant(item.expected_reset_at,now)}`:''}</small>
     </article>
@@ -390,7 +426,7 @@ function AttributionLog({items,accounts,loading}:{items:QuotaUsageInterval[];acc
     {loading?<p>Loading attribution…</p>:items.length?items.map(item=>{
       const windows=(['weekly','session'] as const).filter(window=>(item[window].rise??0)>0)
       return <details class="analytics-diagnostics" key={item.sample_id}>
-        <summary>{accountName(accounts,item.account_id,item.provider)} · {windows.map(window=>`${QUOTA_WINDOW_LABELS[window]} +${formatQuotaPercent(item[window].rise)}`).join(' · ')} · {formatQuotaInstant(item.end,now)}
+        <summary><AccountName provider={item.provider} name={accountName(accounts,item.account_id,item.provider)}/> · {windows.map(window=>`${QUOTA_WINDOW_LABELS[window]} +${formatQuotaPercent(item[window].rise)}`).join(' · ')} · {formatQuotaInstant(item.end,now)}
           <small>{describePoints(item[windows[0]??'session'])}</small>
         </summary>
         <dl class="analytics-facts">
@@ -410,18 +446,19 @@ function AccountCards({status,accounts}:{status:ProviderAccountsStatus;accounts:
     const quota=item.quota,ready=quota?.status==='ready'
     const stale=!!quota?.refreshed_at&&(now-quota.refreshed_at)>(status.stale_minutes||30)*60
     return <article class="quota-account-card" key={item.id}>
-      <header><strong>{accountDisplayLabel(item)}</strong>{status.selected[item.provider]===item.id&&<span class="analytics-badge">Selected</span>}</header>
+      <header><strong><AccountName provider={item.provider} name={accountNameLabel(item)}/></strong>{status.selected[item.provider]===item.id&&<span class="analytics-badge">Selected</span>}</header>
       {/* formatResetRemaining measures any interval; read backwards here it is the reading's age. */}
       <small>{quota?.refreshed_at?`Last reading ${formatQuotaInstant(quota.refreshed_at,now)} (${formatResetRemaining(now,quota.refreshed_at)} ago)${stale?' · stale':''}`:'No successful reading'}</small>
       {(['weekly','session','fable'] as const).filter(key=>key!=='fable'||quota?.fable).map(key=>{
-        const window=ready?quota?.[key]:null,remaining=window?Math.max(0,100-window.used_percent):null
+        const window=ready?quota?.[key]:null
+        // Percent used, the one figure every other quota surface prints. The bar's empty
+        // rest is what is left, so a second "% left" figure would only restate it.
         return <div class="quota-capacity" key={key}>
-          <div><span>{QUOTA_WINDOW_LABELS[key]} window</span><strong>{remaining==null?'Unavailable':`${Math.round(remaining)}% left`}</strong></div>
-          {remaining!=null&&<meter min="0" max="100" value={remaining} aria-label={`${QUOTA_WINDOW_LABELS[key]} window quota remaining`}/>}
-          <small>{window?`${formatQuotaPercent(window.used_percent)} used · `:''}{window?.resets_at
+          <div><span>{QUOTA_WINDOW_LABELS[key]} window</span><strong>{window?`${formatQuotaPercent(window.used_percent)} used`:'Unavailable'}</strong></div>
+          {window&&<WindowShares used={window.used_percent} sources={window.sources} windowLabel={QUOTA_WINDOW_LABELS[key]}/>}
+          <small>{window?.resets_at
             ?window.resets_at<=now?'reset due; awaiting a reading':`resets in ${formatResetRemaining(window.resets_at,now)} (${formatQuotaInstant(window.resets_at,now)})`
             :'reset time unavailable'}</small>
-          {window?.sources&&<WindowShares sources={window.sources} windowLabel={QUOTA_WINDOW_LABELS[key]}/>}
         </div>
       })}
       {quota?.error&&<p class="usage-error">{quota.error}</p>}

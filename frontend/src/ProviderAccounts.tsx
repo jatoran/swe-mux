@@ -318,7 +318,12 @@ export function AccountSwitcher({variant='full',placement,onManage,onViewUsage,p
     window.addEventListener('resize',reposition);window.addEventListener('scroll',reposition,true);window.addEventListener('pointerdown',dismiss);window.addEventListener('keydown',key)
     return()=>{window.removeEventListener('resize',reposition);window.removeEventListener('scroll',reposition,true);window.removeEventListener('pointerdown',dismiss);window.removeEventListener('keydown',key)}
   },[open,opensDown,busy])
-  const popup=open&&<div ref={popover} class="account-popover ui-portal" style={popoverStyle} role="dialog" aria-label="Provider account switcher">
+  // Whether any section draws a Fable column. Decided for the whole popover, not per section,
+  // because it picks the column tier every row is laid out in - and a tier chosen per section
+  // would put Codex's 5h and weekly columns at different offsets from Claude's. An attribute
+  // rather than a class, so the root's `class` stays the literal the UI-scale contract reads.
+  const popoverFable=hasFableWindow(status?.accounts||[])
+  const popup=open&&<div ref={popover} class="account-popover ui-portal" data-fable={popoverFable?'':undefined} style={popoverStyle} role="dialog" aria-label="Provider account switcher">
       <header><div><strong>ACCOUNTS</strong><span>quota per account</span></div><button aria-label="Close account switcher" onClick={()=>setOpen(false)}>×</button></header>
       {providers.map(provider=>{const current=status?.current[provider];const active=selected(provider);const login=loginOf(status?.login,provider);const saved=status?.accounts.filter(account=>account.provider===provider)||[];
         // Decided once per provider, then handed to every row, so the columns are the
@@ -338,6 +343,9 @@ export function AccountSwitcher({variant='full',placement,onManage,onViewUsage,p
           // CLI already running holds the credential it read at startup. It joins the
           // accessible name because `aria-label` replaces the row's content outright,
           // so a badge left out of it is a badge no screen reader can reach.
+          // The badge sits on the name line, just left of the refresh age: both are facts
+          // about the account rather than about one quota window, and the quota line
+          // below needs the row's whole width for its columns.
           // `data-provider-account` carries the account's id. The only other handle on
           // one row is the `active` class, which is exactly what choosing it changes - so
           // anything selecting on that (the site demo's walkthrough switches accounts and
@@ -345,11 +353,11 @@ export function AccountSwitcher({variant='full',placement,onManage,onViewUsage,p
           const spawned=spawnedSessionCount(status?.sessions,account.id)
           const spawnedTitle=`${spawned} live session${spawned===1?'':'s'} spawned under this account. That is what mux had selected when each started, not proof of what it authenticates as now.`
           const state=account.conflict&&!account.conflict.is_primary?'duplicate account, polling suspended':quotaTitle(account)
-          return <button class={`${status?.selected[provider]===account.id?'active':''} ${account.conflict&&!account.conflict.is_primary?'conflicted':''}`} disabled={!!busy} data-provider-account={account.id} onClick={()=>void choose(account)} aria-label={`${account.label}: ${state}${spawned?`; ${spawnedTitle}`:''}`} title={account.conflict?conflictDescription(account):quotaTitle(account)}><span>{status?.selected[provider]===account.id?'◆':'◇'}</span><strong>{account.label}</strong>{account.quota?.refreshed_at?<i class="account-refresh-age" title={`Quotas refreshed ${new Date(account.quota.refreshed_at*1000).toLocaleString()}`}>{formatRefreshAge(account.quota.refreshed_at)}</i>:null}<small>{account.conflict&&!account.conflict.is_primary?'duplicate account · polling suspended':<span class={`quota-row${sectionFable?' has-fable':''}`}>
+          return <button class={`${status?.selected[provider]===account.id?'active':''} ${account.conflict&&!account.conflict.is_primary?'conflicted':''}`} disabled={!!busy} data-provider-account={account.id} onClick={()=>void choose(account)} aria-label={`${account.label}: ${state}${spawned?`; ${spawnedTitle}`:''}`} title={account.conflict?conflictDescription(account):quotaTitle(account)}><span>{status?.selected[provider]===account.id?'◆':'◇'}</span><strong>{account.label}</strong>{spawned>0&&<i class="account-session-count" aria-hidden="true" title={spawnedTitle}>{spawned}×</i>}{account.quota?.refreshed_at?<i class="account-refresh-age" title={`Quotas refreshed ${new Date(account.quota.refreshed_at*1000).toLocaleString()}`}>{formatRefreshAge(account.quota.refreshed_at)}</i>:null}<small>{account.conflict&&!account.conflict.is_primary?'duplicate account · polling suspended':<span class={`quota-row${sectionFable?' has-fable':''}`}>
           {account.quota?.status==='error'
             ?<em class="quota-row-note">unavailable</em>
             :quotaRowCells(account,sectionFable).map((cell,index)=><span class={`quota-cell quota-cell-${cell.key}`} key={cell.key}>{index>0&&<i class="quota-separator" aria-hidden="true"></i>}<b>{cell.percent}</b>{' '}{cell.reset&&<i class="quota-reset">{cell.reset}</i>}<i class="quota-window-label">{cell.qualifier}</i></span>)}
-        </span>}{spawned>0&&<i class="account-session-count" aria-hidden="true" title={spawnedTitle}>{spawned}×</i>}</small></button>
+        </span>}</small></button>
         })}
         {!saved.length&&!login&&<button class="account-empty-cta" disabled={!!busy} onClick={()=>startLogin(provider)}>No saved accounts — <strong>sign in to {provider}</strong></button>}
         {/* The point of the counts. A switch reaches the next process, not the ones

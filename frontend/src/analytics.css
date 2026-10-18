@@ -83,8 +83,14 @@
 .analytics-badge{color:var(--accent);font-size:11px;flex:none}
 .quota-capacity{display:grid;gap:6px;margin-top:16px}
 .quota-capacity>div{display:flex;gap:8px;justify-content:space-between}
-.quota-capacity meter{width:100%;height:10px;accent-color:var(--accent)}
 .quota-capacity>small{color:var(--muted)}
+/* An account name led by its provider's mark, in the colours the sidebar's quota grid uses. */
+.quota-account-name{display:inline-flex;align-items:baseline;gap:.45em;min-width:0;max-width:100%}
+.quota-account-name>.provider-glyph{flex:none;align-self:center;display:inline-grid;place-items:center;color:var(--accent);font-style:normal}
+.quota-account-name>.provider-glyph.claude{color:#d49a78}
+.quota-account-name>.provider-glyph.codex{color:#77c9a7}
+.quota-account-name .provider-mark{width:1em;height:1em;display:block}
+.quota-account-name>span{min-width:0;overflow-wrap:anywhere}
 .quota-grid-line{stroke:var(--line);stroke-width:1;vector-effect:non-scaling-stroke}
 .quota-chart{width:100%;min-width:0;border:1px solid var(--line);padding:12px;background:var(--panel2)}
 .quota-chart-header{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:4px 12px}
@@ -93,8 +99,8 @@
 .analytics-content .quota-chart-explainer{margin:6px 0 10px;color:var(--muted);font-size:12px}
 .quota-chart>p{color:var(--muted)}
 .quota-plot:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
-.quota-chart svg{display:block;width:100%;height:auto;min-width:0;overflow:visible;cursor:crosshair;touch-action:pan-y;user-select:none}
-.quota-chart svg text{fill:var(--muted);font-family:inherit;font-size:11px}
+.quota-plot>svg{display:block;width:100%;height:auto;min-width:0;overflow:visible;cursor:crosshair;touch-action:pan-y;user-select:none}
+.quota-plot>svg text{fill:var(--muted);font-family:inherit;font-size:11px}
 .quota-tick-line{stroke:var(--line);stroke-width:1;stroke-opacity:.5;vector-effect:non-scaling-stroke}
 .quota-line{fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;vector-effect:non-scaling-stroke}
 .quota-point{stroke:var(--panel2);stroke-width:1}
@@ -112,8 +118,11 @@
 .quota-source-untracked{background:repeating-linear-gradient(135deg,var(--muted) 0 2px,transparent 2px 5px)}
 /* Outranks `.quota-capacity>div`, the card's label row, which would make this a flex row. */
 .quota-window-shares,.quota-capacity>.quota-window-shares{display:grid;gap:4px;min-width:0}
-.quota-share-bar{display:flex;height:6px;background:var(--line);overflow:hidden}
+/* One bar per window: the fill is what is used, split by source where attribution reaches
+   it, and the track behind it is what is left. */
+.quota-share-bar{display:flex;height:8px;background:var(--line);overflow:hidden}
 .quota-share-bar>span{flex:none;height:100%;cursor:help}
+.quota-share-used{background:color-mix(in srgb,var(--text) 55%,transparent)}
 .quota-window-shares>small{display:flex;flex-wrap:wrap;gap:2px 12px;color:var(--muted);line-height:1.5}
 .quota-share-part{display:inline-flex;align-items:center;gap:5px;white-space:nowrap}
 .quota-share-part>i{display:inline-block;width:8px;height:8px;flex:none}

@@ -61,9 +61,14 @@ Collection settings, cache clearing, and source provenance live in a disclosure.
 
 ## Quota views
 
-Current shows saved-account cards with selected-account markers, remaining capacity, percent used, reset countdowns with their absolute reset time, and reading freshness.
-Under each attributed window (weekly and 5-hour), a bar on the limit's own 0-100 scale splits what the window has used since it began by source - swe-mux sessions, not swe-mux, used elsewhere, unclear, and untracked for usage from before attribution covered it - with the same parts in words and when the window began (`operational-telemetry.md` § Quota usage attribution).
-An account attribution has not reached yet shows its plain reading and no split.
+Current shows saved-account cards with selected-account markers, percent used, reset countdowns with their absolute reset time, and reading freshness.
+Each window states only its percent used; no surface restates it as percent left, because one number per window read the same way everywhere is what makes two windows comparable at a glance.
+Each window draws exactly one bar, on the limit's own 0-100 scale: its fill ends at the percent used and its empty rest is what is left.
+Where attribution reaches the window (weekly and 5-hour), the fill is split by source - swe-mux sessions, not swe-mux, used elsewhere, unclear, and untracked for usage from before attribution covered it - and the parts sum to the reading, so the split and the reading are one bar rather than two (`operational-telemetry.md` § Quota usage attribution).
+The same parts follow in words, with when the window began.
+An account attribution has not reached yet fills the same bar with its plain reading and claims no split.
+Every account name in the Quota views (the cards, History's rows and readings table, the reset log, and the attribution list) is led by its provider's mark - Anthropic's burst for Claude, OpenAI's knot for Codex - which carries the provider as its accessible name, so the words drop the provider suffix.
+Text that cannot carry a mark (the Account filter's options, tooltips) keeps the provider in words.
 The account-management link opens Settings → Accounts; this surface does not duplicate account switching.
 Every Quota view names a window the same way: Weekly, 5-hour, and Fable weekly.
 

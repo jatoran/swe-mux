@@ -191,7 +191,7 @@ test('quota history opens on the weekly window over the last 7 days and says wha
   expect(latest).toContain('(UTC day)')
 
   // Pointing at the start of the axis reads an earlier day, and the way back is labelled.
-  const plot=chart.locator('svg')
+  const plot=chart.locator('.quota-plot > svg')
   const box=(await plot.boundingBox())!
   await page.mouse.move(box.x+60,box.y+box.height/2)
   await expect(readout.locator('header strong')).not.toHaveText(latest)
@@ -242,9 +242,15 @@ test('each account gets a source lane, a range split, and a source in the readou
 test('an account\'s current weekly window says how much of it was used here and elsewhere', async ({page})=>{
   await page.setViewportSize({width:1200,height:900})
   await openSegment(page,'Quota')
-  // The account card: one bar on the quota's own scale, and the same parts in words.
+  // The account card: one bar per window on the quota's own scale, split by source, and
+  // the same parts in words. The bar's fill is the window's used share and its empty rest
+  // what is left, so no second bar and no "% left" figure restate it.
   const card=page.locator('.quota-account-card').filter({hasText:'work'})
   const weekly=card.locator('.quota-capacity').filter({hasText:'Weekly window'})
+  await expect(weekly.locator('.quota-share-bar')).toHaveCount(1)
+  await expect(weekly.locator('meter')).toHaveCount(0)
+  await expect(weekly.locator(':scope > div > strong')).toHaveText('38.2% used')
+  await expect(page.locator('.quota-account-grid')).not.toContainText(/% left/)
   const shares=weekly.locator('.quota-window-shares')
   await expect(shares.locator('.quota-share-part')).toHaveText(['24% swe-mux sessions','1% not swe-mux','11% used elsewhere','2% untracked'])
   await expect(shares.locator('.quota-share-bar')).toHaveAttribute('aria-label',/^Weekly window since its reset, .+: 24% swe-mux sessions · 1% not swe-mux · 11% used elsewhere · 2% untracked$/)
@@ -254,8 +260,17 @@ test('an account\'s current weekly window says how much of it was used here and 
   const mine=(await shares.locator('.quota-share-bar > .quota-source-swe_mux').boundingBox())!
   // 24 points of a 100-point limit draws as about a quarter of the bar.
   expect(mine.width/bar.width).toBeCloseTo(0.24,1)
-  // An account with no attribution yet shows its plain reading and nothing invented.
-  await expect(page.locator('.quota-account-card').filter({hasText:'personal'}).locator('.quota-window-shares')).toHaveCount(0)
+  // An account with no attribution yet keeps the same one bar, filled with its plain
+  // reading, and invents nothing about where that came from.
+  const personal=page.locator('.quota-account-card').filter({hasText:'personal'})
+  const plain=personal.locator('.quota-capacity').filter({hasText:'Weekly window'})
+  await expect(plain.locator('.quota-share-bar > span')).toHaveCount(1)
+  await expect(plain.locator('.quota-share-bar > .quota-share-used')).toHaveCount(1)
+  await expect(plain.locator('.quota-share-part')).toHaveCount(0)
+  await expect(plain.locator('.quota-share-bar')).toHaveAttribute('aria-label',/^Weekly window: \d+(\.\d)?% used$/)
+  // Each account is named beside its provider's mark, which carries the provider's name.
+  await expect(card.locator('header .quota-account-name .provider-glyph')).toHaveAttribute('aria-label',/\S/)
+  await expect(card.locator('header .quota-account-name .provider-mark')).toHaveCount(1)
 
   // The history chart answers the same question for every charted account.
   await page.getByRole('tab',{name:'History',exact:true}).click()
@@ -263,6 +278,9 @@ test('an account\'s current weekly window says how much of it was used here and 
   await expect(now).toHaveCount(1)
   await expect(now).toContainText('24% swe-mux sessions')
   await expect(now.locator('.quota-value')).toHaveText('38.2% used')
+  // The chart's rows name their accounts the same way the cards do: mark, then name.
+  await expect(now.locator('th .quota-account-name .provider-mark')).toHaveCount(1)
+  await expect(page.locator('.quota-readout tbody th .quota-account-name .provider-mark')).toHaveCount(2)
 })
 
 test('the attribution list reads the stored intervals through a well-formed request', async ({page})=>{

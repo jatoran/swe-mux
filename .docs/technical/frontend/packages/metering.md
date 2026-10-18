@@ -20,6 +20,8 @@ Secondary navigation retains short visible tabs, and extra filters use a bounded
 `UsageDashboardView.tsx` owns Summary, Trends, and Models, the source picker, and explicit collection operations.
 `UsageModelBreakdown.tsx` aggregates by exact source/model identity and offers selected-model history.
 `QuotaAnalytics.tsx` owns Current, History, Resets, and Attribution and fetches only the evidence needed by the selected view.
+Its `WindowShares` is the one bar a window draws, in the cards and in History's window-now table: a source split where attribution reaches the window, the plain reading otherwise.
+Its `AccountName` leads every account name in those views with `harnessMark`; `usageAnalytics.ts`'s `accountNameLabel` is the name without the provider, and `accountDisplayLabel` keeps it for text that cannot carry a mark.
 Current readings are reloaded once a minute while the document is visible; quota provider polling remains owned by the backend.
 That minute reload keeps the previous series on screen until its replacement lands, and only a changed provider, account, range, or point resolution discards it, so the History chart neither flashes nor loses the moment being inspected.
 `quotaTimeline.ts` is the History chart's pure half: readings per window, the requested-range axis domain, outage gap splitting, calendar ticks in local time or UTC days, as-of inspection, the source-lane cells and their merging, totals, and wording, the current-window shares (`windowShares`) the account cards and the chart both draw, and the shared window names and time wording.
@@ -58,8 +60,8 @@ Anchored viewport popovers and summaries.
 The switcher's stranded-session notice (a Codex login a switch left live sessions on) is one collapsed line per login that expands to the sentence, a dismiss, and a "never show this again" checkbox.
 `noticePrefs.ts` owns the persistent half: a closed vocabulary of notice ids written to the `notices` device-settings domain under the canonical `desktop` profile, republished on `mux:settings-changed`, with the undo under the explainer in Settings -> Accounts.
 The for-now half is a module-level set in `ProviderAccounts.tsx` keyed by `strandedNoticeKey` (provider and login, never the count) and pruned when the login stops being stranded.
-Each saved-account row names quota periods inline with its figures (`remaining/5h`, `remaining/7d`, `fable`) instead of relying on a detached heading row.
-The quota refresh age stays right-aligned on the account identity line, leaving the quota line to compare usage only.
+Each saved-account row names quota periods inline with its figures (`/5h`, `/7d`, `fable`) instead of relying on a detached heading row, and drops the `/5h` and `/7d` qualifiers in a compact tier when the UI scale leaves a Fable row too narrow (an `account-row` container query in `style.css`, decided popover-wide by `data-fable`).
+The live-session count and the quota refresh age sit right-aligned on the account identity line, count first, leaving the quota line to compare usage only.
 The expanded sidebar uses one icon-led row for a boxed live-session count, boxed process-tree count, rounded whole-system CPU, and swe-mux process-tree working set, with full labels in its tooltip and accessible name.
 
 The session count leads because it is the operator's own unit of work and the one figure there that is always knowable.

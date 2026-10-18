@@ -243,7 +243,7 @@ The app's stroke marks, kept in shared modules so one concept is one drawing whe
   That is also why a redrawn tab mark replaces its component rather than adding one beside it: `CommandKeyIcon`, `NotePencilIcon`, and `QueueClockIcon` are read by both the drawer map and the menu rows, so the two cannot drift.
   Sizes come from CSS rather than `1em`, because these surfaces run a 9-10 px font that would render an em-sized icon unreadably small.
   The set's one live constraint is that Activity and Processes are both traces on the same rail, and are kept apart by silhouette (a bare squiggle against a framed monitor on a stand) rather than by any detail that survives 34px and not 17px.
-- `harnessIcons.tsx` is the per-harness mark (`harnessMark`), read by the sidebar row's provider prefix, the session tab strip, the account switcher, and the Run menu's launch rows.
+- `harnessIcons.tsx` is the per-harness mark (`harnessMark`), read by the sidebar row's provider prefix, the session tab strip, the account switcher, the Run menu's launch rows, and the Quota views' account names.
   A harness with no drawing falls back to its initial, which is all a browser can honestly say about a harness its daemon added and it does not know.
   The single source is load-bearing rather than tidy: a per-surface copy that knows only the harnesses with provider accounts draws `oh-my-pi` and `opencode` identically, on the surfaces whose job is telling two panes apart.
 - `noteRailIcons.ts` builds its shapes imperatively, because the note editor's rail is outside the Preact tree.

@@ -42,6 +42,9 @@ test('each account names its quota periods inline without a detached heading row
 
   await expect(page.locator('.account-popover .quota-columns')).toHaveCount(0)
   await expect(rows.first().locator('.quota-cell')).toHaveText(['5% 4h3m/5h', '63% 3d1h/7d', '30% fable'])
+  // At the default scale the row has room for every qualifier, so all three are drawn.
+  await expect(rows.first().locator('.quota-window-label')).toHaveCount(3)
+  for (const label of await rows.first().locator('.quota-window-label').all()) await expect(label).toBeVisible()
   // A hairline between columns, drawn rather than typed, and a breath between the
   // percentage and what follows it. Both measured: the separator has width, the gap
   // between the figure's box and the reset text is under one character, and the two
@@ -111,7 +114,7 @@ test('the popover counts live sessions per account and names the ones a switch l
   await page.click('.account-summary > button >> nth=0')
 
   // The selected account carries its count like any other; the badge is a fact about
-  // the row, not a warning about it.
+  // the account, not a warning about it.
   const counts = page.locator('.account-popover .account-session-count')
   await expect(counts).toHaveText(['5×', '2×'])
 
@@ -121,11 +124,79 @@ test('the popover counts live sessions per account and names the ones a switch l
   // login it started with.
   await expect(page.locator('.account-popover .account-session-notice')).toHaveCount(0)
 
-  // The badge rides in the row's own `small`, so the quota columns above it keep the
-  // geometry `quota-row` depends on: adding it must not move a percentage.
+  // The badge sits on the name line, between the name and the refresh age, so the quota
+  // line below keeps the row's full width and a percentage never moves for it.
+  const placement = await page.locator('.account-popover section > button').first().evaluate(row => {
+    const box = (selector: string) => row.querySelector(selector)!.getBoundingClientRect()
+    const name = box(':scope > strong'), count = box(':scope > .account-session-count')
+    const age = box(':scope > .account-refresh-age'), quota = box('.quota-row')
+    return {
+      afterName: count.left - name.right,
+      beforeAge: age.left - count.right,
+      onNameLine: count.top < name.bottom && count.bottom > name.top,
+      aboveQuota: count.bottom <= quota.top + 1,
+    }
+  })
+  expect(placement.afterName).toBeGreaterThanOrEqual(0)
+  expect(placement.beforeAge).toBeGreaterThan(0)
+  expect(placement.onNameLine).toBe(true)
+  expect(placement.aboveQuota).toBe(true)
+  await expect(page.locator('.account-popover .quota-row .account-session-count')).toHaveCount(0)
   const cells = await page.locator('.account-popover .quota-cell-session b').evaluateAll(nodes =>
     nodes.map(node => Math.round(node.getBoundingClientRect().left)))
   expect(new Set(cells).size).toBe(1)
+})
+
+test('a Fable row fits the popover at a large UI scale and stays in columns with every other row', async ({ page }) => {
+  // The popover is a fixed width while its text scales with the chrome, so at 1.4x the
+  // full Fable row (38ch) no longer fits the ~34ch it is given. A Codex account with the
+  // widest weekly countdown sits in the other section, because the columns have to agree
+  // across sections and not only within one.
+  await page.goto('/account-switcher-harness.html?accounts=multi&codex=1&scale=1.4')
+  await page.click('.account-summary > button >> nth=0')
+  const popover = page.locator('.account-popover')
+  await expect(popover.locator('.quota-row')).toHaveCount(4)
+
+  // Nothing overruns: not a row, not the popover, not the Fable label inside its track.
+  const overflow = await popover.evaluate(node => ({
+    popover: node.scrollWidth - node.clientWidth,
+    rows: [...node.querySelectorAll('section > button')].map(row => row.scrollWidth - row.clientWidth),
+    fable: [...node.querySelectorAll('.quota-cell-fable .quota-window-label')].map(label => label.scrollWidth - label.clientWidth),
+  }))
+  expect(overflow.popover).toBeLessThanOrEqual(0)
+  for (const row of overflow.rows) expect(row).toBeLessThanOrEqual(0)
+  // Both readable Claude rows carry the column, the one without a Fable reading included.
+  expect(overflow.fable.length).toBe(2)
+  for (const label of overflow.fable) expect(label).toBeLessThanOrEqual(0)
+  await expect(popover.locator('.quota-cell-fable .quota-window-label').first()).toBeVisible()
+
+  // The compact tier drops the 5h and weekly qualifiers, on every row in both sections.
+  for (const label of await popover.locator(':is(.quota-cell-session,.quota-cell-weekly) .quota-window-label').all()) await expect(label).toBeHidden()
+
+  // And it is one tier for the whole popover: Codex's columns sit under Claude's.
+  const lefts = (selector: string) => popover.locator(selector).evaluateAll(nodes =>
+    nodes.map(node => Math.round(node.getBoundingClientRect().left)))
+  for (const key of ['session', 'weekly']) {
+    const columns = await lefts(`.quota-cell-${key} b`)
+    expect(columns.length).toBe(3)
+    expect(new Set(columns).size).toBe(1)
+  }
+  // The widest countdown still reads whole in the compact weekly column.
+  await expect(popover.locator('section').nth(1).locator('.quota-cell-weekly .quota-reset')).toHaveText('29d23h')
+  const reset = await popover.locator('section').nth(1).locator('.quota-cell-weekly .quota-reset').evaluate(node => node.scrollWidth - node.clientWidth)
+  expect(reset).toBeLessThanOrEqual(0)
+})
+
+test('the qualifiers stay at a large UI scale when no account reports Fable', async ({ page }) => {
+  // The tier answers whether the row fits, not what the scale is: without a Fable column
+  // the same 1.4x row has room for every qualifier.
+  await page.goto('/account-switcher-harness.html?saved=1&codex=1&scale=1.4')
+  await page.click('.account-summary > button >> nth=0')
+  const popover = page.locator('.account-popover')
+  await expect(popover.locator('.quota-cell-fable')).toHaveCount(0)
+  const labels = popover.locator('.quota-window-label')
+  await expect(labels).toHaveCount(4)
+  for (const label of await labels.all()) await expect(label).toBeVisible()
 })
 
 test('a stranded login is one collapsed line that expands, dismisses, and can be silenced for good', async ({ page }) => {

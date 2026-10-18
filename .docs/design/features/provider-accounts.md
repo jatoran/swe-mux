@@ -319,8 +319,13 @@ the last good reading and changes no state.
   Settings -> Accounts.
   A quota percentage answers how much is left, which reliably provokes the question of where
   it went; before this the popover had no way to follow it.
-- Each provider section in the popover draws its accounts' quota as columns, headed once
-  above the rows: 5h, weekly, and Fable where the provider reports it.
+- Each popover row is two lines. The name line carries the selection mark, the account's
+  label, its live-session count, and the quota refresh age, in that order: the count and the
+  age are facts about the account rather than about one window, so the quota line below keeps
+  the row's full width for its columns.
+- Each provider section in the popover draws its accounts' quota as columns: 5h, weekly, and
+  Fable where the provider reports it. Each figure names its own window inline (`/5h`, `/7d`,
+  `fable`), so there is no detached heading row.
   The same figures joined into a sentence read fine for one account and stop reading at all
   for several - `5% 4h3m - 63% 3d1h` and `100% 22m - 7% 6d23h` are different lengths, so
   stacked, no two percentages sit above each other and the eye cannot compare the thing the
@@ -329,12 +334,26 @@ the last good reading and changes no state.
   because a row that skipped one would shift every column after it; the Fable column is the
   exception and belongs to the section rather than the row, so a provider that never reports
   it carries no empty third column.
-  Column tracks are sized in `ch` against a pinned font, which is the whole mechanism: the
-  headings are a `div` and the figures live in a `small` inside a `button`, so they are
-  separate formatting contexts and no `auto` track could line them up with each other.
+  Column tracks are sized in `ch` against the forced monospace UI font and never from a row's
+  content, which is the whole mechanism: every row is its own grid inside its own `button`, so
+  no `auto` track could line one row up with another, while a track that ignores content
+  resolves identically in every row of the same width.
   The percentage is right-aligned within its track so `5%` and `100%` end level.
-  `frontend/test/renderer/account-switcher.spec.ts` measures the column positions, because
-  this geometry is pure CSS and invisible to unit tests.
+- **The columns adapt to the UI scale in two tiers, and the tier belongs to the popover.**
+  The popover is a fixed width while every glyph in it scales with `--ui-scale`, so a Fable
+  row that needs 38ch has about 34 at 1.4x and used to overrun the row.
+  A container query on each row's quota line (`account-row`, measured in that line's own
+  font) switches every row to a compact tier when the full one does not fit: the `/5h` and
+  `/7d` qualifiers drop - those two columns keep their fixed order and their countdowns
+  already read as hours and days, as the sidebar's grid draws them - and `fable` stays,
+  because it is the one column with no countdown to identify it.
+  Narrower still, the Fable label ellipsizes inside its track rather than overrunning.
+  The threshold depends on whether *any* section draws a Fable column (`data-fable` on the
+  popover), not on each section's own, because a per-section tier would put Codex's 5h and
+  weekly columns at different offsets from Claude's.
+  `frontend/test/renderer/account-switcher.spec.ts` measures the column positions in both
+  tiers and across both sections, because this geometry is pure CSS and invisible to unit
+  tests.
   A failed poll invalidates the whole account and replaces its cells with `unavailable`,
   the same rule `providerQuotaWindows` applies, rather than showing a stale mix that reads
   as current.
