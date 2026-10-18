@@ -116,8 +116,11 @@
 .quota-source-elsewhere{fill:var(--red);background:var(--red)}
 .quota-source-uncertain{fill:var(--muted);background:var(--muted)}
 .quota-source-untracked{background:repeating-linear-gradient(135deg,var(--muted) 0 2px,transparent 2px 5px)}
-/* Outranks `.quota-capacity>div`, the card's label row, which would make this a flex row. */
-.quota-window-shares,.quota-capacity>.quota-window-shares{display:grid;gap:4px;min-width:0}
+/* Outranks `.quota-capacity>div`, the card's label row, which would make this a flex row.
+   The explicit `1fr` track matters as much: that rule's `justify-content:space-between`
+   stops an `auto` track stretching, so a bar with no words under it (a plain reading, whose
+   fill is a percentage of the bar and contributes no width) collapsed to nothing. */
+.quota-window-shares,.quota-capacity>.quota-window-shares{display:grid;grid-template-columns:minmax(0,1fr);gap:4px;min-width:0}
 /* One bar per window: the fill is what is used, split by source where attribution reaches
    it, and the track behind it is what is left. */
 .quota-share-bar{display:flex;height:8px;background:var(--line);overflow:hidden}

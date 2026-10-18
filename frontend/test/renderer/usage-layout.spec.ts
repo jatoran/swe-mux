@@ -268,6 +268,14 @@ test('an account\'s current weekly window says how much of it was used here and 
   await expect(plain.locator('.quota-share-bar > .quota-share-used')).toHaveCount(1)
   await expect(plain.locator('.quota-share-part')).toHaveCount(0)
   await expect(plain.locator('.quota-share-bar')).toHaveAttribute('aria-label',/^Weekly window: \d+(\.\d)?% used$/)
+  // The bar spans the window block like an attributed one, and its fill is the reading's
+  // share of it. A bar with no words beneath it once collapsed to zero width.
+  const plainBar=(await plain.locator('.quota-share-bar').boundingBox())!
+  const plainFill=(await plain.locator('.quota-share-used').boundingBox())!
+  const plainBlock=(await plain.boundingBox())!
+  expect(plainBar.width/plainBlock.width).toBeGreaterThan(0.95)
+  expect(plainFill.width/plainBar.width).toBeCloseTo(0.445,2)
+  expect(bar.width/(await weekly.boundingBox())!.width).toBeGreaterThan(0.95)
   // Each account is named beside its provider's mark, which carries the provider's name.
   await expect(card.locator('header .quota-account-name .provider-glyph')).toHaveAttribute('aria-label',/\S/)
   await expect(card.locator('header .quota-account-name .provider-mark')).toHaveCount(1)
