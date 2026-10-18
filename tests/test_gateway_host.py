@@ -155,6 +155,18 @@ async def test_a_daemon_starts_a_gateway_and_connects_to_it(config: FakeConfig) 
         assert host.hub.connected
 
 
+async def test_a_started_host_says_starting_before_its_loop_runs(config: FakeConfig) -> None:
+    """`/api/health` can be asked between `start()` and the loop's first step, and
+    `stopped` there reads as a gateway that will never come: the redeploy's report
+    took it for exactly that on the operator's machine and stopped waiting."""
+    host = make_host(config)
+    await host.start()
+    try:
+        assert host.transport()["state"] == "starting"
+    finally:
+        await host.stop(quit=True)
+
+
 async def test_a_quitting_daemon_takes_the_gateway_with_it(config: FakeConfig) -> None:
     host = make_host(config)
     await host.start()

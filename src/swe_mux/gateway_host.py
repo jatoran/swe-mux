@@ -335,6 +335,10 @@ class GatewayHost:
         self.started = True
         self._stopping = False
         self.unavailable_reason = ""
+        # Starting from this instant, not from when the loop first runs: `/api/health`
+        # can be asked in between, and `stopped` there reads as a gateway that will
+        # never come (the redeploy's report took it for exactly that, 2026-10-18).
+        self.state = STATE_STARTING
         self._task = background.start(GATEWAY_HOST_LOOP, self._supervise)
 
     async def stop(self, *, quit: bool) -> None:

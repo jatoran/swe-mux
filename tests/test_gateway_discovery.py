@@ -10,6 +10,7 @@ only sleeps for the paths where the gateway cannot be asked.
 
 from __future__ import annotations
 
+import asyncio
 import socket
 import subprocess
 import sys
@@ -32,8 +33,10 @@ from swe_mux.gateway_discovery import (
     read_discovery,
     stop_gateway,
 )
-from swe_mux.terminal_core import protocol
+from swe_mux.terminal_core import RemoteHub, TerminalStream, protocol
 from swe_mux.terminal_gateway import gateway_command
+from tests.support.settle import until
+from tests.support.terminal_rig import DaemonHost, descriptor
 
 
 def _closed_port() -> int:
@@ -118,6 +121,57 @@ def test_a_running_gateway_is_asked_to_quit_and_goes(tmp_path: Path) -> None:
         if gateway.poll() is None:
             gateway.kill()
         gateway.wait(timeout=15)
+
+
+async def test_a_gateway_with_something_to_say_still_hears_quit(tmp_path: Path) -> None:
+    """The live failure of 2026-10-18, reproduced.
+
+    A gateway treats every authenticated control connection as its daemon and sends
+    it what it holds the moment it arrives: buffered events and a state flush for
+    each session. A quit sender that closed straight after sending left those unread,
+    Windows answered the close with a reset, and the reset discarded the gateway's
+    unread copy of `quit` - on the operator's machine the connection was accepted
+    and aborted within a millisecond, and the gateway was terminated ten seconds
+    later instead of quitting. A gateway with no sessions sends nothing, which is
+    why the plain quit test above passed throughout.
+    """
+    command = gateway_command(
+        data_dir=tmp_path, daemon_port=1, port=0, executable=sys.executable, frozen=False
+    )
+    gateway = subprocess.Popen(  # noqa: ASYNC220 - a long-lived child, waited on below
+        [*command, "--idle-exit-seconds", "60"],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    hub = RemoteHub(generation="gen-1")
+    try:
+        await until(lambda: live_identity(tmp_path) is not None, seconds=60, what="it started")
+        record = read_discovery(tmp_path)
+        assert record is not None
+        await hub.connect("127.0.0.1", int(record["control_port"]), token=str(record["token"]))
+        stream = TerminalStream(
+            64 * 1024,
+            attach_replay_bytes=None,
+            stream_id="daemon-ring",
+            remote_stream=lambda: "",
+            rebuilt=lambda: False,
+        )
+        hub.adopt(stream=stream, descriptor=descriptor(), host=DaemonHost())
+        # Answered in order, so the gateway has taken the session once this returns.
+        assert await hub.ping(10.0) is True
+        # The daemon goes; the gateway keeps the session, as it does through a restart.
+        await hub.close()
+
+        stopped = await asyncio.to_thread(stop_gateway, tmp_path)
+
+        assert stopped.outcome == STOP_QUIT, stopped
+        assert await asyncio.to_thread(gateway.wait, 15) == 0
+    finally:
+        await hub.close()
+        if gateway.poll() is None:
+            gateway.kill()
+        await asyncio.to_thread(gateway.wait, 15)
 
 
 def test_a_gateway_that_cannot_be_asked_is_terminated_by_identity(

@@ -26,6 +26,7 @@ it is.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import time
@@ -49,8 +50,12 @@ QUIT_GRACE_SECONDS = 10.0
 #: How long a terminated (and then a killed) gateway gets to disappear.
 TERMINATE_GRACE_SECONDS = 5.0
 POLL_SECONDS = 0.1
-#: How long sending `quit` may take, connection and handshake included.
-QUIT_SEND_SECONDS = 5.0
+#: How long a gateway asked to quit gets to close the connection it was asked on,
+#: which it does on its way out.
+QUIT_CLOSE_WAIT_SECONDS = 5.0
+#: How long sending `quit` may take: the connection and handshake, the send, and the
+#: wait for the gateway to close its end.
+QUIT_SEND_SECONDS = 15.0
 #: Two readings of one process's creation time agree to well inside this.
 CREATED_AT_TOLERANCE_SECONDS = 0.001
 
@@ -161,6 +166,14 @@ async def send_quit(record: dict[str, Any], *, name: str = "terminal-gateway-qui
     try:
         peer.notify({"t": QUIT})
         await peer.drain()
+        # Then wait for the gateway to close its end, reading whatever it sends,
+        # rather than closing ours first. A gateway treats every authenticated
+        # connection as its daemon and sends it what it holds on arrival; closing with
+        # that unread makes Windows reset the connection, and the reset discards the
+        # gateway's unread copy of `quit` (2026-10-18: accepted and aborted inside a
+        # millisecond on the operator's machine, and terminated ten seconds later).
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(peer.wait_closed(), QUIT_CLOSE_WAIT_SECONDS)
     except PeerClosed:
         return False
     finally:
