@@ -85,6 +85,7 @@ from .frontend_overlay import (
     log_choice,
     resolve_frontend_dir,
 )
+from .gateway_host import GatewayHost
 from .ghost_windows import GhostWindowSweeper
 from .git_monitor import GitMonitor
 from .git_provenance import GitProvenanceService
@@ -1402,6 +1403,34 @@ def _queue_writer(events: EventBus) -> OperatorWriter:
     return write
 
 
+async def _start_terminal_gateway(
+    app: web.Application, config: Config, supervisor_client: SupervisorClient | None
+) -> GatewayHost:
+    """Build the terminal gateway host, publish it, and start it when it can run.
+
+    The gateway carries terminals from the PTY supervisor, so without one there is
+    nothing for it to carry and terminals stay on this daemon.
+    """
+    gateway_host = GatewayHost(config, generation=app[keys.DAEMON_GENERATION])
+    publish(app, {keys.TERMINAL_GATEWAY: gateway_host})
+    if supervisor_client is None:
+        gateway_host.mark_unavailable("no PTY supervisor is attached")
+    else:
+        await gateway_host.start()
+    return gateway_host
+
+
+async def _stop_terminal_gateway(app: web.Application, intent: str) -> None:
+    """Leave the gateway running for the next daemon, or end it with this one."""
+    gateway_host = app.get(keys.TERMINAL_GATEWAY)
+    if gateway_host is None:
+        return
+    try:
+        await gateway_host.stop(quit=intent == "quit")
+    except Exception:  # noqa: BLE001 - one service must not strand the rest of the teardown
+        log.exception("could not stop the terminal gateway host")
+
+
 async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase by phase
     app: web.Application, timeline: StartupTimeline, predecessor_died_uncleanly: bool = False
 ) -> None:
@@ -1807,6 +1836,10 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
     publish(app, {keys.WORKER: worker_host, keys.TRANSCRIPT_SCANNER: transcript_scanner})
     canonical_telemetry.attach_worker(worker_host)
     transcript_scanner.attach_worker(worker_host)
+    # The terminal gateway (`gateway_host.py`): found or started the same way, never
+    # awaited past that, so a slow or failing gateway costs this start nothing and
+    # terminals stay on this daemon until it is up.
+    gateway_host = await _start_terminal_gateway(app, config, supervisor_client)
 
     # The monitor's branch-scoped diff is measured against the same base the Git
     # drawer uses, so the sidebar and the drawer cannot report a session's branch
@@ -1883,6 +1916,9 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
     )
     # Sampling passes run in the worker while one is ready, and here otherwise.
     process_inspector.attach_worker(worker_host)
+    # The gateway is swe-mux's own and outlives this daemon, so it is named by pid
+    # the way the supervisor is: never a session's, and its ports never a Preview's.
+    process_inspector.attach_gateway(gateway_host)
     ghost_windows = GhostWindowSweeper(
         cadence=config.ghost_window_poll_seconds,
         enabled=config.ghost_window_sweep_enabled,
@@ -3123,6 +3159,10 @@ async def _teardown_runtime(app: web.Application) -> None:  # noqa: PLR0912, PLR
     # with a supervisor attached, an unqualified exit (Ctrl-C, crash-adjacent
     # teardown) defaults to detach — the tmux model.
     intent = app[keys.SHUTDOWN_STATE]["intent"] or ("detach" if supervisor_client else "quit")
+    # Before the sessions go: a quitting daemon takes the gateway with it, and a
+    # restarting one only lets go, leaving every terminal carried until the next
+    # daemon connects.
+    await _stop_terminal_gateway(app, intent)
     sessions: SessionManager | None = app.get(keys.SESSIONS)
     if sessions is not None:
         await sessions.shutdown(intent=intent)

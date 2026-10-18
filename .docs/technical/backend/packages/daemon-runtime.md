@@ -98,7 +98,16 @@ The terminal gateway process (`../../../design/features/terminal-gateway.md`): a
 `GATEWAY_MODULES` is the exact `swe_mux` closure the process loads and `gateway_build_id` the digest over its compiled code; `tests/test_terminal_gateway.py` checks the list in a fresh interpreter.
 `gateway_command` is the one place its argv is built: `swe-mux.exe --gateway-child` frozen, `python -m swe_mux.terminal_gateway` from source.
 
-**Not:** a session's meaning (status, delivery, the event log), which stays in the daemon; not the daemon's runtime, which it never imports - the closure test is what holds that; and not yet spawned by anything, which is item 29.
+**Not:** a session's meaning (status, delivery, the event log), which stays in the daemon; and not the daemon's runtime, which it never imports - the closure test is what holds that.
+
+### `gateway_host.py`
+
+The daemon's side of the terminal gateway (`../../../design/features/terminal-gateway.md`, item 29): one supervised `terminal-gateway-host` loop that finds a running gateway through its discovery record or spawns one.
+It replaces one whose build id, protocol or ports differ (asking it to `quit` first, terminating it by identity if it stays), connects the `RemoteHub` it owns, and goes round again with backoff when the connection closes.
+`stop(quit=...)` is the teardown's choice between ending the gateway and leaving it for the next daemon.
+`transport()` and the module-level `terminal_transport(host)` are the `/api/health` block; `health()` is the `/api/diagnostics/background` one.
+
+**Not:** the gateway's process (`terminal_gateway.py`), and not ownership in the worker's sense: the gateway is spawned outside every Job and its own process group, and is never put under the daemon's reaper.
 
 ### `stall_watchdog.py`
 

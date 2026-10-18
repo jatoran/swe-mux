@@ -460,6 +460,8 @@ class ProcessInspector:
         self.daemon_pid_override: int | None = None
         # The worker process the pass runs in, when one is attached (`attach_worker`).
         self._worker: Any | None = None
+        # The terminal gateway host (`attach_gateway`), whose `pid` is infrastructure.
+        self._gateway: Any | None = None
         # The worker incarnation whose sampler holds this mirror, or None when the
         # mirror changed here (a restore, a pass run in-process) and must be loaded
         # into the worker before its next pass.
@@ -1004,6 +1006,15 @@ class ProcessInspector:
         self._worker = worker
         self._synced_generation = None
 
+    def attach_gateway(self, gateway: Any) -> None:
+        """Name the terminal gateway (a `GatewayHost`) as infrastructure, by its pid.
+
+        Like the supervisor it outlives the daemon that started it, so after a
+        restart it is no descendant of this one; from source it is not even this
+        process's image. The daemon knows it by pid regardless.
+        """
+        self._gateway = gateway
+
     def _worker_usable(self) -> bool:
         worker = self._worker
         return worker is not None and bool(getattr(worker, "ready", False))
@@ -1053,6 +1064,7 @@ class ProcessInspector:
             "sessions": facts,
             "job_pids": self._job_pids,
             "supervisor_pid": self._supervisor_pid(),
+            "gateway_pid": self._gateway_pid(),
             "daemon_pid": os.getpid(),
             "orphan_grace_seconds": self.orphan_grace_seconds,
             "session_priority": self.session_priority,
@@ -1425,6 +1437,22 @@ class ProcessInspector:
             return None
         return pid
 
+    def _gateway_pid(self) -> int | None:
+        """The terminal gateway this daemon drives, when there is one.
+
+        Read from the attached host in the daemon, and from the request's mirror
+        (`sessions.terminal_gateway_pid`) in the worker that samples for it.
+        """
+        gateway = self._gateway
+        pid = (
+            getattr(gateway, "pid", None)
+            if gateway is not None
+            else getattr(self.sessions, "terminal_gateway_pid", None)
+        )
+        if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+            return None
+        return pid
+
     def _is_own_image(self, pid: int) -> bool:
         """Whether `pid` is running swe-mux's own executable as infrastructure.
 
@@ -1564,6 +1592,12 @@ class ProcessInspector:
             handle = self._handle(supervisor)
             if handle is not None:
                 seen.add(supervisor)
+                handles.append(handle)
+        gateway = self._gateway_pid()
+        if gateway is not None and gateway not in seen:
+            handle = self._handle(gateway)
+            if handle is not None:
+                seen.add(gateway)
                 handles.append(handle)
         return handles
 

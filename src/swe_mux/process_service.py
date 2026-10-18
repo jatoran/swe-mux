@@ -57,16 +57,18 @@ SERVICE_NAME = "processes"
 class SampledSessions:
     """What a sampling pass reads from `SessionManager`, rebuilt from the daemon's facts.
 
-    `sessions` maps an id to an object whose `record` carries the fact fields, and
-    `supervisor.supervisor_pid` is the PTY supervisor's pid: the two attributes
-    `ProcessInspector` reaches through its session manager while it samples.
+    `sessions` maps an id to an object whose `record` carries the fact fields,
+    `supervisor.supervisor_pid` is the PTY supervisor's pid and `terminal_gateway_pid`
+    the terminal gateway's: the attributes `ProcessInspector` reaches through its
+    session manager while it samples.
     """
 
     def __init__(self) -> None:
         self.sessions: dict[str, SimpleNamespace] = {}
         self.supervisor = SimpleNamespace(supervisor_pid=None)
+        self.terminal_gateway_pid: int | None = None
 
-    def apply(self, facts: list[Any], supervisor_pid: Any) -> None:
+    def apply(self, facts: list[Any], supervisor_pid: Any, gateway_pid: Any = None) -> None:
         sessions: dict[str, SimpleNamespace] = {}
         for entry in facts:
             if not isinstance(entry, dict) or not isinstance(entry.get("id"), str):
@@ -74,8 +76,12 @@ class SampledSessions:
             record = SimpleNamespace(**{name: entry.get(name) for name in SESSION_FACT_FIELDS})
             sessions[record.id] = SimpleNamespace(record=record)
         self.sessions = sessions
-        valid = isinstance(supervisor_pid, int) and not isinstance(supervisor_pid, bool)
-        self.supervisor.supervisor_pid = supervisor_pid if valid else None
+        self.supervisor.supervisor_pid = _pid_or_none(supervisor_pid)
+        self.terminal_gateway_pid = _pid_or_none(gateway_pid)
+
+
+def _pid_or_none(value: Any) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
 
 
 class DeltaEncoder:
@@ -219,7 +225,11 @@ class ProcessService:
     def _configure(self, request: dict[str, Any]) -> None:
         inspector = self.inspector
         facts = request.get("sessions")
-        self.sessions.apply(facts if isinstance(facts, list) else [], request.get("supervisor_pid"))
+        self.sessions.apply(
+            facts if isinstance(facts, list) else [],
+            request.get("supervisor_pid"),
+            request.get("gateway_pid"),
+        )
         job_pids = request.get("job_pids")
         if isinstance(job_pids, dict):
             inspector._job_pids = {

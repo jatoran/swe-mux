@@ -24,6 +24,7 @@ from ..deterministic_consumers import DeterministicConsumerService
 from ..errors import NotFound
 from ..event_bus import EventBus
 from ..executor_accounting import LEDGER as EXECUTOR_LEDGER
+from ..gateway_host import terminal_transport
 from ..gil_switch import gil_switch_interval_ms
 from ..harness import (
     detect_installations_with_versions,
@@ -459,6 +460,13 @@ async def get_background_health(request: web.Request) -> web.Response:
             "worker": (
                 worker.health() if (worker := request.app.get(keys.WORKER)) is not None else None
             ),
+            # The terminal gateway (`gateway_host.py`): which process, found or
+            # started, how often replaced or restarted, and the connection to it.
+            "terminal_gateway": (
+                gateway.health()
+                if (gateway := request.app.get(keys.TERMINAL_GATEWAY)) is not None
+                else None
+            ),
             # Where the loop was during each stall the monitor counted, from the
             # GIL-free dump the loop arms itself. `loop_lag` says how long; this says
             # what, and whether a starved canary thread makes it a native-code stall.
@@ -786,6 +794,7 @@ async def _doctor_report(app: web.Application) -> dict[str, Any]:
             getattr(supervisor, "supervisor_revision", None) if supervisor is not None else None
         ),
         "supervisor_revision_shipped": SUPERVISOR_REVISION,
+        "terminal_transport": terminal_transport(app.get(keys.TERMINAL_GATEWAY)),
     }
     remote = await tailscale_status(config.port, tailnet_enabled=config.tailnet_enabled)
     firewall: dict[str, Any] = {"supported": False}

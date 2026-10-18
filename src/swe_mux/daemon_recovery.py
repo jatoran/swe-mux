@@ -4,6 +4,9 @@ The durable record names one process generation, not a reusable PID. A shared
 OS lock fences termination against intentional shutdown and in-process PTY
 creation. Once a generation attempts a local PTY, forced recovery is revoked
 for its lifetime. The PTY supervisor is only queried, never changed or stopped.
+The terminal gateway is named in the record (`terminal_gateway`, written by
+`gateway_host.py`) and never signalled: recovery terminates the one daemon pid,
+never a tree, and the gateway carries every terminal across the replacement.
 """
 
 from __future__ import annotations
@@ -159,6 +162,7 @@ def register_daemon(data_dir: Path, token: str | None) -> bool:
                 "ready": False,
                 "local_pty": False,
                 "supervisor": None,
+                "terminal_gateway": None,
                 "intent": None,
                 "intent_at": None,
             },
@@ -254,7 +258,15 @@ def mark_ready(data_dir: Path, supervisor_pid: int | None) -> None:
 
 
 def terminate_generation(record: dict[str, Any]) -> bool:
-    """Terminate just the fenced daemon; psutil rechecks PID reuse on terminate."""
+    """Terminate just the fenced daemon; psutil rechecks PID reuse on terminate.
+
+    Never a process the record names as the supervisor or the terminal gateway,
+    whatever pid the daemon field holds: both outlive the daemon on purpose.
+    """
+    for protected in ("supervisor", "terminal_gateway"):
+        other = record.get(protected)
+        if isinstance(other, dict) and other.get("pid") == record.get("pid"):
+            return False
     if process_state(record) != "alive":
         return process_state(record) == "gone"
     process = psutil.Process(record["pid"])

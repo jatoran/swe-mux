@@ -49,6 +49,7 @@ if TYPE_CHECKING:
     from .event_bus import EventBus
     from .fleet_intelligence import FleetIntelligence
     from .frontend_overlay import FrontendChoice, OverlayStore
+    from .gateway_host import GatewayHost
     from .ghost_windows import GhostWindowSweeper
     from .git_monitor import GitMonitor
     from .git_provenance import GitProvenanceService
@@ -228,6 +229,9 @@ VOICE_STORE: web.AppKey[VoiceStore] = web.AppKey("voice_store")
 #: The worker process host (`worker_host.py`). Present whenever the runtime is,
 #: whether or not the worker is enabled; `health()` says which.
 WORKER: web.AppKey[WorkerHost] = web.AppKey("worker")
+#: The terminal gateway host (`gateway_host.py`). Present whenever the runtime is,
+#: whether or not the gateway is enabled; `transport()` says where terminals go.
+TERMINAL_GATEWAY: web.AppKey[GatewayHost] = web.AppKey("terminal_gateway")
 #: The native-conversation discovery walk, in the worker when it is ready
 #: (`transcript_discovery.py`).
 TRANSCRIPT_SCANNER: web.AppKey[TranscriptScanner] = web.AppKey("transcript_scanner")

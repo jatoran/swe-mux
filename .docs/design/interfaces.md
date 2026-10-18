@@ -101,6 +101,7 @@ It also reports `session_recovery: bool`, `cold_sessions`, and `inactive_session
 `cold_sessions` counts sessions rebuilt because their processes died with a daemon that never recorded how they ended (`features/session-recovery.md`).
 A non-zero cold count is the signal that something took the whole app down, which no other field says.
 `inactive_sessions` counts intentional Stand down rows with no process.
+`terminal_transport` says which process a browser opens terminals on (`features/terminal-gateway.md`): `{transport: "gateway", state: "running", port}` while the daemon is connected to a terminal gateway, and otherwise `{transport: "daemon", state, port: null, reason?}`, where `state` is `disabled` (`terminal_gateway_enabled` off), `unavailable` (no PTY supervisor, so nothing for a gateway to carry), `stopped`, `starting` or `backoff`, and `reason` is why when there is one.
 Shutdown exists only when the daemon
 was launched with desktop control, accepts IP-loopback peers only, compares the generated token
 in constant time, and returns `202 {status: "shutting_down", mode}`. An optional JSON body
@@ -718,7 +719,7 @@ The process behind that protocol (`design/features/terminal-gateway.md`, item 28
   503 with `status: "starting"` until it has a supervisor and has heard from a daemon; 200 with `status: "ok"` after.
 
 It announces itself in `<data_dir>/terminal-gateway.json`, written atomically once both listeners are bound and removed on exit while it is still its own: `{pid, created_at, started_at, port, hosts, control_port, token, build, build_id, protocol, daemon_port}`.
-`created_at` is the process's creation time, so a reader can tell a recycled pid from the gateway that wrote the record; `build_id` is the digest a daemon compares against its own copy of the gateway's code before adopting a gateway it did not start (item 29).
+`created_at` is the process's creation time, so a reader can tell a recycled pid from the gateway that wrote the record; `build_id` is the digest a daemon compares against its own copy of the gateway's code before adopting a gateway it did not start (`gateway_host.py`), and a gateway whose `build_id`, `protocol`, `port` or `daemon_port` does not match is asked to `quit` and replaced.
 `<data_dir>/terminal-gateway.lock` is held exclusively for the process's life and is not data.
 
 ## Canonical Projects and Groups
@@ -2419,6 +2420,15 @@ venv launcher, else `null`), `port`, `spawns`, `restarts`, `generation` (how man
 connected; a service reloads a worker whose generation it has not pushed its state to),
 `last_exit_code`, `last_error`, `uptime_seconds`, the `services` it hosts, its `build`,
 `notices_unrouted`, and `connection` (the framed IPC connection's counters, or `null`).
+
+`terminal_gateway` is the terminal gateway host (`design/features/terminal-gateway.md`): `enabled`
+(`terminal_gateway_enabled`), `state` (`disabled`, `unavailable`, `stopped`, `starting`, `running`,
+`backoff`), `ready`, `reason` (why it is `unavailable`), `gateway` (its discovery record without the
+token, or `null`), `spawned_here` (this daemon started it rather than finding it), `configured_port`,
+`build_id` (this daemon's own build of the gateway), `spawns`, `adoptions` (gateways a previous
+daemon left running), `replacements` and `last_replacement` (gateways replaced for another build,
+protocol or port, and why the last one was), `restarts`, `last_exit_code`, `last_error`,
+`uptime_seconds`, and `connection` (`RemoteHub.stats()`).
 
 `governor` is load shedding (`background.pace` / `background.defer`): `attached`, whether the
 loop's recent lag puts it in `shedding` (`recent_max_lag_seconds` over `window_seconds`, against

@@ -95,6 +95,7 @@ A spawned replacement is tracked before it publishes its startup record, prevent
 A daemon that starts while the record names a live generation with no planned handoff does not take the record (`register_daemon` returns `False` and says so in `lifecycle.log`): it is a duplicate about to lose its port bind, and taking the record made the monitor restart a daemon that was fine.
 Manual tray restart pauses and fences the monitor; tray Quit stops it before requesting shutdown.
 Recovery never invokes supervisor shutdown, kills a process tree, or rebuilds a bundle.
+It never signals the terminal gateway either (`terminal-gateway.md`): the record names it, `terminate_generation` refuses a record whose daemon pid is the gateway's or the supervisor's, and the replacement daemon finds the same gateway and connects to it, so terminals keep echoing through the recovery.
 Every recovery state transition and failure goes to the rotating `lifecycle.log`.
 
 ## Listener guard
@@ -119,7 +120,7 @@ POSIX selector loops already survive a failed accept, so there the factory is th
 
 ## Session protection and durable authority
 
-`daemon-recovery.json` records the PID, OS creation timestamp, desktop-token digest, readiness, lifetime local-PTY revocation, attached supervisor identity, and planned shutdown intent.
+`daemon-recovery.json` records the PID, OS creation timestamp, desktop-token digest, readiness, lifetime local-PTY revocation, attached supervisor identity, the terminal gateway's identity (`terminal_gateway`, pid and creation time, once the daemon has connected to one), and planned shutdown intent.
 It contains no raw authentication secret and is replaced atomically.
 `daemon-recovery.lock` is a persistent file whose byte lock on Windows or `flock` on POSIX is owned by the kernel and released on process exit.
 Daemon registration, authority changes, and the recovery decision share this fence.

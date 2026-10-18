@@ -193,6 +193,11 @@ def test_session_facts_are_exactly_what_the_pass_reads() -> None:
     assert list(sessions.sessions) == ["s"], "a malformed entry is skipped"
     assert sessions.sessions["s"].record.pid == 4242
     assert sessions.supervisor.supervisor_pid is None, "a bool is not a pid"
+    assert sessions.terminal_gateway_pid is None
+    sessions.apply([facts], supervisor_pid=31, gateway_pid=47)
+    assert (sessions.supervisor.supervisor_pid, sessions.terminal_gateway_pid) == (31, 47)
+    sessions.apply([facts], supervisor_pid=31, gateway_pid=False)
+    assert sessions.terminal_gateway_pid is None, "a bool is not a pid"
 
 
 async def test_the_worker_refuses_to_sample_before_it_is_loaded() -> None:

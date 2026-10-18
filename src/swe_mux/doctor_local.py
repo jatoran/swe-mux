@@ -132,8 +132,9 @@ _DAEMON_ONLY: tuple[tuple[str, str, str, str], ...] = (
         "daemon",
         "Daemon health and PTY supervisor",
         "Needs a running daemon: whether it is healthy, which UI build it serves, "
-        "whether the PTY supervisor is attached, and whether any supervised session "
-        "is unadopted are all facts about a live process.",
+        "whether the PTY supervisor is attached, whether any supervised session "
+        "is unadopted, and which process carries the terminals are all facts about "
+        "a live process.",
         "",
     ),
     (

@@ -299,6 +299,9 @@ def _daemon_checks(health: dict[str, Any], daemon: dict[str, Any]) -> list[dict[
                 "source checkout follows the supervisor update steps in CLAUDE.md.",
             )
         )
+    transport_check = _terminal_transport_check(health.get("terminal_transport"))
+    if transport_check is not None:
+        checks.append(transport_check)
     unadopted = int(health.get("supervisor_unadopted", 0) or 0)
     if unadopted:
         checks.append(
@@ -332,6 +335,53 @@ def _daemon_checks(health: dict[str, Any], daemon: dict[str, Any]) -> list[dict[
         )
     )
     return checks
+
+
+def _terminal_transport_check(transport: Any) -> dict[str, Any] | None:
+    """Which process carries the terminals (`gateway_host.py`), and whether that is wanted.
+
+    Off is not a fault: the daemon serving terminals itself is how every install
+    worked before the gateway, and it stays the fallback. Enabled and not running is
+    worth a warning, because terminals then pause whenever the daemon does - the
+    exact thing the gateway is for - while everything else looks fine.
+    """
+    if not isinstance(transport, dict):
+        return None  # a daemon from before the gateway, which reports nothing
+    state = str(transport.get("state") or "")
+    if transport.get("transport") == "gateway":
+        return _check(
+            id="daemon.terminal_transport",
+            category="daemon",
+            title="Terminal gateway",
+            status="ok",
+            severity="optional",
+            detail=f"Terminals are carried by the terminal gateway on port "
+            f"{transport.get('port')}, so typing keeps working through a daemon stall "
+            "or restart.",
+        )
+    if state == "disabled":
+        return _check(
+            id="daemon.terminal_transport",
+            category="daemon",
+            title="Terminal gateway",
+            status="ok",
+            severity="info",
+            detail="Terminals are served by the daemon (terminal_gateway_enabled is off).",
+        )
+    reason = str(transport.get("reason") or "")
+    return _check(
+        id="daemon.terminal_transport",
+        category="daemon",
+        title="Terminal gateway",
+        status="warn",
+        severity="optional",
+        detail=f"The terminal gateway is enabled but not carrying terminals (state "
+        f"{state or 'unknown'}{': ' + reason if reason else ''}), so they are served by "
+        "the daemon and pause whenever it does.",
+        remedy="Read terminal-gateway.log and terminal-gateway-console.log in the data "
+        "directory; the daemon retries by itself with backoff, and "
+        "/api/diagnostics/background carries the `terminal_gateway` block.",
+    )
 
 
 def _harness_checks(harnesses: dict[str, Any]) -> list[dict[str, Any]]:

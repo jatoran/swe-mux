@@ -261,6 +261,42 @@ def test_the_supervisor_is_reserved_but_never_traversed(
     assert reserved == {900, 950}
 
 
+def test_the_terminal_gateway_is_reserved_after_its_daemon_is_gone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """It outlives the daemon that started it, and from source it is not our image.
+
+    So neither the descendant walk nor the image test can find it; the pid the daemon
+    holds does - from the attached host in the daemon, and from the sampling request's
+    mirror in the worker.
+    """
+    daemon = FakeProcess(900, 1, 90.0, image=APP_IMAGE, argv=[APP_IMAGE, "--daemon-child"])
+    # ppid 700: the daemon that started it, long since replaced.
+    gateway = FakeProcess(
+        970, 700, 80.0, image=OTHER_IMAGE, argv=[OTHER_IMAGE, "-m", "swe_mux.terminal_gateway"]
+    )
+    install_table(monkeypatch, {900: daemon, 970: gateway}, daemon_pid=900)
+
+    unattached = inspector_for()
+    unattached._refresh_tree()
+    assert {int(h.pid) for h in unattached._infrastructure_handles()} == {900}
+
+    attached = inspector_for()
+    attached.attach_gateway(SimpleNamespace(pid=970))
+    attached._refresh_tree()
+    assert {int(h.pid) for h in attached._infrastructure_handles()} == {900, 970}
+
+    mirrored = inspector_for(SimpleNamespace(sessions={}, terminal_gateway_pid=970))
+    mirrored._refresh_tree()
+    assert {int(h.pid) for h in mirrored._infrastructure_handles()} == {900, 970}
+
+    # A host with no gateway yet names nothing.
+    idle = inspector_for()
+    idle.attach_gateway(SimpleNamespace(pid=None))
+    idle._refresh_tree()
+    assert {int(h.pid) for h in idle._infrastructure_handles()} == {900}
+
+
 def test_the_ancestor_walk_still_finds_the_shell_without_a_process_scan(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

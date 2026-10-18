@@ -372,7 +372,7 @@ All rotate, so a noisy day cannot grow an unbounded file.
 | `desktop-daemon.log`, `daemon-relaunch.log` | The console redirect held by whoever spawned the daemon: an early-startup and native-stderr crash catcher, not the structured log. |
 | `supervisor.log`, `supervisor-console.log` | The PTY supervisor's own logs. |
 | `worker.log`, `worker-console.log` | The worker process's log (10 MB × 3) and what its interpreter printed before logging started. |
-| `terminal-gateway.log`, `terminal-gateway-console.log` | The terminal gateway's log (10 MB × 3) and what its interpreter printed before logging started. Absent until the daemon starts a gateway, which no release does yet (`DAEMON_LOAD_ISOLATION.md` items 29 and 34). |
+| `terminal-gateway.log`, `terminal-gateway-console.log` | The terminal gateway's log (10 MB × 3) and what its interpreter printed before logging started. Present only where the daemon has started a gateway, which it does only with `terminal_gateway_enabled` on (off by default until `DAEMON_LOAD_ISOLATION.md` item 34). |
 | `redeploy.log`, `redeploy-result.json` | The frozen-app redeploy's output and last verdict. |
 | `lifecycle.log`, `git-provenance-backfill.log` | The lifecycle ledger and the provenance backfill's log. |
 

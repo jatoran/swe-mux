@@ -5,8 +5,8 @@ Every daemon stall - a GIL-heavy reconcile, a slow scan, a restart - therefore f
 The terminal gateway is a process of its own that carries terminals instead: browser -> gateway -> supervisor and back, with the daemon told about each keystroke afterwards.
 The daemon can stall, or restart, and typing keeps echoing.
 
-Status (2026-10-18): the gateway process exists and is tested end to end (item 28); the daemon does not yet spawn it, hand it sessions or send browsers to it.
-That is items 29 to 32, and `terminal_gateway_enabled` stays off until item 34.
+Status (2026-10-18): the gateway process exists (item 28) and, with `terminal_gateway_enabled` on, the daemon finds or starts it and owns its lifecycle (item 29).
+The daemon does not yet hand it sessions or send browsers to it; that is items 30 to 32, and the switch stays off until item 34.
 
 ## What runs where
 
@@ -68,14 +68,37 @@ The gateway binds the daemon's host set (loopback, the tailnet address, the WSL 
 - **It exits** when the daemon says it is quitting (`quit`), and when there has been no daemon attached and nothing live under the supervisor for `--idle-exit-seconds` (120 by default).
   A live session keeps it running however long the daemon is away, which is what a slow redeploy needs.
 - **Its process**: `cwd` in the data directory, so it never locks an app tree against a rebuild; above-normal priority (`--priority`); the daemon's GIL switch interval and a 1 ms timer resolution; its own rotating `terminal-gateway.log` (10 MB x 3), and `crash.log` for a native crash, like every swe-mux process; `terminal-gateway-console.log` (`CONSOLE_LOG_NAME`) is the name its spawner gives the stderr redirect for what the interpreter says before logging starts.
-- **How it is started**: frozen as `swe-mux.exe --gateway-child`, from source as `python -m swe_mux.terminal_gateway` (`terminal_gateway.gateway_command`), never as `-m swe_mux`, which would load the whole daemon.
+- **How it is started**: by the daemon (below), frozen as `swe-mux.exe --gateway-child` and from source as `python -m swe_mux.terminal_gateway` (`terminal_gateway.gateway_command`), never as `-m swe_mux`, which would load the whole daemon.
   Exit codes: 0 a stop, 3 another gateway already runs, 4 a listener that would not bind, 1 a failure.
+
+## Owned by the daemon
+
+`gateway_host.GatewayHost` is the daemon's side (item 29), started beside the worker host once the PTY supervisor is connected.
+Enabled with no supervisor it starts nothing and says why (`unavailable`), because there is nothing for a gateway to carry.
+
+- **Found before it is started.** One supervised background loop reads `terminal-gateway.json`, keeps the record only while its process is alive (pid and creation time), and connects a `RemoteHub` to it with the record's token.
+  Only when there is none does it spawn one, and the spawn and every discovery read run in threads.
+- **Replaced when it runs other code.** A gateway whose `build_id`, `protocol`, `port` or `daemon_port` differs from this daemon's is asked to `quit` over a connection of its own and waited for, and terminated by its identity if it stays (or at once, when it speaks a protocol the request cannot be sent in).
+  Quitting closes its browsers with 4011, so the restart a redeploy causes is orchestrated rather than a dropped socket.
+  A gateway this daemon started itself is never replaced for its build: it is this daemon's code by construction, so a disagreement there is logged as the bug it would be rather than becoming a restart loop.
+  A port change in config applies at the next daemon start exactly this way.
+- **Started outside the daemon's reach.** Outside every Job object (`popen_outside_job`), in a process group of its own on Windows and a session of its own on POSIX, `cwd` in the data directory, the desktop control token withheld from its environment, and stderr to `terminal-gateway-console.log` (truncated past 1 MiB).
+  The daemon's reaper never holds it, which is the difference from the worker.
+- **Started again when it dies**, with backoff from 0.5 s to 30 s reset after a minute of good service.
+  A spawn that loses the instance lock (exit 3) waits for the winner's record and uses it; one that cannot bind its port (exit 4) is reported as that.
+- **Stopped by intent**, before the sessions in teardown: a quitting daemon sends `quit` and terminates a gateway that has not left within ten seconds; a restarting daemon only closes its connection, and the gateway carries every terminal until the successor finds it.
+- **Named as swe-mux's own.** The recovery record carries its identity and desktop recovery never signals it (`daemon-resilience.md`); the process inspector reserves its pid the way it reserves the supervisor's, so it is never a session's process and its ports are never a Preview's.
+- **Reported** as `terminal_transport` on `/api/health`, which is what the frontend will read to choose a transport (item 30), as `terminal_gateway` on `/api/diagnostics/background`, and as the `daemon.terminal_transport` row of `swemux doctor`, which warns when the gateway is enabled and not carrying terminals.
+
+The build id this daemon computes and the one a freshly started gateway computes are asserted equal by a test, because the replacement rule compares them and a digest that depended on what else a process had loaded would replace every gateway on every daemon start.
 
 ## Key files
 
+- `src/swe_mux/gateway_host.py` - the daemon's side: find or start, replace, restart, stop by intent, `terminal_transport`.
 - `src/swe_mux/terminal_gateway.py` - the process: `SupervisorLink`, `TerminalGateway`, `InstanceLock`, discovery, `gateway_command`, `main`.
 - `src/swe_mux/terminal_core/gateway.py` - `GatewayHub`, the cores it hosts and the daemon connection.
 - `src/swe_mux/terminal_core/remote.py` - the daemon's mirror.
 - `src/swe_mux/terminal_core/protocol.py` - the control protocol.
 - `src/swe_mux/desktop.py` - the frozen `--gateway-child` dispatch.
 - `tests/test_terminal_gateway.py` - against a real in-process `SupervisorServer` (`tests/support/supervisor_wire.py`), ending with the gateway as a process and the daemon's loop blocked under it.
+- `tests/test_gateway_host.py` - the real gateway as a process, driven by the real host: start, adopt, replace, restart, quit.

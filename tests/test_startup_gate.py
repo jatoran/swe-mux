@@ -642,6 +642,12 @@ async def test_the_daemon_answers_its_phase_while_the_runtime_is_still_building(
         ready_payload = await ready.json()
         assert ready_payload["ok"] is True
         assert ready_payload["status"] == "ready"
+        # The gateway is off by default, so this daemon serves every terminal.
+        assert ready_payload["terminal_transport"] == {
+            "transport": "daemon",
+            "state": "disabled",
+            "port": None,
+        }
         # The phases that made up the start are readable from the answer itself.
         assert {item["name"] for item in ready_payload["phases"]} >= {
             "database-integrity",

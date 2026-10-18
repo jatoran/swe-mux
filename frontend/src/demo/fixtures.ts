@@ -388,6 +388,8 @@ export function demoConfig(): Record<string, unknown> {
     daemon_process_priority: 'above_normal',
     gil_switch_interval_ms: 5.0,
     worker_process_enabled: true,
+    terminal_gateway_enabled: false,
+    terminal_gateway_port: 0,
     ghost_window_sweep_enabled: false,
     ghost_window_poll_seconds: 5.0,
     process_evidence_retention_days: 30,

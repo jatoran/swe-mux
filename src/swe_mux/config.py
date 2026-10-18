@@ -201,6 +201,10 @@ RESTART_FIELDS = {
     "pty_supervisor_enabled",
     # The worker process is spawned once at daemon start (`worker_host.py`).
     "worker_process_enabled",
+    # The terminal gateway is found or started once at daemon start
+    # (`gateway_host.py`), and its port is passed to it on its command line.
+    "terminal_gateway_enabled",
+    "terminal_gateway_port",
     # Unexpected-loss restoration and checkpoint capture are selected once at
     # daemon start. The durable registry itself remains present for inactive
     # sessions, so this switch never controls explicit Stand down persistence.
@@ -871,6 +875,14 @@ class Config:
     # daemon and restarts with backoff. Off runs the same work in the daemon, as
     # before the worker existed. Applies at the next daemon start.
     worker_process_enabled: bool = True
+    # Browser terminals carried by a process of their own (`gateway_host.py`,
+    # `terminal_gateway.py`, `DAEMON_LOAD_ISOLATION.md` items 28-34), so a daemon
+    # stall or restart does not freeze typing. The daemon finds or starts it and it
+    # outlives a daemon restart. Off until it has proven itself on the live fleet
+    # (item 34); applies at the next daemon start.
+    terminal_gateway_enabled: bool = False
+    # The gateway's browser port. 0 is the daemon's port plus one.
+    terminal_gateway_port: int = 0
     # Windows-only sweep for headless-browser windows that DWM composites even
     # though Win32 reports them hidden (ghost_windows.py). Off by config only
     # when an operator deliberately wants such a window left on screen.
@@ -1659,6 +1671,10 @@ class Config:
         root = Path(configured).expanduser() if configured else self.data_dir / "worktrees"
         return root.resolve()
 
+    def terminal_gateway_listen_port(self) -> int:
+        """The port the terminal gateway is started on: the set one, or the daemon's plus one."""
+        return self.terminal_gateway_port or self.port + 1
+
     def public_dict(self) -> dict[str, object]:
         result = asdict(self)
         result["data_dir"] = str(self.data_dir)
@@ -1865,6 +1881,13 @@ class _Pattern:
 
 _RANGE_RULES: tuple[_Range, ...] = (
     _Range("port", 1, 65535, "must be between 1 and 65535"),
+    _Range(
+        "terminal_gateway_port",
+        1,
+        65535,
+        "must be 0 (the daemon's port plus one) or between 1 and 65535",
+        zero_disables=True,
+    ),
     _Range(
         "note_font_size_px",
         8,
@@ -2226,6 +2249,23 @@ def _automation_policy_errors(config: Config) -> dict[str, str]:
     return errors
 
 
+def _validate_terminal_gateway_port(config: Config, errors: dict[str, str]) -> None:
+    """The gateway's port against the daemon's, once each is valid on its own.
+
+    Its range is a `_Range`; what that cannot say is that the two must differ, and
+    that the derived default (the daemon's plus one) does not exist above 65534 -
+    which matters only to a daemon that will start a gateway, so a daemon on 65535
+    with the gateway off stays a valid config.
+    """
+    if "terminal_gateway_port" in errors or "port" in errors:
+        return
+    gateway_port = config.terminal_gateway_listen_port()
+    if gateway_port == config.port:
+        errors["terminal_gateway_port"] = "must differ from the daemon's port"
+    elif gateway_port > 65535 and config.terminal_gateway_enabled:
+        errors["terminal_gateway_port"] = "must be set explicitly when the daemon's port is 65535"
+
+
 def _validate(config: Config) -> None:
     errors: dict[str, str] = {}
     # Every spending cap validates through one implementation against the bounds
@@ -2266,6 +2306,7 @@ def _validate(config: Config) -> None:
         errors["terminal_font_family"] = (
             "must not contain semicolons, braces, or control characters"
         )
+    _validate_terminal_gateway_port(config, errors)
     if config.default_backend != "shell" and not is_agent_harness(config.default_backend):
         errors["default_backend"] = "must be shell or a registered agent"
     if config.default_harness and not is_agent_harness(config.default_harness):

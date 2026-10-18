@@ -27,6 +27,7 @@ from ..bundle_locks import (
 )
 from ..config import Config
 from ..event_bus import EventBus
+from ..gateway_host import terminal_transport
 from ..harness import (
     DETECTION_REUSE_SECONDS,
     public_harness_registry,
@@ -174,6 +175,11 @@ async def health(request: web.Request) -> web.Response:
                     request.app.get(keys.SESSION_RECOVERY) is not None,
                 )
             ),
+            # Which process a browser opens terminals on (`gateway_host.py`): the
+            # gateway and its port while one is connected, the daemon otherwise,
+            # with the state that says why. Read here because this is the endpoint
+            # every client already polls.
+            "terminal_transport": terminal_transport(request.app.get(keys.TERMINAL_GATEWAY)),
             # The same block the starting answer carries, so one consumer reads
             # one shape either way - and so the phase breakdown of the start that
             # just finished stays readable without going to the log.

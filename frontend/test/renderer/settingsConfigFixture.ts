@@ -197,6 +197,8 @@ export const SETTINGS_CONFIG_FIXTURE = {
   "daemon_process_priority": "above_normal",
   "gil_switch_interval_ms": 5.0,
   "worker_process_enabled": true,
+  "terminal_gateway_enabled": false,
+  "terminal_gateway_port": 0,
   "project_card_daily_budget": {
     "mode": "usd",
     "tokens": null,

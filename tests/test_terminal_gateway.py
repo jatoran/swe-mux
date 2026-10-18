@@ -29,7 +29,7 @@ from swe_mux import supervisor as supervisor_module
 from swe_mux.scrollback import ScrollbackBuffer
 from swe_mux.supervisor import SupervisedSession, SupervisorServer
 from swe_mux.terminal_core import RemoteHub, TerminalStream
-from swe_mux.terminal_core.protocol import CLOSE_USE_DAEMON
+from swe_mux.terminal_core.protocol import CLOSE_GATEWAY_RESTARTING, CLOSE_USE_DAEMON
 from swe_mux.terminal_gateway import (
     CAPABILITY_OUTPUT_GAP,
     CAPABILITY_SUBSCRIBE_SINCE,
@@ -295,6 +295,34 @@ async def test_a_browser_types_through_the_gateway_and_sees_the_echo(
             finally:
                 await browser.close()
                 await hub.close()
+
+
+async def test_a_stopping_gateway_tells_its_browsers_to_reconnect(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A replaced or quitting gateway closes with 4011, never just drops the socket.
+
+    This is what makes the daemon's version-skew restart orchestrated: every client
+    reads 4011 as "reconnect", to the gateway that replaces this one or to the daemon.
+    """
+    async with open_supervisor(tmp_path, monkeypatch) as running:
+        echo_session(running.server)
+        gateway = TerminalGateway(
+            GatewayOptions(data_dir=tmp_path, daemon_port=DAEMON_PORT, port=0)
+        )
+        task = asyncio.create_task(gateway.run())
+        await until(lambda: read_discovery(tmp_path) is not None, what="the gateway is up")
+        hub = await attach_daemon(gateway)
+        browser = await Browser.open(gateway.port)
+        try:
+            await browser.attach()
+            assert hub.quit()
+            await browser.read_until(lambda: False)
+            assert browser.ws.close_code == CLOSE_GATEWAY_RESTARTING
+            assert await asyncio.wait_for(task, timeout=15) == 0
+        finally:
+            await browser.close()
+            await hub.close()
 
 
 async def test_an_on_attach_subscription_releases_its_ring_after_the_linger(

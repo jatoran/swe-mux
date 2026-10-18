@@ -37,6 +37,7 @@ from .core import TerminalCore, WriteRefused
 from .host import PtySink, TerminalSocket
 from .protocol import (
     BROADCAST,
+    CLOSE_GATEWAY_RESTARTING,
     CLOSE_USE_DAEMON,
     DIAGNOSTICS,
     EVENT,
@@ -378,6 +379,15 @@ class GatewayHub:
 
     async def close(self) -> None:
         await self.server.close()
+        # Every browser is told this process is going rather than dropped: 4011 is
+        # "reconnect", to the gateway that replaces this one or to the daemon.
+        await asyncio.gather(
+            *(
+                session.close_sockets(CLOSE_GATEWAY_RESTARTING, b"gateway stopping")
+                for session in tuple(self.sessions.values())
+            ),
+            return_exceptions=True,
+        )
         for session in tuple(self.sessions.values()):
             for task in tuple(session.tasks):
                 task.cancel()
