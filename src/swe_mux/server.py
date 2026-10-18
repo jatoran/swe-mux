@@ -1405,13 +1405,13 @@ def _queue_writer(events: EventBus) -> OperatorWriter:
     return write
 
 
-async def _start_terminal_gateway(
+def _build_terminal_gateway(
     app: web.Application,
     config: Config,
     supervisor_client: SupervisorClient | None,
     sessions: SessionManager,
 ) -> GatewayHost:
-    """Build the terminal gateway host, publish it, and start it when it can run.
+    """Build the terminal gateway host and publish it; the caller starts it later.
 
     The gateway carries terminals from the PTY supervisor, so without one there is
     nothing for it to carry and terminals stay on this daemon.
@@ -1420,6 +1420,13 @@ async def _start_terminal_gateway(
     phase, long before the composition root publishes `keys.SESSIONS`, and reading
     it here failed every supervised start (2026-10-18, caught by the redeploy's
     rollback and then by the `live_daemon` tier).
+
+    And it is not started here, for the same reason one level down: its first
+    connection hands every live session over, and each handover builds a
+    `SessionTerminalHost`, which reads the published runtime (`keys.EVENTS`). Started
+    in `services`, every connection with a live session failed until the
+    composition root caught up - four incarnations and eight seconds on the first
+    live start with the gateway on.
     """
     generation = app[keys.DAEMON_GENERATION]
     gateway_host = GatewayHost(config, generation=generation)
@@ -1439,7 +1446,6 @@ async def _start_terminal_gateway(
     network_usage: NetworkUsage | None = app.get(keys.NETWORK_USAGE)
     if network_usage is not None:
         gateway_host.hub.on_metering = network_usage.merge_remote
-    await gateway_host.start()
     return gateway_host
 
 
@@ -1859,10 +1865,10 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
     publish(app, {keys.WORKER: worker_host, keys.TRANSCRIPT_SCANNER: transcript_scanner})
     canonical_telemetry.attach_worker(worker_host)
     transcript_scanner.attach_worker(worker_host)
-    # The terminal gateway (`gateway_host.py`): found or started the same way, never
-    # awaited past that, so a slow or failing gateway costs this start nothing and
-    # terminals stay on this daemon until it is up.
-    gateway_host = await _start_terminal_gateway(app, config, supervisor_client, sessions)
+    # The terminal gateway (`gateway_host.py`): built and published here, started
+    # once the runtime is (below), never awaited past that, so a slow or failing
+    # gateway costs this start nothing and terminals stay on this daemon until it is up.
+    gateway_host = _build_terminal_gateway(app, config, supervisor_client, sessions)
 
     # The monitor's branch-scoped diff is measured against the same base the Git
     # drawer uses, so the sidebar and the drawer cannot report a session's branch
@@ -3042,6 +3048,11 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
             keys.UPDATE_INSTALL: update_installer,
         },
     )
+    # Only now: the gateway's first connection hands every live session over, and a
+    # handover reads the runtime just published (`_build_terminal_gateway`). A gateway
+    # a predecessor left running carries its terminals the whole time, so starting
+    # here costs nobody a keystroke. Returns at once; the connection is a loop's job.
+    await gateway_host.start()
     # The startup duration nobody could see. The listeners are already bound by
     # the time this runs, so it is no longer downtime - but it is still the
     # number the desktop shell's health wait and the redeploy budget are set

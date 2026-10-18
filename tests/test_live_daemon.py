@@ -618,6 +618,7 @@ async def test_a_terminal_runs_through_the_gateway_and_quit_leaves_nothing_behin
         block = await daemon.gateway_block()
         assert block["gateway"]["pid"] == gateway_pid, block
         assert block["spawns"] == 1 and block["adoptions"] == 0, block
+        assert block["restarts"] == 0, block
 
         project_id = await daemon.register_project(root)
         sid = await daemon.spawn_shell(project_id, root, name="live-gateway")
@@ -713,6 +714,11 @@ async def test_typing_through_the_gateway_goes_on_while_the_daemon_restarts(
             f"the successor started another gateway instead of adopting {gateway_pid}: {block}"
         )
         assert block["spawns"] == 0 and block["adoptions"] == 1, block
+        # A successor that starts with a live session hands it over on its first
+        # connection, and that connection must succeed the first time. It once failed
+        # four times in a row - the handover read the runtime before it was published
+        # - and retried until it worked, which the transport check alone cannot see.
+        assert block["restarts"] == 0, block
         assert not terminal.closed.is_set(), "the browser was disconnected by the successor"
         await _type_and_see(terminal, markers[2], where="after the successor adopted the gateway")
 

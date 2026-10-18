@@ -489,12 +489,14 @@ async def test_the_composition_root_installs_the_placement_and_the_metering(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from swe_mux.network_usage import NetworkUsage
-    from swe_mux.server import _start_terminal_gateway
+    from swe_mux.server import _build_terminal_gateway
 
-    async def not_started(_self: GatewayHost) -> None:
-        return None
+    async def must_not_start(_self: GatewayHost) -> None:
+        raise AssertionError(
+            "started during the build: its first handover reads the published runtime"
+        )
 
-    monkeypatch.setattr(GatewayHost, "start", not_started)
+    monkeypatch.setattr(GatewayHost, "start", must_not_start)
     sessions = SimpleNamespace(sessions={}, terminal_placement=None)
     usage = NetworkUsage()
     app = web.Application()
@@ -505,7 +507,7 @@ async def test_the_composition_root_installs_the_placement_and_the_metering(
     app[keys.NETWORK_USAGE] = usage
     config = Config(data_dir=tmp_path, terminal_gateway_enabled=True)
 
-    host = await _start_terminal_gateway(app, config, cast(Any, object()), cast(Any, sessions))
+    host = _build_terminal_gateway(app, config, cast(Any, object()), cast(Any, sessions))
 
     assert app[keys.TERMINAL_GATEWAY] is host
     assert host.placement is not None
@@ -516,5 +518,11 @@ async def test_the_composition_root_installs_the_placement_and_the_metering(
     bare = SimpleNamespace(sessions={}, terminal_placement=None)
     app2 = web.Application()
     app2[keys.DAEMON_GENERATION] = "gen-1"
-    unsupervised = await _start_terminal_gateway(app2, config, None, cast(Any, bare))
+    unsupervised = _build_terminal_gateway(app2, config, None, cast(Any, bare))
     assert unsupervised.placement is None and bare.terminal_placement is None
+    # The composition root starts every host once the runtime is published; one this
+    # daemon cannot run stays unavailable, with its reason, rather than starting.
+    monkeypatch.undo()
+    await unsupervised.start()
+    assert unsupervised.started is False
+    assert unsupervised.transport()["reason"] == "no PTY supervisor is attached"

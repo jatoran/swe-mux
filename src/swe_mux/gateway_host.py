@@ -327,7 +327,10 @@ class GatewayHost:
         if not self.enabled:
             log.info("terminal gateway disabled (terminal_gateway_enabled = false)")
             return
-        if self.started:
+        if self.started or self.state == STATE_UNAVAILABLE:
+            # Unavailable is this daemon's verdict that it cannot run one (no PTY
+            # supervisor); starting anyway would erase the reason and spawn a gateway
+            # with nothing to carry.
             return
         self.started = True
         self._stopping = False
