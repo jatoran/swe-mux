@@ -17,6 +17,14 @@ capped and an unauthenticated connection is capped harder still and given a
 deadline; the reverse direction is left unbounded, because a legitimate
 ``subscribe`` reply carries a whole scrollback buffer whose size is the daemon's
 ``scrollback_bytes`` setting.
+
+A client that advertises ``output_gap`` in ``hello`` is never waited on
+(DAEMON_LOAD_ISOLATION.md item 12). Its frames go through an outbox drained by
+its own writer task; once that outbox holds ``OUTPUT_GAP_QUEUE_BYTES`` of output,
+each session's further output is dropped for that client and one ``gap {sid,
+position}`` frame says where its copy stops, and the client resubscribes to
+recover. Every other client is written to directly and waited on when it falls
+behind, which is the behaviour an older daemon was built against.
 """
 
 from __future__ import annotations
@@ -36,6 +44,7 @@ import struct
 import sys
 import time
 import tomllib
+from collections import deque
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -73,7 +82,24 @@ HELLO_MAX_HEADER_BYTES = 64 * 1024
 # never speaking.
 AUTH_DEADLINE_SECONDS = 15.0
 # Backpressure threshold per client connection before the fanout awaits drain.
+# Applies only to a connection that did not negotiate `output_gap`.
 WRITE_BUFFER_HIGH_WATER = 2 * 1024 * 1024
+# What a client advertises in `hello` to be dropped from rather than waited on.
+CAPABILITY_OUTPUT_GAP = "output_gap"
+# Every capability this supervisor understands, announced in the `hello` reply so
+# a client can tell an older supervisor (no list) from one that declined it.
+SUPERVISOR_CAPABILITIES = (CAPABILITY_OUTPUT_GAP,)
+# Output an `output_gap` connection may have queued and unwritten before each
+# session's further output is dropped for it with a `gap`. Sized to ride out a
+# daemon stall of several seconds at fleet output rates (36 sessions at 20 KB/s
+# fill it in about eleven) while bounding what one stopped reader costs this
+# process; replies are not counted, so a large `subscribe` reply never causes one.
+OUTPUT_GAP_QUEUE_BYTES = 8 * 1024 * 1024
+# Everything queued for one `output_gap` connection, replies included, past which
+# the supervisor stops reading that connection's requests until its outbox is
+# back under the output cap. Only a client that keeps asking and never reads its
+# answers can get here, and the pause is its own: nothing else waits on it.
+REQUEST_PAUSE_QUEUE_BYTES = 64 * 1024 * 1024
 # With no attached daemon and no live sessions there is nothing to preserve;
 # self-exit keeps a forgotten supervisor from lingering forever (tmux-style).
 LINGER_POLL_SECONDS = 30.0
@@ -220,9 +246,159 @@ class Connection:
     reader: asyncio.StreamReader
     writer: asyncio.StreamWriter
     authenticated: bool = False
+    peer: str = ""
+    # Negotiated in `hello`. A lossy connection's frames are queued in `_outbox`
+    # and written by `_writer_task`, so nothing that sends to it ever waits on it.
+    output_gap: bool = False
+    # Sessions whose output this connection has stopped receiving since a `gap`;
+    # `subscribe` and `unsubscribe` take a session out again.
+    gapped: set[str] = field(default_factory=set)
+    gaps: int = 0
+    dropped_bytes: int = 0
+    closed: bool = False
+    _outbox: deque[tuple[bytes, bool]] = field(default_factory=deque)
+    _queued_bytes: int = 0
+    _queued_output_bytes: int = 0
+    _wake: asyncio.Event = field(default_factory=asyncio.Event)
+    _room: asyncio.Event = field(default_factory=asyncio.Event)
+    _idle: asyncio.Event = field(default_factory=asyncio.Event)
+    _writer_task: asyncio.Task[None] | None = None
 
     def send(self, header: dict[str, Any], payload: bytes = b"") -> None:
-        self.writer.write(encode_frame(header, payload))
+        self.send_frame(encode_frame(header, payload))
+
+    def send_frame(self, frame: bytes) -> None:
+        """Queue a control frame or a reply. Never dropped for being over the cap."""
+        if self.output_gap:
+            self._enqueue(frame, output=False)
+        else:
+            self.writer.write(frame)
+
+    @property
+    def queued_bytes(self) -> int:
+        """Everything in the outbox, replies included; zero for a direct connection."""
+        return self._queued_bytes
+
+    def start_lossy(self) -> None:
+        """Switch to the queued, never-waited-on mode `output_gap` asks for.
+
+        Called while `hello` is handled, before its reply is sent, so the reply is
+        the outbox's first frame and nothing written directly can follow it.
+        """
+        self.output_gap = True
+        self._room.set()
+        self._idle.set()
+        self._writer_task = asyncio.create_task(
+            self._write_loop(), name=f"sup-writer-{self.peer or id(self)}"
+        )
+
+    def offer_output(self, sid: str, frame: bytes, start: int, size: int) -> None:
+        """Queue one session's output frame, or drop it. Never waits.
+
+        ``start`` is the session's stream position at the first byte of the frame,
+        which is exactly where this connection's copy stops when it is the first
+        frame dropped, so that is what the `gap` names.
+        """
+        if self.closed:
+            return
+        if sid in self.gapped:
+            self.dropped_bytes += size
+            return
+        if self._queued_output_bytes >= OUTPUT_GAP_QUEUE_BYTES:
+            if not self.gapped:
+                log.warning(
+                    "supervisor: connection %s is not reading (%d byte(s) of output "
+                    "queued); dropping its output per session with gap frames until "
+                    "it resubscribes",
+                    self.peer,
+                    self._queued_output_bytes,
+                )
+            self.gapped.add(sid)
+            self.gaps += 1
+            self.dropped_bytes += size
+            self._enqueue(encode_frame({"t": "gap", "sid": sid, "position": start}), output=False)
+            return
+        self._enqueue(frame, output=True)
+
+    def resume(self, sid: str) -> None:
+        """Deliver ``sid``'s output to this connection again (it resubscribed or left)."""
+        if sid not in self.gapped:
+            return
+        self.gapped.discard(sid)
+        if not self.gapped:
+            log.info(
+                "supervisor: connection %s caught up; %d gap(s) so far, %d byte(s) "
+                "of output dropped in total",
+                self.peer,
+                self.gaps,
+                self.dropped_bytes,
+            )
+
+    def _enqueue(self, frame: bytes, *, output: bool) -> None:
+        if self.closed:
+            return
+        self._outbox.append((frame, output))
+        self._queued_bytes += len(frame)
+        if output:
+            self._queued_output_bytes += len(frame)
+        self._idle.clear()
+        self._wake.set()
+
+    async def _write_loop(self) -> None:
+        """Write the outbox in order, waiting only on this connection's transport."""
+        try:
+            while True:
+                await self._wake.wait()
+                self._wake.clear()
+                while self._outbox:
+                    frame, output = self._outbox.popleft()
+                    self._queued_bytes -= len(frame)
+                    if output:
+                        self._queued_output_bytes -= len(frame)
+                    self.writer.write(frame)
+                    # Returns at once unless the transport has paused this writer;
+                    # the outbox, not the transport, is where a backlog accumulates.
+                    await self.writer.drain()
+                    if self._queued_bytes <= OUTPUT_GAP_QUEUE_BYTES:
+                        self._room.set()
+                self._idle.set()
+        except (ConnectionError, RuntimeError, OSError) as exc:
+            log.info("supervisor: connection %s write failed: %s", self.peer, exc)
+            self._abandon()
+            with contextlib.suppress(Exception):
+                self.writer.close()
+
+    async def wait_for_room(self) -> None:
+        """Wait until the outbox is back under the output cap, or the connection is gone."""
+        while self._queued_bytes > OUTPUT_GAP_QUEUE_BYTES and not self.closed:
+            self._room.clear()
+            await self._room.wait()
+
+    async def flush(self) -> None:
+        """Wait until everything sent so far has reached the transport and drained."""
+        if self.output_gap:
+            while self._outbox and not self.closed:
+                await self._idle.wait()
+        if not self.closed:
+            await self.writer.drain()
+
+    def _abandon(self) -> None:
+        self.closed = True
+        self._outbox.clear()
+        self._queued_bytes = 0
+        self._queued_output_bytes = 0
+        self._room.set()
+        self._idle.set()
+
+    def close(self) -> asyncio.Task[None] | None:
+        """Stop writing and close the transport; returns the writer task to await."""
+        self._abandon()
+        task, self._writer_task = self._writer_task, None
+        if task is not None and not task.done():
+            task.cancel()
+        with contextlib.suppress(Exception):
+            self.writer.close()
+        return task
 
 
 class SupervisorServer:
@@ -303,16 +479,28 @@ class SupervisorServer:
         self._closing = True
         if self._server is not None:
             self._server.close()
-            await self._server.wait_closed()
         await self._drain_background_tasks()
+        # Connections close before the listener is awaited, because since Python
+        # 3.12.1 `wait_closed` also waits for every connected client to go away:
+        # one client that stayed connected - a second daemon, a stalled reader -
+        # used to hold the reap below open for as long as it stayed.
+        writer_tasks = [task for task in (c.close() for c in tuple(self.connections)) if task]
+        if writer_tasks:
+            await asyncio.gather(*writer_tasks, return_exceptions=True)
+        if self._server is not None:
+            try:
+                await asyncio.wait_for(self._server.wait_closed(), timeout=SHUTDOWN_DRAIN_SECONDS)
+            except TimeoutError:
+                log.warning(
+                    "supervisor teardown: connection handlers still running after %.0fs; "
+                    "reaping anyway",
+                    SHUTDOWN_DRAIN_SECONDS,
+                )
         for entry in self.sessions.values():
             if entry.fanout_task and not entry.fanout_task.done():
                 entry.fanout_task.cancel()
             if entry.ownership_job:
                 entry.ownership_job.close()
-        for connection in tuple(self.connections):
-            with contextlib.suppress(Exception):
-                connection.writer.close()
         self._remove_discovery()
         # Closing the Job handle is the reap: kill-on-close terminates every
         # process tree that was assigned to it.
@@ -359,8 +547,8 @@ class SupervisorServer:
     async def _serve_connection(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
     ) -> None:
-        connection = Connection(reader, writer)
         peer = writer.get_extra_info("peername")
+        connection = Connection(reader, writer, peer=str(peer))
         self.connections.add(connection)
         self._last_busy = time.monotonic()
         try:
@@ -394,21 +582,29 @@ class SupervisorServer:
                     if header.get("id") is not None:
                         connection.send({"id": header["id"], "ok": False, "error": str(exc)})
                     with contextlib.suppress(ConnectionError):
-                        await writer.drain()
+                        await connection.flush()
                     break
                 except Exception as exc:
                     request_id = header.get("id")
                     log.exception("failed handling %s", header.get("t"))
                     if request_id is not None:
                         connection.send({"id": request_id, "ok": False, "error": str(exc)})
+                if connection.output_gap:
+                    # Replies are queued rather than waited for, so a client that has
+                    # stopped reading still has its keystrokes written. Only one that
+                    # also keeps asking past the pause threshold is held, alone.
+                    if connection.queued_bytes > REQUEST_PAUSE_QUEUE_BYTES:
+                        await connection.wait_for_room()
+                    continue
                 with contextlib.suppress(ConnectionError):
                     await writer.drain()
         finally:
             self.connections.discard(connection)
             for entry in self.sessions.values():
                 entry.subscribers.discard(connection)
-            with contextlib.suppress(Exception):
-                writer.close()
+            writer_task = connection.close()
+            if writer_task is not None:
+                await asyncio.gather(writer_task, return_exceptions=True)
 
     async def _read_request(self, connection: Connection) -> tuple[dict[str, Any], bytes]:
         """Read one daemon-inbound frame under the bounds its state has earned (F13).
@@ -495,8 +691,10 @@ class SupervisorServer:
             # Snapshot and subscription registration are synchronous, so the
             # fanout task cannot interleave a chunk between them: the client
             # neither misses nor duplicates the boundary chunk (the same
-            # contract as Session.replay_and_subscribe, one level down).
+            # contract as Session.replay_and_subscribe, one level down). The same
+            # step ends a gap: the reply carries everything the gap dropped.
             entry.subscribers.add(connection)
+            connection.resume(entry.sid)
             connection.send(
                 {
                     "id": request_id,
@@ -512,6 +710,7 @@ class SupervisorServer:
             existing = self.sessions.get(str(header.get("sid")))
             if existing is not None:
                 existing.subscribers.discard(connection)
+                connection.resume(existing.sid)
         elif kind == "stop":
             entry = self._require(header)
             self._spawn_background(
@@ -542,7 +741,7 @@ class SupervisorServer:
             if request_id is not None:
                 connection.send({"id": request_id, "ok": True})
                 with contextlib.suppress(ConnectionError):
-                    await connection.writer.drain()
+                    await connection.flush()
             self.exit_event.set()
         else:
             raise ValueError(f"unknown message type: {kind!r}")
@@ -559,12 +758,23 @@ class SupervisorServer:
                 f"protocol mismatch: supervisor={PROTOCOL_VERSION} client={protocol}"
             )
         connection.authenticated = True
+        # Capabilities are additive and never gate the protocol version: an older
+        # supervisor ignores the list it does not understand and announces none,
+        # which is how the client knows it is being waited on as before.
+        requested = header.get("capabilities")
+        if (
+            isinstance(requested, list)
+            and CAPABILITY_OUTPUT_GAP in requested
+            and not connection.output_gap
+        ):
+            connection.start_lossy()
         connection.send(
             {
                 "id": request_id,
                 "ok": True,
                 "protocol": PROTOCOL_VERSION,
                 "pid": os.getpid(),
+                "capabilities": list(SUPERVISOR_CAPABILITIES),
                 "sessions": self._session_infos(),
             }
         )
@@ -853,6 +1063,8 @@ class SupervisorServer:
         sid = str(header.get("sid"))
         entry = self.sessions.pop(sid, None)
         if entry is not None:
+            for subscriber in tuple(entry.subscribers):
+                subscriber.resume(sid)
             if entry.fanout_task and not entry.fanout_task.done():
                 entry.fanout_task.cancel()
                 await asyncio.gather(entry.fanout_task, return_exceptions=True)
@@ -901,21 +1113,36 @@ class SupervisorServer:
                 frame = encode_frame(
                     {"t": "pty_exit", "sid": entry.sid, "exit_code": entry.exit_code}
                 )
+                # A control frame, so a gapped connection gets it too; the reply
+                # to its resubscribe carries the bytes before it.
                 for connection in tuple(entry.subscribers):
                     with contextlib.suppress(Exception):
-                        connection.writer.write(frame)
+                        connection.send_frame(frame)
                 return
             entry.scrollback.append(chunk)
             frame = encode_frame({"t": "output", "sid": entry.sid}, chunk)
+            start = entry.scrollback.position - len(chunk)
+            behind: list[Connection] = []
+            # Every subscriber gets the chunk before any is waited on, so a direct
+            # connection that has fallen behind delays the next chunk, never this
+            # one, and an `output_gap` connection is never waited on at all.
             for connection in tuple(entry.subscribers):
                 try:
+                    if connection.output_gap:
+                        connection.offer_output(entry.sid, frame, start, len(chunk))
+                        continue
                     connection.writer.write(frame)
                     transport = connection.writer.transport
                     if (
                         transport is not None
                         and transport.get_write_buffer_size() > WRITE_BUFFER_HIGH_WATER
                     ):
-                        await connection.writer.drain()
+                        behind.append(connection)
+                except (ConnectionError, RuntimeError):
+                    entry.subscribers.discard(connection)
+            for connection in behind:
+                try:
+                    await connection.writer.drain()
                 except (ConnectionError, RuntimeError):
                     entry.subscribers.discard(connection)
 

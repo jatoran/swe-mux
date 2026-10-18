@@ -359,6 +359,11 @@ uv run python tools/fleet_load_harness.py --set gil_switch_interval_ms=1
 - One acknowledging client per session, one timed probe session, one `/events` client reporting
   desktop presence, and the open window's polls make it a daemon somebody has open; without the
   `/events` client the readiness watcher skips its pass and the run measures an empty room.
+- `--stalled-subscriber {direct,gap}` connects a second client to the scratch supervisor, subscribes
+  it to every session including the probe, and never reads it again - the shape of a hung daemon or
+  gateway. `direct` connects as an older client the supervisor waits on; `gap` negotiates
+  `output_gap` and is dropped from instead. The report says whether the supervisor started dropping
+  (`gap_episodes`, read from its log). With `direct` the probe's echo stops outright.
 - `--burn N` adds below-normal CPU-bound processes for agents' builds. A saturated host is what turns
   sub-second lag into multi-second stalls, and it is the only way this harness reproduces them.
 - `--stall-profiler PATH` hands the scratch daemon a `py-spy` executable through

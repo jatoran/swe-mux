@@ -108,6 +108,72 @@ class Options:
     decision_rate: float = 0.0
     peer: str = "loopback"
     ws_compress: str = "offer"
+    stalled_subscriber: str = "none"
+
+
+class StalledSubscriber:
+    """A second supervisor client that subscribes to every session, then never reads again.
+
+    The shape of a daemon whose loop has stopped, or of a terminal gateway that hung:
+    a connection the supervisor fans every session's output into and nothing drains.
+    `direct` connects as an older client that is waited on; `gap` negotiates
+    `output_gap` and is dropped from instead (DAEMON_LOAD_ISOLATION.md item 12).
+    """
+
+    def __init__(self, data_dir: Path, mode: str) -> None:
+        self.data_dir = data_dir
+        self.mode = mode
+        self.capabilities: list[str] = []
+        self.writer: asyncio.StreamWriter | None = None
+
+    async def start(self, sids: list[str]) -> None:
+        from swe_mux.supervisor import PROTOCOL_VERSION, discovery_path, encode_frame, read_frame
+
+        info = json.loads(discovery_path(self.data_dir).read_text(encoding="utf-8"))
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        # A small window, so the kernel stops absorbing what is never read after
+        # kilobytes and the supervisor's own buffering is what gets exercised.
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
+        sock.setblocking(False)
+        await asyncio.get_running_loop().sock_connect(sock, ("127.0.0.1", int(info["port"])))
+        reader, self.writer = await asyncio.open_connection(sock=sock, limit=4096)
+        hello: dict[str, Any] = {
+            "t": "hello",
+            "id": 0,
+            "token": info["token"],
+            "protocol": PROTOCOL_VERSION,
+        }
+        if self.mode == "gap":
+            hello["capabilities"] = ["output_gap"]
+        self.writer.write(encode_frame(hello))
+        await self.writer.drain()
+        reply, _ = await asyncio.wait_for(read_frame(reader), timeout=10)
+        if not reply.get("ok"):
+            raise SystemExit(f"stalled subscriber refused: {reply}")
+        self.capabilities = [str(item) for item in reply.get("capabilities") or []]
+        for index, sid in enumerate(sids, start=1):
+            self.writer.write(encode_frame({"t": "subscribe", "id": index, "sid": sid}))
+        await self.writer.drain()
+        answered = 0
+        while answered < len(sids):
+            frame, _ = await asyncio.wait_for(read_frame(reader), timeout=30)
+            if frame.get("id") is not None:
+                answered += 1
+        # From here on nothing reads this socket.
+
+    async def close(self) -> None:
+        if self.writer is not None:
+            self.writer.close()
+            with contextlib.suppress(Exception):
+                await self.writer.wait_closed()
+
+    def gap_episodes(self) -> int:
+        """How often the supervisor started dropping output for a connection, from its log."""
+        log = self.data_dir / "supervisor.log"
+        if not log.is_file():
+            return 0
+        text = log.read_text(encoding="utf-8", errors="replace")
+        return text.count("is not reading")
 
 
 @dataclass
@@ -151,7 +217,10 @@ class Client:
 class Harness:
     def __init__(self, options: Options) -> None:
         self.options = options
-        self.workdir = options.workdir
+        # Absolute, because the daemon runs with its cwd in the data dir: a relative
+        # `--workdir` made `--config` and `HOME` resolve under that, so the daemon
+        # found no config and fell back to the defaults - port 8765 included.
+        self.workdir = options.workdir.resolve()
         self.data_dir = self.workdir / "data"
         self.home = self.workdir / "home"
         self.project_root = self.workdir / "project"
@@ -163,6 +232,7 @@ class Harness:
         self.http: aiohttp.ClientSession | None = None
         self.clients: list[Client] = []
         self.probe: Client | None = None
+        self.stalled: StalledSubscriber | None = None
         # Every browser offers permessage-deflate (window bits 15); `none` offers nothing.
         self.ws_compress = 15 if options.ws_compress == "offer" else 0
         # What each socket negotiated: 0 when the daemon declined compression.
@@ -527,6 +597,10 @@ class Harness:
             self.clients = [await self.attach(sid, terminal_base) for sid in sids]
             self.probe = await self.attach(probe_sid, terminal_base)
             await asyncio.gather(*(c.quiet(1.5, 60) for c in [*self.clients, self.probe]))
+            if options.stalled_subscriber != "none":
+                # Every session, the probe included: the worst case for echo.
+                self.stalled = StalledSubscriber(self.data_dir, options.stalled_subscriber)
+                await self.stalled.start([*sids, probe_sid])
             for index, client in enumerate(self.clients):
                 await client.send(
                     self.generator_command(index, self.stats_dir / f"{index:03d}.json")
@@ -590,8 +664,17 @@ class Harness:
             )
             report["process_read_ms"] = percentiles(process_reads)
             report["events_frames"] = event_counts
+            if self.stalled is not None:
+                report["stalled_subscriber"] = {
+                    "mode": self.stalled.mode,
+                    "output_gap_negotiated": "output_gap" in self.stalled.capabilities
+                    and self.stalled.mode == "gap",
+                    "gap_episodes": self.stalled.gap_episodes(),
+                }
             return report
         finally:
+            if self.stalled is not None:
+                await self.stalled.close()
             for client in [*self.clients, *([self.probe] if self.probe else [])]:
                 with contextlib.suppress(Exception):
                     await client.ws.close()
@@ -743,6 +826,14 @@ def render(report: dict[str, Any]) -> None:
             f"{compression.get('negotiated')} of {compression.get('sockets')} sockets"
         )
     print(f"  generators reported: {report['generators_reported']}/{options['sessions']}")
+    stalled = report.get("stalled_subscriber")
+    if stalled:
+        print(
+            f"  stalled subscriber {stalled['mode']}, output_gap "
+            f"{'negotiated' if stalled['output_gap_negotiated'] else 'not negotiated'}, "
+            f"{stalled['gap_episodes']} gap episode(s); output "
+            f"{report['output_bytes_per_second']} B/s across the fleet"
+        )
 
     def line(label: str, dist: dict[str, Any]) -> None:
         if not dist.get("count"):
@@ -960,6 +1051,13 @@ def main() -> int:
         help="offer permessage-deflate on every socket as browsers do, or offer nothing",
     )
     parser.add_argument(
+        "--stalled-subscriber",
+        choices=("none", "direct", "gap"),
+        default="none",
+        help="a second supervisor client on every session that stops reading: "
+        "waited on (direct) or dropped from with gaps (gap)",
+    )
+    parser.add_argument(
         "--otlp-rate", type=float, default=1.5, help="OTLP posts/s across the fleet"
     )
     parser.add_argument(
@@ -1015,6 +1113,7 @@ def main() -> int:
         decision_rate=args.decision_rate,
         peer=args.peer,
         ws_compress=args.ws_compress,
+        stalled_subscriber=args.stalled_subscriber,
         otlp_rate=args.otlp_rate,
         spawn_interval=args.spawn_interval,
         probe_interval=args.probe_interval,

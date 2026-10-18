@@ -236,6 +236,14 @@ That matters on the daemon side too: only a `spawn_status` of `unknown` proves n
 
 Supervisor teardown quiesces before it reaps: the closing flag goes up, the listener closes, new spawns are refused, in-flight ones are drained and any child born during shutdown is stopped, and only then do the Jobs close.
 Closing the reaper Job first orphans anything created a moment later, which is the one failure a reap cannot report.
+Client connections are closed before the listener is awaited, because since Python 3.12.1 `Server.wait_closed()` also waits for every connected client, and one client that stayed connected used to hold the reap open for as long as it stayed.
+
+**The supervisor never waits on a client that negotiated `output_gap`** (`development/DAEMON_LOAD_ISOLATION.md` item 12).
+Such a connection has an outbox drained by its own writer task, and replies, control frames and output all go through it in order.
+Once the outbox holds `OUTPUT_GAP_QUEUE_BYTES` (8 MiB) of output, each session's further output is dropped for that connection and one `gap {sid, position}` frame names where its copy stops; `subscribe` ends the gap, and `pty_exit` is delivered regardless.
+Replies are never dropped and do not count toward that cap, so a large `subscribe` reply cannot cause a gap; a client that keeps asking past `REQUEST_PAUSE_QUEUE_BYTES` of unread replies has its own requests paused, and nothing else waits on it.
+A connection that does not advertise the capability keeps the old contract, lossless and waited on, because an older daemon cannot recover from a gap - which also means it keeps the coupling: one such client that stops reading stalls each session's fanout and, once the 1,024-chunk reader queue fills, the agent.
+The `hello` reply lists `capabilities`, so a client can tell a supervisor that declined from one that predates the list.
 
 The frozen supervisor ships as its own bundle (`dist/swe-mux-supervisor`), never inside `dist/swe-mux`, so app rebuilds cannot collide with a running supervisor's image.
 Keep the supervisor's import closure inside the hash-gated source list in `packaging/build_desktop.py`; adding an import to `supervisor.py` or `pty_host.py` without updating that list ships a stale bundle.

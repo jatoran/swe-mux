@@ -391,7 +391,7 @@ Items are worked in order, and an item may reorder, split or remove later items 
   - **Tests:** `tests/test_background_shedding.py` (the window, the allowance and its absolute cap, resuming within a step of recovery, a non-deferrable loop's cadence, every protected name refused whatever it asks, `defer` inside and past its allowance, a broken reading never sheds, the governor on the health report, accounting that keeps the caller's faults, the protected names against their modules, a Git sweep that waits while a reported change does not, and a process read that keeps a stale sample unless forced).
   - **Where:** `background_tasks.py`, `loop_lag.py`, `server.py`, `git_monitor.py`, `processes.py`, `ghost_windows.py`, `telemetry_service.py`, `operational_telemetry.py`, `usage.py`, `update_check.py`, `provider_accounts.py`, `quota_usage.py`, `observation.py`, `session.py`, `tools/fleet_load_harness.py`, `design/interfaces.md`, `development/PERFORMANCE_RUNBOOK.md`, `technical/backend/packages/{daemon-runtime,runtime-rules}.md`.
 
-- [ ] **12. Supervisor: non-blocking per-connection fanout.**
+- [x] **12. Supervisor: non-blocking per-connection fanout.**
   - **Why:** one slow subscriber stalls every other subscriber and eventually the child (`supervisor.py:881-920`; `pty_host.py:369-430`).
   - **Change:**
     - Each connection gets an outbound queue with a byte cap, drained by its own writer task.
@@ -402,6 +402,32 @@ Items are worked in order, and an item may reorder, split or remove later items 
     - Tests cover concurrent subscribers and prove a connection that stops reading never delays another subscriber or the child; `tests/test_pty_supervisor.py` has neither today.
   - **Where:** `supervisor.py`, `packaging/build_desktop.py` (`SUPERVISOR_SOURCES` and the hash gate), `technical/backend/packages/runtime-rules.md`.
   - **Done when:** the tests pass, and a harness run with a deliberately stalled client shows unchanged echo latency on another connection.
+  - **Done (2026-10-17).**
+    An `output_gap` connection has a `deque` outbox and one writer task that writes it in order and awaits only that connection's `drain()`.
+    The cap counts queued *output* only (`OUTPUT_GAP_QUEUE_BYTES`, 8 MiB): replies, `gap` and `pty_exit` frames are never dropped and do not count, so a multi-megabyte `subscribe` reply cannot cause a gap.
+    The transport's own buffer was the alternative queue and was rejected for exactly that reason - it cannot tell a reply's bytes from output's.
+    A `gap` names the stream position of the first dropped byte, every later chunk of that session is dropped for that connection until it resubscribes, and the supervisor logs one line when a connection starts dropping and one when it has caught up, not one per session.
+    A client that keeps sending requests past 64 MiB of unread replies (`REQUEST_PAUSE_QUEUE_BYTES`) has its own request reading paused until it is back under the cap; nothing else waits on it.
+    For a direct connection, every subscriber is now written before any is waited on, so a lagging direct client delays a session's next chunk rather than the other subscribers' copy of this one; it is still lossless and still couples, which is what an older daemon needs.
+    The `hello` reply lists `capabilities`.
+    No new imports, so `SUPERVISOR_SOURCES` is unchanged and the hash gate sees the edit as it should.
+  - **Found on the way: supervisor teardown could not reap while any client stayed connected.**
+    Since Python 3.12.1 `asyncio.Server.wait_closed()` waits for every connected client (probed on this host's 3.12.11), and `_teardown` awaited it before closing connections, so a second daemon, a stalled reader or a future gateway held `reap_all_and_exit` open indefinitely.
+    Connections now close first and the wait is bounded by `SHUTDOWN_DRAIN_SECONDS`.
+  - **Tests:** `tests/test_supervisor_fanout.py` against a real loopback listener with queue-backed sessions (`tests/support/supervisor_wire.py`), on every host: a stalled lossy subscriber never back-pressures the child (32 MiB through a 1,024-chunk queue fed with `put_nowait`, so a single wait would raise `QueueFull`); never delays a direct subscriber, which receives every byte; a subscriber that did not ask is still waited on (the queue fills, and closing it releases the fanout); the gap position equals the bytes delivered and nothing follows it until a resubscribe; `pty_exit` reaches a gapped client; a stalled client's keystrokes are still written; teardown reaps with clients connected; and the outbox's order, single gap per session, never-dropped replies, request pause and close.
+    Six of the socket tests fail with the capability ignored, and the teardown test fails with the old order.
+  - **Measured** (36 sessions, 60 s, a second supervisor client subscribed to every session including the probe, never reading):
+
+    | Stalled client | Echo p50 | Echo p95 | Echo p99 | Echo timeouts (30 s) | Screens classified |
+    | --- | --- | --- | --- | --- | --- |
+    | none | 4.8 ms | 68.9 ms | 107.6 ms | 0 of 60 | 992 |
+    | direct (pre-item-12 contract) | 10.0 ms (n=1) | - | - | 2 | 1 |
+    | `output_gap` | 3.7 ms | 16.8 ms | 23.9 ms | 0 of 60 | 997 |
+
+    With a direct stalled client the probe got one echo before every session's fanout parked in `drain()`, and the daemon saw no output for the rest of the window.
+    With `output_gap` the client began dropping 20 s after start, once its outbox reached 8 MiB, and echo was indistinguishable from the run with no stalled client.
+    Generator throughput did not move in any run (606-609 KB/s), because at 20 KB/s a session takes longer than the window to fill its 1,024-chunk reader queue; agent throttling is item 17's measurement.
+  - **Harness:** `--stalled-subscriber {none,direct,gap}`. The harness also resolves `--workdir` now: a relative one made the scratch daemon, whose cwd is its data dir, miss its config and fall back to port 8765.
 
 - [ ] **13. Supervisor: subscribe-since, stream identity, terminal scope, notices.**
   - **Why:** the gateway needs delta resubscription, cursors that cannot cross streams and no session secrets, and the daemon needs true geometry when another connection resizes.

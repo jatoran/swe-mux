@@ -157,17 +157,30 @@ class FakePtyHost:
 class RecordingConnection:
     """A `Connection` stand-in that captures replies, or drops them on demand."""
 
-    def __init__(self, *, drop: bool = False) -> None:
+    def __init__(self, *, drop: bool = False, scope: str = "daemon") -> None:
         self.frames: list[dict[str, Any]] = []
         self.payloads: list[bytes] = []
         self.authenticated = True
         self.drop = drop
+        self.scope = scope
+        self.output_gap = False
+        self.gapped: set[str] = set()
 
     def send(self, header: dict[str, Any], payload: bytes = b"") -> None:
         if self.drop:
             return
         self.frames.append(header)
         self.payloads.append(payload)
+
+    def send_frame(self, frame: bytes) -> None:
+        if self.drop:
+            return
+        (size,) = struct.unpack(">I", frame[:4])
+        self.frames.append(json.loads(frame[4 : 4 + size]))
+        self.payloads.append(frame[4 + size :])
+
+    def resume(self, sid: str) -> None:
+        self.gapped.discard(sid)
 
     @property
     def last(self) -> dict[str, Any]:
