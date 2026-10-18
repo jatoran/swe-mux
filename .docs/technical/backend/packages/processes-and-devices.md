@@ -18,8 +18,25 @@ Periodic psutil work in this area is the daemon's largest measured cost centre; 
 - The `background_tasks` fast-clear, since a descendant older than the annotation cannot be its task.
 - Changed-only evidence persistence: `OwnedProcess.observation()` is the stored row, `observation_fingerprint()` decides whether it changed, and `ProcessInspector._persist_observations` builds the rows in a worker thread under `_sample_lock`. `OwnedProcess.snapshot()` copies one level deep instead of calling `dataclasses.asdict`, which was the loop's largest cost on a long-running daemon.
 - Reserved Preview destinations: `PreviewRegistry(reserved_ports=...)`, `ProcessInspector.infrastructure_loopback_ports()`, and `PreviewDestinationReserved`.
+- Where a pass runs: `attach_worker` hands passes, actions, port-conflict probes and unique-memory reads to the worker process while it is ready, keeps `owned` as a mirror applied from `_decode_delta` on the loop, reloads a worker whose `generation` it has not loaded, and samples in-process on any failure (`sampling_stats()`).
+  The wire is defined here: `SESSION_FACT_FIELDS`, `owned_to_wire`/`owned_from_wire`, `owned_key`, `listen_index_to_wire`.
+- Importable by the worker without the daemon: the session model, the event bus and aiohttp are imported only for type checking or where a daemon-only method uses them, which a worker that imports `session` would otherwise pay seventy modules for.
 
 **Not:** proxy transport, authoritative ownership from PID alone, or deciding a process *is* a background task - it may only refute.
+
+## `process_service.py`
+
+The worker process's `processes` service: a `ProcessInspector` fed the daemon's session facts through `SampledSessions`, a `DeltaEncoder` that sends what the daemon's mirror lacks (whole records for new processes, changed fields for known ones, keys for removed ones), and `load`, `sample`, `act`, `port_conflict` and `unique_memory`, serialised by one lock because the pass runs in a thread.
+A worker that has not been loaded refuses to sample.
+
+**Not:** a second sampling implementation - every pass is `ProcessInspector._collect_all` - nor anything that writes `mux.db`, emits events or touches a PTY.
+
+## `process_fingerprint.py`
+
+`process_identity` and `command_hash`, the two hashes a tracked process is identified by, standard library only so the worker can compute them without importing `operational_telemetry`.
+`operational_telemetry` re-exports both.
+
+**Not:** any other identity rule.
 
 Preview rules it enforces:
 
@@ -35,6 +52,7 @@ Preview rules it enforces:
 ## `ghost_windows.py`
 
 Windows-only detection and off-screen parking of headless-browser windows that DWM composites while Win32 reports them hidden, plus the conjunctive sweep predicate and its memoized command-line verdicts.
+The daemon's loop sweeps through the worker process's `GhostWindowService` while it is ready and in-process otherwise, and keeps the counts either way.
 
 **Not:** closing or terminating any browser, session state, non-Windows behavior, or which browser stack an agent chooses.
 

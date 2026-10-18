@@ -592,10 +592,11 @@ Items are worked in order, and an item may reorder, split or remove later items 
       Its environment withholds `SWE_MUX_DESKTOP_CONTROL_TOKEN`, it runs at normal priority below the daemon's, and it logs to its own `worker.log` (10 MB × 3) with `worker-console.log` for what the interpreter printed before logging started.
   - **Measured** (source mode on this host, five fresh workers): spawn to ready 188-225 ms (median 197 ms), 23.7 MiB resident, and a `noop.echo` round trip 184-214 us p50 and 285-408 us p99 over 200 calls each.
     The daemon pays nothing on its loop for the spawn, which runs in a thread inside the supervised loop.
+  - **Live (2026-10-17):** landed and redeployed with 8 sessions running, all kept; the frozen worker (`swe-mux.exe --worker-child`, no launcher) reported `running` and ready 24 s after the swap, which is the frozen half of the entry point that no test exercises.
   - **Tests:** `tests/test_worker_host.py`, 15, every one but the unit cases against a real worker process: the round trip and the built-in stats; a killed worker restarted, with the ready hook having rebuilt its state from the daemon and the new worker remembering nothing else; a stop that leaves neither the worker nor its launcher; a worker that leaves with exit code 0 when its connection closes; notices routed to their service; a stranger holding the token but not the pid refused, and a non-worker role refused; a worker that exits before its hello restarted with its exit code; one that never says hello killed at the deadline with no hung child left; disabled means never spawned; health serializable in every state; the worker held in the host's own reaper and the reaper closed on stop; a stand-in daemon killed outright taking its worker with it; the frozen and source commands; the bounded token read; and the daemon-pid check.
     `tests/test_live_daemon.py`: a real `muxd` reports a ready worker among its descendants and a `quit` reaps it, and a detach ends the worker while the supervisor survives.
 
-- [ ] **20. Process inspection into the worker.**
+- [x] **20. Process inspection into the worker.**
   - **Why:** psutil holds the GIL on Windows, and the inspector walks about 1,200 processes per pass plus request-triggered extra passes (`processes.py:501-573,817-829,1300-1431,1558-1684`).
   - **Change:**
     - The worker runs the sampling pass, priority enforcement, the Codex process proofs (`codex_process_identity.py`), `win_process_files` queries and the ghost-window sweep.
@@ -605,6 +606,43 @@ Items are worked in order, and an item may reorder, split or remove later items 
     - `process_evidence` writes to `mux.db` stay in the daemon, fed by the deltas, and `_fast_clear_background_annotations` stays in the daemon, driven by snapshots.
   - **Where:** `processes.py`, `ghost_windows.py`, `codex_process_identity.py`, `win_process_files.py`, `design/features/processes-and-previews.md`.
   - **Done when:** the Processes tab, previews, fleet intelligence and process evidence match the in-process behaviour in tests, and the harness shows the inspector's GIL share gone from the daemon.
+  - **Done (2026-10-17).** Design: `design/features/processes-and-previews.md` § Where the pass runs, and `design/features/worker-process.md` § Moving a service into it.
+    - **The worker runs the daemon's own sampler, not a port of it.**
+      `process_service.py` gives a `ProcessInspector` the eight session-record fields a pass reads (`SESSION_FACT_FIELDS`) through a stand-in session manager, plus the job-pid map, the supervisor pid, the daemon's pid (`daemon_pid_override`, so the worker samples the daemon as the daemon and counts itself among swe-mux's own processes), the orphan grace and the priority target, and calls the same `_collect_all`.
+      The daemon's `owned` becomes a mirror, so every reader - the Processes surfaces, previews, fleet intelligence, `process_evidence` persistence, listener events and the background-annotation clear - is untouched and still in-process.
+    - **A delta, mostly patches.** A process the daemon has never held crosses whole, one it holds crosses as the fields that changed, and a pruned one as its key; a live process's command line, most of its bytes, never changes, so a pass after the first carries no whole records at all on a steady fleet.
+      The daemon decodes in a thread and applies on the loop.
+    - **Reloaded, never trusted.** `WorkerHost.generation` counts connected workers; the daemon loads its whole mirror into a worker it has not loaded, and an unloaded worker refuses to sample rather than answer with a delta that forgets every process.
+      A patch for a process the mirror lacks marks the copies diverged and reloads on the next pass; any failure samples in the daemon for that pass, exactly as before the worker existed.
+    - **Actions, port-conflict probes and unique memory go to the worker** because they need its handles and process table. `_deliver` is shared by both ends; a session root's interrupt is the one thing the worker only verifies, because the daemon owns the PTY that delivers it. A refusal there is the same `ValueError` and 400.
+    - **Priority enforcement moved with the pass**, and `process_priority` reports the worker's counts while passes run there.
+    - **The ghost-window sweep moved too**, as a `ghost_windows` worker service the daemon's loop calls once a tick with an in-process fallback, because `EnumWindows` calls back into Python, taking the GIL, once per top-level window.
+  - **Three departures from the text above.**
+    - **Listener events are derived in the daemon from the mirror**, not returned by the worker: the mirror holds the same rows the worker's pass produced, and deriving there keeps the event bus, its ordering and its consumers where they were.
+    - **A read still triggers a pass when the sample is stale** (older than the cadence and not shed by the governor), and an action still forces one. The plan's "read the latest snapshot instead" was about a pass costing the daemon its GIL; a pass now costs it one delta decode, and keeping the rule keeps every freshness guarantee the tests hold the inspector to. Preview `register(force)` goes through that forced pass, with the pass's own 60 s timeout.
+    - **The Codex process proofs (`codex_process_identity.py`) and `win_process_files` stay in the daemon.** They are event-gated - once per Codex hook start or per session event that could move a conversation (`SessionManager._process_proof_due`) - and they sit on paths where a round trip is latency a person waits on.
+      Measured on the live daemon at 20 minutes of uptime with 8 sessions: neither appears among the 15 costliest executor labels (each below 1.5 s of CPU), against `ProcessInspector._collect_all` at 37.0 s over 235 passes (157 ms each); item 4's GIL ranking did not see them at all.
+  - **Measured** (the item 4 configuration: 36 `scroll` sessions at 20 KB/s, 3 hooks, 1 decision and 1.5 OTLP posts a second, an `/events` browser, no burners, `py-spy --gil --threads` on the daemon pid for 45 s; one run each, the same build, `worker_process_enabled` off and then on):
+
+    | | Worker off | Worker on |
+    | --- | --- | --- |
+    | Process inspection share of the daemon's GIL samples | 6.5% (70 of 1,080) | 0.4% (4 of 1,065, all serializing snapshots for readers) |
+    | `ProcessInspector._collect_all` CPU in the daemon | 3.02 s over 28 passes | none |
+    | Keystroke echo p50 / p95 / p99 / max | 6.3 / 102 / 602 / 1,083 ms | 5.0 / 18.5 / 27.0 / 28.6 ms |
+    | `GET /api/sessions` p99 | 582 ms | 38.5 ms |
+    | `GET /api/health` p99 | 537 ms | 25.7 ms |
+    | Hook / decision / OTLP p99 | 153 / 48.9 / 103 ms | 22.3 / 18.7 / 27.3 ms |
+    | Lag samples >= 100 ms | 3 / 239 | 0 / 241 |
+
+    The GIL share and the executor CPU are the measurement this item was for, and they are unambiguous: the pass and its socket-table and parent-map reads (`_refresh_tree` alone was 2.8% of samples) are gone from the daemon, and decoding and applying the delta does not appear in a single sample.
+    The latency tails are one run each and the worker-off run's are one episode - every p99 near 540-600 ms, against item 6's in-process 40 ms echo p99 - so they show what an inspector-held convoy costs when it lands, not a steady-state ratio.
+    `process-inspector` busy time rose from 3.6 s to 5.2 s in the window: busy is wall time per iteration, and an iteration now awaits the worker's pass instead of running it on a daemon thread.
+    The ghost sweep was already small - 0.11 s of daemon CPU over 27 sweeps in the worker-off run, and no GIL sample in either profile - so it moved for the per-window callback convoy rather than for a measured share.
+  - **Tests:** `tests/test_process_sampling_worker.py`, 9: a mirror kept only from deltas equals the sampler it mirrors (new, patched, exited, pruned processes and the machine-wide readings), patches carry only changed fields, a quiet pass sends nothing, diagnostics cross only when changed, a patch the mirror cannot apply reports divergence, session facts are exactly the fields the pass reads, an unloaded worker refuses to sample, a failing worker pass samples in the daemon; and against a real worker and a real process tree under a stand-in supervisor, a pass in the worker attributes exactly what a pass in the daemon does (and a second pass is patches only, and unique memory is read there), actions run in the worker with a root interrupted through its PTY and a refusal raised as before, and a killed worker is reloaded before it samples.
+    `tests/test_ghost_windows.py`: a sweep in the worker is counted in the daemon and never repeated there, a failing or absent worker sweeps in the daemon, and the worker service sweeps on its own sweeper.
+    `tests/test_live_daemon.py`: a daemon a default install builds hands its passes to the worker, which sampled that daemon as the daemon.
+    `tests/test_worker_host.py`: the generation counts each connected worker.
+  - **Where:** `process_service.py`, `process_fingerprint.py`, `processes.py`, `ghost_windows.py`, `worker.py`, `worker_host.py`, `server.py`, `routes/diagnostics.py`, `operational_telemetry.py`, `tools/fleet_load_harness.py` (now reports `process_sampling` and `worker`), `design/features/{processes-and-previews,worker-process,ghost-windows}.md`, `design/interfaces.md`, `technical/backend/packages/{processes-and-devices,daemon-runtime}.md`.
 
 - [ ] **21. Canonical telemetry into the worker.**
   - **Why:** the reducer, reconcile, rollups and seals run in daemon threads, OTLP bodies of up to 4 MiB are parsed on the loop, and `_dimensions` runs on the loop for every event (`telemetry_service.py:151-368`; `routes/agent_ingress.py:433-476`).

@@ -380,9 +380,84 @@ def test_diagnostics_shape_and_recent_is_not_the_live_list(monkeypatch: pytest.M
         "cadence": 2.5,
         "swept_total": 0,
         "recent": [],
+        "sweeps": {"in_worker": 0, "here": 0, "worker_failures": 0},
     }
     diagnostics["recent"].append({"hwnd": 999})
     assert sweeper.recent == [], "diagnostics() must return a copy, not the sweeper's live list"
+
+
+# ---------------------------------------------------------------------------
+# Where the sweep runs: the worker process while it is ready, here otherwise
+# ---------------------------------------------------------------------------
+
+
+class _Worker:
+    def __init__(self, reply: Any = None, error: Exception | None = None) -> None:
+        self.ready = True
+        self.reply = reply
+        self.error = error
+        self.calls: list[tuple[str, str]] = []
+
+    async def call(self, service: str, method: str, *_: Any, **__: Any) -> Any:
+        self.calls.append((service, method))
+        if self.error is not None:
+            raise self.error
+        return self.reply, b""
+
+
+async def test_a_sweep_in_the_worker_is_counted_here_and_never_repeated_here(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sweeper = GhostWindowSweeper()
+    monkeypatch.setattr(
+        sweeper, "sweep", lambda: pytest.fail("the daemon swept although the worker did")
+    )
+    parked = [_ghost(1).as_dict(), _ghost(2).as_dict()]
+    worker = _Worker(reply={"parked": parked, "available": True})
+    sweeper.attach_worker(worker)
+
+    await sweeper.sweep_once()
+
+    assert worker.calls == [(ghost_windows.GHOST_WINDOW_SERVICE, "sweep")]
+    assert sweeper.swept_total == 2
+    assert [entry["hwnd"] for entry in sweeper.recent] == [1, 2]
+    assert all("ts" in entry for entry in sweeper.recent)
+    assert sweeper.sweeps == {"in_worker": 1, "here": 0, "worker_failures": 0}
+
+
+async def test_a_failed_or_absent_worker_sweeps_here(monkeypatch: pytest.MonkeyPatch) -> None:
+    sweeper = GhostWindowSweeper()
+    swept: list[bool] = []
+    monkeypatch.setattr(sweeper, "sweep", lambda: swept.append(True) or [])
+    worker = _Worker(error=RuntimeError("worker went away"))
+    sweeper.attach_worker(worker)
+
+    await sweeper.sweep_once()
+    worker.ready = False
+    await sweeper.sweep_once()
+
+    assert len(worker.calls) == 1, "a worker that is not ready is not asked"
+    assert swept == [True, True]
+    assert sweeper.sweeps == {"in_worker": 0, "here": 2, "worker_failures": 1}
+
+
+async def test_the_worker_service_sweeps_on_its_own_sweeper(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = ghost_windows.GhostWindowService()
+    monkeypatch.setattr(ghost_windows, "supported", lambda platform=None: True)
+    monkeypatch.setattr(ghost_windows, "psutil", SimpleNamespace())
+    monkeypatch.setattr(service.sweeper, "scan", lambda: [_ghost(3)])
+    fake_user32 = _fake_user32()
+    monkeypatch.setattr(
+        ghost_windows.ctypes, "WinDLL", lambda *_a, **_k: fake_user32, raising=False
+    )
+
+    reply = await service.handle("sweep", {}, b"")
+
+    assert reply == {"parked": [_ghost(3).as_dict()], "available": True}
+    with pytest.raises(ghost_windows.RequestRefused, match="unknown method"):
+        await service.handle("nothing", {}, b"")
 
 
 # ---------------------------------------------------------------------------

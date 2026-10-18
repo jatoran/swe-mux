@@ -78,6 +78,7 @@ Standard library only, which `tests/test_framed_ipc.py` checks in a fresh interp
 The daemon's side of the worker process (`../../../design/features/worker-process.md`): the `framed_ipc` listener, the spawn in a thread with the token on stdin, and the worker's own kill-on-close reaper.
 It runs the supervised `worker-host` loop, incarnation after incarnation with capped backoff, with ready hooks that push each service its state, notice routing, and `health()` for `/api/diagnostics/background`.
 `call` raises `WorkerUnavailable` rather than waiting for a restart, so every caller keeps a daemon fallback.
+`generation` counts connected workers, which is how a service holding state in the worker knows it must push that state again.
 
 **Not:** any service's work, which lives in `worker.py`'s services; and not `mux.db`, which only the daemon writes.
 
@@ -85,6 +86,7 @@ It runs the supervised `worker-host` loop, incarnation after incarnation with ca
 
 The worker process itself: reads its token from stdin, sets the switch interval and timer period, logs to `worker.log`, connects to its daemon, routes `<service>.<method>` requests to the services in `SERVICES`, and exits on the connection's EOF or its daemon's pid disappearing.
 Frozen it runs as `swe-mux.exe --worker-child`; from source as `python -m swe_mux.worker`.
+`SERVICES` names each service by a factory that imports its module only when the worker builds it (`processes` from `process_service.py`, `ghost_windows` from `ghost_windows.py`), so the daemon, which imports this module for its constants, never loads them.
 
 **Not:** a place for state the daemon cannot push back after a restart.
 

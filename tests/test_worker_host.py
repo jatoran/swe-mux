@@ -136,11 +136,12 @@ async def test_a_no_op_service_round_trips_through_a_real_worker(tmp_path: Path)
         reply, payload = await host.call("noop", "echo", {"value": 7}, b"\x00bytes")
         assert reply["echo"] == 7 and payload == b"\x00bytes"
         stats, _ = await host.call("worker", "stats")
-        assert stats["pid"] == host.pid and stats["services"] == ["noop"]
+        assert stats["pid"] == host.pid and stats["services"] == sorted(worker.SERVICES)
 
         health = host.health()
         assert health["state"] == STATE_RUNNING and health["ready"] is True
-        assert health["services"] == ["noop"] and health["spawns"] == 1
+        assert health["services"] == sorted(worker.SERVICES) and health["spawns"] == 1
+        assert health["generation"] == 1
         assert alive(host.pid)
         # The daemon's own child - or, under a Windows venv's `python.exe`
         # launcher, the child of the daemon's own child.
@@ -184,6 +185,7 @@ async def test_a_killed_worker_is_restarted_and_rebuilt_from_the_daemon(tmp_path
         )
         assert not alive(first)
         assert host.restarts == 1 and host.spawns == 2
+        assert host.generation == 2, "a service's state is pushed per generation"
         # The new worker remembers nothing: it holds what the hook pushed it.
         described, _ = await host.call("noop", "describe")
         assert described["state"] == {"generation": 2}

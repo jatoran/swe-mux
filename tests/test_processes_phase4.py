@@ -541,7 +541,7 @@ async def test_unified_process_snapshot_groups_sessions_and_aggregates_resources
         77, 20, "session-b", "worker", "worker", 2.0, None, 7.5, 64 * 1024 * 1024, [], []
     )
     inspector.owned = {(55, 1.0): first, (77, 2.0): second}
-    monkeypatch.setattr(inspector, "_collect_all", lambda: [first, second])
+    monkeypatch.setattr(inspector, "_collect_all", lambda *_: [first, second])
 
     result = await inspector.snapshot_all()
 
@@ -611,7 +611,7 @@ def _fleet_inspector(monkeypatch: pytest.MonkeyPatch) -> Any:
         (88, 3.0): orphan,
         (99, 4.0): dead_only,
     }
-    monkeypatch.setattr(inspector, "_collect_all", lambda: [live, orphan])
+    monkeypatch.setattr(inspector, "_collect_all", lambda *_: [live, orphan])
     return inspector
 
 

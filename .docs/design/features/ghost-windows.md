@@ -77,6 +77,11 @@ The stamp is read with the GIL released (`host_metrics.process_start_stamp`), an
 Measured against 580 live top-level windows: 3.99 ms cold, 2.76 ms median warm, with one memoized command-line lookup.
 This satisfies the periodic-loop rule in `../../technical/backend/packages.md`, which exists because an earlier unmemoized per-tick `cmdline()` scan in `processes.py` cost 930-1110 ms per pass.
 
+**The sweep runs in the worker process while one is ready** (`worker-process.md`, `development/DAEMON_LOAD_ISOLATION.md` item 20).
+`EnumWindows` calls back into Python once per top-level window, and each callback takes the GIL; in the daemon those few milliseconds are spread across hundreds of GIL acquisitions that each compete with the event loop.
+The daemon's loop asks the worker's `ghost_windows` service for one sweep per tick and records what it parked; a worker that is not ready, or a sweep there that fails, sweeps in the daemon as before.
+`/api/diagnostics/background` → `ghost_windows` reports the counts, the recent parks, and `sweeps` (`in_worker`, `here`, `worker_failures`).
+
 ## Configuration
 
 | Option | Default | Bounds |
@@ -96,7 +101,8 @@ working.
 
 - Windows only.
   The artifact is a Win32 and DWM interaction and the service is inert on other platforms.
-- Daemon-side.
+- Daemon-owned.
+  The loop and its counts belong to the daemon and the sweep runs in the daemon's own worker process, which dies with it.
   The supervisor is deliberately uninvolved because a ghost is a desktop artifact rather than session state, and it must not survive into a session-preserving reload as owned state.
 - Requires `psutil` for the command-line condition.
   Without it the service reports unavailable and does nothing rather than sweeping on a weaker signature.
@@ -110,6 +116,6 @@ The sweep remains necessary regardless, because swe-mux does not control which b
 
 ## Implementation
 
-- `src/swe_mux/ghost_windows.py` owns detection, remediation, and the loop.
+- `src/swe_mux/ghost_windows.py` owns detection, remediation, the loop, and the worker's `GhostWindowService`.
 - `src/swe_mux/server.py` constructs `GhostWindowSweeper`, starts and stops it with the other background loops, and applies hot-reloaded configuration.
 - `src/swe_mux/config.py` defines and validates both options.

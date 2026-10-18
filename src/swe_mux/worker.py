@@ -115,8 +115,29 @@ class NoopService:
         self._worker = None
 
 
-#: Every service the worker can host, by name. Items 20-22 add theirs here.
-SERVICES: dict[str, Callable[[], WorkerService]] = {"noop": NoopService}
+# The factories import their modules when called rather than at the top: the
+# daemon imports this module for its constants (`worker_host.py`), and must not
+# load the worker's services with it.
+
+
+def _process_service() -> WorkerService:
+    from .process_service import ProcessService
+
+    return ProcessService()
+
+
+def _ghost_window_service() -> WorkerService:
+    from .ghost_windows import GhostWindowService
+
+    return GhostWindowService()
+
+
+#: Every service the worker can host, by name. Items 21-22 add theirs here.
+SERVICES: dict[str, Callable[[], WorkerService]] = {
+    "noop": NoopService,
+    "processes": _process_service,
+    "ghost_windows": _ghost_window_service,
+}
 
 
 class Worker:

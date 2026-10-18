@@ -64,6 +64,7 @@ rather than letting a finalizer report it against a neighbour.
 from __future__ import annotations
 
 import asyncio
+import os
 import subprocess
 import uuid
 from collections.abc import Sequence
@@ -155,6 +156,31 @@ async def test_starting_the_daemon_writes_the_agent_shims_and_hook_artifacts(
         assert materialized, "no adapter declared a settings or MCP config path at all"
         for name, path in materialized:
             assert Path(path).is_file(), f"{name} declared {path} and never wrote it"
+
+
+@pytest.mark.asyncio
+async def test_process_sampling_runs_in_the_worker_process(tmp_path: Path) -> None:
+    """`DAEMON_LOAD_ISOLATION.md` item 20, on the daemon a default install builds.
+
+    The unit tier proves a worker attributes what the daemon would; this proves the
+    daemon actually hands its passes over - the worker started, was loaded, and
+    answered - and that the worker sampled this daemon as the daemon, which is the
+    one fact a worker cannot learn from its own process.
+    """
+    async with isolated_daemon(tmp_path) as daemon:
+        inspector = daemon.app[keys.PROCESS_INSPECTOR]
+        worker = daemon.app[keys.WORKER]
+        await until(
+            lambda: inspector.sampling_stats()["remote_passes"] >= 1,
+            seconds=120.0,
+            what=f"a sampling pass ran in the worker; {inspector.sampling_stats()}",
+        )
+        stats = inspector.sampling_stats()
+        assert stats["in_worker"] is True and stats["loads"] >= 1, stats
+        fleet = await inspector.snapshot_all()
+        assert fleet["daemon"]["pid"] == os.getpid(), "the in-process daemon is this process"
+        members = {member["pid"] for member in fleet["daemon"]["members"]}
+        assert worker.pid in members, f"the worker {worker.pid} is not among {members}"
 
 
 # ----------------------------------------------------------------- session round trip

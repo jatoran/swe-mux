@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import logging
 import os
 import re
@@ -12,20 +13,24 @@ from collections.abc import Awaitable, Callable, Collection
 from contextlib import suppress
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit, urlunsplit
-
-from aiohttp import ClientError, ClientSession, ClientTimeout
 
 from . import process_priority
 from .background_tasks import background
 from .errors import NotFound
-from .event_bus import EventBus
-from .harness import is_agent_harness
+from .framed_ipc import RemoteError
 from .host_metrics import process_exited
-from .operational_telemetry import command_hash, process_identity
-from .preview_store import PreviewStore
-from .session import Session, SessionManager, clear_standing_activity
+from .process_fingerprint import command_hash, process_identity
+
+# The worker process imports this module to sample processes, so everything only
+# the daemon half needs - the session model, the event bus, aiohttp for preview
+# probes - is imported where it is used or for type checking only. Importing
+# `session` here would load seventy modules into a worker that needs none of them.
+if TYPE_CHECKING:
+    from .event_bus import EventBus
+    from .preview_store import PreviewStore
+    from .session import Session, SessionManager
 
 try:
     import psutil
@@ -36,6 +41,8 @@ log = logging.getLogger(__name__)
 
 PROCESS_INSPECTOR_LOOP = "process-inspector"
 PROCESS_ATTRIBUTION_VERSION = 2
+#: How long the startup pass waits for the worker process before running here.
+STARTUP_WORKER_WAIT_SECONDS = 30.0
 # Creation times round-trip through float seconds on both sides; the existing
 # ownership re-check uses the same tolerance.
 _CREATE_TIME_TOLERANCE_SECONDS = 0.01
@@ -297,6 +304,7 @@ class OwnedProcess:
 
 
 _OWNED_PROCESS_FIELDS: tuple[str, ...] = tuple(item.name for item in fields(OwnedProcess))
+_OWNED_PROCESS_FIELD_SET = frozenset(_OWNED_PROCESS_FIELDS)
 _OWNED_PROCESS_LIST_FIELDS = ("listeners", "conditions", "connections", "parent_lineage")
 #: What `OperationalTelemetryStore.record_process_observations` reads. CPU, memory,
 #: listeners and connections are live readings, not evidence, and are not persisted.
@@ -331,6 +339,97 @@ _OBSERVATION_FIELDS = (*_OBSERVATION_SCALAR_FIELDS, "parent_lineage")
 #: A retained process's identity: pid plus creation time.
 _ProcessKey = tuple[int, float]
 
+# --- the worker wire ------------------------------------------------------------
+#
+# With a worker process attached (`attach_worker`, `DAEMON_LOAD_ISOLATION.md` item
+# 20) the sampling pass runs there, on an instance of this same class, and the
+# daemon keeps `owned` as a mirror updated from deltas. These are the shapes that
+# cross: an owned process is all of its fields, the listen index is a list of
+# `[host, port, pids]`, and a session is the eight record fields the pass reads.
+# `process_service.encode_delta` writes the delta `_decode_delta` reads; a key is
+# `[pid, started_at]`, and a process the daemon already holds arrives as a patch
+# of the fields that changed, because a live process's command line - most of its
+# bytes - never does.
+
+#: The `SessionRecord` fields a sampling pass reads, and nothing else.
+SESSION_FACT_FIELDS = (
+    "id",
+    "pid",
+    "state",
+    "root_started_at",
+    "project_id",
+    "agent_run_id",
+    "process_job_assignment",
+    "last_activity_ts",
+)
+
+
+def owned_to_wire(item: OwnedProcess) -> dict[str, Any]:
+    """Every field of an owned process, nested lists copied, ready for JSON."""
+    result = {name: getattr(item, name) for name in _OWNED_PROCESS_FIELDS}
+    for name in _OWNED_PROCESS_LIST_FIELDS:
+        result[name] = [dict(entry) if isinstance(entry, dict) else entry for entry in result[name]]
+    return result
+
+
+def owned_from_wire(record: dict[str, Any]) -> OwnedProcess:
+    """The inverse of `owned_to_wire`; a field the sender did not know keeps its default."""
+    return OwnedProcess(**{name: record[name] for name in _OWNED_PROCESS_FIELDS if name in record})
+
+
+def owned_key(item: OwnedProcess) -> _ProcessKey:
+    return (item.pid, float(item.started_at or 0.0))
+
+
+def session_facts(session: Any) -> dict[str, Any]:
+    """What a sampling pass needs to know about one session, as plain data."""
+    record = session.record
+    return {name: getattr(record, name, None) for name in SESSION_FACT_FIELDS}
+
+
+def listen_index_to_wire(index: dict[tuple[str, int], frozenset[int]]) -> list[list[Any]]:
+    return [[host, port, sorted(pids)] for (host, port), pids in index.items()]
+
+
+def _decode_delta(payload: bytes) -> dict[str, Any]:
+    """A worker pass's reply, decoded off the loop into what `_apply_delta` applies.
+
+    Run in a thread: a fleet's live processes all change every pass (their CPU and
+    memory move), so this is a few hundred records of JSON and the objects built
+    from them, which is exactly the kind of work the worker exists to keep off the
+    event loop.
+    """
+    data = json.loads(payload) if payload else {}
+    upserts: list[tuple[_ProcessKey, OwnedProcess]] = []
+    for record in data.get("upserts") or []:
+        item = owned_from_wire(record)
+        upserts.append((owned_key(item), item))
+    patches: list[tuple[_ProcessKey, dict[str, Any]]] = [
+        ((int(pid), float(started)), changed)
+        for pid, started, changed in data.get("patches") or []
+        if isinstance(changed, dict)
+    ]
+    removed = [(int(pid), float(started)) for pid, started in data.get("removed") or []]
+    listen_index = {
+        (str(host), int(port)): frozenset(int(pid) for pid in pids)
+        for host, port, pids in data.get("listen_index") or []
+    }
+    resources = data.get("daemon_resources")
+    diagnostics = data.get("diagnostics")
+    priority = data.get("priority")
+    return {
+        "upserts": upserts,
+        "patches": patches,
+        "removed": removed,
+        "daemon_resources": resources if isinstance(resources, dict) else {},
+        "listen_index": listen_index,
+        "system_cpu_pct": data.get("system_cpu_pct"),
+        # Absent when unchanged since the last delta: the list is bounded but sent
+        # whole, and it changes far less often than every pass.
+        "diagnostics": list(diagnostics) if isinstance(diagnostics, list) else None,
+        "priority": priority if isinstance(priority, dict) else None,
+    }
+
 
 class ProcessInspector:
     def __init__(
@@ -356,6 +455,28 @@ class ProcessInspector:
         self._priority_lowered_total = 0
         self._priority_denied: set[int] = set()
         self._priority_last_pass = 0
+        # Which process is "the daemon" to the pass. Its own pid in the daemon; the
+        # daemon's pid when this instance runs in the worker process (`process_service`).
+        self.daemon_pid_override: int | None = None
+        # The worker process the pass runs in, when one is attached (`attach_worker`).
+        self._worker: Any | None = None
+        # The worker incarnation whose sampler holds this mirror, or None when the
+        # mirror changed here (a restore, a pass run in-process) and must be loaded
+        # into the worker before its next pass.
+        self._synced_generation: int | None = None
+        # The worker's last priority report, which `priority_stats` answers with.
+        self._remote_priority: dict[str, Any] | None = None
+        self._sampling: dict[str, Any] = {
+            "remote_passes": 0,
+            "local_passes": 0,
+            "remote_failures": 0,
+            "loads": 0,
+            "last_remote_seconds": None,
+            "last_delta_bytes": 0,
+            "last_upserts": 0,
+            "last_patches": 0,
+            "last_failure": "",
+        }
         self.owned: dict[tuple[int, float], OwnedProcess] = {}
         self._task: asyncio.Task[None] | None = None
         self._listeners: set[tuple[str, int, str]] = set()
@@ -406,7 +527,7 @@ class ProcessInspector:
         self._ownership_diagnostics: list[dict[str, Any]] = []
         self._ownership_diagnostic_keys: set[tuple[Any, ...]] = set()
         self._daemon_resources: dict[str, Any] = {
-            "pid": os.getpid(),
+            "pid": self._daemon_pid(),
             "processes": 0,
             "cpu_pct": 0.0,
             "memory_bytes": 0,
@@ -465,12 +586,26 @@ class ProcessInspector:
             existing = self.owned.get(key)
             if existing is None or float(process.last_seen or 0) > float(existing.last_seen or 0):
                 self.owned[key] = process
+        # The mirror changed here, so a worker that already loaded it holds less.
+        self._synced_generation = None
         if self.available:
+            # The startup pass is the cold one - a full sweep measured at 20.7 s on a
+            # 482-process host - and the whole point of the worker is that it is not
+            # paid on this interpreter. This runs in a deferred task, so waiting for
+            # the worker costs the start nothing; past the bound it runs here.
+            worker = self._worker
+            if worker is not None and getattr(worker, "enabled", False):
+                await worker.wait_ready(STARTUP_WORKER_WAIT_SECONDS)
             await self.reconcile(startup=True)
 
     @property
     def available(self) -> bool:
         return psutil is not None
+
+    def _daemon_pid(self) -> int:
+        """The daemon's pid: this process's, unless this instance samples for it elsewhere."""
+        override = self.daemon_pid_override
+        return override if override is not None else os.getpid()
 
     def _diagnose_once(
         self,
@@ -526,7 +661,7 @@ class ProcessInspector:
             return
         await self._refresh_job_pids()
         async with self._sample_lock:
-            snapshots = await asyncio.to_thread(self._collect_all, startup)
+            await self._sample_pass(startup=startup, prune=True)
         now = time.time()
         # Escaped processes with current provenance remain owned. They are absent
         # from the downward walk by definition, but their live listener must agree
@@ -561,11 +696,6 @@ class ProcessInspector:
                 host=host,
                 port=port,
             )
-        self.owned = {
-            key: process
-            for key, process in self.owned.items()
-            if process.exited_at is None or now - process.exited_at < ENDED_RETENTION_SECONDS
-        }
         self._fast_clear_background_annotations(snapshots, now)
         if self.telemetry is not None and (
             startup or now - self._last_persist >= max(10.0, self.cadence * 2)
@@ -649,6 +779,20 @@ class ProcessInspector:
         if len(pids) < 2:
             self._answerers.pop((host, port), None)
             return None
+        if self._worker_usable() and self._synced_generation is not None:
+            # The answerer probe reads the whole socket table and the description
+            # opens foreign processes: both belong where the handles are.
+            worker = self._worker
+            assert worker is not None
+            with suppress(Exception):
+                reply, _ = await worker.call(
+                    "processes",
+                    "port_conflict",
+                    {"host": host, "port": port, "session_id": session_id},
+                    timeout_seconds=15.0,
+                )
+                conflict = reply.get("conflict")
+                return conflict if isinstance(conflict, dict) else None
         now = time.monotonic()
         cached = self._answerers.get((host, port))
         fresh = cached is not None and now - cached[1] < PORT_CONFLICT_RECHECK_SECONDS
@@ -770,6 +914,9 @@ class ProcessInspector:
         at all. `_could_be_background_task` replaces the count with a per-process
         question that those helpers answer "no" to by construction.
         """
+        from .harness import is_agent_harness
+        from .session import clear_standing_activity
+
         live: dict[str, list[Any]] = {}
         for item in snapshots:
             live.setdefault(item.session_id, []).append(item)
@@ -834,7 +981,150 @@ class ProcessInspector:
             # Re-checked under the lock: a caller ahead of this one may just have
             # collected.
             if force or (due and time.monotonic() - self._last_collect >= self.cadence):
-                await asyncio.to_thread(self._collect_all)
+                await self._sample_pass(startup=False, prune=False)
+
+    # -- where the pass runs -----------------------------------------------------------
+
+    def attach_worker(self, worker: Any) -> None:
+        """Run sampling passes in `worker` (a `WorkerHost`) while it is ready.
+
+        `owned` and the rest of the sampled state then become a mirror of the
+        worker's sampler, updated from a delta after each pass. Whenever no worker
+        is ready, or a pass there fails, the pass runs here exactly as it did
+        before the worker existed, and the mirror is loaded back into the next
+        worker before it samples again.
+        """
+        self._worker = worker
+        self._synced_generation = None
+
+    def _worker_usable(self) -> bool:
+        worker = self._worker
+        return worker is not None and bool(getattr(worker, "ready", False))
+
+    async def _sample_pass(self, *, startup: bool, prune: bool) -> None:
+        """One collection pass, in the worker when one is ready. Caller holds the lock."""
+        if self._worker_usable():
+            try:
+                await self._remote_pass(startup=startup, prune=prune)
+                return
+            except Exception as exc:  # noqa: BLE001 - every failure falls back to sampling here
+                self._synced_generation = None
+                self._sampling["remote_failures"] += 1
+                self._sampling["last_failure"] = f"{type(exc).__name__}: {exc}"[:300]
+                failures = self._sampling["remote_failures"]
+                if failures == 1 or failures % 50 == 0:
+                    log.warning(
+                        "process sampling in the worker failed (%s); sampling in the daemon "
+                        "this pass (%d failure(s) so far)",
+                        self._sampling["last_failure"],
+                        failures,
+                    )
+        await asyncio.to_thread(self._collect_all, startup)
+        if prune:
+            self._prune_retention(time.time())
+        self._sampling["local_passes"] += 1
+        # The mirror moved here; the worker's copy is no longer it.
+        self._synced_generation = None
+
+    def _prune_retention(self, now: float) -> None:
+        """Forget ended processes older than `ENDED_RETENTION_SECONDS`."""
+        self.owned = {
+            key: process
+            for key, process in self.owned.items()
+            if process.exited_at is None or now - process.exited_at < ENDED_RETENTION_SECONDS
+        }
+
+    async def _remote_pass(self, *, startup: bool, prune: bool) -> None:
+        worker = self._worker
+        assert worker is not None
+        generation = getattr(worker, "generation", None)
+        if self._synced_generation is None or self._synced_generation != generation:
+            await self._load_worker(worker)
+            self._synced_generation = generation
+        facts = [session_facts(session) for session in self.sessions.sessions.values()]
+        request = {
+            "sessions": facts,
+            "job_pids": self._job_pids,
+            "supervisor_pid": self._supervisor_pid(),
+            "daemon_pid": os.getpid(),
+            "orphan_grace_seconds": self.orphan_grace_seconds,
+            "session_priority": self.session_priority,
+        }
+        started = time.perf_counter()
+        _, payload = await worker.call(
+            "processes",
+            "sample",
+            {"startup": startup, "prune": prune},
+            json.dumps(request).encode("utf-8"),
+            timeout_seconds=max(60.0, self.cadence * 6),
+        )
+        delta = await asyncio.to_thread(_decode_delta, payload)
+        if not self._apply_delta(delta):
+            # A patch for a process the mirror does not hold: the two copies have
+            # diverged, so the next pass loads this one into the worker again.
+            self._synced_generation = None
+            log.warning("process sampler mirror diverged from the worker; reloading it")
+        self._last_collect = time.monotonic()
+        self._sampling["remote_passes"] += 1
+        self._sampling["last_remote_seconds"] = round(time.perf_counter() - started, 4)
+        self._sampling["last_delta_bytes"] = len(payload)
+        self._sampling["last_upserts"] = len(delta["upserts"])
+        self._sampling["last_patches"] = len(delta["patches"])
+
+    async def _load_worker(self, worker: Any) -> None:
+        """Replace the worker sampler's state with this mirror."""
+        payload = await asyncio.to_thread(
+            lambda: json.dumps(
+                {
+                    "owned": [owned_to_wire(item) for item in self.owned.values()],
+                    "diagnostics": list(self._ownership_diagnostics),
+                }
+            )
+        )
+        await worker.call(
+            "processes", "load", {}, payload.encode("utf-8"), timeout_seconds=120.0
+        )
+        self._sampling["loads"] += 1
+        log.info(
+            "process sampler loaded into the worker with %d retained process(es)",
+            len(self.owned),
+        )
+
+    def _apply_delta(self, delta: dict[str, Any]) -> bool:
+        """Apply a decoded delta to the mirror; False when a patch found nothing to patch.
+
+        On the loop, so no reader ever sees a process half-patched; the costly part,
+        decoding and building the new records, already happened in a thread.
+        """
+        owned = self.owned
+        coherent = True
+        for key, item in delta["upserts"]:
+            owned[key] = item
+        for key, changed in delta["patches"]:
+            target = owned.get(key)
+            if target is None:
+                coherent = False
+                continue
+            for name, value in changed.items():
+                if name in _OWNED_PROCESS_FIELD_SET:
+                    setattr(target, name, value)
+        for key in delta["removed"]:
+            owned.pop(key, None)
+        self._daemon_resources = delta["daemon_resources"]
+        self._listen_index = delta["listen_index"]
+        self._system_cpu_pct = delta["system_cpu_pct"]
+        if delta["diagnostics"] is not None:
+            self._ownership_diagnostics = delta["diagnostics"]
+        self._remote_priority = delta["priority"]
+        return coherent
+
+    def sampling_stats(self) -> dict[str, Any]:
+        """Where passes ran and what they cost, for `/api/diagnostics/background`."""
+        return {
+            "in_worker": self._worker_usable() and self._synced_generation is not None,
+            "worker_attached": self._worker is not None,
+            **self._sampling,
+        }
 
     def _sample_due(self) -> bool:
         age = time.monotonic() - self._last_collect
@@ -1066,7 +1356,16 @@ class ProcessInspector:
             )
 
     def priority_stats(self) -> dict[str, Any]:
-        """What the enforcement has done, for `/api/diagnostics/background`."""
+        """What the enforcement has done, for `/api/diagnostics/background`.
+
+        The worker's report while passes run there: it is the process that holds
+        the handles and lowers the priorities.
+        """
+        if self._remote_priority is not None and self._synced_generation is not None:
+            return dict(self._remote_priority)
+        return self._local_priority_stats()
+
+    def _local_priority_stats(self) -> dict[str, Any]:
         return {
             "target": self.session_priority,
             "lowered_total": self._priority_lowered_total,
@@ -1239,13 +1538,13 @@ class ProcessInspector:
                 seen.add(pid)
                 handles.append(handle)
 
-        add_tree(os.getpid())
+        add_tree(self._daemon_pid())
         # Deliberately no creation-time check on these edges, unlike every downward
         # one. There, a recycled parent pid splices in a process that is not ours; here
         # the edge is only ever followed to a pid the image test has already declared
         # ours, and a recycled pid running our own executable is swe-mux whether or not
         # it is really this daemon's parent. The check could not change an answer.
-        cursor = self._parents.get(os.getpid())
+        cursor = self._parents.get(self._daemon_pid())
         for _ in range(MAX_INFRASTRUCTURE_ANCESTORS):
             if cursor is None or cursor in seen or not self._is_own_image(cursor):
                 break
@@ -1473,8 +1772,9 @@ class ProcessInspector:
         frozen app whose shell alone held 69 MiB - an undercount of its own footprint,
         from the same descendant-only definition that let a session claim the shell.
         """
+        daemon_pid = self._daemon_pid()
         empty = {
-            "pid": os.getpid(),
+            "pid": daemon_pid,
             "processes": 0,
             "cpu_pct": 0.0,
             "memory_bytes": 0,
@@ -1497,7 +1797,7 @@ class ProcessInspector:
         sampled_pids: set[int] = set()
         for process in candidates:
             pid = int(process.pid)
-            if pid in sampled_pids or (pid != os.getpid() and pid in attributed_pids):
+            if pid in sampled_pids or (pid != daemon_pid and pid in attributed_pids):
                 continue
             sampled_pids.add(pid)
             try:
@@ -1549,9 +1849,9 @@ class ProcessInspector:
                     "conditions": conditions,
                 }
             )
-        members.sort(key=lambda item: (item["pid"] != os.getpid(), item["pid"]))
+        members.sort(key=lambda item: (item["pid"] != daemon_pid, item["pid"]))
         return {
-            "pid": os.getpid(),
+            "pid": daemon_pid,
             "processes": process_count,
             "cpu_pct": round(cpu_total, 1),
             "memory_bytes": memory_total,
@@ -1751,6 +2051,21 @@ class ProcessInspector:
             except (AttributeError, psutil.NoSuchProcess, psutil.AccessDenied, OSError):
                 continue
         return result
+
+    async def _unique_memory(self, pids: list[int]) -> dict[int, int]:
+        """`_collect_unique_memory`, in the worker while passes run there."""
+        if self._worker_usable() and self._synced_generation is not None:
+            worker = self._worker
+            assert worker is not None
+            try:
+                _, payload = await worker.call(
+                    "processes", "unique_memory", {}, json.dumps(pids).encode("utf-8"),
+                    timeout_seconds=60.0,
+                )
+                return {int(pid): int(value) for pid, value in json.loads(payload).items()}
+            except Exception:  # noqa: BLE001 - USS is an optional column; read it here instead
+                log.debug("unique memory from the worker failed; reading it here", exc_info=True)
+        return await asyncio.to_thread(self._collect_unique_memory, pids)
 
     def _connections_by_pid(self) -> dict[int, list[Any]]:
         if psutil is None:
@@ -2146,7 +2461,7 @@ class ProcessInspector:
             daemon_members = list(daemon.get("members") or [])
             pids = [int(item["pid"]) for item in live]
             pids.extend(int(item["pid"]) for item in daemon_members)
-            unique_by_pid = await asyncio.to_thread(self._collect_unique_memory, pids)
+            unique_by_pid = await self._unique_memory(pids)
             for item in all_processes:
                 item["memory_unique_bytes"] = unique_by_pid.get(int(item["pid"]))
             daemon = dict(daemon)
@@ -2248,40 +2563,36 @@ class ProcessInspector:
             raise ValueError("process fingerprint cannot be revalidated") from exc
         return process, item
 
-    async def act(
-        self,
-        session_id: str,
-        pid: int,
-        action: str,
-        *,
-        identity_id: str | None = None,
-    ) -> dict[str, Any]:
-        await self._ensure_sampled(force=True)
-        process, _ = self._owned_live(session_id, pid, identity_id)
-        session = self.sessions.sessions.get(session_id)
+    @staticmethod
+    def _deliver(process: Any, pid: int, action: str, *, root_pid: int | None) -> bool:
+        """Signal one verified process; True when it is a session root to interrupt.
+
+        A session root is interrupted through its PTY, which only the daemon holds,
+        so that one case is answered rather than delivered. Runs in a thread, here
+        or in the worker (`process_service`), after `_owned_live` has verified the
+        process; an action it does not know is refused only after that check, as it
+        always was.
+        """
         if action == "interrupt":
-            if session and pid == session.record.pid:
-                session.pty.write(b"\x03")
-            elif os.name == "nt":
+            if root_pid is not None and pid == root_pid:
+                return True
+            if os.name == "nt":
                 # psutil rejects SIGINT on Windows, so this action was unusable
                 # for every non-root descendant on the primary platform. A console
                 # child in its own group takes CTRL_BREAK; anything else has no
                 # interrupt at all, and saying so beats a raw psutil ValueError.
                 try:
-                    await asyncio.to_thread(
-                        process.send_signal, getattr(signal, "CTRL_BREAK_EVENT", signal.SIGTERM)
-                    )
+                    process.send_signal(getattr(signal, "CTRL_BREAK_EVENT", signal.SIGTERM))
                 except (OSError, ValueError, psutil.Error) as exc:
                     raise ValueError(
-                        "this process cannot be interrupted on Windows; "
-                        "use terminate instead"
+                        "this process cannot be interrupted on Windows; use terminate instead"
                     ) from exc
             else:
-                await asyncio.to_thread(process.send_signal, signal.SIGINT)
+                process.send_signal(signal.SIGINT)
         elif action == "terminate":
-            await asyncio.to_thread(process.terminate)
+            process.terminate()
         elif action == "terminate_tree":
-            children = await asyncio.to_thread(process.children, recursive=True)
+            children = process.children(recursive=True)
             # Descendants of a fingerprint-verified root are part of the tree by
             # construction. Matching them against the owned set by *raw pid* let a
             # child that respawned since the last sample (a dev server restarting)
@@ -2293,6 +2604,65 @@ class ProcessInspector:
             process.terminate()
         else:
             raise ValueError("action must be interrupt, terminate, or terminate_tree")
+        return False
+
+    async def _remote_act(
+        self, session_id: str, pid: int, action: str, identity_id: str | None
+    ) -> bool | None:
+        """Verify and signal in the worker; None when there is none to ask.
+
+        The worker holds the handles and the fresh process table the check is made
+        against. A refusal there is the same `ValueError` it would be here; a worker
+        that went away before answering leaves the action to this process.
+        """
+        if not (self._worker_usable() and self._synced_generation is not None):
+            return None
+        from .worker_host import WorkerUnavailable
+
+        worker = self._worker
+        assert worker is not None
+        try:
+            reply, _ = await worker.call(
+                "processes",
+                "act",
+                {
+                    "session_id": session_id,
+                    "pid": pid,
+                    "action": action,
+                    "identity_id": identity_id,
+                },
+                timeout_seconds=30.0,
+            )
+        except WorkerUnavailable:
+            return None
+        except RemoteError as exc:
+            raise RuntimeError(f"process action failed in the worker: {exc.error}") from exc
+        refused = reply.get("refused")
+        if isinstance(refused, str):
+            raise ValueError(refused)
+        return bool(reply.get("root_interrupt"))
+
+    async def act(
+        self,
+        session_id: str,
+        pid: int,
+        action: str,
+        *,
+        identity_id: str | None = None,
+    ) -> dict[str, Any]:
+        await self._ensure_sampled(force=True)
+        session = self.sessions.sessions.get(session_id)
+        root_pid = session.record.pid if session else None
+        remote = await self._remote_act(session_id, pid, action, identity_id)
+        if remote is not None:
+            root_interrupt = remote
+        else:
+            process, _ = self._owned_live(session_id, pid, identity_id)
+            root_interrupt = await asyncio.to_thread(
+                self._deliver, process, pid, action, root_pid=root_pid
+            )
+        if root_interrupt and session is not None:
+            session.pty.write(b"\x03")
         await self.events.emit(
             "process_action",
             session_id=session_id,
@@ -2493,6 +2863,8 @@ def classify_preview_response(
 
 async def probe_browser_preview(url: str) -> PreviewProbeResult:
     """Read only enough of one loopback endpoint to decide if it is browser-facing."""
+    from aiohttp import ClientError, ClientSession, ClientTimeout
+
     timeout = ClientTimeout(total=1.5, sock_connect=0.5, sock_read=1.0)
     try:
         async with ClientSession(timeout=timeout) as client:

@@ -512,6 +512,15 @@ async def get_background_health(request: web.Request) -> web.Response:
             ),
             # What the inspector has lowered to keep the fleet below this process.
             "process_priority": request.app[keys.PROCESS_INSPECTOR].priority_stats(),
+            # Where the inspector's sampling passes run - the worker process, or here
+            # while it is away - and what one costs this process: the round trip and
+            # the size of the delta it decoded.
+            "process_sampling": request.app[keys.PROCESS_INSPECTOR].sampling_stats(),
+            # The headless-browser ghost sweep: what it parked, and where its sweeps
+            # ran (the worker, or here while it was away or failed).
+            "ghost_windows": (
+                ghost.diagnostics() if (ghost := request.app.get(keys.GHOST_WINDOWS)) else None
+            ),
             # Why each Git read happened (`initial`, `change`, `sweep`, or `poll` for a
             # checkout that fell back to timed polling) and the OS watches behind it.
             # `poll` climbing with `watch.unwatched_roots` above zero is a watch that

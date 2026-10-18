@@ -19,9 +19,13 @@ destroys the agent's page and killing the process destroys its whole browser,
 whereas relocation leaves both intact: a headless surface is captured from the
 compositor and never reads its own screen coordinates.
 
-Ownership: daemon-side service, started and stopped alongside the other
-background loops in `server.py`. The supervisor is deliberately uninvolved
-because a ghost is a desktop artifact rather than session state.
+Ownership: the loop is a daemon-side service, started and stopped alongside the
+other background loops in `server.py`. The sweep itself runs in the worker
+process while one is ready (`GhostWindowService`, `DAEMON_LOAD_ISOLATION.md`
+item 20): `EnumWindows` calls back into Python once per top-level window on the
+desktop, and each callback takes the GIL the daemon's event loop needs. The
+supervisor is deliberately uninvolved because a ghost is a desktop artifact
+rather than session state.
 """
 
 from __future__ import annotations
@@ -35,6 +39,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .background_tasks import background
+from .framed_ipc import RequestRefused
 from .host_metrics import process_start_stamp
 
 try:
@@ -45,6 +50,9 @@ except ImportError:  # pragma: no cover - diagnostics cover an unsynchronized de
 log = logging.getLogger(__name__)
 
 GHOST_WINDOW_SWEEP_LOOP = "ghost-window-sweep"
+#: The worker service the sweep runs in (`worker.SERVICES`).
+GHOST_WINDOW_SERVICE = "ghost_windows"
+SWEEP_TIMEOUT_SECONDS = 30.0
 
 # The headless browser window itself. `Chrome_WidgetWin_0` is the hidden
 # message-only window that every Chromium and Electron process owns (VS Code,
@@ -135,6 +143,13 @@ class GhostWindowSweeper:
         # this has not judged yet: every Electron app's hidden frames share the
         # class this sweep looks for, so most windows it meets are known ones.
         self._headless_pids: dict[tuple[int, int], bool] = {}
+        # The worker process the sweep runs in while it is ready (`attach_worker`).
+        self._worker: Any | None = None
+        self.sweeps = {"in_worker": 0, "here": 0, "worker_failures": 0}
+
+    def attach_worker(self, worker: Any) -> None:
+        """Sweep in `worker` (a `WorkerHost`) while it is ready, and here otherwise."""
+        self._worker = worker
 
     @property
     def available(self) -> bool:
@@ -167,7 +182,28 @@ class GhostWindowSweeper:
             if not self.enabled:
                 continue
             with background.iteration(GHOST_WINDOW_SWEEP_LOOP):
-                await asyncio.to_thread(self.sweep)
+                await self.sweep_once()
+
+    async def sweep_once(self) -> None:
+        """One sweep, in the worker when one is ready; a failure there sweeps here."""
+        worker = self._worker
+        if worker is not None and getattr(worker, "ready", False):
+            try:
+                reply, _ = await worker.call(
+                    GHOST_WINDOW_SERVICE, "sweep", timeout_seconds=SWEEP_TIMEOUT_SECONDS
+                )
+            except Exception as exc:  # noqa: BLE001 - a failed remote sweep runs here
+                self.sweeps["worker_failures"] += 1
+                if self.sweeps["worker_failures"] == 1 or self.sweeps["worker_failures"] % 50 == 0:
+                    log.warning("ghost window sweep in the worker failed (%s); sweeping here", exc)
+            else:
+                parked = reply.get("parked")
+                if isinstance(parked, list):
+                    self._record([entry for entry in parked if isinstance(entry, dict)])
+                self.sweeps["in_worker"] += 1
+                return
+        await asyncio.to_thread(self.sweep)
+        self.sweeps["here"] += 1
 
     def _is_automation_browser(self, pid: int) -> bool:
         if psutil is None:
@@ -276,11 +312,17 @@ class GhostWindowSweeper:
             # something invalidates it, so the repaint is part of the fix
             # rather than cosmetic.
             user32.RedrawWindow(None, None, None, _RDW_FLAGS)
-            self.swept_total += len(parked)
-            now = time.time()
-            self.recent.extend({"ts": now, **ghost.as_dict()} for ghost in parked)
-            self.recent = self.recent[-_MAX_RECENT:]
+            self._record([ghost.as_dict() for ghost in parked])
         return parked
+
+    def _record(self, parked: list[dict[str, Any]]) -> None:
+        """Count windows a sweep parked, here or in the worker, and keep the recent ones."""
+        if not parked:
+            return
+        self.swept_total += len(parked)
+        now = time.time()
+        self.recent.extend({"ts": now, **ghost} for ghost in parked)
+        self.recent = self.recent[-_MAX_RECENT:]
 
     def diagnostics(self) -> dict[str, Any]:
         return {
@@ -289,4 +331,35 @@ class GhostWindowSweeper:
             "cadence": self.cadence,
             "swept_total": self.swept_total,
             "recent": list(self.recent),
+            "sweeps": dict(self.sweeps),
         }
+
+
+class GhostWindowService:
+    """The worker's `ghost_windows` service: one sweep per request, on its own sweeper.
+
+    The sweeper's verdict cache lives here and is rebuilt by a restarted worker as
+    it meets windows again; nothing else it holds matters to the daemon, which
+    keeps the counts and the recent list from each reply.
+    """
+
+    name = GHOST_WINDOW_SERVICE
+
+    def __init__(self) -> None:
+        self.sweeper = GhostWindowSweeper()
+        self._lock = asyncio.Lock()
+
+    async def start(self, worker: Any) -> None:
+        return None
+
+    async def stop(self) -> None:
+        return None
+
+    async def handle(self, method: str, header: dict[str, Any], payload: bytes) -> Any:
+        if method != "sweep":
+            raise RequestRefused(f"unknown method {self.name}.{method}")
+        if not self.sweeper.available:
+            return {"parked": [], "available": False}
+        async with self._lock:
+            parked = await asyncio.to_thread(self.sweeper.sweep)
+        return {"parked": [ghost.as_dict() for ghost in parked], "available": True}

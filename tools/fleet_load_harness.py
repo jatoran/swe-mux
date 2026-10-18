@@ -798,6 +798,15 @@ class Harness:
                 ("hits", "misses", "generation"),
             ),
             "event_journal": after.get("event_journal") or {},
+            # Where the inspector's passes ran and what one cost the daemon, and the
+            # worker they ran in (`DAEMON_LOAD_ISOLATION.md` items 19-20).
+            "process_sampling": _process_sampling_window(
+                before.get("process_sampling") or {}, after.get("process_sampling") or {}
+            ),
+            "worker": {
+                key: (after.get("worker") or {}).get(key)
+                for key in ("state", "pid", "spawns", "restarts", "generation", "last_error")
+            },
             "governor": _governor_window(
                 before.get("governor") or {},
                 after.get("governor") or {},
@@ -905,6 +914,16 @@ def render(report: dict[str, Any]) -> None:
             f"{journal.get('batches')} writes ({journal.get('events_per_batch')} each), "
             f"max pending {journal.get('max_pending')}, failures {journal.get('failures')}"
         )
+    sampling = report.get("process_sampling") or {}
+    if sampling:
+        print(
+            f"  process sampling   {sampling.get('remote_passes', 0):.0f} in the worker, "
+            f"{sampling.get('local_passes', 0):.0f} here, "
+            f"{sampling.get('remote_failures', 0):.0f} failed, "
+            f"{sampling.get('loads', 0):.0f} loads; "
+            f"last {sampling.get('last_remote_seconds')}s, {sampling.get('last_delta_bytes')} B "
+            f"({sampling.get('last_upserts')} whole, {sampling.get('last_patches')} patched)"
+        )
     governor = report.get("governor") or {}
     if governor:
         parts = ", ".join(
@@ -1002,6 +1021,27 @@ def _counter_delta(
     return {
         key: round(float(after.get(key) or 0) - float(before.get(key) or 0), 3) for key in keys
     }
+
+
+def _process_sampling_window(before: dict[str, Any], after: dict[str, Any]) -> dict[str, Any]:
+    """Pass counts over the window plus the last remote pass's cost; empty before item 20."""
+    if not after:
+        return {}
+    window: dict[str, Any] = dict(
+        _counter_delta(
+            before, after, ("remote_passes", "local_passes", "remote_failures", "loads")
+        )
+    )
+    for key in (
+        "in_worker",
+        "last_remote_seconds",
+        "last_delta_bytes",
+        "last_upserts",
+        "last_patches",
+        "last_failure",
+    ):
+        window[key] = after.get(key)
+    return window
 
 
 def parse_settings(values: list[str]) -> dict[str, str]:

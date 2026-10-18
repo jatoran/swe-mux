@@ -363,6 +363,29 @@ the pass was walking) is answered by `host_metrics.process_exited`, one `OpenPro
 zero-timeout wait with the GIL released, before any handle is built
 (`development/DAEMON_LOAD_ISOLATION.md` item 6).
 
+### Where the pass runs
+
+Every psutil call above holds the GIL on Windows, and under fleet load the pass was the thread holding it through the daemon's worst stalls (`development/DAEMON_LOAD_ISOLATION.md` items 4 and 11).
+So while the worker process is ready (`design/features/worker-process.md`), the pass runs there, on an instance of this same `ProcessInspector` inside `process_service.py`, and the daemon's `owned` becomes a mirror of it.
+
+- **What crosses.**
+  Each pass the daemon sends the eight session-record fields a pass reads (`SESSION_FACT_FIELDS`: id, pid, state, root creation time, Project, run, job assignment, last activity), the supervisor's job-pid map, the supervisor pid, its own pid, the orphan grace and the priority target.
+  The worker answers with a delta: a process the daemon has never held goes whole, one it holds goes as the fields that changed (its command line, most of its bytes, never does), and an exited process pruned from retention goes as its key; plus the daemon's own resources, the machine-wide listener index, system CPU, the priority counts, and the ownership diagnostics when they changed.
+- **What stays.**
+  Everything that reads the result is unchanged and in the daemon: listener events, the background-annotation clear, `process_evidence` persistence, snapshots, previews and fleet intelligence all read the mirror.
+  The delta is decoded in a thread and applied on the loop, so no reader sees a process half-updated.
+- **The worker is loaded before it samples.**
+  The daemon sends its whole mirror to a worker it has not loaded (`WorkerHost.generation` says which worker that is), and a worker that has not been loaded refuses to sample rather than answering with a delta that forgets everything.
+  A patch for a process the mirror lacks means the two copies diverged, and the next pass loads the worker again.
+- **Any failure samples here.**
+  A worker that is not ready, a pass that fails or times out, or a refusal runs the pass in the daemon exactly as it ran before the worker existed, and marks the worker for a reload.
+  The startup pass waits up to 30 s for the worker first, because it is the cold one (20.7 s measured on a 482-process host) and it runs in a deferred task where waiting costs the start nothing.
+- **Actions, port-conflict probes and unique memory go to the worker too**, because they need its handles and its process table.
+  An action is verified and delivered there; the one exception is interrupting a session root, which goes through that session's PTY, so the worker verifies the root and the daemon writes the byte.
+  A refusal there is the same `ValueError`, and the same 400, that it is here.
+- **`/api/diagnostics/background` → `process_sampling`** says where passes ran: `in_worker`, `remote_passes`, `local_passes`, `remote_failures` with `last_failure`, `loads`, and for the last pass its round trip, delta bytes, whole records and patches.
+  `process_priority` reports the worker's counts while passes run there, because the worker holds the handles it lowers.
+
 ### Persisting evidence
 
 Every tenth second or so the pass mirrors the retained set into `process_evidence`, and the retained set is mostly processes that already exited.
@@ -783,6 +806,11 @@ with its viewport presets, refresh, copy-URL, external open, and capture.
   `tests/test_preview_self_origin.py`
 - Evidence persistence: `src/swe_mux/processes.py` (`ProcessInspector._persist_observations`,
   `OwnedProcess.observation`), `tests/test_process_observation_persistence.py`
+- Sampling in the worker process: `src/swe_mux/process_service.py` (`ProcessService`,
+  `DeltaEncoder`, `SampledSessions`), `src/swe_mux/processes.py` (`attach_worker`,
+  `_sample_pass`, `_remote_pass`, `_decode_delta`, `_apply_delta`, `_remote_act`,
+  `sampling_stats`), `src/swe_mux/process_fingerprint.py` (the identity hashes, stdlib-only),
+  `tests/test_process_sampling_worker.py`, `tests/test_live_daemon.py`
 - Durable evidence: `src/swe_mux/operational_telemetry.py`
 - Job boundary: `src/swe_mux/win_jobobj.py`, `src/swe_mux/session.py`
 - Inspector (the act surface, shared by the System dialog and the drawer tab):

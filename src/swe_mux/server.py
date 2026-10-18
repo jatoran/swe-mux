@@ -1858,10 +1858,13 @@ async def _build_runtime_handles(  # noqa: PLR0915 - one composition root, phase
         orphan_grace_seconds=config.process_orphan_grace_seconds,
         session_priority=config.session_process_priority,
     )
+    # Sampling passes run in the worker while one is ready, and here otherwise.
+    process_inspector.attach_worker(worker_host)
     ghost_windows = GhostWindowSweeper(
         cadence=config.ghost_window_poll_seconds,
         enabled=config.ghost_window_sweep_enabled,
     )
+    ghost_windows.attach_worker(worker_host)
     previews = PreviewRegistry(
         process_inspector,
         sessions,

@@ -4,8 +4,15 @@ The daemon serves every terminal keystroke, every WebSocket frame and every API 
 The worker process is where bulk work that is heavy and not interactive goes instead: a second process with its own interpreter, spawned, owned and restarted by the daemon.
 It exists because measuring the daemon under fleet load showed the stall time sitting in GIL convoys held by exactly that kind of work (`development/DAEMON_LOAD_ISOLATION.md` items 2, 4 and 11).
 
-Process inspection moves into it first (item 20) and the canonical telemetry ledgers after (item 21).
-Until those land it hosts only `noop`, the service that proves the host.
+It hosts three services today:
+
+| Service | What it does | Daemon side |
+| --- | --- | --- |
+| `processes` | The process inspector's sampling pass, priority enforcement, process actions, port-conflict probes and unique-memory reads (item 20, `process_service.py`) | `ProcessInspector`, which keeps a mirror (`design/features/processes-and-previews.md`) |
+| `ghost_windows` | The headless-browser ghost-window sweep (item 20) | `GhostWindowSweeper`, which keeps the counts |
+| `noop` | Echo, pushed state and a notice: the service that proves the host | none |
+
+The canonical telemetry ledgers are next (item 21).
 
 ## The shape
 
@@ -19,6 +26,22 @@ Until those land it hosts only `noop`, the service that proves the host.
 - **Nothing waits on it.**
   The daemon's `WorkerHost.call` raises `WorkerUnavailable` at once when no worker is connected, and every caller falls back to doing the work in the daemon, which is how it ran before the worker existed.
 - **`worker_process_enabled`** (default on, applies at the next daemon start) turns it off; Settings → Processes has the switch.
+
+## Moving a service into it
+
+The process inspector is the pattern, and each rule in it answers a way the move could have changed behaviour.
+
+- **The worker runs the daemon's own code, not a copy.**
+  `process_service.py` feeds a `ProcessInspector` the facts it reads through a stand-in for the session manager and calls the same `_collect_all` the daemon calls when no worker is ready, so there is one implementation and two processes that can run it.
+- **The daemon keeps what its readers read, as a mirror updated from deltas.**
+  Every reader of `ProcessInspector.owned` - the Processes surfaces, previews, fleet intelligence, process evidence - is unchanged and in-process; only the pass moved.
+- **A restarted worker is reloaded before it is trusted.**
+  `WorkerHost.generation` counts connected workers; a service compares it with the generation it last pushed its state to, and a worker that has not been loaded refuses to answer rather than answering from empty state.
+- **Every failure falls back to the daemon for that call**, and the next call reloads the worker first.
+- **What only the daemon holds stays in the daemon.**
+  A session root is interrupted through its PTY, so the worker verifies and answers "this is the root" and the daemon writes the byte; evidence is persisted by the daemon from its mirror.
+
+The Codex process proofs (`codex_process_identity.py`) and the handle queries behind them (`win_process_files.py`) stay in the daemon on purpose: they run once per hook or once per session event rather than per tick, on paths where an extra round trip is latency a person waits on, and they cost too little to see in any measurement taken (`development/DAEMON_LOAD_ISOLATION.md` item 20).
 
 ## Lifecycle
 
@@ -55,9 +78,11 @@ Requests are `<service>.<method>`, plus the built-ins `worker.stats` and `worker
 
 - `worker.log` in the data directory, rotating at 10 MB with three backups; each start names its pid and its daemon's.
 - `worker-console.log`: what the interpreter printed before logging started, truncated at a spawn once it passes 1 MiB.
-- `/api/diagnostics/background` → `worker`: `enabled`, `state` (`disabled`, `stopped`, `starting`, `running`, `backoff`), `ready`, `pid`, `launcher_pid`, `port`, `spawns`, `restarts`, `last_exit_code`, `last_error`, `uptime_seconds`, `services`, `build`, `notices_unrouted`, and the connection's own counters.
+- `/api/diagnostics/background` → `worker`: `enabled`, `state` (`disabled`, `stopped`, `starting`, `running`, `backoff`), `ready`, `pid`, `launcher_pid`, `port`, `spawns`, `restarts`, `generation`, `last_exit_code`, `last_error`, `uptime_seconds`, `services`, `build`, `notices_unrouted`, and the connection's own counters.
+- `process_sampling` and `ghost_windows` on the same endpoint say where each service's work actually ran - in the worker, or in the daemon while it was away - and how often a call to it failed.
 
 ## Where it is tested
 
 `tests/test_worker_host.py` spawns real workers: a round trip, a killed worker restarted and rebuilt from the daemon, a stop that leaves nothing behind, a worker that leaves on its own when its connection closes, a stand-in daemon killed outright taking its worker with it, a stranger holding the token refused, and the failure shapes (exiting before `hello`, never saying it, disabled).
 The `live_daemon` tier asserts that a real `muxd` reports a ready worker, that a `quit` reaps it, and that a detach ends it while the supervisor survives.
+`tests/test_process_sampling_worker.py` holds the process service to the in-process behaviour against a real worker and a real process tree, and the `live_daemon` tier asserts that a daemon a default install builds hands its sampling passes to the worker.

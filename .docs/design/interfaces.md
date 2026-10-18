@@ -2359,9 +2359,10 @@ its staging budget) and `output_dropped_bytes` (bytes discarded and asked for ag
 `worker` is the worker process (`design/features/worker-process.md`): `enabled`
 (`worker_process_enabled`), `state` (`disabled`, `stopped`, `starting`, `running`, `backoff`),
 `ready`, `pid` (the worker's own) and `launcher_pid` (the spawned process when it is a Windows
-venv launcher, else `null`), `port`, `spawns`, `restarts`, `last_exit_code`, `last_error`,
-`uptime_seconds`, the `services` it hosts, its `build`, `notices_unrouted`, and `connection` (the
-framed IPC connection's counters, or `null`).
+venv launcher, else `null`), `port`, `spawns`, `restarts`, `generation` (how many workers have
+connected; a service reloads a worker whose generation it has not pushed its state to),
+`last_exit_code`, `last_error`, `uptime_seconds`, the `services` it hosts, its `build`,
+`notices_unrouted`, and `connection` (the framed IPC connection's counters, or `null`).
 
 `governor` is load shedding (`background.pace` / `background.defer`): `attached`, whether the
 loop's recent lag puts it in `shedding` (`recent_max_lag_seconds` over `window_seconds`, against
@@ -2399,7 +2400,10 @@ Its `pools[]` reports each executor's occupancy since start: `name` (the thread 
 `queue_reads` reports the prompt queue's per-tick reads answered from memory between writes (`entries`, `hits`, `misses`, `generation`, the count of operations that wrote), or `null` before the queue store exists.
 `event_journal` reports event persistence behind the emit (`event_journal.py`): `next_seq`, `written_seq`, `pending` (what a hard kill would lose), `max_pending`, `batches`, `events_written`, `events_per_batch`, `dropped`, `failures` and `last_error`.
 `process_priority` reports what the process inspector has lowered to keep the fleet
-below this process (`target`, `lowered_total`, `lowered_last_pass`, `denied_pids`).
+below this process (`target`, `lowered_total`, `lowered_last_pass`, `denied_pids`); while
+sampling runs in the worker these are the worker's counts.
+`process_sampling` reports where the inspector's passes ran (`design/features/processes-and-previews.md` § Where the pass runs): `in_worker`, `worker_attached`, `remote_passes`, `local_passes`, `remote_failures` and `last_failure`, `loads` (whole mirrors sent to a worker), and for the last remote pass `last_remote_seconds`, `last_delta_bytes`, `last_upserts` and `last_patches`.
+`ghost_windows` reports the ghost-window sweep (`design/features/ghost-windows.md`): `available`, `enabled`, `cadence`, `swept_total`, `recent[]`, and `sweeps` (`in_worker`, `here`, `worker_failures`), or `null` when there is no sweeper.
 `listener_guard` reports closed listeners found and rebound, and carries
 `accept_failures_absorbed` (`absorbed`, `last_error`, `last_at`): per-connection accept
 failures the event loop's proactor absorbed without closing the listener

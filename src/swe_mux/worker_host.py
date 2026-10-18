@@ -162,6 +162,10 @@ class WorkerHost:
         self.launcher_pid: int | None = None
         self.spawns = 0
         self.restarts = 0
+        #: Counts connected workers. A service holding state in the worker compares
+        #: it with the generation it last pushed that state to, so a worker that
+        #: restarted between two calls is reloaded rather than trusted.
+        self.generation = 0
         self.last_exit_code: int | None = None
         self.last_error = ""
         self.connected_at: float | None = None
@@ -537,6 +541,7 @@ class WorkerHost:
             # The incarnation gave up on this one between its hello and here.
             raise RuntimeError("no incarnation is waiting for a worker")
         self._peer = peer
+        self.generation += 1
         # The worker's own pid, which is the spawned one's child under a Windows
         # virtual environment's launcher; the launcher is kept for the record.
         claimed = peer.remote_hello.get("pid")
@@ -568,6 +573,7 @@ class WorkerHost:
             "port": self._server.port if self._server is not None else None,
             "spawns": self.spawns,
             "restarts": self.restarts,
+            "generation": self.generation,
             "last_exit_code": self.last_exit_code,
             "last_error": self.last_error,
             "uptime_seconds": (

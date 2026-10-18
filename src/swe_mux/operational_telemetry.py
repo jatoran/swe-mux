@@ -28,6 +28,7 @@ from .harness import (
 from .models import MuxEvent
 from .opencode_store import conversation_records
 from .opencode_store import conversation_watermark as store_watermark
+from .process_fingerprint import command_hash, process_identity
 from .quota_usage import QUOTA_WINDOWS, QuotaUsageMixin, usage_interval_public
 from .quota_usage import SCHEMA as QUOTA_USAGE_SCHEMA
 from .sqlite_store import (
@@ -397,15 +398,6 @@ CREATE TABLE IF NOT EXISTS loop_stalls (
 );
 CREATE INDEX IF NOT EXISTS idx_loop_stalls_started ON loop_stalls(started_at);
 """
-
-
-def process_identity(session_id: str, pid: int, creation_time: float) -> str:
-    material = f"{session_id}\0{pid}\0{creation_time:.6f}".encode()
-    return hashlib.sha256(material).hexdigest()
-
-
-def command_hash(command: str) -> str:
-    return hashlib.sha256(command.encode("utf-8", "replace")).hexdigest()
 
 
 def normalize_tool(raw: str) -> str:
