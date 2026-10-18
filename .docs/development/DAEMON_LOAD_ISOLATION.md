@@ -1033,7 +1033,7 @@ Items are worked in order, and an item may reorder, split or remove later items 
     The one test that starts a supervised daemon end to end is the `live_daemon` tier, which `.worktree-verify` deselects, and it failed on the broken build in five seconds.
     So from here on a change to the composition root or to anything a daemon builds at startup runs `uv run pytest tests/test_live_daemon.py -m live_daemon` before it lands.
 
-- [ ] **33. Packaging, redeploy, update and the live tier.**
+- [x] **33. Packaging, redeploy, update and the live tier.**
   - **Why:** the gateway is a new long-lived `swe-mux.exe` that holds the bundle image.
   - **Change:**
     - `stop_app_processes` stops the gateway gracefully before the swap (`bundle_apply.py:633`), the bundle-holder scan expects it, the relaunched daemon spawns the new gateway, and `wait_healthy` also reports gateway health.
@@ -1072,6 +1072,10 @@ Items are worked in order, and an item may reorder, split or remove later items 
     `send_quit` now reads until the gateway closes its end (five seconds at most), and a test reproduces the failure with a gateway holding a session (`terminated` before the fix, `quit` after); the existing quit test had passed throughout because a gateway with nothing to say sends nothing.
     The report: a host reported `stopped` from `start()` until its loop first ran, and the redeploy asked in between; it says `starting` from the instant it starts now, with a test.
     Both fixes fail their tests when reverted.
+  - **Measured live, on the operator's app** (the gateway turned on through `PATCH /api/config` and a session-preserving restart, 04:48, and left on): two staged redeploys, each keeping all three sessions.
+    The second, after the fixes above, is the definition of done: the swap logged `terminal gateway pid 96316 quit`, the relaunched daemon started gateway pid 69468 and handed it all three terminals on its first connection (`handovers 3`, `restarts 0`), the desktop window's open terminal came back on the new gateway (one active `pty (gateway)` socket), and the run ended `terminals are carried by the terminal gateway on port 8766` with `terminal_transport` in `redeploy-result.json` saying the same.
+    The other two sessions had no browser attached, so for them "reconnects" is the handover alone.
+    The reconnect was a whole replay (about 540 KB), as it must be from the desktop window: the redeploy relaunches it, and a new page has no cursor to offer.
   - **CI green on every leg is not verified here:** this session holds no push authority, so the batch reaches CI when the operator's next push carries it.
 
 - [ ] **34. Default the gateway on.**
