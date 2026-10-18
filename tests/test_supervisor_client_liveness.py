@@ -176,7 +176,9 @@ async def test_ticker_freezes_instead_of_ending_an_unreachable_session(tmp_path:
     harness = TickerHarness(await spawned_host(client))
     try:
         harness.start()
-        await supervisor.drop_connection()
+        # The listener goes too, so the client cannot reattach and the session stays
+        # unreachable - while the pid the discovery file names (this process) lives.
+        await supervisor.stop()
         await until(lambda: not client.connected, what="the client noticed the drop")
         await until(
             lambda: harness.session.supervisor_unreachable_since is not None,
@@ -209,9 +211,15 @@ async def test_ticker_ends_the_session_on_a_definitive_pty_exit(tmp_path: Path) 
 
 
 async def test_ticker_clears_the_unreachable_window_when_the_socket_returns(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Reachability is restored by reconnecting; the frozen session resumes, unended."""
+    """The client reattaches by itself; the frozen session resumes, unended.
+
+    This used to stand in for the reattach by flipping the client's flags, because
+    only a daemon restart could reattach. The first attempt is held back past a
+    ticker period so the window is observed before it closes.
+    """
+    monkeypatch.setattr(supervisor_client, "RECONNECT_INITIAL_SECONDS", 2.5)
     supervisor, client = await connected_client(tmp_path)
     host = await spawned_host(client)
     harness = TickerHarness(host)
@@ -225,17 +233,18 @@ async def test_ticker_clears_the_unreachable_window_when_the_socket_returns(
             what="the ticker recorded the unreachable window",
         )
 
-        # Stand in for the reattach a daemon restart performs: the same host, a
-        # connection that works again.
-        client.connected = True
-        client.lost = False
+        await until(lambda: client.connected, seconds=10, what="the client reattached")
         await until(
             lambda: harness.session.supervisor_unreachable_since is None,
             seconds=10,
             what="the ticker cleared the unreachable window",
         )
 
+        assert client.reconnects == 1
+        assert client.lost is False
         assert harness.ended == []
+        # The reattach resubscribed the session it had been frozen on.
+        await until(lambda: bool(supervisor.requests_of("subscribe")), what="it resubscribed")
     finally:
         await harness.stop()
         await client.close()

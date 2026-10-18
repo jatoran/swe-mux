@@ -88,6 +88,7 @@ from .supervisor_client import (
     SPAWN_STATE_UNKNOWN,
     SPAWN_STATE_UNSUPPORTED,
     Liveness,
+    OutputReseed,
     RemotePtyHost,
     SupervisorClient,
     SupervisorUnavailable,
@@ -2341,7 +2342,7 @@ def note_supervisor_unreachable(session: Session) -> None:
     log.warning(
         "session %s (%s): pseudoconsole unreachable for %.1fs - the supervisor process "
         "is alive but its socket is not; observation is frozen and no end will be "
-        "recorded. Restart the daemon (mux reload-daemon) to reattach.",
+        "recorded while the daemon reattaches (swemux reload-daemon also reattaches).",
         session.record.id,
         session.record.name,
         elapsed,
@@ -3138,6 +3139,43 @@ class Session:
 
     def unsubscribe(self, subscriber: PtySubscriber) -> None:
         self.subscribers.discard(subscriber)
+
+    def reseed_from_supervisor(self, reseed: OutputReseed) -> None:
+        """Adopt the supervisor's buffer after a stretch of output was lost on the way.
+
+        The daemon's ring had a hole the supervisor no longer retained, so it is
+        replaced, exactly as an adoption seeds it: the ring takes the supervisor's
+        bytes and position, and the parsers that derive standing state from the
+        stream are rebuilt from those bytes, because whatever they had read
+        before the hole may have ended mid-sequence. The prompt scanners restart
+        empty instead of replaying - a replay would fire prompts already acted on.
+        Every attached terminal is resynced, since its cursor is in the old ring.
+        """
+        previous = self.scrollback.position
+        self.scrollback.seed(reseed.data, reseed.position)
+        self.screen = ScreenModeParser()
+        self.bracketed_paste = BracketedPasteParser()
+        self.sticky_modes = StickyModeParser()
+        self.osc_signals = OscSignalParser()
+        self.screen.feed(reseed.data)
+        self.bracketed_paste.feed(reseed.data)
+        self.sticky_modes.feed(reseed.data)
+        self.osc_signals.feed(reseed.data)
+        self.osc7 = Osc7Parser()
+        self.osc133 = Osc133Parser()
+        for subscriber in tuple(self.subscribers):
+            self._schedule_resync(subscriber)
+        log.warning(
+            "session %s (%s): output from the supervisor had a hole it no longer retained; "
+            "re-seeded the ring from its %d byte(s) at position %d (was %d) and resynced %d "
+            "terminal(s)",
+            self.record.id,
+            self.record.name,
+            len(reseed.data),
+            reseed.position,
+            previous,
+            len(self.subscribers),
+        )
 
 
 class SessionManager:
@@ -7699,6 +7737,9 @@ class SessionManager:
         # its PTY, so it has no place in a registry keyed by singleton loop name.
         while True:
             chunk = await session.pty.output_queue.get()
+            if isinstance(chunk, OutputReseed):
+                session.reseed_from_supervisor(chunk)
+                continue
             if chunk == b"":
                 if not session.stopping:
                     await self._mark_ended(session, "process_exit")

@@ -44,17 +44,22 @@ That is the property that made the extraction safe: the same six lines had been 
 
 ## `supervisor_client.py`
 
-The daemon-side supervisor connection (framing, RPC, output dispatch), the `RemotePtyHost` PtyHost facade, discover-or-spawn, metadata and initial-scrollback transport, and `kill_server`.
+The daemon-side supervisor connection (framing, RPC, output dispatch), the `RemotePtyHost` PtyHost facade, discover-or-spawn, reattachment after a dropped socket, hole recovery, metadata and initial-scrollback transport, and `kill_server`.
 
-Three rules this module exists to keep:
+Four rules this module exists to keep:
 
 - **Tri-state liveness.**
   `Liveness` is `alive`/`dead`/`unreachable`, and `liveness_of()` reads it from any PtyHost-shaped object (an in-process host is two-state by construction).
   `_alive` is cleared only by a definitive `pty_exit` or a confirmed supervisor death, so `isalive()` ("not dead") never reports a running child as gone because a socket dropped.
+  A dropped socket to a live supervisor is reattached by the client itself (same pid only, capped backoff), and a stop asked for in that window is sent when it reattaches.
 - **Dispatching a frame never waits.**
   RPC replies, output, and `pty_exit` for every session share one read loop, so output goes to a per-session staging deque drained by a per-session pump.
-  The deque is bounded by that session's scrollback budget (floor 1 MiB) and drops oldest-first with a counter and a rate-limited log.
-  It never drops the newest entry, which is what guarantees the exit sentinel is delivered.
+  A reply that positions a session (`spawn`, `subscribe`) is applied inside the read loop through `request(on_reply=...)`, before the frames behind it are dispatched; applied when the caller next ran, it would race them.
+- **The daemon's ring never disagrees with the supervisor's positions** (`development/DAEMON_LOAD_ISOLATION.md` item 14).
+  Each `RemotePtyHost` tracks the supervisor's `stream` and the position at the end of what it took off the wire.
+  A supervisor `gap`, or staging outgrowing its budget (that session's scrollback, floor 1 MiB), resubscribes with `since` from where the copy stops; staging used to drop its oldest bytes and carry on with a hole.
+  A non-delta answer travels through the output queue as an `OutputReseed`, in order, and `Session.reseed_from_supervisor` adopts it.
+  Frames arriving while the resubscribe is outstanding are discarded because its reply carries them, an exit in that window waits for the reply, and recoveries in quick succession back off.
 - **Irreversible actions ask first.**
   `spawn_status`/`resolve_spawn_outcome` answer what became of a spawn whose reply was lost, separating "the supervisor says X" from "this supervisor cannot be asked" (`unsupported`) and "the question could not be delivered" (`indeterminate`).
   `_terminate_supervisor` verifies pid creation time against the discovery file's `started_at` plus a supervisor command line for this config, and fails closed.

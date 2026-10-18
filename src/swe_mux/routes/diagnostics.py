@@ -446,6 +446,13 @@ async def get_background_health(request: web.Request) -> web.Response:
             # The switch interval in force (`gil_switch.py`): what each GIL hand-back
             # to the loop can cost while a worker is runnable.
             "gil_switch_interval_ms": gil_switch_interval_ms(),
+            # The link to the PTY supervisor: what it announced, how often this daemon
+            # fell behind it (`gaps`), how each hole was filled, and reattachments.
+            "supervisor_link": (
+                supervisor.link_stats()
+                if (supervisor := request.app.get(keys.SUPERVISOR)) is not None
+                else None
+            ),
             # Where the loop was during each stall the monitor counted, from the
             # GIL-free dump the loop arms itself. `loop_lag` says how long; this says
             # what, and whether a starved canary thread makes it a native-code stall.

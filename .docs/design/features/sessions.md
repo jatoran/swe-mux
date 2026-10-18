@@ -371,14 +371,31 @@ and reattachable browser viewports.
   actually gone means the kill-on-close Jobs closed and the trees died; a transient socket
   fault leaves sessions running. Treating the second as the first fabricated an exit for
   every live session, recorded false history, and re-adopted them on the next boot. The
-  daemon reports `supervisor_state: "lost"` instead, and recovery is a daemon restart.
+  daemon reports `supervisor_state: "lost"` instead and reattaches by itself: it retries the
+  same supervisor pid with capped backoff, and on success resubscribes every live session from
+  the position its copy stops at, so output produced while it was away arrives as a delta
+  (`development/DAEMON_LOAD_ISOLATION.md` item 14). A different pid in the discovery file is
+  never reattached to - it means the old supervisor, and every child it owned, is gone.
+- **A hole in a session's output is filled, never skipped.** It opens when the supervisor stops
+  sending a session's output because this daemon fell behind (a `gap`, from a supervisor that
+  negotiated `output_gap`), or when the daemon's own per-session staging outgrows its budget
+  because the session's consumer stopped taking output - which used to drop the oldest staged
+  bytes and leave the daemon's ring disagreeing with the supervisor's positions for the rest of
+  the session. Either way the session is resubscribed from where its copy stops: a delta while
+  the supervisor retains it, and otherwise the supervisor's whole buffer, which the session
+  adopts in place of its ring (re-deriving screen mode, bracketed paste and the sticky modes
+  from it) and every attached terminal resyncs from. Frames that arrive while the resubscribe
+  is outstanding are discarded, because its reply carries them, and an exit reported in that
+  window waits for the reply. The reply is applied as the read loop reads it, so output right
+  behind it is never mistaken for part of the hole. Against a supervisor that predates
+  `subscribe_since` the refill is always the whole buffer.
 - **Liveness is three states, not a bool.** `RemotePtyHost.liveness()` answers `alive`,
   `dead`, or `unreachable`, and `isalive()` is "not dead" — an unreachable session is a
   *running* one this daemon cannot see. **A session may be recorded as ended on exactly two
   pieces of evidence: a definitive `pty_exit`, or a supervisor death this daemon confirmed by
   pid.** A dropped socket is neither, so the per-session ticker freezes instead: no state
   transition, no metadata push, no durable end, and a log line naming the session and how long
-  it has been out of reach. It resumes by itself if the connection returns. The rule holds for
+  it has been out of reach. It resumes by itself when the client reattaches. The rule holds for
   a malformed frame too, which is classified and counted as a protocol desync rather than
   folded into "connection lost". Writability is separate from liveness: a broadcast skips an
   unreachable session rather than reporting a delivery whose bytes were discarded.

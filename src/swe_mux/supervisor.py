@@ -1096,6 +1096,11 @@ class SupervisorServer:
                 "reaper_assignment": host.reaper_assignment,
                 "state": entry.spawn_state(),
                 "started_at": entry.started_at,
+                # Where the first output frame will start: after the seeded bytes.
+                # The fanout was created above but has not run, so nothing has
+                # been appended since the seed.
+                "position": entry.scrollback.position,
+                "stream": entry.stream,
             }
         )
 

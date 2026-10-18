@@ -448,7 +448,7 @@ Items are worked in order, and an item may reorder, split or remove later items 
     Dropping the stream check fails the two fallback cases it guards.
     The unmodified daemon is `tests/test_pty_supervisor.py`: its 20 real-ConPTY tests run today's `SupervisorClient`, which sends none of the new fields, against this supervisor, and all pass.
 
-- [ ] **14. Daemon side of the supervisor changes.**
+- [x] **14. Daemon side of the supervisor changes.**
   - **Why:** the daemon must use the new capabilities and keep working against the older supervisor that is running until item 17.
   - **Change:**
     - Advertise `output_gap`; on `gap`, resubscribe with `since`, and `scrollback.seed` on a full reply (`scrollback.py:67-78`).
@@ -457,6 +457,26 @@ Items are worked in order, and an item may reorder, split or remove later items 
     - Reconnect after a lost supervisor connection instead of staying lost until the next daemon start (`supervisor_client.py:726-761`).
     - Degrade on "unknown message type" and on a missing capability, and log the degraded mode once.
   - **Done when:** tests run the daemon against both the new supervisor and a stub of the old one.
+  - **Done (2026-10-17).**
+    - Each `RemotePtyHost` tracks the supervisor's `stream` and its position at the end of what it took off the wire, plus the position at the end of what reached its bounded queue.
+      The spawn reply now names `position` and `stream` (a supervisor addition shipped with items 12-13); an older supervisor names neither and the host's base - the end of its seed - is the same number.
+    - A hole from either side - a `gap`, or staging outgrowing its budget - becomes one resubscribe from where the copy stops, with `since` and `stream` when the supervisor announced `subscribe_since`.
+      An overflow drops everything staged, keeps what is already queued (the session is consuming it), and asks from the end of the queue.
+      A delta reply is offered as output; anything else travels through the same queue as an `OutputReseed`, so it lands after every chunk already queued, and `Session.reseed_from_supervisor` seeds the ring, rebuilds screen mode, bracketed paste, sticky modes and OSC signals from the new bytes, restarts the prompt scanners without replaying them, and resyncs every attached terminal.
+    - **Found while writing it:** a reply that positions a host must be applied inside the read loop, not when its awaiting caller resumes.
+      The read loop dispatches buffered frames back to back without yielding, so the output right behind a reply was being dispatched while the host still thought it was recovering, and dropped.
+      `request(on_reply=...)` runs a hook as the reply is read; spawn, adoption and recovery replies all use it.
+      `test_output_that_follows_a_recovery_reply_is_kept` fails when the reply is applied late.
+    - Frames for a recovering session are discarded because the reply carries them; an exit in that window is deferred until the reply, or delivered at once if no reply is coming (`removed`, an unknown session, a dead supervisor).
+      A recovery whose own reply overflows staging re-enters the same task, and recoveries within ten seconds of each other back off from 0.5 s to 10 s, so a consumer that is still not draining is not handed the same buffer as fast as the link carries it.
+    - `resized` updates the host's mirror and is never echoed; `removed` ends the session.
+    - A dropped socket to a live supervisor is reattached by the client with backoff from 0.5 s to 10 s, only to the same pid, and every live or recovering session is resubscribed from its position; a stop asked for while unreachable is sent on reattach, followed by the `remove` the release could not send.
+    - Against a supervisor without `output_gap` the client logs one warning per supervisor pid and works as before, except that a staging overflow now refills with the whole buffer instead of skipping bytes.
+    - `/api/diagnostics/background` gains `supervisor_link`.
+  - **Tests:** `tests/test_supervisor_client_recovery.py`. Against the real supervisor: the hello negotiates `output_gap`; a daemon that stopped reading recovers every byte after a gap with one delta; output right behind the recovery reply is kept; a consumer that falls behind is refilled rather than skipped; a hole the supervisor no longer retains is reseeded with its 64 KiB; another connection's resize reaches the mirror; a removal ends the session; a dropped socket is reattached and the output produced meanwhile recovered; a stop asked for while unreachable is sent on reattach.
+    Against `FakeSupervisor`, which announces nothing: the compatibility warning once per supervisor, and an overflow refilled by a whole-buffer subscribe with no `since`.
+    Unit level: an exit during recovery waits for the recovered bytes, a full refill is queued in order, an exit waiting on a recovery is delivered when none is coming, the session adopts a reseed and resyncs, and the fanout applies a reseed between the chunks around it.
+    The two ticker tests in `test_supervisor_client_liveness.py` were rewritten, not weakened: the freeze test now removes the listener too so the session stays unreachable, and the "socket returns" test drives the real reattach instead of flipping the client's flags.
 
 - [ ] **15. Stream-bound `since` cursors.**
   - **Why:** a `since` answered from a different stream silently corrupts the terminal, and nothing identifies a stream beyond the cold check.

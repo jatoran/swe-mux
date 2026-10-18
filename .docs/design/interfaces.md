@@ -2328,6 +2328,14 @@ fault (the session task handles its own).
 `gil_switch_interval_ms` is the interpreter's GIL switch interval in force (`gil_switch_interval_ms`
 in the config, applied at start and live on change).
 
+`supervisor_link` is the daemon's connection to the PTY supervisor, or `null` without one:
+`connected`, `lost` (socket down, supervisor alive - reattaching), `supervisor_pid`, the
+`capabilities` it announced (empty for a supervisor that predates them), `reconnects`, `gaps`
+(times the supervisor stopped sending a session's output because this daemon fell behind),
+`recoveries` by kind (`delta`, `full` - the whole buffer re-seeded - and `failed` attempts),
+the sessions `recovering` right now, `consumer_overflows` (a session's own consumer fell behind
+its staging budget) and `output_dropped_bytes` (bytes discarded and asked for again, not lost).
+
 `governor` is load shedding (`background.pace` / `background.defer`): `attached`, whether the
 loop's recent lag puts it in `shedding` (`recent_max_lag_seconds` over `window_seconds`, against
 `lag_threshold_seconds`), the bounds (`max_stretch` cadences, `max_extra_seconds`), `deferrals`

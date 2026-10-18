@@ -21,7 +21,7 @@ import subprocess
 import sys
 import time
 from collections import deque
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -29,6 +29,8 @@ from typing import TYPE_CHECKING, Any
 
 from .subprocess_flags import background_creation_flags, popen_outside_job
 from .supervisor import (
+    CAPABILITY_OUTPUT_GAP,
+    CAPABILITY_SUBSCRIBE_SINCE,
     PROTOCOL_VERSION,
     discovery_path,
     encode_frame,
@@ -53,6 +55,15 @@ SPAWN_STATUS_DEADLINE_SECONDS = 30.0
 # scrollback ring would have evicted before anyone could read it.
 MIN_OUTPUT_OVERFLOW_BYTES = 1 * 1024 * 1024
 OUTPUT_OVERFLOW_LOG_INTERVAL_SECONDS = 5.0
+# Reattaching to a supervisor whose process is alive and whose socket dropped.
+RECONNECT_INITIAL_SECONDS = 0.5
+RECONNECT_MAX_SECONDS = 10.0
+# Re-asking for a session's missing output after a failed or unanswered attempt.
+RECOVERY_RETRY_MAX_SECONDS = 10.0
+RECOVERY_TIMEOUT_SECONDS = 30.0
+# What this client asks the supervisor for in `hello`. Advertised unconditionally:
+# an older supervisor ignores the list and announces none of its own.
+CLIENT_CAPABILITIES = (CAPABILITY_OUTPUT_GAP,)
 # Console-output redirect (crash catcher) for a supervisor spawned by this
 # daemon. Distinct from supervisor.log, which the supervisor's own rotating
 # handler owns: the child inherits this redirect handle for its lifetime, so
@@ -114,6 +125,20 @@ SPAWN_STATE_INDETERMINATE = "indeterminate"
 _SUPERVISOR_SPAWN_STATES = frozenset(
     {SPAWN_STATE_UNKNOWN, SPAWN_STATE_RESERVED, SPAWN_STATE_LIVE, SPAWN_STATE_EXITED}
 )
+
+
+@dataclass(frozen=True)
+class OutputReseed:
+    """The supervisor's whole retained buffer, replacing the daemon's copy after a hole.
+
+    Travels through a session's output queue rather than around it, so it lands
+    after every chunk that was already queued and before every chunk that follows:
+    applying it out of order would put older bytes after the new ring.
+    ``position`` is the supervisor's stream position at the end of ``data``.
+    """
+
+    data: bytes
+    position: int
 
 
 @dataclass(frozen=True)
@@ -224,17 +249,35 @@ class RemotePtyHost:
         self._alive = False
         self._exit_code: int | None = None
         self._first_output_at: float | None = None
-        self._queue: asyncio.Queue[bytes] | None = None
+        self._queue: asyncio.Queue[bytes | OutputReseed] | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._released = False
         # Staging for output this session's consumer has not taken yet. The read
         # loop must never wait on one session (see ``_offer``), so overflow past
         # the bounded queue lands here and a per-session pump drains it.
-        self._pending: deque[bytes] = deque()
+        self._pending: deque[bytes | OutputReseed] = deque()
         self._pending_bytes = 0
         self._pump_task: asyncio.Task[None] | None = None
         self._draining = False
+        # The incarnation the supervisor's positions belong to (`stream`), and the
+        # supervisor's stream position at the end of the last byte this host took
+        # off the wire. Together they are what a resubscribe asks from, so a hole -
+        # a supervisor `gap`, or this host's own staging overflowing - is filled
+        # from exactly where the copy stops instead of silently skipped. A spawn
+        # starts after its seed; an adoption learns both from its subscribe reply.
+        self.stream = ""
+        self._stream_position = len(initial_output)
+        # The position at the end of what has reached the bounded queue, the
+        # pump's in-flight chunk included: everything after it is staging that an
+        # overflow may discard and ask for again.
+        self._queued_end = len(initial_output)
+        # Output frames are discarded while a resubscribe is outstanding; its reply
+        # carries them. An exit reported in that window waits for the reply, so
+        # the end of output never overtakes the bytes before it.
+        self._recovering = False
+        self._exit_deferred = False
         self.output_dropped_bytes = 0
+        self.consumer_overflows = 0
         self._dropped_logged_at = 0.0
 
     # -- PtyHost surface -------------------------------------------------------
@@ -251,10 +294,19 @@ class RemotePtyHost:
         self.client.notify({"t": "set_graceful_exit", "sid": self.sid, "keys": keys})
 
     @property
-    def output_queue(self) -> asyncio.Queue[bytes]:
+    def output_queue(self) -> asyncio.Queue[bytes | OutputReseed]:
         if self._queue is None:
             raise RuntimeError("PTY has not been spawned")
         return self._queue
+
+    @property
+    def stream_position(self) -> int:
+        """The supervisor's position at the end of the last byte taken off the wire."""
+        return self._stream_position
+
+    @property
+    def recovering(self) -> bool:
+        return self._recovering
 
     @property
     def first_output_at(self) -> float | None:
@@ -328,12 +380,14 @@ class RemotePtyHost:
         if self._loop is None or not self.client.connected:
             if self.liveness() is Liveness.UNREACHABLE:
                 # A deliberate stop is still honoured locally - the operator asked
-                # for it - but the child is not actually being killed, so say so
-                # loudly rather than let the record read as a clean exit.
+                # for it - but the child is not actually being killed yet, so say so
+                # loudly rather than let the record read as a clean exit, and send
+                # the stop for real when the client reattaches.
+                self.client.defer_stop(self.sid, graceful)
                 log.error(
                     "session %s: stop requested while the supervisor is unreachable; "
-                    "the child may still be running under supervisor pid %d "
-                    "(restart the daemon to reattach and stop it for real)",
+                    "the child is still running under supervisor pid %d and is stopped "
+                    "when the daemon reattaches",
                     self.sid,
                     self.client.supervisor_pid,
                 )
@@ -356,21 +410,91 @@ class RemotePtyHost:
         self._alive = False
         if exit_code is not None:
             self._exit_code = exit_code
-        if was_alive and self._queue is not None:
-            # The b"" sentinel is the same end-of-output contract the local read
-            # thread uses; Session._fanout converts it into _mark_ended. It goes
-            # through the same staging path as output so it stays ordered behind
-            # the bytes the child produced before exiting, and so a full queue can
-            # never drop it: `_offer` keeps the newest chunk unconditionally.
-            self._offer(b"")
+        if not was_alive or self._queue is None:
+            return
+        if self._recovering:
+            # The bytes before this exit are in the outstanding resubscribe's
+            # reply; the sentinel follows them when it arrives.
+            self._exit_deferred = True
+            return
+        # The b"" sentinel is the same end-of-output contract the local read
+        # thread uses; Session._fanout converts it into _mark_ended. It goes
+        # through the same staging path as output so it stays ordered behind
+        # the bytes the child produced before exiting, and an overflow re-queues
+        # it behind the recovered bytes rather than losing it.
+        self._offer(b"")
 
     def _receive_output(self, _chunk: bytes) -> None:
         if self._first_output_at is None:
             self._first_output_at = time.perf_counter()
 
+    def _receive_wire_output(self, chunk: bytes) -> None:
+        """One output frame for this session, as the read loop hands it over."""
+        if self._recovering:
+            # Covered by the outstanding resubscribe's reply.
+            return
+        self._stream_position += len(chunk)
+        self._receive_output(chunk)
+        self._offer(chunk)
+
+    def _attach_reply(self, response: dict[str, Any], *, fresh: bool = True) -> None:
+        """Adopt the stream and position a spawn or subscribe reply names.
+
+        Applied by the read loop as the reply is read, not when the awaiting caller
+        next runs: output frames for this session follow the reply immediately, and
+        each one advances the position from this base. ``fresh`` is a first attach,
+        with nothing queued yet; a recovery leaves the queue's account alone.
+        """
+        stream = response.get("stream")
+        if isinstance(stream, str) and stream:
+            self.stream = stream
+        position = response.get("position")
+        if isinstance(position, int) and not isinstance(position, bool):
+            self._stream_position = position
+            if fresh:
+                self._queued_end = position
+
+    def _begin_recovery(self) -> None:
+        self._recovering = True
+
+    def _abandon_recovery(self) -> None:
+        """No reply is coming; deliver an exit that was waiting for one."""
+        self._recovering = False
+        if self._exit_deferred:
+            self._exit_deferred = False
+            self._offer(b"")
+
+    def _apply_recovery(self, response: dict[str, Any], payload: bytes) -> str:
+        """Fill the hole from a resubscribe reply; returns which kind of fill it was.
+
+        A delta continues the stream exactly where this copy stopped. Anything else
+        is the supervisor's whole retained buffer, which the session must adopt in
+        place of its own ring rather than append to it.
+        """
+        self._recovering = False
+        self._attach_reply(response, fresh=False)
+        position = self._stream_position
+        if response.get("delta") is True:
+            kind = "delta"
+            if payload:
+                self._receive_output(payload)
+                self._offer(payload)
+        else:
+            kind = "full"
+            self._offer(OutputReseed(payload, position))
+        alive = response.get("alive")
+        exit_code = response.get("exit_code")
+        if alive is False or self._exit_deferred:
+            self._exit_deferred = False
+            if isinstance(exit_code, int) and not isinstance(exit_code, bool):
+                self._exit_code = exit_code
+            self._alive = False
+            self._offer(b"")
+        return kind
+
     # -- output staging -----------------------------------------------------------
 
-    def _offer(self, chunk: bytes) -> None:
+    def _offer(self, chunk: bytes | OutputReseed) -> None:
         """Hand one chunk to this session without ever blocking the read loop.
 
         The bounded queue still carries backpressure; what changed is who waits
@@ -387,54 +511,71 @@ class RemotePtyHost:
         if not self._draining and not self._pending:
             try:
                 queue.put_nowait(chunk)
+                self._note_queued(chunk)
                 return
             except asyncio.QueueFull:
                 pass
         self._pending.append(chunk)
-        self._pending_bytes += len(chunk)
-        self._trim_pending()
-        if self._pump_task is None or self._pump_task.done():
+        self._pending_bytes += _staged_size(chunk)
+        if self._pending_bytes > self._overflow_budget:
+            self._overflow()
+        if self._pending and (self._pump_task is None or self._pump_task.done()):
             self._draining = True
             loop = self._loop or self.client.loop
             self._pump_task = loop.create_task(self._pump(), name=f"remote-pty-pump-{self.sid}")
+
+    def _note_queued(self, chunk: bytes | OutputReseed) -> None:
+        if isinstance(chunk, OutputReseed):
+            self._queued_end = chunk.position
+        else:
+            self._queued_end += len(chunk)
 
     @property
     def _overflow_budget(self) -> int:
         return max(int(self.max_scrollback), MIN_OUTPUT_OVERFLOW_BYTES)
 
-    def _trim_pending(self) -> None:
-        """Bound the staging deque, dropping oldest-first and saying so.
+    def _overflow(self) -> None:
+        """Staging outgrew its budget: drop what was staged and ask for it again.
 
         Unbounded staging would trade a stalled session for daemon memory growth.
-        The ring drops from the old end, exactly like the scrollback that would
-        have evicted these bytes anyway, and never drops the newest entry - which
-        is what guarantees the exit sentinel survives.
+        This used to drop the *oldest* staged bytes and carry on, which bounded the
+        memory and silently broke the stream: the daemon's ring skipped bytes the
+        supervisor still had, and every position after the hole disagreed with the
+        supervisor's. Now everything staged goes - the queue's contents are kept,
+        because the session is already consuming them - and the session is
+        resubscribed from the end of what was queued, so the hole is filled with a
+        delta while the supervisor retains it and with its whole buffer otherwise.
         """
-        budget = self._overflow_budget
-        if self._pending_bytes <= budget:
-            return
         dropped = 0
-        while self._pending_bytes > budget and len(self._pending) > 1:
-            oldest = self._pending.popleft()
-            self._pending_bytes -= len(oldest)
-            dropped += len(oldest)
-        if not dropped:
-            return
+        exit_staged = False
+        for staged in self._pending:
+            if isinstance(staged, OutputReseed):
+                dropped += len(staged.data)
+            elif staged == b"":
+                exit_staged = True
+            else:
+                dropped += len(staged)
+        self._pending.clear()
+        self._pending_bytes = 0
         self.output_dropped_bytes += dropped
+        self.consumer_overflows += 1
+        self._stream_position = self._queued_end
+        self._begin_recovery()
+        self._exit_deferred = self._exit_deferred or exit_staged
         now = time.monotonic()
-        if now - self._dropped_logged_at < OUTPUT_OVERFLOW_LOG_INTERVAL_SECONDS:
-            return
-        self._dropped_logged_at = now
-        log.error(
-            "session %s: dropped %d byte(s) of supervisor output (%d total) - the "
-            "daemon-side consumer is not draining its queue; %d byte(s) staged, "
-            "budget %d",
-            self.sid,
-            dropped,
-            self.output_dropped_bytes,
-            self._pending_bytes,
-            budget,
-        )
+        if now - self._dropped_logged_at >= OUTPUT_OVERFLOW_LOG_INTERVAL_SECONDS:
+            self._dropped_logged_at = now
+            log.warning(
+                "session %s: the daemon-side consumer fell %d byte(s) behind its budget of "
+                "%d; dropped what it had not taken and re-requesting from position %d "
+                "(%d overflow(s) so far)",
+                self.sid,
+                dropped,
+                self._overflow_budget,
+                self._stream_position,
+                self.consumer_overflows,
+            )
+        self.client.recover(self)
 
     async def _pump(self) -> None:
         """Drain staged output into the bounded queue, waiting only this session."""
@@ -446,9 +587,11 @@ class RemotePtyHost:
                 return
             while self._pending:
                 # Popped *before* the await so an in-flight chunk cannot be
-                # trimmed underneath the put and counted as dropped twice.
+                # dropped underneath the put by an overflow, and counted as queued
+                # from that moment: an overflow resumes after it, not before it.
                 chunk = self._pending.popleft()
-                self._pending_bytes -= len(chunk)
+                self._pending_bytes -= _staged_size(chunk)
+                self._note_queued(chunk)
                 await queue.put(chunk)
         finally:
             self._draining = False
@@ -460,12 +603,66 @@ class RemotePtyHost:
             task.cancel()
 
 
+def _staged_size(chunk: bytes | OutputReseed) -> int:
+    return len(chunk.data) if isinstance(chunk, OutputReseed) else len(chunk)
+
+
+async def _handshake(
+    data_dir: Path,
+) -> tuple[asyncio.StreamReader, asyncio.StreamWriter, dict[str, Any]]:
+    """Connect to the supervisor the discovery file names and complete `hello`."""
+    path = discovery_path(data_dir)
+    try:
+        info = json.loads(path.read_text(encoding="utf-8"))
+        port = int(info["port"])
+        token = str(info["token"])
+    except (OSError, ValueError, KeyError) as exc:
+        raise SupervisorUnavailable(f"no supervisor discovery file: {exc}") from exc
+    try:
+        reader, writer = await asyncio.wait_for(
+            asyncio.open_connection("127.0.0.1", port), timeout=CONNECT_TIMEOUT_SECONDS
+        )
+    except (OSError, TimeoutError) as exc:
+        raise SupervisorUnavailable(f"supervisor not reachable on port {port}") from exc
+    request_id = 0
+    writer.write(
+        encode_frame(
+            {
+                "t": "hello",
+                "id": request_id,
+                "token": token,
+                "protocol": PROTOCOL_VERSION,
+                "capabilities": list(CLIENT_CAPABILITIES),
+            }
+        )
+    )
+    try:
+        await writer.drain()
+        header, _ = await asyncio.wait_for(read_frame(reader), timeout=CONNECT_TIMEOUT_SECONDS)
+    except (OSError, TimeoutError, ValueError, asyncio.IncompleteReadError) as exc:
+        writer.close()
+        raise SupervisorUnavailable(f"supervisor handshake failed: {exc}") from exc
+    if header.get("id") != request_id or not header.get("ok"):
+        writer.close()
+        raise SupervisorUnavailable(
+            f"supervisor rejected handshake: {header.get('error', 'unknown error')}"
+        )
+    return reader, writer, header
+
+
+# Supervisor pids whose compatibility mode has been logged, so a reconnect to the
+# same older supervisor does not say it again.
+_DEGRADED_LOGGED: set[int] = set()
+
+
 class SupervisorClient:
     def __init__(
         self,
         reader: asyncio.StreamReader,
         writer: asyncio.StreamWriter,
         info: dict[str, Any],
+        *,
+        data_dir: Path | None = None,
     ) -> None:
         self._reader = reader
         self._writer = writer
@@ -474,6 +671,25 @@ class SupervisorClient:
         self.initial_sessions: list[dict[str, Any]] = list(info.get("sessions") or [])
         self.hosts: dict[str, RemotePtyHost] = {}
         self.connected = True
+        # Where the discovery file lives, for reattaching after a dropped socket.
+        # None for a client built around an existing stream, which cannot reconnect.
+        self.data_dir = data_dir
+        self.capabilities: frozenset[str] = frozenset()
+        self._note_capabilities(info)
+        # Requests whose reply must be applied as the read loop reads it, before
+        # any frame that follows it, rather than whenever the caller next runs.
+        self._reply_hooks: dict[int, Callable[[dict[str, Any], bytes], None]] = {}
+        self._recovery_tasks: dict[str, asyncio.Task[None]] = {}
+        self._recovery_backoff: dict[str, tuple[float, int]] = {}
+        self._reconnect_task: asyncio.Task[None] | None = None
+        self._deferred_stops: dict[str, bool] = {}
+        self._side_tasks: set[asyncio.Task[None]] = set()
+        self._closing = False
+        # What happened on this link, for `/api/diagnostics/background`.
+        self.reconnects = 0
+        self.gaps_received = 0
+        self.recoveries: dict[str, int] = {"delta": 0, "full": 0, "failed": 0}
+        self._gap_logged_at = 0.0
         # True when the connection dropped while the supervisor process is still
         # alive: sessions are running but unreachable, which is a different (and
         # recoverable) condition from "no supervisor".
@@ -512,37 +728,53 @@ class SupervisorClient:
 
     @classmethod
     async def connect(cls, data_dir: Path) -> SupervisorClient:
-        path = discovery_path(data_dir)
-        try:
-            info = json.loads(path.read_text(encoding="utf-8"))
-            port = int(info["port"])
-            token = str(info["token"])
-        except (OSError, ValueError, KeyError) as exc:
-            raise SupervisorUnavailable(f"no supervisor discovery file: {exc}") from exc
-        try:
-            reader, writer = await asyncio.wait_for(
-                asyncio.open_connection("127.0.0.1", port), timeout=CONNECT_TIMEOUT_SECONDS
-            )
-        except (OSError, TimeoutError) as exc:
-            raise SupervisorUnavailable(f"supervisor not reachable on port {port}") from exc
-        request_id = 0
-        writer.write(
-            encode_frame(
-                {"t": "hello", "id": request_id, "token": token, "protocol": PROTOCOL_VERSION}
-            )
+        reader, writer, header = await _handshake(data_dir)
+        return cls(reader, writer, header, data_dir=data_dir)
+
+    def _note_capabilities(self, info: dict[str, Any]) -> None:
+        """Record what the supervisor announced, and say once when it is an older one.
+
+        An older supervisor announces nothing and waits on this daemon whenever it
+        falls behind, so a stalled loop here can still throttle agents there; that
+        is a fact about the running supervisor, not a fault, and it lasts until the
+        scheduled supervisor update replaces it.
+        """
+        announced = info.get("capabilities")
+        self.capabilities = (
+            frozenset(str(item) for item in announced)
+            if isinstance(announced, list)
+            else frozenset()
         )
-        try:
-            await writer.drain()
-            header, _ = await asyncio.wait_for(read_frame(reader), timeout=CONNECT_TIMEOUT_SECONDS)
-        except (OSError, TimeoutError, ValueError, asyncio.IncompleteReadError) as exc:
-            writer.close()
-            raise SupervisorUnavailable(f"supervisor handshake failed: {exc}") from exc
-        if header.get("id") != request_id or not header.get("ok"):
-            writer.close()
-            raise SupervisorUnavailable(
-                f"supervisor rejected handshake: {header.get('error', 'unknown error')}"
-            )
-        return cls(reader, writer, header)
+        if CAPABILITY_OUTPUT_GAP in self.capabilities:
+            return
+        if self.supervisor_pid in _DEGRADED_LOGGED:
+            return
+        _DEGRADED_LOGGED.add(self.supervisor_pid)
+        log.warning(
+            "supervisor pid %d predates output_gap and subscribe_since: it waits on this "
+            "daemon when the daemon falls behind, so a daemon stall can throttle agents, "
+            "and a lost stretch of output is recovered by resending a session's whole "
+            "buffer; both stop when the supervisor is updated "
+            "(DAEMON_LOAD_ISOLATION.md item 17)",
+            self.supervisor_pid,
+        )
+
+    def link_stats(self) -> dict[str, Any]:
+        """The daemon-to-supervisor link, for `/api/diagnostics/background`."""
+        return {
+            "connected": self.connected,
+            "lost": self.lost,
+            "supervisor_pid": self.supervisor_pid,
+            "capabilities": sorted(self.capabilities),
+            "reconnects": self.reconnects,
+            "gaps": self.gaps_received,
+            "recoveries": dict(self.recoveries),
+            "recovering": sorted(sid for sid, host in self.hosts.items() if host.recovering),
+            "consumer_overflows": sum(host.consumer_overflows for host in self.hosts.values()),
+            "output_dropped_bytes": sum(
+                host.output_dropped_bytes for host in self.hosts.values()
+            ),
+        }
 
     @classmethod
     async def connect_or_spawn(cls, config: Config) -> SupervisorClient:
@@ -608,11 +840,21 @@ class SupervisorClient:
         )
 
     async def close(self) -> None:
+        self._closing = True
         await self.flush_meta()
         self.connected = False
+        background = [
+            task
+            for task in (self._reconnect_task, *self._recovery_tasks.values(), *self._side_tasks)
+            if task is not None and not task.done()
+        ]
+        for task in background:
+            task.cancel()
         if self._read_task and not self._read_task.done():
             self._read_task.cancel()
-            await asyncio.gather(self._read_task, return_exceptions=True)
+            background.append(self._read_task)
+        if background:
+            await asyncio.gather(*background, return_exceptions=True)
         pumps = [host._pump_task for host in tuple(self.hosts.values())]
         for host in tuple(self.hosts.values()):
             host._cancel_pump()
@@ -652,19 +894,30 @@ class SupervisorClient:
         header: dict[str, Any],
         payload: bytes = b"",
         timeout_seconds: float = RPC_TIMEOUT_SECONDS,
+        *,
+        on_reply: Callable[[dict[str, Any], bytes], None] | None = None,
     ) -> tuple[dict[str, Any], bytes]:
+        """Send one request and wait for its reply.
+
+        ``on_reply`` runs inside the read loop the moment the reply is read, before
+        the next frame is: the caller resumes a loop turn later, by which time
+        frames that follow the reply may already have been dispatched.
+        """
         if not self.connected:
             raise SupervisorUnavailable("supervisor connection is closed")
         request_id = self._next_id
         self._next_id += 1
         future: asyncio.Future[tuple[dict[str, Any], bytes]] = self._loop.create_future()
         self._pending[request_id] = future
+        if on_reply is not None:
+            self._reply_hooks[request_id] = on_reply
         try:
             self._write_frame(encode_frame({**header, "id": request_id}, payload))
             await self._writer.drain()
             response, response_payload = await asyncio.wait_for(future, timeout=timeout_seconds)
         finally:
             self._pending.pop(request_id, None)
+            self._reply_hooks.pop(request_id, None)
         if not response.get("ok"):
             raise RuntimeError(str(response.get("error") or "supervisor request failed"))
         return response, response_payload
@@ -694,21 +947,75 @@ class SupervisorClient:
         kind = header.get("t")
         request_id = header.get("id")
         if request_id is not None:
+            hook = self._reply_hooks.pop(int(request_id), None)
+            if hook is not None:
+                try:
+                    hook(header, payload)
+                except Exception:
+                    log.exception("supervisor reply hook for request %s failed", request_id)
             future = self._pending.get(int(request_id))
             if future is not None and not future.done():
                 future.set_result((header, payload))
             return
+        host = self.hosts.get(str(header.get("sid")))
+        if host is None:
+            return
         if kind == "output":
-            host = self.hosts.get(str(header.get("sid")))
-            if host is not None and host._queue is not None:
-                host._receive_output(payload)
-                host._offer(payload)
+            if host._queue is not None:
+                host._receive_wire_output(payload)
             return
         if kind == "pty_exit":
-            host = self.hosts.get(str(header.get("sid")))
-            if host is not None:
-                exit_code = header.get("exit_code")
-                host._mark_dead(int(exit_code) if exit_code is not None else None)
+            exit_code = header.get("exit_code")
+            host._mark_dead(int(exit_code) if exit_code is not None else None)
+            return
+        if kind == "gap":
+            self._on_gap(host, header)
+            return
+        if kind == "resized":
+            # Another connection resized this console; mirror the size the host
+            # applied. Never echoed back, so it cannot start a resize loop.
+            cols, rows = header.get("cols"), header.get("rows")
+            if isinstance(cols, int) and isinstance(rows, int):
+                host.cols, host.rows = cols, rows
+            return
+        if kind == "removed":
+            # Another connection removed the session, which stops a live one.
+            log.warning(
+                "session %s: removed from supervisor pid %d by another connection",
+                host.sid,
+                self.supervisor_pid,
+            )
+            host._abandon_recovery()
+            host._mark_dead(None)
+
+    def _on_gap(self, host: RemotePtyHost, header: dict[str, Any]) -> None:
+        """The supervisor stopped sending this session's output: this daemon fell behind."""
+        self.gaps_received += 1
+        if host.recovering:
+            return
+        position = header.get("position")
+        if isinstance(position, int) and position != host.stream_position:
+            # The supervisor's account and this host's disagree about where the
+            # copy stops; asking from this host's own position is what is safe.
+            log.warning(
+                "session %s: gap at position %d but this daemon has %d",
+                host.sid,
+                position,
+                host.stream_position,
+            )
+        now = time.monotonic()
+        if now - self._gap_logged_at >= OUTPUT_OVERFLOW_LOG_INTERVAL_SECONDS:
+            self._gap_logged_at = now
+            log.warning(
+                "supervisor pid %d stopped sending session %s output at position %d "
+                "because this daemon fell behind; re-requesting it (%d gap(s) so far)",
+                self.supervisor_pid,
+                host.sid,
+                host.stream_position,
+                self.gaps_received,
+            )
+        host._begin_recovery()
+        self.recover(host)
 
     def _on_frame_desync(self, error: Exception) -> None:
         """Log a malformed frame as itself, then drop the unusable connection."""
@@ -744,14 +1051,18 @@ class SupervisorClient:
         if self.lost:
             log.error(
                 "supervisor connection %s but pid %d is still alive; %d session(s) are "
-                "running unreachable (%s) — restart the daemon to reattach; no session "
-                "will be recorded as ended on this evidence",
+                "running unreachable (%s) — reattaching; no session will be recorded as "
+                "ended on this evidence",
                 reason,
                 self.supervisor_pid,
                 len(self.hosts),
                 ", ".join(sorted(self.hosts)) or "none",
             )
+            self._start_reconnect()
             return
+        self._on_supervisor_gone(reason)
+
+    def _on_supervisor_gone(self, reason: str) -> None:
         log.warning(
             "supervisor %s and pid %d is gone; its kill-on-close job reaped every "
             "child, so %d remote session(s) are confirmed dead",
@@ -759,8 +1070,203 @@ class SupervisorClient:
             self.supervisor_pid,
             len(self.hosts),
         )
+        self.lost = False
         for host in tuple(self.hosts.values()):
+            # No reply is coming to an outstanding resubscribe; the end of output
+            # must not wait for one.
+            host._abandon_recovery()
             host._mark_dead(None)
+
+    # -- reattaching -----------------------------------------------------------------
+
+    def _start_reconnect(self) -> None:
+        if self._closing or self.data_dir is None:
+            return
+        if self._reconnect_task is not None and not self._reconnect_task.done():
+            return
+        self._reconnect_task = self._loop.create_task(
+            self._reconnect_loop(), name="supervisor-reconnect"
+        )
+
+    async def _reconnect_loop(self) -> None:
+        """Reattach to the same supervisor process, then recover every live session.
+
+        Used to need a daemon restart: a socket fault left every session running and
+        unreachable until the next start re-adopted them. Only the same supervisor
+        pid is reattached to - a different one means the old one is gone, and with
+        it every child it owned.
+        """
+        # unsupervised-loop-ok: scoped to one lost connection; ends when it is
+        # reattached, when the supervisor is gone, or when the client closes.
+        assert self.data_dir is not None
+        delay = RECONNECT_INITIAL_SECONDS
+        attempts = 0
+        while not self._closing and not self.connected:
+            await asyncio.sleep(delay)
+            delay = min(delay * 2, RECONNECT_MAX_SECONDS)
+            attempts += 1
+            if not _pid_running(self.supervisor_pid):
+                self._on_supervisor_gone("connection was lost")
+                return
+            try:
+                reader, writer, info = await _handshake(self.data_dir)
+            except SupervisorUnavailable as exc:
+                log.info(
+                    "supervisor pid %d reattach attempt %d failed: %s",
+                    self.supervisor_pid,
+                    attempts,
+                    exc,
+                )
+                continue
+            pid = int(info.get("pid", -1))
+            if pid != self.supervisor_pid:
+                writer.close()
+                log.error(
+                    "the discovery file now names supervisor pid %d, not %d; not "
+                    "reattaching sessions to a different supervisor",
+                    pid,
+                    self.supervisor_pid,
+                )
+                continue
+            if self._closing:
+                writer.close()
+                return
+            self._resume(reader, writer, info, attempts)
+            return
+
+    def _resume(
+        self,
+        reader: asyncio.StreamReader,
+        writer: asyncio.StreamWriter,
+        info: dict[str, Any],
+        attempts: int,
+    ) -> None:
+        self._reader = reader
+        self._writer = writer
+        self.connected = True
+        self.lost = False
+        self.reconnects += 1
+        self._note_capabilities(info)
+        # Anything queued for the old socket may never have arrived.
+        self._meta_sent.clear()
+        self._read_task = asyncio.create_task(self._read_loop(), name="supervisor-read")
+        # A host whose exit is waiting on a recovery still needs the bytes before it.
+        live = [host for host in self.hosts.values() if host._alive or host.recovering]
+        log.warning(
+            "reattached to supervisor pid %d after %d attempt(s); recovering %d session(s)",
+            self.supervisor_pid,
+            attempts,
+            len(live),
+        )
+        for host in live:
+            # The new connection subscribes to nothing until asked, and the old
+            # one's output stops at the host's position: recovery is both at once.
+            host._begin_recovery()
+            self.recover(host)
+        stops, self._deferred_stops = self._deferred_stops, {}
+        for sid, graceful in stops.items():
+            log.warning("session %s: sending the stop requested while unreachable", sid)
+            task = self._loop.create_task(
+                self._deferred_stop(sid, graceful), name=f"supervisor-stop-{sid}"
+            )
+            self._side_tasks.add(task)
+            task.add_done_callback(self._side_tasks.discard)
+
+    def defer_stop(self, sid: str, graceful: bool) -> None:
+        """Remember a stop asked for while unreachable, to send when reattached."""
+        self._deferred_stops[sid] = graceful
+
+    async def _deferred_stop(self, sid: str, graceful: bool) -> None:
+        # unsupervised-loop-ok: one bounded request, not a loop.
+        try:
+            await self.stop_session(sid, graceful=graceful, stop_timeout=2.0)
+        except (SupervisorUnavailable, RuntimeError, TimeoutError) as exc:
+            log.warning("session %s: deferred stop failed: %s", sid, exc)
+            return
+        if sid not in self.hosts:
+            # The daemon released it while unreachable; that `remove` never left.
+            self.notify({"t": "remove", "sid": sid})
+
+    # -- filling holes ---------------------------------------------------------------
+
+    def recover(self, host: RemotePtyHost) -> None:
+        """Resubscribe ``host`` from where its copy stops; never waits.
+
+        The reply is applied by the read loop as it is read (see `request`), so the
+        output frames that follow it continue the stream. Repeated recoveries in
+        quick succession back off: a consumer that is still not draining would
+        otherwise be handed the same buffer again as fast as the link carries it.
+        """
+        host._begin_recovery()
+        task = self._recovery_tasks.get(host.sid)
+        if task is not None and not task.done():
+            # That task loops while the host is recovering, so a hole opened while
+            # it runs - its own reply overflowing staging, say - is filled by it.
+            return
+        self._recovery_tasks[host.sid] = self._loop.create_task(
+            self._recover_host(host), name=f"supervisor-recover-{host.sid}"
+        )
+
+    def _recovery_delay(self, sid: str) -> float:
+        """No wait for a first recovery; doubling waits for recoveries in quick succession."""
+        now = time.monotonic()
+        last_at, streak = self._recovery_backoff.get(sid, (0.0, -1))
+        streak = streak + 1 if now - last_at < RECOVERY_RETRY_MAX_SECONDS else 0
+        self._recovery_backoff[sid] = (now, streak)
+        return 0.0 if streak == 0 else min(RECOVERY_RETRY_MAX_SECONDS, 0.25 * 2**streak)
+
+    async def _recover_host(self, host: RemotePtyHost) -> None:
+        # unsupervised-loop-ok: scoped to one session's hole; ends when it is
+        # filled, when the session is gone, or when the connection drops (the
+        # reattach recovers every session again).
+        attempt = 0
+        delay = self._recovery_delay(host.sid)
+        while host.recovering and self.connected and self.hosts.get(host.sid) is host:
+            if delay:
+                await asyncio.sleep(delay)
+                if not (host.recovering and self.connected):
+                    return
+            header: dict[str, Any] = {"t": "subscribe", "sid": host.sid}
+            if CAPABILITY_SUBSCRIBE_SINCE in self.capabilities and host.stream:
+                header["since"] = host.stream_position
+                header["stream"] = host.stream
+
+            def apply(response: dict[str, Any], payload: bytes) -> None:
+                if response.get("ok"):
+                    self.recoveries[host._apply_recovery(response, payload)] += 1
+
+            try:
+                await self.request(
+                    header, timeout_seconds=RECOVERY_TIMEOUT_SECONDS, on_reply=apply
+                )
+                attempt = 0
+                delay = self._recovery_delay(host.sid) if host.recovering else 0.0
+                continue
+            except SupervisorUnavailable:
+                return
+            except RuntimeError as exc:
+                if "unknown session" in str(exc):
+                    log.warning(
+                        "session %s: supervisor pid %d no longer has it; ending it",
+                        host.sid,
+                        self.supervisor_pid,
+                    )
+                    host._abandon_recovery()
+                    host._mark_dead(None)
+                    return
+                failure = str(exc)
+            except TimeoutError:
+                failure = f"no reply within {RECOVERY_TIMEOUT_SECONDS:g}s"
+            self.recoveries["failed"] += 1
+            attempt += 1
+            delay = min(RECOVERY_RETRY_MAX_SECONDS, 0.5 * 2**attempt)
+            log.warning(
+                "session %s: resubscribe %d failed (%s); retrying in %.1fs",
+                host.sid,
+                attempt,
+                failure,
+                delay,
+            )
 
     # -- host lifecycle -----------------------------------------------------------
 
@@ -771,6 +1277,10 @@ class SupervisorClient:
         current = self.hosts.get(host.sid)
         if current is host:
             del self.hosts[host.sid]
+            task = self._recovery_tasks.pop(host.sid, None)
+            if task is not None and not task.done():
+                task.cancel()
+            self._recovery_backoff.pop(host.sid, None)
         host._cancel_pump()
         self._meta_pending.pop(host.sid, None)
         self._meta_sent.pop(host.sid, None)
@@ -791,6 +1301,9 @@ class SupervisorClient:
                 "meta": host.meta,
             },
             host.initial_output,
+            # An older supervisor names no position; the host's own base (the end
+            # of its seed) is what that supervisor's stream starts from too.
+            on_reply=lambda reply, _payload: host._attach_reply(reply) if reply.get("ok") else None,
         )
         host.pid = int(response.get("pid", -1))
         host.reaper_assignment = str(response.get("reaper_assignment", "supervisor_unknown"))
@@ -881,7 +1394,10 @@ class SupervisorClient:
 
     async def subscribe(self, host: RemotePtyHost) -> tuple[dict[str, Any], bytes]:
         """Attach to an existing supervised session; returns (info, scrollback)."""
-        response, payload = await self.request({"t": "subscribe", "sid": host.sid})
+        response, payload = await self.request(
+            {"t": "subscribe", "sid": host.sid},
+            on_reply=lambda reply, _payload: host._attach_reply(reply) if reply.get("ok") else None,
+        )
         host._alive = bool(response.get("alive"))
         exit_code = response.get("exit_code")
         host._exit_code = int(exit_code) if exit_code is not None else None
