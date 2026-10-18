@@ -1002,6 +1002,10 @@ body {
 .update-dialog-command { display:flex;align-items:center;gap:8px;margin-top:10px!important }
 .update-dialog-command code { flex:1;min-width:0;padding:6px 8px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:11px 'Cascadia Mono',Consolas,monospace;overflow-wrap:anywhere }
 .update-dialog-command button { min-height:28px;padding:0 10px;border:1px solid var(--line);border-radius:6px;background:var(--panel2);color:var(--text);font-size:11px;cursor:pointer }
+/* The optional supervisor update: unticked by default, and worded as its cost. */
+.update-dialog-supervisor { display:flex;align-items:flex-start;gap:8px;margin-top:12px;color:var(--text);font-size:12px;cursor:pointer }
+.update-dialog-supervisor input { margin-top:2px }
+.update-dialog-offer { color:var(--muted);font-size:12px }
 .daemon-reload-modal .modal-actions button.update-dialog-reap { border-color:var(--red);background:color-mix(in srgb,var(--panel) 80%,var(--red)) }
 .daemon-reload-modal .modal-actions button.update-dialog-reap:hover { border-color:var(--red);background:color-mix(in srgb,var(--panel) 65%,var(--red)) }
 .redeploy-chip-body .redeploy-chip-note.redeploy-chip-reap { color:var(--amber) }

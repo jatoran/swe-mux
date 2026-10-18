@@ -24,6 +24,14 @@ number is the thing the daemon and the supervisor actually negotiate on
 (`supervisor.py`'s `hello` refuses a mismatch outright), it is compiled into both
 halves, and it is what `CLAUDE.md` names as the change that forces a reap.
 
+`supervisor_revision` answers the second question the protocol cannot: whether
+the release carries a *newer supervisor* that still speaks the same protocol
+(`supervisor.SUPERVISOR_REVISION`, hand-bumped and pinned against the source
+closure's content, so unlike a build hash it means the same thing on every
+machine). That is never required, because the running supervisor keeps working,
+so the updater offers it rather than demanding it. It is optional in the file: a
+bundle built before it existed reads as revision 0.
+
 `schema` is honoured before any field is read, for the same reason
 `update_check.parse_manifest` does it: a build installed today may be reading a
 bundle produced by a build years newer, and an unrecognized document must answer
@@ -62,12 +70,14 @@ class BundleMetadata:
     supervisor_protocol: int
     platform: str
     built: str
+    supervisor_revision: int = 0
 
     def as_dict(self) -> dict[str, Any]:
         return {
             "schema": BUNDLE_METADATA_SCHEMA,
             "version": self.version,
             "supervisor_protocol": self.supervisor_protocol,
+            "supervisor_revision": self.supervisor_revision,
             "platform": self.platform,
             "built": self.built,
         }
@@ -79,6 +89,7 @@ def bundle_metadata(
     supervisor_protocol: int,
     platform: str,
     built: str | None = None,
+    supervisor_revision: int = 0,
 ) -> BundleMetadata:
     """Describe a bundle being built now.
 
@@ -91,6 +102,7 @@ def bundle_metadata(
         supervisor_protocol=int(supervisor_protocol),
         platform=str(platform),
         built=stamp,
+        supervisor_revision=int(supervisor_revision),
     )
 
 
@@ -111,6 +123,11 @@ def parse_bundle_metadata(payload: object) -> tuple[BundleMetadata | None, str]:
     version = payload.get("version")
     if not isinstance(version, str) or not version.strip():
         return None, BUNDLE_METADATA_MALFORMED
+    # Absent is a bundle from before the field (revision 0); present and not a
+    # non-negative integer is a damaged file, never a default.
+    revision = payload.get("supervisor_revision", 0)
+    if isinstance(revision, bool) or not isinstance(revision, int) or revision < 0:
+        return None, BUNDLE_METADATA_MALFORMED
     platform = payload.get("platform")
     built = payload.get("built")
     return (
@@ -119,6 +136,7 @@ def parse_bundle_metadata(payload: object) -> tuple[BundleMetadata | None, str]:
             supervisor_protocol=protocol,
             platform=platform.strip() if isinstance(platform, str) else "",
             built=built.strip() if isinstance(built, str) else "",
+            supervisor_revision=revision,
         ),
         BUNDLE_METADATA_OK,
     )

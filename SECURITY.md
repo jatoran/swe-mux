@@ -124,7 +124,9 @@ A vulnerability is something that breaks the boundary above **as designed**:
   hash of either - is in scope here, and is what `tests/test_site_metrics_counter.py` fails
   the build over.
 - Making the updater replace the PTY supervisor, or otherwise end live sessions, on a
-  request that did not carry `accept_supervisor_update`.
+  request that carried neither `accept_supervisor_update` nor `with_supervisor_update` -
+  or replacing a supervisor the release does not *require* replaced on a request that did
+  not carry `with_supervisor_update`.
 - Getting an artifact staged by the updater without matching the SHA-256 the manifest
   publishes, or getting an install to start without the explicit action that authorizes one.
   The verification is what stands between a network position and replacing the application.

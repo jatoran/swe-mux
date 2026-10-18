@@ -745,6 +745,12 @@ class SupervisorClient:
             if isinstance(announced, list)
             else frozenset()
         )
+        # 0 for a supervisor from before revisions; `swemux doctor` compares it
+        # with the one this build ships (`supervisor.SUPERVISOR_REVISION`).
+        revision = info.get("revision")
+        self.supervisor_revision = (
+            revision if isinstance(revision, int) and not isinstance(revision, bool) else 0
+        )
         if CAPABILITY_OUTPUT_GAP in self.capabilities:
             return
         if self.supervisor_pid in _DEGRADED_LOGGED:
@@ -765,6 +771,7 @@ class SupervisorClient:
             "connected": self.connected,
             "lost": self.lost,
             "supervisor_pid": self.supervisor_pid,
+            "supervisor_revision": self.supervisor_revision,
             "capabilities": sorted(self.capabilities),
             "reconnects": self.reconnects,
             "gaps": self.gaps_received,

@@ -65,6 +65,15 @@ from .timer_resolution import raise_timer_resolution
 log = logging.getLogger(__name__)
 
 PROTOCOL_VERSION = 1
+# Which supervisor this is, independent of the protocol it speaks. Bumped by hand
+# whenever anything in its hash-gated source closure changes
+# (`packaging/build_desktop.py::SUPERVISOR_SOURCES`), and pinned per revision in
+# `packaging/supervisor_revisions.json`, which `tests/test_supervisor_revision.py`
+# checks against the closure's content. The updater compares it with the running
+# supervisor's: a newer one that keeps the protocol is offered as an optional
+# update, because installing it ends every session. 0 is a supervisor from before
+# the field existed.
+SUPERVISOR_REVISION = 1
 DISCOVERY_FILENAME = "supervisor.json"
 MAX_HEADER_BYTES = 4 * 1024 * 1024
 # Daemon-inbound bounds (F13). A header carries the child's whole environment
@@ -477,6 +486,7 @@ class SupervisorServer:
             "port": port,
             "token": self.token,
             "protocol": PROTOCOL_VERSION,
+            "revision": SUPERVISOR_REVISION,
             "config_path": str(self.config_path),
             "started_at": time.time(),
         }
@@ -858,6 +868,7 @@ class SupervisorServer:
                 "id": request_id,
                 "ok": True,
                 "protocol": PROTOCOL_VERSION,
+                "revision": SUPERVISOR_REVISION,
                 "pid": os.getpid(),
                 "capabilities": list(SUPERVISOR_CAPABILITIES),
                 "scope": connection.scope,

@@ -2,8 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'preact/hooks'
 import { useModalFocus } from './modalFocus'
 import {
   fetchUpdateInstall, installFinished, installPhaseLabel, planCostLine, planInstallLine,
-  planSessionsLine, refusalNeedsConsent, requestUpdateInstall, requestUpdatePlan,
-  UpdateRefusedError,
+  planSessionsLine, planSupervisorOfferLine, refusalNeedsConsent, requestUpdateInstall,
+  requestUpdatePlan, UpdateRefusedError,
   type UpdateInstallStatus, type UpdatePlan, type UpdateRefusal,
 } from './updateCheck'
 
@@ -26,6 +26,12 @@ import {
  * download and the refusal arrives here with the same consent word, so the
  * second press is offered then. Either way the archive is kept, and the second
  * press costs no second download.
+ *
+ * A newer supervisor that keeps the protocol is the one optional cost. The plan
+ * says so (`supervisor_update_available`), the install proceeds without it, and
+ * only ticking the box labelled with the consequence turns the press into the
+ * same consenting button, sending `with_supervisor_update` - so leaving it alone
+ * can never end a session.
  *
  * Once the daemon hands off to the applier, the dialog closes: the app-wide
  * redeploy chip and outage overlay take over, driven by the same broadcast a
@@ -52,6 +58,8 @@ type Stage =
 export function UpdateDialog({ version, changelog, onClose }: Props) {
   const [stage, setStage] = useState<Stage>({ name: 'planning' })
   const [busy, setBusy] = useState(false)
+  // The operator's choice to take the optional supervisor update; off by default.
+  const [withSupervisor, setWithSupervisor] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
   // Escape and the back gesture close it during the plan and the refusal, never
   // mid-install: a download the operator can no longer see is one they will
@@ -107,12 +115,12 @@ export function UpdateDialog({ version, changelog, onClose }: Props) {
     current.name === 'planned' ? current.plan
       : current.name === 'refused' || current.name === 'error' ? current.plan : null
 
-  const install = useCallback(async (accept: boolean) => {
+  const install = useCallback(async (accept: boolean, withSupervisorUpdate: boolean) => {
     if (busy) return
     setBusy(true)
     const plan = planOf(stage)
     try {
-      const status = await requestUpdateInstall(version, accept)
+      const status = await requestUpdateInstall(version, accept, withSupervisorUpdate)
       setStage({ name: 'installing', status })
     } catch (cause) {
       if (cause instanceof UpdateRefusedError) setStage({ name: 'refused', refusal: cause.refusal, plan })
@@ -123,10 +131,13 @@ export function UpdateDialog({ version, changelog, onClose }: Props) {
   }, [busy, stage, version])
 
   const plan = planOf(stage)
+  const offer = stage.name === 'planned' ? planSupervisorOfferLine(stage.plan) : ''
+  const optedIn = !!offer && withSupervisor
   const consentNeeded = stage.name === 'refused'
     ? refusalNeedsConsent(stage.refusal)
-    : stage.name === 'planned' && !!stage.plan.consent
-  const reaps = plan?.reaps_sessions || (stage.name === 'refused' && refusalNeedsConsent(stage.refusal))
+    : stage.name === 'planned' && (!!stage.plan.consent || optedIn)
+  const reaps = plan?.reaps_sessions || optedIn
+    || (stage.name === 'refused' && refusalNeedsConsent(stage.refusal))
   const sourceInstall = stage.name === 'refused' && stage.refusal.error === 'source_install'
 
   return <div class="modal-layer daemon-reload-layer" role="alertdialog" aria-modal="true" aria-label={`Install swe-mux ${version}`} onClick={() => { if (closable) onClose() }}>
@@ -140,8 +151,18 @@ export function UpdateDialog({ version, changelog, onClose }: Props) {
         {/* The one line that matters, drawn as the refusal it is when sessions end. */}
         <p class={`redeploy-interrupts${reaps ? ' redeploy-blocked' : ''}`}>
           <strong>{reaps ? 'Every live session ends.' : plan.supervisor.known ? 'Sessions are preserved.' : 'Sessions: decided after download.'}</strong>
-          <span>{planSessionsLine(plan)}</span>
+          <span>{optedIn ? offer : planSessionsLine(plan)}</span>
         </p>
+        {offer && <label class="update-dialog-supervisor">
+          <input
+            type="checkbox"
+            checked={withSupervisor}
+            disabled={busy}
+            onChange={event => setWithSupervisor((event.target as HTMLInputElement).checked)}
+          />
+          <span>Also update the PTY supervisor, ending every live session</span>
+        </label>}
+        {offer && !optedIn && <p class="update-dialog-offer">{offer}</p>}
       </>}
 
       {stage.name === 'installing' && <p class="update-dialog-progress" aria-live="polite">
@@ -176,10 +197,10 @@ export function UpdateDialog({ version, changelog, onClose }: Props) {
         <button type="button" onClick={onClose} disabled={!closable}>{stage.name === 'refused' || stage.name === 'done' || stage.name === 'error' ? 'Close' : 'Cancel'}</button>
         {(stage.name === 'planned' || (stage.name === 'refused' && !sourceInstall)) && (
           consentNeeded
-            ? <button type="button" class="primary update-dialog-reap" disabled={busy} onClick={() => void install(true)}>
+            ? <button type="button" class="primary update-dialog-reap" disabled={busy} onClick={() => void install(true, optedIn)}>
               {busy ? 'Starting…' : 'End every session and install'}
             </button>
-            : <button type="button" class="primary" disabled={busy} onClick={() => void install(false)}>
+            : <button type="button" class="primary" disabled={busy} onClick={() => void install(false, false)}>
               {busy ? 'Starting…' : 'Install'}
             </button>
         )}

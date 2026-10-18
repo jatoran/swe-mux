@@ -218,6 +218,28 @@ Three independent layers now hold, each covering what the others cannot:
   bump does. And an archive whose metadata is **missing or unreadable** is refused too -
   "cannot tell whether this reaps your sessions" is not a case to guess at, and it is
   precisely what an archive built before this contract looks like.
+- **A newer supervisor that keeps the protocol is offered, never imposed**
+  (`development/DAEMON_LOAD_ISOLATION.md` item 16). The protocol deliberately does not move
+  for a compatible supervisor improvement, so on its own the gate above would never deliver
+  one to an installed copy. So each bundle also states `supervisor_revision`
+  (`supervisor.SUPERVISOR_REVISION`) and the running supervisor writes its own into
+  `supervisor.json`. A higher incoming revision with the same protocol leaves the plan at
+  swap - the running supervisor keeps working, and the sessions with it - and sets
+  `supervisor_update_available`. Taking it is a separate request word,
+  `with_supervisor_update` (the dialog's unticked "Also update the PTY supervisor, ending
+  every live session" box, or `--with-supervisor-update`), which implies consent and installs
+  in replace mode. It is not folded into `accept_supervisor_update` on purpose: that word stays
+  a permission, so a caller that always sends it never takes a reap a merely newer supervisor
+  would cost. A running supervisor that predates the field reads as revision 0, so the first
+  revision is offered to every existing install; an equal or older incoming revision offers
+  nothing, because there is nothing to gain from it.
+  The revision is a number rather than a hash for the same reason the protocol is, and it is
+  kept honest by a pin rather than by discipline: `packaging/supervisor_revisions.json` maps
+  each revision to `build_desktop.supervisor_content_digest()` - the closure's own bytes,
+  line endings normalised and the revision line itself excluded - and
+  `tests/test_supervisor_revision.py` fails when the closure changes without a bump, or when a
+  bump reuses a pinned digest. `swemux doctor` reports a running supervisor older than the one
+  its own bundle ships (`daemon.supervisor_revision`, a warning, never a failure).
 - **The frontend overlay replaces the UI without replacing the application, and the three
   properties that make that sound are not optional.**
   `frontend_overlay.py` lets a hash-verified `static/` tree in the data directory be served

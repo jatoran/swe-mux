@@ -417,7 +417,7 @@ A frozen install is further `checkout`, `installer` (read from the Windows insta
 The release-artifact naming contract lives here too (`release_archive_name`, `release_file_manifest_name`, `release_bundle_metadata_name`, `release_installer_name`, `release_platform_tag`).
 Then the plan (`plan`): the manifest and the two small hashed sidecars, answered before any download as the mode the release needs, whether that ends sessions, and the delta.
 Then the streaming bounded download hashed as it arrives, and the promotion of a `.part` file only on a matching digest.
-Then the supervisor gate (`_supervisor_verdict`), which answers `swap` or `replace` and the consent refusal that stands until `accept_supervisor_update`.
+Then the supervisor gate (`_supervisor_verdict`), which answers `swap` or `replace` and the consent refusal that stands until `accept_supervisor_update`, and offers a newer supervisor revision on the running protocol (`update_available`) that only `with_supervisor_update` installs; `running_supervisor_revision` reads the running one's from `supervisor.json`, 0 when it predates revisions.
 Then the applier's extraction from the archive's own `swe-mux-cli/` (`prepare_applier`, falling back to the installed client).
 Then the handoff to `swemux update-apply` through `redeploy_launch.spawn_applier`, announced to every client as `daemon_redeploy_started` with `kind: "update"` and the mode.
 Its refusal vocabulary is closed and durable in `<data_dir>/update-install.json`, because the daemon does not survive the swap it starts.

@@ -252,8 +252,9 @@ def _daemon_checks(health: dict[str, Any], daemon: dict[str, Any]) -> list[dict[
                 severity="critical",
                 detail="Supervisor is alive but unreachable from this daemon; "
                 "live sessions are running and cannot be controlled from here.",
-                remedy="Restart the daemon (mux reload-daemon) to re-attach; if it "
-                "stays lost, the supervisor process may need a manual restart.",
+                remedy="The daemon re-attaches by itself; if it stays lost, restart "
+                "the daemon (swemux reload-daemon), and if that does not re-attach, "
+                "the supervisor process may need a manual restart.",
             )
         )
     else:  # absent, or an older snapshot with no field
@@ -271,6 +272,31 @@ def _daemon_checks(health: dict[str, Any], daemon: dict[str, Any]) -> list[dict[
                 "the spawn failed, then restart the daemon. If pty_supervisor_enabled "
                 "was deliberately turned off, turn it back on to keep sessions alive "
                 "across reloads.",
+            )
+        )
+    running_revision = health.get("supervisor_revision")
+    shipped_revision = health.get("supervisor_revision_shipped")
+    if (
+        state == "connected"
+        and isinstance(running_revision, int)
+        and isinstance(shipped_revision, int)
+        and running_revision < shipped_revision
+    ):
+        checks.append(
+            _check(
+                id="daemon.supervisor_revision",
+                category="daemon",
+                title="PTY supervisor revision",
+                status="warn",
+                severity="optional",
+                detail=f"The running PTY supervisor is revision {running_revision} and "
+                f"this build ships revision {shipped_revision}. It keeps working, "
+                "without what the newer one adds, until it is replaced - and "
+                "replacing it ends every live session.",
+                remedy="Replace it at a quiet moment: an installed copy offers it again "
+                "with every update until it is taken (tick the supervisor box, or "
+                "`swemux update --install <version> --with-supervisor-update`), and a "
+                "source checkout follows the supervisor update steps in CLAUDE.md.",
             )
         )
     unadopted = int(health.get("supervisor_unadopted", 0) or 0)

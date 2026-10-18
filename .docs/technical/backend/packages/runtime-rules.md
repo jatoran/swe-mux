@@ -231,6 +231,11 @@ A mismatch stops a new daemon from driving the already-running supervisor, and t
 Add the message, let an older supervisor answer "unknown message type", and degrade on the daemon side.
 `spawn_status` is the current example: it exists so a daemon whose spawn reply was lost can learn the true outcome instead of guessing, and against a supervisor that predates it the daemon keeps its previous behaviour and logs the ambiguity.
 
+**Any change to the supervisor's source closure bumps `SUPERVISOR_REVISION`** (`development/DAEMON_LOAD_ISOLATION.md` item 16).
+The protocol stays put for a compatible change, so the revision is the only thing that tells an installed copy a better supervisor exists; the updater offers it, and only an explicit `with_supervisor_update` installs it, because that ends every session.
+Bump the number in `supervisor.py` and append its `build_desktop.supervisor_content_digest()` to `packaging/supervisor_revisions.json`; `tests/test_supervisor_revision.py` fails with both values spelled out when you forget, and never rewrite an existing pin.
+The running supervisor states its revision in `supervisor.json` and in its `hello` reply, and the daemon reports it as `supervisor_link.supervisor_revision`.
+
 `spawn` is idempotent on the session id, and the reservation - created the moment the request is accepted - is the deduplication key.
 That matters on the daemon side too: only a `spawn_status` of `unknown` proves nothing was reserved, so it is the one state under which an in-process fallback cannot leave two agents mutating one workspace.
 

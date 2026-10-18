@@ -492,7 +492,7 @@ Items are worked in order, and an item may reorder, split or remove later items 
     The cold check in `_delta_covers` stays as a second guard.
   - **Tests:** `tests/test_pty_ws.py::test_a_cursor_from_another_stream_is_never_answered_with_a_delta` (another stream, and no stream, for a position a delta would be served for); `tests/test_session_reliability.py` (a covered position refused for another or no stream, the supervisor's stream winning when named, and two `Session` objects for one id minting different streams; every delta-expecting fixture now offers its stream); `frontend/test/terminalRenderer.test.ts` (the pair travels together and a stream never alone).
 
-- [ ] **16. Supervisor revision for updates.**
+- [x] **16. Supervisor revision for updates.**
   - **Why:** installed copies replace the supervisor only on a protocol change, so items 12 and 13 would never reach them.
   - **Change:**
     - A hand-bumped `SUPERVISOR_REVISION` in `supervisor.py`, written to `supervisor.json` and `bundle.json`, with a drift test that fails when the content of `SUPERVISOR_SOURCES` changes without a bump.
@@ -501,6 +501,23 @@ Items are worked in order, and an item may reorder, split or remove later items 
     - `swemux doctor` reports a running supervisor older than its bundle.
   - **Where:** `update_install.py:44-61,1618-1638`, `bundle_metadata.py`, `packaging/build_desktop.py:26-95`, `design/features/desktop-shell.md`, `RELEASING.md`.
   - **Done when:** the plan endpoint offers the optional replace against a fixture with a lower revision.
+  - **Done (2026-10-17), with two deliberate departures from the text above.**
+    - **"Only a consented request" became a separate word, `with_supervisor_update`.**
+      `accept_supervisor_update` was documented, tested and shipped as a *permission* ("a release that can be installed around the sessions is, whatever the flag says"), and folding the optional replace into it would have made it an instruction for any caller that sends it by habit - a script passing `--accept-supervisor-update` on every install would start reaping the first time a release carried a newer supervisor.
+      The new word implies the consent, because it names the same cost, so a request needs only one of them; it changes nothing for a release with no newer revision; and `accept_supervisor_update` alone never installs an optional supervisor (`test_only_asking_for_it_replaces_a_compatible_supervisor`, four cases).
+      The dialog sends it from the unticked "Also update the PTY supervisor, ending every live session" box, the CLI from `--with-supervisor-update`, and `swemux update --plan` prints the second command beneath the default one.
+    - **"Differs" became "is higher".**
+      An equal or older incoming revision offers nothing: a downgrade on the same protocol gains nothing and costs every session, unlike a protocol downgrade, which strands the fleet and so stays `!=`.
+    - The pin is `packaging/supervisor_revisions.json`, one `build_desktop.supervisor_content_digest()` per revision: the closure's bytes with line endings normalised and the `SUPERVISOR_REVISION` line excluded, so a bump alone changes nothing a pin covers and two pins for one content fail.
+      Revision 1 pins the closure as items 12-14 left it, and a running supervisor that predates the field reads as revision 0 (`running_supervisor_revision`), so every existing install is offered revision 1 by the first release that carries it.
+      `bundle.json`'s `supervisor_revision` is optional - absent reads as 0, which is what an archive built before this looks like - and a present value that is not a non-negative integer makes the metadata malformed rather than guessed.
+    - The supervisor states its revision in `supervisor.json` and its `hello` reply; the daemon reports it in `supervisor_link`, and the doctor health payload carries it beside the build's own (`supervisor_revision_shipped`).
+      `daemon.supervisor_revision` is a warning with optional severity, never a failure: an older supervisor keeps working.
+    - **Known limit, accepted:** a declined supervisor is offered again by every later release until it is taken, and there is no path to take it on the *same* version.
+      Adding one would mean admitting a same-version install past `not_newer` for a single case, which is a second install shape to keep correct for an act the next release offers anyway; a checkout already has `redeploy_desktop.py --from-archive <zip> --replace-supervisor`.
+  - **Tests:** `tests/test_supervisor_revision.py` (the pin matches the closure, one pin per revision with none skipped or repeated; the digest ignores line endings and the revision line and nothing else, in any closure file; the pins file is outside the closure it pins; the running supervisor writes its revision).
+    `tests/test_update_install.py`: the plan offers a newer supervisor and stays swap with no consent word; no offer for an equal revision, a downgrade, or two builds that both predate revisions; a running supervisor without a revision is offered the first one; consent alone swaps and the instruction replaces, with or without consent; asking for a supervisor the release does not improve swaps; the instruction is accepted as consent for a required protocol replacement; and the metadata revision is optional but never guessed.
+    `tests/test_doctor.py` (the warning, and silence for an equal, newer or unreported revision), `tests/test_cli.py` (the body carries both words as typed; the plan prints the optional command last), `frontend/test/updateCheck.test.ts` (`planSupervisorOfferLine`: offered with both revisions and the session count, revision 0 for a running supervisor that predates them, and nothing for an older daemon, a declined offer, or a release that reaps anyway).
 
 - [ ] **17. Run the supervisor update.**
   - **Why:** items 12-14 do nothing until the running supervisor is replaced, and its bundle has been stale since 2026-08-27.

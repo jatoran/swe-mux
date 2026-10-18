@@ -2336,7 +2336,9 @@ CLI = Page(
                         "verifies its hash against the published manifest, and replaces the app "
                         "around your sessions. A release that replaces the PTY supervisor is "
                         "refused until <code>--accept-supervisor-update</code> is given, because "
-                        "that <b>ends every session</b>.",
+                        "that <b>ends every session</b>. A release carrying an optional newer "
+                        "supervisor installs around your sessions unless "
+                        "<code>--with-supervisor-update</code> asks for it too.",
                     ],
                     [
                         "swemux reload-daemon",

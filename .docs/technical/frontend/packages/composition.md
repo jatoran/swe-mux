@@ -29,10 +29,13 @@ Index: `../packages.md`.
 - **Not the same thing as the UI-build banner above it.** That one says this tab is behind the daemon it is already talking to and reloads itself; this one says the installed swe-mux is behind the published release.
 - `updateCheck.ts` deliberately does **not** re-derive whether an update exists, nor whether installing it ends the operator's sessions.
   `banner` in the payload is the daemon's verdict, and `POST /api/update/plan` is the daemon's verdict on the install; a second comparison in the browser would eventually make the desktop and the phone disagree.
-  What the browser owns is the narrow guard (a payload that failed to arrive, one from an older daemon with no such endpoint, and a verdict with no version to name all render nothing) and the rendering of the plan's facts into sentences (`planSessionsLine`, `planCostLine`, `planInstallLine`, `installPhaseLabel`), which are pure and tested.
+  What the browser owns is the narrow guard (a payload that failed to arrive, one from an older daemon with no such endpoint, and a verdict with no version to name all render nothing) and the rendering of the plan's facts into sentences (`planSessionsLine`, `planSupervisorOfferLine`, `planCostLine`, `planInstallLine`, `installPhaseLabel`), which are pure and tested.
 - `UpdateDialog.tsx` asks for the plan as it opens and shows, before the press: how this copy is managed, how much of the bundle is rewritten, and - drawn as the refusal it is when so - whether every live session ends and how many there are.
   A release that replaces the PTY supervisor is refused by the daemon until the request carries `accept_supervisor_update`, and the dialog sends that only from the button labelled "End every session and install".
   When the plan could not know (no metadata sidecar), the same consent is offered when the install stops after the download.
+  When the plan reports `supervisor_update_available` (a newer supervisor on the running protocol), the dialog adds an unticked "Also update the PTY supervisor, ending every live session" box under the sessions line, with `planSupervisorOfferLine` stating the revisions and the cost.
+  Ticking it redraws the sessions line as a reap, turns the button into "End every session and install", and sends `with_supervisor_update` with that press.
+  Leaving it alone installs around the sessions, so the default press can never end one.
   A source install gets the exact upgrade command with a copy control instead of a button.
   While the download runs the dialog polls `GET /api/update/install` once a second; the daemon's `daemon_redeploy_started` broadcast (with `kind: "update"` and the mode) closes it and the app-wide redeploy chip and outage overlay take over, saying "Installing update" and, for a consented reap, that the sessions ended rather than that they are held.
 - The poll is an hour and only re-reads an answer the daemon already holds (it checks once a day).

@@ -264,7 +264,8 @@ CLI flag.
 ```text
 POST /api/update/plan      {version: str}   (X-Mux-User-Gesture: update-plan)
 GET  /api/update/install
-POST /api/update/install   {version: str, accept_supervisor_update?: bool}
+POST /api/update/install   {version: str, accept_supervisor_update?: bool,
+                            with_supervisor_update?: bool}
                                             (X-Mux-User-Gesture: update-install)
 ```
 
@@ -281,13 +282,20 @@ that never turns healthy is rolled back to `<name>.prev`.
 download**: it fetches the manifest and the release's two small hashed sidecars
 (`.files.json`, `.bundle.json`) and returns `{version, current_version,
 changelog, published, install_kind, managed, install_root, artifact, installer,
-supervisor, mode, reaps_sessions, consent, consent_reason, delta,
-archive_cached, live_sessions}`.
+supervisor, mode, reaps_sessions, consent, consent_reason,
+supervisor_update_available, delta, archive_cached, live_sessions}`.
 `mode` is `swap` (the app is replaced around live sessions) or `replace` (every
 session ends and the PTY supervisor bundle is replaced too); `supervisor` carries
-the running and incoming protocol numbers, `known` (false when the release
-published no metadata sidecar, in which case the install decides after the
-download and stops to ask), and the sentence the dialog shows.
+the running and incoming protocol numbers, the running and incoming supervisor
+revisions (`running_revision` is 0 for a supervisor that predates them,
+`incoming_revision` is null when not read), `update_available`, `known` (false
+when the release published no metadata sidecar, in which case the install decides
+after the download and stops to ask), and the sentence the dialog shows.
+`supervisor_update_available` is true when the release carries a newer supervisor
+revision that speaks the running protocol: the plan stays `swap`, nothing is
+refused, and the newer supervisor is installed only by a request carrying
+`with_supervisor_update` (below). A daemon that predates revisions omits the
+field.
 `managed` is `checkout`, `installer`, or `portable` for a frozen install, and
 decides only what happens *after* a successful swap: an installer install gets
 its Add/Remove Programs entry brought up to the new version.
@@ -301,7 +309,7 @@ bundle. It returns `{install_kind, managed, swappable, bundle_root,
 install_root, upgrade_command, platform, artifact_name, current_version, running,
 phase, reason, message, version, artifact, archive, bytes_downloaded,
 bytes_total, started_at, finished_at, install_id, events[], delta, mode,
-accepted_supervisor_update, consent, applier}`.
+accepted_supervisor_update, with_supervisor_update, consent, applier}`.
 `phase` is `idle | downloading | verifying | inspecting | preparing | handed_off
 | refused | failed`, and the state is durable in `<data_dir>/update-install.json`
 because **the daemon does not survive its own swap** - a record that lived only
@@ -339,6 +347,17 @@ does) and it is the protocol rather than a source hash
 package versions, so hashes never match across a release). An archive whose
 `bundle.json` is missing or unreadable is refused too: "cannot tell whether this
 reaps your sessions" is not a case to guess at.
+
+A fourth field, `with_supervisor_update`, is an **instruction** where
+`accept_supervisor_update` is a permission: install the newer supervisor a
+compatible release carries (`supervisor_update_available` on the plan) as well,
+in replace mode, ending every session. It implies the consent, because it names
+the same cost, so the request needs only the one word. It changes nothing for a
+release with no newer revision, and it is a separate word so that a caller that
+always sends the permission is never handed a reap it did not ask for.
+`bundle.json`'s `supervisor_revision` is optional (absent reads as 0, a release
+built before revisions) and a present value that is not a non-negative integer
+makes the metadata malformed rather than guessed.
 
 `reason` is a closed set, and each word is a different thing an operator can do:
 `source_install` (a `uv tool install`/wheel has no bundle to swap; the reply

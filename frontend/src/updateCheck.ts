@@ -180,6 +180,11 @@ export type UpdateSupervisorVerdict = {
   known: boolean
   reaps_sessions: boolean
   consent: string
+  /** The running supervisor's revision (0 before revisions existed) and the release's. */
+  running_revision?: number
+  incoming_revision?: number | null
+  /** A newer supervisor that keeps the protocol: optional, and installing it reaps. */
+  update_available?: boolean
 }
 
 export type UpdateDelta = {
@@ -212,6 +217,10 @@ export type UpdatePlan = {
   reaps_sessions: boolean
   consent: string
   consent_reason: string
+  /** Optional, unlike `consent`: the install proceeds without it, and sending
+   *  `with_supervisor_update` installs the newer supervisor too. Absent from a
+   *  daemon that predates supervisor revisions. */
+  supervisor_update_available?: boolean
   delta: UpdateDelta
   archive_cached: boolean
   live_sessions?: number
@@ -270,12 +279,19 @@ async function post<T>(path: string, gesture: string, body: unknown): Promise<T>
 export const requestUpdatePlan = (version: string): Promise<UpdatePlan> =>
   post<UpdatePlan>('/api/update/plan', UPDATE_PLAN_GESTURE, { version })
 
-/** The press. `acceptSupervisorUpdate` is consent to end every session *if needed*. */
+/**
+ * The press. `acceptSupervisorUpdate` is consent to end every session *if needed*;
+ * `withSupervisorUpdate` asks for the optional newer supervisor as well, and the
+ * daemon reads it as carrying that consent. Two words, because a permission that
+ * also acted as an instruction would reap for a caller that only meant the first.
+ */
 export const requestUpdateInstall = (
-  version: string, acceptSupervisorUpdate: boolean,
+  version: string, acceptSupervisorUpdate: boolean, withSupervisorUpdate = false,
 ): Promise<UpdateInstallStatus> =>
   post<UpdateInstallStatus>('/api/update/install', UPDATE_INSTALL_GESTURE, {
-    version, accept_supervisor_update: acceptSupervisorUpdate,
+    version,
+    accept_supervisor_update: acceptSupervisorUpdate,
+    with_supervisor_update: withSupervisorUpdate,
   })
 
 /** The passive read, polled while a download runs. Never reaches the network past the daemon. */
@@ -336,6 +352,17 @@ export function planSessionsLine(plan: UpdatePlan): string {
   return count > 0
     ? `Your ${sessions} keep running: the PTY supervisor holds them while the app restarts around them.`
     : 'Live sessions keep running: the PTY supervisor holds them while the app restarts around them.'
+}
+
+/** The optional supervisor update the plan offers, in one line, or '' when none is. */
+export function planSupervisorOfferLine(plan: UpdatePlan): string {
+  if (!plan.supervisor_update_available || plan.reaps_sessions) return ''
+  const incoming = plan.supervisor.incoming_revision
+  const running = plan.supervisor.running_revision ?? 0
+  const count = plan.live_sessions ?? 0
+  const cost = count === 1 ? 'the 1 live session' : count > 1 ? `all ${count} live sessions` : 'every live session'
+  return `This release also carries a newer PTY supervisor (revision ${incoming ?? '?'}; revision ${running} is running). `
+    + `Installing it too ends ${cost}; leaving it out keeps them, and the running supervisor keeps working.`
 }
 
 /** How much of the bundle the install writes, or '' when the plan could not say. */

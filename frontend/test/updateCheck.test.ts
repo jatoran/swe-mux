@@ -2,7 +2,8 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
   bytesLabel, CONSENT_SUPERVISOR_UPDATE, installFinished, installPhaseLabel, lastCheckedLabel,
-  planCostLine, planInstallLine, planSessionsLine, refusalNeedsConsent, runningVersionLabel,
+  planCostLine, planInstallLine, planSessionsLine, planSupervisorOfferLine, refusalNeedsConsent,
+  runningVersionLabel,
   shouldShowUpdateBanner,
   updateBannerText, updateStatusSummary, UPDATE_CHECK_GESTURE, UPDATE_INSTALL_GESTURE,
   UPDATE_PLAN_GESTURE,
@@ -183,6 +184,30 @@ test('the sessions line is the daemon verdict with the count the operator would 
   const unknown = plan({ supervisor: { ...plan().supervisor, known: false, incoming_protocol: null } })
   assert.match(planSessionsLine(unknown), /decided after the download/)
   assert.match(planSessionsLine(unknown), /asks first/)
+})
+
+test('a newer supervisor that keeps the protocol is offered, priced, and never assumed', () => {
+  // The offer is the daemon's `supervisor_update_available`, not a comparison of
+  // the two revisions here: the browser would otherwise be a second updater.
+  const offered = plan({
+    supervisor_update_available: true,
+    supervisor: { ...plan().supervisor, running_revision: 1, incoming_revision: 2, update_available: true },
+  })
+  const line = planSupervisorOfferLine(offered)
+  assert.match(line, /revision 2; revision 1 is running/)
+  assert.match(line, /ends all 7 live sessions/)
+  assert.match(line, /leaving it out keeps them/)
+  assert.match(planSupervisorOfferLine({ ...offered, live_sessions: 1 }), /ends the 1 live session/)
+  assert.match(planSupervisorOfferLine({ ...offered, live_sessions: 0 }), /ends every live session/)
+  // A running supervisor from before revisions existed reports none and reads as 0.
+  const predates = { ...offered, supervisor: { ...offered.supervisor, running_revision: undefined } }
+  assert.match(planSupervisorOfferLine(predates), /revision 0 is running/)
+
+  // No offer: an older daemon that has no such field, a plan that declines it,
+  // and a release that reaps anyway - where the consent line already says it all.
+  assert.equal(planSupervisorOfferLine(plan()), '')
+  assert.equal(planSupervisorOfferLine({ ...offered, supervisor_update_available: false }), '')
+  assert.equal(planSupervisorOfferLine({ ...offered, reaps_sessions: true, consent: 'supervisor_update' }), '')
 })
 
 test('the cost line counts files rewritten, or says the archive is already here', () => {

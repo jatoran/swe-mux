@@ -60,6 +60,22 @@ release and comparing them would refuse every update forever. Consent is
 permission, not an instruction: a release whose supervisor protocol matches the
 running one installs in swap mode whether or not consent was given.
 
+**A newer supervisor that keeps the protocol is offered, never imposed.** The
+protocol alone never moves for a supervisor improvement that stays compatible,
+so such an improvement would never reach an installed copy. The bundle also
+states `supervisor_revision` (`supervisor.SUPERVISOR_REVISION`, hand-bumped and
+pinned to the closure's content, so it means the same on every machine), and the
+running supervisor states its own in `supervisor.json`. A higher incoming
+revision leaves the default at swap - the running supervisor keeps working, and
+the sessions with it - and the plan reports `supervisor_update_available`. Taking
+it is a separate word, `with_supervisor_update`, because it is an instruction
+rather than a permission: `accept_supervisor_update` keeps meaning only "end the
+sessions if this release cannot be installed otherwise", so a caller that always
+sends it is never surprised by a reap a merely newer supervisor would cost. The
+instruction implies the consent, since it names the same consequence, and it
+installs in replace mode - the only way that improvement lands, and the reason it
+ends every session.
+
 **The plan answers before the download.** `POST /api/update/plan` reads the
 manifest and the release's `.bundle.json` sidecar (a few hundred bytes, hashed
 like every other artifact) to say which mode this release needs, what it will
@@ -618,6 +634,8 @@ class _State:
     mode: str = ""
     #: Whether the request carried consent to end every session.
     accepted_supervisor_update: bool = False
+    #: Whether the request asked for the optional newer supervisor too.
+    with_supervisor_update: bool = False
     #: What a refusal is waiting on (`CONSENT_*`), or "".
     consent: str = ""
     #: The applier executable the attempt ran, once prepared.
@@ -640,6 +658,7 @@ class _State:
             "delta": dict(self.delta),
             "mode": self.mode,
             "accepted_supervisor_update": self.accepted_supervisor_update,
+            "with_supervisor_update": self.with_supervisor_update,
             "consent": self.consent,
             "applier": self.applier,
         }
@@ -668,6 +687,13 @@ class SupervisorVerdict:
     #: Whether the incoming protocol was actually read (False before a download
     #: of a release with no metadata sidecar).
     known: bool
+    #: The running supervisor's revision (0 for one that predates the field) and
+    #: the release's (None when not read).
+    running_revision: int = 0
+    incoming_revision: int | None = None
+    #: A newer supervisor that keeps the protocol: swap installs around it, and
+    #: `with_supervisor_update` installs it, ending every session.
+    update_available: bool = False
 
     @property
     def reaps_sessions(self) -> bool:
@@ -680,6 +706,9 @@ class SupervisorVerdict:
             "message": self.message,
             "running_protocol": self.running_protocol,
             "incoming_protocol": self.incoming_protocol,
+            "running_revision": self.running_revision,
+            "incoming_revision": self.incoming_revision,
+            "update_available": self.update_available,
             "known": self.known,
             "reaps_sessions": self.reaps_sessions,
             "consent": CONSENT_SUPERVISOR_UPDATE if self.reason else "",
@@ -799,6 +828,7 @@ class UpdateInstaller:
             if isinstance(value, (int, float)) and not isinstance(value, bool):
                 setattr(state, name, float(value))
         state.accepted_supervisor_update = payload.get("accepted_supervisor_update") is True
+        state.with_supervisor_update = payload.get("with_supervisor_update") is True
         events = payload.get("events")
         if isinstance(events, list):
             state.events = [item for item in events[:MAX_EVENTS] if isinstance(item, dict)]
@@ -936,8 +966,11 @@ class UpdateInstaller:
         if kind.kind == INSTALL_SOURCE:
             raise UpdateRefused(REASON_SOURCE_INSTALL, self._source_refusal(kind))
         release, artifact = await self._resolve_artifact(wanted, record=False)
+        incoming = await self._incoming_metadata(release)
         verdict = await self._supervisor_verdict(
-            await self._incoming_protocol(release), accepted=False
+            incoming.supervisor_protocol if incoming is not None else None,
+            accepted=False,
+            incoming_revision=incoming.supervisor_revision if incoming is not None else None,
         )
         delta = await self._delta_plan(release)
         installer = release_installer_name(release.version, self.platform_tag)
@@ -958,6 +991,9 @@ class UpdateInstaller:
             "reaps_sessions": verdict.reaps_sessions,
             "consent": CONSENT_SUPERVISOR_UPDATE if verdict.reason else "",
             "consent_reason": verdict.reason,
+            # Optional, unlike `consent`: installing proceeds without it, and only
+            # `with_supervisor_update` installs the newer supervisor too.
+            "supervisor_update_available": verdict.update_available,
             "delta": delta.as_dict(),
             "archive_cached": (self.downloads_dir / artifact.name).is_file(),
         }
@@ -965,7 +1001,11 @@ class UpdateInstaller:
     # -- the install ----------------------------------------------------------
 
     async def start(
-        self, version: str, *, accept_supervisor_update: bool = False
+        self,
+        version: str,
+        *,
+        accept_supervisor_update: bool = False,
+        with_supervisor_update: bool = False,
     ) -> dict[str, Any]:
         """Begin an install of exactly `version`, in the background.
 
@@ -973,7 +1013,9 @@ class UpdateInstaller:
         runs as a task because a download is minutes long and the request that
         started it is a button press, not a transfer. `accept_supervisor_update`
         is the operator's consent to end every live session if - and only if -
-        this release cannot be installed any other way.
+        this release cannot be installed any other way. `with_supervisor_update`
+        asks for the newer supervisor a compatible release carries as well, and
+        implies that consent: it names the same cost.
         """
         await self.ensure_loaded()
         if self.running:
@@ -985,7 +1027,8 @@ class UpdateInstaller:
             version=str(version).strip(),
             started_at=float(self._clock()),
             install_id=f"{int(self._clock())}-{os.getpid()}",
-            accepted_supervisor_update=bool(accept_supervisor_update),
+            accepted_supervisor_update=bool(accept_supervisor_update or with_supervisor_update),
+            with_supervisor_update=bool(with_supervisor_update),
         )
         # Refusals that need nothing from the network are made here, so the
         # caller gets them as the response to its own request rather than having
@@ -1047,6 +1090,8 @@ class UpdateInstaller:
                 metadata.supervisor_protocol,
                 accepted=self._state.accepted_supervisor_update,
                 known=True,
+                incoming_revision=metadata.supervisor_revision,
+                chosen=self._state.with_supervisor_update,
             )
             if verdict.reason:
                 raise UpdateRefused(
@@ -1258,8 +1303,8 @@ class UpdateInstaller:
 
     # -- step 1c: what the release says about the supervisor, before download ---
 
-    async def _incoming_protocol(self, release: Release) -> int | None:
-        """The release's supervisor protocol from its metadata sidecar, or None.
+    async def _incoming_metadata(self, release: Release) -> BundleMetadata | None:
+        """The release's bundle metadata from its sidecar, or None.
 
         None means "not published" or "could not be read", both of which the
         plan reports as unknown; the install answers from the archive itself.
@@ -1283,7 +1328,7 @@ class UpdateInstaller:
                 extra={"update_reason": reason, "update_version": release.version},
             )
             return None
-        return metadata.supervisor_protocol
+        return metadata
 
     # -- step 2: the bytes, and the hash over them ----------------------------
 
@@ -1440,7 +1485,13 @@ class UpdateInstaller:
     # -- step 4: the supervisor gate ------------------------------------------
 
     async def _supervisor_verdict(
-        self, incoming: int | None, *, accepted: bool, known: bool | None = None
+        self,
+        incoming: int | None,
+        *,
+        accepted: bool,
+        known: bool | None = None,
+        incoming_revision: int | None = None,
+        chosen: bool = False,
     ) -> SupervisorVerdict:
         """Which mode installing a release with protocol `incoming` needs.
 
@@ -1450,12 +1501,15 @@ class UpdateInstaller:
         consent to because it ends every session. `incoming` of None with
         `known` unset is the plan's "the sidecar was not published" case, and
         answers swap mode with `known: false` - the install will decide from the
-        archive.
+        archive. A higher `incoming_revision` than the running supervisor's, with
+        the protocol unchanged, keeps swap as the answer and offers the newer
+        supervisor; only `chosen` (the request's `with_supervisor_update`) turns
+        that offer into replace mode - consent alone stays a permission.
         """
         is_known = (incoming is not None) if known is None else known
-        running, reason = await asyncio.to_thread(
-            running_supervisor_protocol, Path(self._config.data_dir)
-        )
+        data_dir = Path(self._config.data_dir)
+        running, reason = await asyncio.to_thread(running_supervisor_protocol, data_dir)
+        running_revision = await asyncio.to_thread(running_supervisor_revision, data_dir)
 
         def verdict(refusal: str, message: str) -> SupervisorVerdict:
             # The mode names what installing this release *needs*, whether or
@@ -1469,6 +1523,8 @@ class UpdateInstaller:
                 running_protocol=running,
                 incoming_protocol=incoming,
                 known=is_known,
+                running_revision=running_revision,
+                incoming_revision=incoming_revision,
             )
 
         if running is None:
@@ -1504,14 +1560,42 @@ class UpdateInstaller:
                 "installs it and ends them; declining keeps everything running until "
                 "you choose a quieter moment.",
             )
+        newer = incoming_revision is not None and incoming_revision > running_revision
+        if newer and chosen:
+            return SupervisorVerdict(
+                mode=MODE_REPLACE,
+                reason="",
+                message=f"This release carries PTY supervisor revision {incoming_revision} "
+                f"and revision {running_revision} is running. You chose to install it, "
+                "which replaces the supervisor and ends every live terminal session.",
+                running_protocol=running,
+                incoming_protocol=incoming,
+                known=is_known,
+                running_revision=running_revision,
+                incoming_revision=incoming_revision,
+                update_available=True,
+            )
+        message = (
+            "Your live sessions are preserved: the PTY supervisor keeps them while the "
+            "app restarts around them."
+        )
+        if newer:
+            message += (
+                f" This release also carries a newer PTY supervisor (revision "
+                f"{incoming_revision}; revision {running_revision} is running). It is "
+                "left out unless you choose it, because installing it ends every live "
+                "session; the running one keeps working until then."
+            )
         return SupervisorVerdict(
             mode=MODE_SWAP,
             reason="",
-            message="Your live sessions are preserved: the PTY supervisor keeps them "
-            "while the app restarts around them.",
+            message=message,
             running_protocol=running,
             incoming_protocol=incoming,
             known=is_known,
+            running_revision=running_revision,
+            incoming_revision=incoming_revision,
+            update_available=newer,
         )
 
     def _supervisor_inside_bundle(self) -> bool:
@@ -1638,6 +1722,23 @@ def running_supervisor_protocol(data_dir: Path) -> tuple[int | None, str]:
     return protocol, REASON_OK
 
 
+def running_supervisor_revision(data_dir: Path) -> int:
+    """The running supervisor's `SUPERVISOR_REVISION`, from its discovery file.
+
+    0 for a supervisor from before the field, and for one that cannot be read:
+    "older than anything that states a revision" is the conservative reading of
+    both, because the most it can cause is an update being *offered*.
+    """
+    try:
+        payload = json.loads(discovery_path(data_dir).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return 0
+    revision = payload.get("revision") if isinstance(payload, dict) else None
+    if isinstance(revision, bool) or not isinstance(revision, int) or revision < 0:
+        return 0
+    return revision
+
+
 def _live_supervisor_exe(data_dir: Path) -> Path | None:
     """The running supervisor's executable, from its discovery pid, or None."""
     import psutil
@@ -1761,4 +1862,5 @@ __all__ = [
     "release_installer_name",
     "release_platform_tag",
     "running_supervisor_protocol",
+    "running_supervisor_revision",
 ]

@@ -820,13 +820,33 @@ def test_update_install_carries_the_gesture_and_the_consent_flag(
     assert captured[0]["headers"] == {"X-Mux-User-Gesture": "update-install"}
     # Absent consent is sent as an explicit False: the daemon's default is the
     # same, and a body that says so is one a reader can audit.
-    assert captured[0]["body"] == {"version": "0.3.0", "accept_supervisor_update": False}
+    assert captured[0]["body"] == {
+        "version": "0.3.0",
+        "accept_supervisor_update": False,
+        "with_supervisor_update": False,
+    }
     captured.clear()
     assert (
         cli.main(["update", "--install", "0.3.0", "--accept-supervisor-update", "--json"])
         == cli.EXIT_OK
     )
-    assert captured[0]["body"] == {"version": "0.3.0", "accept_supervisor_update": True}
+    assert captured[0]["body"] == {
+        "version": "0.3.0",
+        "accept_supervisor_update": True,
+        "with_supervisor_update": False,
+    }
+    # The optional supervisor is its own word: the daemon treats it as implying
+    # consent, so the client sends exactly what was typed and no more.
+    captured.clear()
+    assert (
+        cli.main(["update", "--install", "0.3.0", "--with-supervisor-update", "--json"])
+        == cli.EXIT_OK
+    )
+    assert captured[0]["body"] == {
+        "version": "0.3.0",
+        "accept_supervisor_update": False,
+        "with_supervisor_update": True,
+    }
 
 
 def test_update_plan_uses_its_own_gesture_word(
@@ -866,6 +886,21 @@ def test_the_plan_renders_the_cost_before_the_command() -> None:
     )
     assert "sessions  preserved" in quiet
     assert "--accept-supervisor-update" not in quiet
+    assert "--with-supervisor-update" not in quiet
+    offered = cli._render_update_plan(
+        {
+            "version": "0.3.0",
+            "mode": "swap",
+            "reaps_sessions": False,
+            "supervisor_update_available": True,
+            "supervisor": {"known": True},
+        }
+    )
+    assert "sessions  preserved" in offered
+    lines = offered.splitlines()
+    assert lines[-2].endswith("update --install 0.3.0"), "the default stays first"
+    assert "--with-supervisor-update" in lines[-1]
+    assert "ENDS EVERY SESSION" in lines[-1]
 
 
 def test_a_refused_install_names_the_flag_that_would_proceed() -> None:

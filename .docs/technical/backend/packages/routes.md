@@ -63,7 +63,7 @@ Registered immediately after `system` because it uses that module's successor-sp
 Plus `POST /api/update/plan`, behind its own `update-plan` gesture: the manifest and two small sidecars, answered as what installing would do (the mode, whether sessions end and how many the daemon counts live, the delta) before any download.
 Plus `GET /api/update/install` (the attempt's phase; polled during a download, so it reads state only).
 Plus `POST /api/update/install`, which needs the `update-install` gesture header **and** a named version, so what installs is what the operator was shown.
-That route also takes `accept_supervisor_update` as the operator's consent to end every session if the release cannot be installed any other way.
+That route also takes `accept_supervisor_update` as the operator's consent to end every session if the release cannot be installed any other way, and `with_supervisor_update` as the instruction to install the optional newer supervisor a compatible release carries (which implies that consent).
 Every refusal that needs no network is answered as a `409` to that request rather than left for a poll to find, and a refusal that consent would clear carries `consent: "supervisor_update"`.
 The three gesture words are deliberately different from each other.
 A runtime with no checker or installer published answers a quiet 200 rather than a 404, because every consumer is a passive banner.

@@ -185,6 +185,7 @@ def make_bundle(
     version: str = NEXT,
     protocol: int = SUPERVISOR_PROTOCOL,
     siblings: bool = True,
+    revision: int = 0,
 ) -> Path:
     """A directory shaped like a built bundle, small enough to zip in a test.
 
@@ -200,7 +201,10 @@ def make_bundle(
     write_bundle_metadata(
         directory,
         bundle_metadata(
-            version=version, supervisor_protocol=protocol, platform=release_platform_tag()
+            version=version,
+            supervisor_protocol=protocol,
+            supervisor_revision=revision,
+            platform=release_platform_tag(),
         ),
     )
     if siblings:
@@ -275,10 +279,14 @@ def artifact_entry(archive: Path, *, sha256: str | None = None) -> dict[str, str
     }
 
 
-def write_supervisor(data_dir: Path, *, protocol: int | None = SUPERVISOR_PROTOCOL) -> None:
+def write_supervisor(
+    data_dir: Path, *, protocol: int | None = SUPERVISOR_PROTOCOL, revision: int | None = None
+) -> None:
     payload: dict[str, Any] = {"pid": 1234, "port": 5000, "token": "x", "started_at": 1.0}
     if protocol is not None:
         payload["protocol"] = protocol
+    if revision is not None:
+        payload["revision"] = revision
     data_dir.mkdir(parents=True, exist_ok=True)
     (data_dir / "supervisor.json").write_text(json.dumps(payload), encoding="utf-8")
 
@@ -335,10 +343,16 @@ def build(
 
 
 async def run_install(
-    installer: UpdateInstaller, version: str = NEXT, *, accept: bool = False
+    installer: UpdateInstaller,
+    version: str = NEXT,
+    *,
+    accept: bool = False,
+    with_supervisor: bool = False,
 ) -> dict[str, Any]:
     """Start an install and let it finish, returning the final snapshot."""
-    await installer.start(version, accept_supervisor_update=accept)
+    await installer.start(
+        version, accept_supervisor_update=accept, with_supervisor_update=with_supervisor
+    )
     await installer.wait()
     return installer.snapshot()
 
@@ -893,6 +907,18 @@ def test_bundle_metadata_honours_its_schema_before_reading_a_field() -> None:
     assert absent == BUNDLE_METADATA_MALFORMED
 
 
+def test_the_supervisor_revision_is_optional_but_never_guessed() -> None:
+    base = {"schema": 1, "version": "0.2.0", "supervisor_protocol": 1}
+    older, reason = parse_bundle_metadata(base)
+    assert reason == "ok"
+    assert older is not None and older.supervisor_revision == 0, "a bundle from before it"
+    newer, _ = parse_bundle_metadata({**base, "supervisor_revision": 3})
+    assert newer is not None and newer.supervisor_revision == 3
+    for damaged in ("3", -1, True, 1.5):
+        _, why = parse_bundle_metadata({**base, "supervisor_revision": damaged})
+        assert why == BUNDLE_METADATA_MALFORMED
+
+
 def test_a_built_bundle_describes_itself(tmp_path: Path) -> None:
     bundle = make_bundle(tmp_path / "swe-mux")
     metadata, reason = read_bundle_metadata(bundle)
@@ -1422,10 +1448,12 @@ async def test_the_sidecar_manifest_name_cannot_collide_with_the_archives(
 
 
 def release_with_sidecars(
-    tmp_path: Path, *, protocol: int = SUPERVISOR_PROTOCOL
+    tmp_path: Path, *, protocol: int = SUPERVISOR_PROTOCOL, revision: int = 0
 ) -> tuple[dict[str, Any], FakeDownloads, Path]:
     """A manifest naming the archive and both sidecars, and a downloader for all three."""
-    bundle = make_bundle(tmp_path / "build" / "swe-mux", version=NEXT, protocol=protocol)
+    bundle = make_bundle(
+        tmp_path / "build" / "swe-mux", version=NEXT, protocol=protocol, revision=revision
+    )
     archive, files = package_desktop_release.build_archive(
         bundle, tmp_path / "out", siblings=package_desktop_release.sibling_bundles(bundle)
     )
@@ -1485,6 +1513,131 @@ async def test_the_plan_reports_a_preserving_release_and_the_delta(tmp_path: Pat
     assert "preserved" in plan["supervisor"]["message"]
     assert plan["delta"]["reason"] in {"ok", "too_little_reuse"}
     assert plan["managed"] == MANAGED_PORTABLE
+
+
+async def test_the_plan_offers_a_newer_supervisor_that_keeps_the_protocol(
+    tmp_path: Path,
+) -> None:
+    """DAEMON_LOAD_ISOLATION item 16: offered, never imposed.
+
+    The protocol is unchanged, so the running supervisor keeps working and swap
+    stays the default; the newer supervisor is the optional replace, because
+    installing it is the only way it lands and it ends every session.
+    """
+    manifest_payload, download, _ = release_with_sidecars(tmp_path, revision=2)
+    fetch = FakeFetch({MANIFEST_URL: manifest_payload})
+    installer = build(tmp_path, fetch=fetch, download=download)
+    write_supervisor(Path(installer._config.data_dir), revision=1)
+
+    plan = await installer.plan(NEXT)
+
+    assert plan["mode"] == bundle_apply.MODE_SWAP
+    assert plan["reaps_sessions"] is False
+    assert plan["consent"] == "", "nothing is refused; the offer is optional"
+    assert plan["supervisor_update_available"] is True
+    assert plan["supervisor"]["update_available"] is True
+    assert plan["supervisor"]["incoming_revision"] == 2
+    assert plan["supervisor"]["running_revision"] == 1
+    assert "newer PTY supervisor" in plan["supervisor"]["message"]
+    assert "ends every live session" in plan["supervisor"]["message"]
+
+
+@pytest.mark.parametrize(("running", "incoming"), [(2, 2), (3, 2), (None, 0)])
+async def test_no_supervisor_update_is_offered_unless_the_release_is_newer(
+    tmp_path: Path, running: int | None, incoming: int
+) -> None:
+    # The same revision, a downgrade, and two builds that both predate revisions.
+    manifest_payload, download, _ = release_with_sidecars(tmp_path, revision=incoming)
+    fetch = FakeFetch({MANIFEST_URL: manifest_payload})
+    installer = build(tmp_path, fetch=fetch, download=download)
+    write_supervisor(Path(installer._config.data_dir), revision=running)
+
+    plan = await installer.plan(NEXT)
+
+    assert plan["mode"] == bundle_apply.MODE_SWAP
+    assert plan["supervisor_update_available"] is False
+    assert "newer PTY supervisor" not in plan["supervisor"]["message"]
+
+
+async def test_a_running_supervisor_that_predates_revisions_is_offered_the_first_one(
+    tmp_path: Path,
+) -> None:
+    """The stale supervisor every install has today states no revision at all."""
+    manifest_payload, download, _ = release_with_sidecars(tmp_path, revision=1)
+    fetch = FakeFetch({MANIFEST_URL: manifest_payload})
+    installer = build(tmp_path, fetch=fetch, download=download)
+    write_supervisor(Path(installer._config.data_dir))
+
+    plan = await installer.plan(NEXT)
+
+    assert plan["supervisor_update_available"] is True
+    assert plan["supervisor"]["running_revision"] == 0
+
+
+@pytest.mark.parametrize(
+    ("accept", "with_supervisor", "mode"),
+    [
+        (False, False, bundle_apply.MODE_SWAP),
+        # Consent is a permission and nothing here needs it: a caller that always
+        # sends it must never take a reap a merely newer supervisor would cost.
+        (True, False, bundle_apply.MODE_SWAP),
+        # The instruction is what installs it, and it carries the consent itself.
+        (False, True, bundle_apply.MODE_REPLACE),
+        (True, True, bundle_apply.MODE_REPLACE),
+    ],
+)
+async def test_only_asking_for_it_replaces_a_compatible_supervisor(
+    tmp_path: Path, accept: bool, with_supervisor: bool, mode: str
+) -> None:
+    manifest_payload, download, archive = release_with_sidecars(tmp_path, revision=2)
+    fetch = FakeFetch({MANIFEST_URL: manifest_payload})
+    handoff = Handoff()
+    installer = build(tmp_path, fetch=fetch, download=download, handoff=handoff)
+    write_supervisor(Path(installer._config.data_dir), revision=1)
+
+    snapshot = await run_install(installer, accept=accept, with_supervisor=with_supervisor)
+
+    assert snapshot["phase"] == PHASE_HANDED_OFF
+    assert snapshot["mode"] == mode
+    assert snapshot["with_supervisor_update"] is with_supervisor
+    assert snapshot["accepted_supervisor_update"] is (accept or with_supervisor)
+    assert [call[2] for call in handoff.calls] == [mode]
+
+
+async def test_asking_for_a_supervisor_the_release_does_not_improve_changes_nothing(
+    tmp_path: Path,
+) -> None:
+    # The same revision on both sides: there is nothing to take, so the request
+    # installs around the sessions exactly as if it had not asked.
+    manifest_payload, download, _ = release_with_sidecars(tmp_path, revision=2)
+    fetch = FakeFetch({MANIFEST_URL: manifest_payload})
+    handoff = Handoff()
+    installer = build(tmp_path, fetch=fetch, download=download, handoff=handoff)
+    write_supervisor(Path(installer._config.data_dir), revision=2)
+
+    snapshot = await run_install(installer, with_supervisor=True)
+
+    assert snapshot["phase"] == PHASE_HANDED_OFF
+    assert [call[2] for call in handoff.calls] == [bundle_apply.MODE_SWAP]
+
+
+async def test_asking_for_the_supervisor_consents_to_a_required_replacement(
+    tmp_path: Path,
+) -> None:
+    # A protocol change needs replace mode whatever was asked; the instruction
+    # names the same cost as the consent, so it is accepted as that consent.
+    archive = make_archive(tmp_path, protocol=SUPERVISOR_PROTOCOL + 1)
+    fetch = FakeFetch({MANIFEST_URL: manifest(artifacts=[artifact_entry(archive)])})
+    handoff = Handoff()
+    installer = build(
+        tmp_path, fetch=fetch, download=FakeDownload(archive.read_bytes()), handoff=handoff
+    )
+    write_supervisor(Path(installer._config.data_dir))
+
+    snapshot = await run_install(installer, with_supervisor=True)
+
+    assert snapshot["phase"] == PHASE_HANDED_OFF
+    assert [call[2] for call in handoff.calls] == [bundle_apply.MODE_REPLACE]
 
 
 async def test_a_release_without_the_metadata_sidecar_plans_as_unknown(

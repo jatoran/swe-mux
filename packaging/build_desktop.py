@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -18,6 +19,7 @@ from swe_mux.build_support import publish_frontend  # noqa: E402
 from swe_mux.bundle_metadata import bundle_metadata, write_bundle_metadata  # noqa: E402
 from swe_mux.desktop import create_tray_image  # noqa: E402
 from swe_mux.supervisor import PROTOCOL_VERSION as SUPERVISOR_PROTOCOL_VERSION  # noqa: E402
+from swe_mux.supervisor import SUPERVISOR_REVISION  # noqa: E402
 from swe_mux.update_install import release_platform_tag  # noqa: E402
 
 # The dedicated supervisor bundle's complete source closure. Rebuilding it is
@@ -83,6 +85,30 @@ def supervisor_source_hash() -> str:
             digest.update(f"{package}=={version(package)}".encode())
         except Exception:
             digest.update(f"{package}==unknown".encode())
+    return digest.hexdigest()
+
+
+#: One content digest per `SUPERVISOR_REVISION`, appended to and never rewritten.
+SUPERVISOR_REVISIONS_FILE = ROOT / "packaging" / "supervisor_revisions.json"
+_REVISION_LINE = re.compile(rb"^SUPERVISOR_REVISION = \d+$", re.MULTILINE)
+
+
+def supervisor_content_digest() -> str:
+    """The supervisor closure's content, as a revision pin sees it.
+
+    Not `supervisor_source_hash`, which gates a local rebuild and mixes in this
+    machine's package versions so it never matches across machines. This one
+    must: it decides whether a revision bump was forgotten, on a Windows checkout
+    and a Linux runner alike, so line endings are normalized and nothing about the
+    build machine is read. The `SUPERVISOR_REVISION` line is left out, so a bump
+    on its own changes nothing a pin covers - and two pins for one content fail.
+    """
+    digest = hashlib.sha256()
+    for path in SUPERVISOR_SOURCES:
+        content = path.read_bytes().replace(b"\r\n", b"\n")
+        content = _REVISION_LINE.sub(b"SUPERVISOR_REVISION = <pinned>", content)
+        digest.update(path.name.encode("utf-8") + b"\0")
+        digest.update(content + b"\0")
     return digest.hexdigest()
 
 
@@ -247,6 +273,7 @@ def describe_bundle(bundle_root: Path) -> Path:
         bundle_metadata(
             version=__version__,
             supervisor_protocol=SUPERVISOR_PROTOCOL_VERSION,
+            supervisor_revision=SUPERVISOR_REVISION,
             platform=release_platform_tag(),
         ),
     )

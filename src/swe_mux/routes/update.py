@@ -263,6 +263,11 @@ async def post_update_install(request: web.Request) -> web.Response:
     it (`409` carrying `consent: "supervisor_update"`) until the request says
     that was understood. The flag is permission, not an instruction - a release
     that can be installed around the sessions is, whatever the flag says.
+    `with_supervisor_update` is the instruction: install the newer supervisor a
+    compatible release carries as well (`supervisor_update_available` on the
+    plan), ending every session. It implies the consent, because it names the
+    same cost, and it is a separate word so that a caller that always sends the
+    permission never takes a reap it did not ask for.
 
     Everything it can refuse without touching the network is refused here, as the
     response to this request, so a caller learns "this is a source install" or
@@ -279,8 +284,11 @@ async def post_update_install(request: web.Request) -> web.Response:
     if not version:
         return _version_required()
     accepted = body.get("accept_supervisor_update") is True
+    with_supervisor = body.get("with_supervisor_update") is True
     try:
-        snapshot = await installer.start(version, accept_supervisor_update=accepted)
+        snapshot = await installer.start(
+            version, accept_supervisor_update=accepted, with_supervisor_update=with_supervisor
+        )
     except UpdateRefused as refusal:
         log.info(
             "update install refused",

@@ -215,6 +215,13 @@ Its contract:
   dialog button or CLI flag labelled with the consequence. The plan answers from the
   `.bundle.json` sidecar before the download and the install re-reads the archive's own copy;
   it never decides this quietly, and the release notes are where the operator reads why.
+- **A release whose `supervisor.SUPERVISOR_REVISION` moved should say what the newer
+  supervisor fixes**, because installing it is optional and costs every live session: the
+  plan offers it (`supervisor_update_available`), the dialog's unticked box and
+  `--with-supervisor-update` take it, and an install that leaves it out keeps the old one
+  running. The operator decides whether that is worth a reap from the release notes. The
+  revision cannot be forgotten - `tests/test_supervisor_revision.py` fails the gate when the
+  closure changed without a bump - but the sentence explaining it can.
 - Write `version.json` into the static site (latest version, artifact URLs and hashes, and a
   changelog pointer). That file is the in-app update-check endpoint; the site workflow deploys
   `site/` to Cloudflare Workers from the same repository.

@@ -91,6 +91,29 @@ def test_lost_supervisor_is_a_critical_failure() -> None:
     assert report["ok"] is False
 
 
+def test_a_supervisor_older_than_its_bundle_is_reported_without_failing() -> None:
+    """It works; it is missing what the newer one adds, and replacing it costs a reap."""
+    sources = _healthy_sources()
+    sources["health"]["supervisor_revision"] = 0
+    sources["health"]["supervisor_revision_shipped"] = 1
+    report = doctor.build_doctor_report(**sources)
+    revision = next(c for c in report["checks"] if c["id"] == "daemon.supervisor_revision")
+    assert revision["status"] == "warn"
+    assert revision["severity"] == "optional"
+    assert "revision 0" in revision["detail"] and "revision 1" in revision["detail"]
+    assert "ends every live session" in revision["detail"]
+    assert report["ok"] is True
+
+    # Current; newer than this build (a rolled-back app over a kept supervisor),
+    # which is not something replacing it would improve; or a snapshot from a
+    # daemon that does not report revisions: no check.
+    for running, shipped in ((1, 1), (2, 1), (None, None)):
+        sources["health"]["supervisor_revision"] = running
+        sources["health"]["supervisor_revision_shipped"] = shipped
+        ids = {c["id"] for c in doctor.build_doctor_report(**sources)["checks"]}
+        assert "daemon.supervisor_revision" not in ids
+
+
 def test_firewall_needs_repair_fails_with_remedy() -> None:
     sources = _healthy_sources()
     sources["firewall"] = {

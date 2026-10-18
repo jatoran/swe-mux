@@ -658,6 +658,12 @@ def _render_update_plan(result: Any) -> str:
         )
     else:
         lines.append(f"install   {invoked_as()} update --install {payload.get('version', '')}")
+        if payload.get("supervisor_update_available"):
+            # The optional half, offered last and priced in the same line.
+            lines.append(
+                f"          {invoked_as()} update --install {payload.get('version', '')} "
+                "--with-supervisor-update  (also updates the supervisor; ENDS EVERY SESSION)"
+            )
     return "\n".join(lines)
 
 
@@ -1107,6 +1113,15 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
             "with --install: consent to replacing the PTY supervisor if this release "
             "needs it, which ENDS EVERY LIVE SESSION. Without it such a release is "
             "refused and nothing is changed"
+        ),
+    )
+    update.add_argument(
+        "--with-supervisor-update",
+        action="store_true",
+        help=(
+            "with --install: also install the newer PTY supervisor this release carries "
+            "when it is optional (the plan says so), which ENDS EVERY LIVE SESSION. "
+            "Implies --accept-supervisor-update"
         ),
     )
 
@@ -1579,6 +1594,7 @@ def dispatch(args: argparse.Namespace, base: str) -> tuple[Any, Any]:
                     {
                         "version": args.install,
                         "accept_supervisor_update": bool(args.accept_supervisor_update),
+                        "with_supervisor_update": bool(args.with_supervisor_update),
                     },
                     base=base,
                     headers={"X-Mux-User-Gesture": "update-install"},

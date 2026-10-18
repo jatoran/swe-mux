@@ -266,6 +266,10 @@ Confirm which build is being served before assuming a change is live: compare th
 A release whose daemon speaks a different supervisor protocol cannot be installed around your sessions.
 The in-app updater refuses it (`supervisor_update_required`, and the dialog says so before the download when the release publishes its metadata sidecar) until you press the button labelled with the consequence - "End every session and install", or `swemux update --install <version> --accept-supervisor-update` - and then installs it in replace mode: the daemon stops with quit intent, every session ends, and the supervisor bundle the archive carries is swapped alongside the app.
 A release that needs this says so in its release notes as well, rather than leaving the updater to surprise you.
+A release can also carry a newer supervisor that still speaks the running protocol; that one is optional.
+The update installs around your sessions by default and the running supervisor keeps working; the dialog offers an unticked "Also update the PTY supervisor, ending every live session" box, and `swemux update --install <version> --with-supervisor-update` is the CLI form.
+`--accept-supervisor-update` alone never takes it, so habitually passing that flag cannot cost you a reap you did not ask for.
+`swemux doctor` reports a running supervisor older than the one its own bundle ships as a warning (`daemon.supervisor_revision`), so you can pick the quiet moment to take it.
 In a checkout, `packaging/redeploy_desktop.py` cannot ship a supervisor change from a *rebuild* and says nothing when it does not; the manual flow there is `uv run swemuxd --shutdown`, then `uv run python packaging/build_desktop.py --supervisor-only`, then relaunch, all from outside swe-mux (`redeploy_desktop.py --from-archive <zip> --replace-supervisor` is the archive form).
 
 **A schema migration keeps a copy of what it replaced.**

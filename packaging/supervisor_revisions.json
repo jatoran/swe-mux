@@ -1,0 +1,6 @@
+{
+  "comment": "One content digest of the supervisor's source closure per SUPERVISOR_REVISION (build_desktop.supervisor_content_digest). Append a new revision when the closure changes; never rewrite an existing one. tests/test_supervisor_revision.py enforces it.",
+  "revisions": {
+    "1": "9bd29036227ba8245002a34480327243beaa402dbd50f890850cbf583f21f210"
+  }
+}

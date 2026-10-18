@@ -48,6 +48,7 @@ from ..session import (
 )
 from ..status_timeline import StatusTimelineStore
 from ..storage_usage import StorageUsage
+from ..supervisor import SUPERVISOR_REVISION
 from ..tailscale import (
     tailscale_ipv4,
     tailscale_status,
@@ -758,6 +759,12 @@ async def _doctor_report(app: web.Application) -> dict[str, Any]:
         "ui_build_id": await ui_build_id_cached(app[keys.FRONTEND_DIR]),
         "supervisor_state": supervisor_state,
         "supervisor_unadopted": int(getattr(sessions, "unadopted_supervisor_sessions", 0) or 0),
+        # The running supervisor's revision against the one this build ships; a
+        # lower one is still working, and is updated only by a session reap.
+        "supervisor_revision": (
+            getattr(supervisor, "supervisor_revision", None) if supervisor is not None else None
+        ),
+        "supervisor_revision_shipped": SUPERVISOR_REVISION,
     }
     remote = await tailscale_status(config.port, tailnet_enabled=config.tailnet_enabled)
     firewall: dict[str, Any] = {"supported": False}
