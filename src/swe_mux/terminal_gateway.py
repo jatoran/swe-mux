@@ -63,6 +63,7 @@ from aiohttp import web
 from . import __version__
 from . import app_keys as keys
 from .framed_ipc import FramedPeer, HandshakeRefused, connect, new_token
+from .gateway_discovery import DISCOVERY_FILENAME, discovery_path, read_discovery
 from .gil_switch import apply_gil_switch_interval
 from .http_origin_policy import gateway_middleware
 from .listener_guard import ListenerGuard
@@ -101,7 +102,6 @@ BROWSER_ROUTES: tuple[tuple[str, str], ...] = (
     ("GET", f"{GATEWAY_PROXY_PREFIX}/pty/{{sid}}"),
     ("GET", "/health"),
 )
-DISCOVERY_FILENAME = "terminal-gateway.json"
 LOCK_FILENAME = "terminal-gateway.lock"
 CONSOLE_LOG_NAME = "terminal-gateway-console.log"
 
@@ -144,6 +144,7 @@ GATEWAY_MODULES = (
     "swe_mux.app_keys",
     "swe_mux.composer_input",
     "swe_mux.framed_ipc",
+    "swe_mux.gateway_discovery",
     "swe_mux.gil_switch",
     "swe_mux.http_origin_policy",
     "swe_mux.listener_guard",
@@ -605,19 +606,6 @@ class InstanceLock:
 
                 fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
         handle.close()
-
-
-def discovery_path(data_dir: Path) -> Path:
-    return data_dir / DISCOVERY_FILENAME
-
-
-def read_discovery(data_dir: Path) -> dict[str, Any] | None:
-    """The running gateway's discovery record, or None when there is no readable one."""
-    try:
-        record = json.loads(discovery_path(data_dir).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
-    return record if isinstance(record, dict) else None
 
 
 def _write_discovery(data_dir: Path, record: dict[str, Any]) -> None:

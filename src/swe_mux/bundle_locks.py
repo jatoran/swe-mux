@@ -19,6 +19,11 @@ Exclusions, and why they are safe:
 
 - Processes named ``swe-mux.exe`` — the redeploy's own stop machinery
   terminates these (escalating to the whole image when a lock demands it).
+  That includes the terminal gateway (``swe-mux.exe --gateway-child``), which
+  outlives every daemon restart and so is never stopped by the daemon's detach;
+  the swap ends it itself, last and by asking it to quit
+  (``bundle_apply.stop_terminal_gateway``), so excluding it here is correct only
+  because that stop exists.
 - Descendants of a ``swe-mux.exe`` process — the WebView2 browser children
   and any daemon-owned conhost die with the shell/daemon they belong to.
 

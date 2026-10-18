@@ -48,11 +48,12 @@ from typing import Any
 
 from .background_tasks import background
 from .daemon_recovery import process_state, update_daemon
-from .framed_ipc import HandshakeRefused, PeerClosed, RemoteError, connect
+from .framed_ipc import PeerClosed, RemoteError
+from .gateway_discovery import identity, send_quit, usable
 from .lifecycle import ledger
 from .spawn_contract import scrub_claude_session_markers
 from .subprocess_flags import background_creation_flags, popen_outside_job
-from .terminal_core.protocol import GATEWAY_PROTOCOL_VERSION, QUIT
+from .terminal_core.protocol import GATEWAY_PROTOCOL_VERSION
 from .terminal_core.remote import RemoteHub
 from .terminal_gateway import (
     CONSOLE_LOG_NAME,
@@ -127,17 +128,6 @@ TRANSPORT_DAEMON = "daemon"
 HOW_STARTED = "started"
 HOW_ADOPTED = "adopted"
 HOW_RECONNECTED = "reconnected"
-
-#: Every field a usable discovery record carries, and its type.
-_RECORD_FIELDS: dict[str, type | tuple[type, ...]] = {
-    "pid": int,
-    "port": int,
-    "control_port": int,
-    "token": str,
-    "build_id": str,
-    "protocol": int,
-    "daemon_port": int,
-}
 
 HostsProvider = Callable[[], Awaitable[Sequence[str]]]
 CommandFactory = Callable[..., list[str]]
@@ -815,21 +805,8 @@ def terminal_transport(host: GatewayHost | None) -> dict[str, Any]:
 # --- discovery records -----------------------------------------------------------------
 
 
-def _usable(record: dict[str, Any] | None) -> dict[str, Any] | None:
-    if record is None:
-        return None
-    for key, kind in _RECORD_FIELDS.items():
-        value = record.get(key)
-        if not isinstance(value, kind) or isinstance(value, bool):
-            return None
-    return record
-
-
-def _identity(record: dict[str, Any]) -> tuple[int, float] | None:
-    created = record.get("created_at")
-    if not isinstance(created, (int, float)) or isinstance(created, bool):
-        return None
-    return int(record["pid"]), float(created)
+_usable = usable
+_identity = identity
 
 
 def _holder(record: dict[str, Any]) -> tuple[int, float | None]:
@@ -902,34 +879,12 @@ async def _ask_to_quit(gateway: dict[str, Any], record: dict[str, Any] | None) -
 
     For a gateway this daemon is not connected to: one it is replacing, or one it
     lost the connection to. A protocol it does not speak cannot carry the request,
-    and the caller terminates it instead.
+    and the caller terminates it instead. The sending is `gateway_discovery`'s, which
+    the staged swap uses too, so there is one way to ask a gateway to go.
     """
-    if (
-        record is None
-        or _usable(record) is None
-        or record.get("pid") != gateway.get("pid")
-        or record.get("protocol") != GATEWAY_PROTOCOL_VERSION
-    ):
+    if record is None or record.get("pid") != gateway.get("pid"):
         return False
-    try:
-        peer = await connect(
-            "127.0.0.1",
-            int(record["control_port"]),
-            token=str(record["token"]),
-            protocol=GATEWAY_PROTOCOL_VERSION,
-            name="terminal-gateway-quit",
-        )
-    except HandshakeRefused as exc:
-        log.info("could not ask terminal gateway pid %s to quit: %s", record["pid"], exc)
-        return False
-    try:
-        peer.notify({"t": QUIT})
-        await peer.drain()
-    except PeerClosed:
-        return False
-    finally:
-        await peer.close("asked the gateway to quit")
-    return True
+    return await send_quit(record)
 
 
 async def _wait_gone(identity: tuple[int, float], seconds: float) -> bool:

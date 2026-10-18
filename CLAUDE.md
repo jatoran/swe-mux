@@ -50,7 +50,11 @@ daemon restarts and app rebuilds. Use these flows instead of killing swe-mux:
   silently does nothing. This is the backend half of the frontend trap above — same check
   applies (compare the served asset hash; a frozen daemon also serves the bundled
   frontend). On the frozen app, ship backend changes with the **Frozen desktop app
-  update** flow below.
+  update** flow below. With the **terminal gateway** on, a daemon restart leaves it running:
+  it keeps carrying every terminal through the gap and the successor adopts it, so typing
+  never stops. The one exception is a change to the gateway's own code (`GATEWAY_MODULES` in
+  `terminal_gateway.py`): from source, the successor computes a different build id and
+  replaces the gateway, and browsers reconnect.
 - **Frozen desktop app update** (rebuild `dist/` + relaunch, sessions preserved —
   safe to run from a session inside swe-mux): `uv run python packaging/redeploy_desktop.py`,
   or from the UI: menu → "Rebuild + redeploy app (keep sessions)" (`app.redeploy`, also on
@@ -63,7 +67,11 @@ daemon restarts and app rebuilds. Use these flows instead of killing swe-mux:
   to `dist/swe-mux.prev` (bad bundle kept at `dist/swe-mux.failed`). If the swap's rename
   retries exhaust on a `WinError 5/32` lock straggler, the script relaunches the old bundle
   itself; do NOT reach for `taskkill`/`swemuxd --shutdown` (that reaps sessions). Endpoint log:
-  `<data_dir>/redeploy.log`.
+  `<data_dir>/redeploy.log`. The terminal gateway runs the app's image, so the swap ends it
+  - last, after the daemon and the shell, and by asking it to `quit` so browsers are told to
+  reconnect (`bundle_apply.stop_terminal_gateway`) - and the relaunched daemon starts the new
+  build's; the log's last lines say which process carries the terminals afterwards. The
+  `--skip-build` bounce renames nothing and leaves the gateway running.
 - **In-app update of an installed copy** (the thing a user does; `.docs/design/features/desktop-shell.md`):
   the banner's Update button, `swemux update --install <version>`, or `POST /api/update/install`.
   Since 2026-09-05 it needs no checkout and no `uv`: the release archive carries the console
@@ -72,7 +80,8 @@ daemon restarts and app rebuilds. Use these flows instead of killing swe-mux:
   do not grow a second). A release that changes the supervisor protocol is refused until the
   request carries `accept_supervisor_update`, because that ends every session. On this
   machine the redeploy above is still how a *source change* ships; the updater is how a
-  *release* does.
+  *release* does. It treats the terminal gateway exactly as the redeploy does, because it is
+  the same swap.
 - **Supervisor change** (`supervisor.py`, `pty_host.py`, `scrollback.py`, `win_jobobj.py`,
   `subprocess_flags.py`, the supervisor spec/entry): **the redeploy above cannot ship this,
   and says nothing when it doesn't.** The redeploy's preflight *requires* a live supervisor,

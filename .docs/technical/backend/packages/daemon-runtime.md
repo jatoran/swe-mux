@@ -101,6 +101,14 @@ The terminal gateway process (`../../../design/features/terminal-gateway.md`): a
 
 **Not:** a session's meaning (status, delivery, the event log), which stays in the daemon; and not the daemon's runtime, which it never imports - the closure test is what holds that.
 
+### `gateway_discovery.py`
+
+The gateway's discovery record (`terminal-gateway.json`: `read_discovery`, `usable`, `identity`, `live_identity`) and ending the process it names from a process that is not its daemon (item 33).
+`send_quit` is the one way anything asks a gateway to go - `gateway_host` uses it for a replacement and the staged swap through `stop_gateway`, which asks, waits ten seconds, then terminates and kills only the pid whose creation time the record names, and never signals a record without one.
+It imports neither aiohttp nor `terminal_core`, because the swap also runs in the frozen console client, whose bundle carries neither; so it restates the control protocol's version and its `quit`, and `tests/test_gateway_discovery.py` holds the copies equal and imports the swap with aiohttp blocked.
+
+**Not:** writing the record (`terminal_gateway.py`) or deciding when a gateway must go (`gateway_host.py` for a daemon, `bundle_apply.py` for a swap).
+
 ### `gateway_host.py`
 
 The daemon's side of the terminal gateway (`../../../design/features/terminal-gateway.md`, item 29): one supervised `terminal-gateway-host` loop that finds a running gateway through its discovery record or spawns one.
@@ -396,6 +404,7 @@ The temporary carries the pid, so two daemons sharing one source tree cannot int
 ### `bundle_locks.py`
 
 Who would block the frozen-bundle swap: exe and cwd anchors into `dist/swe-mux` from processes the redeploy cannot stop, excluding the app's own image and its descendants.
+The terminal gateway is one of the app's image and is excluded with it, which holds only because the swap ends the gateway itself (`bundle_apply.stop_terminal_gateway`): a daemon's detach never does.
 Shared by the redeploy script's pre-build and pre-stop gates and by the endpoint's `409 bundle_in_use`.
 
 **Not:** stopping anything, since it reports only, or the swap itself (`packaging/redeploy_desktop.py`).
@@ -581,7 +590,9 @@ The staged swap, lifted out of `packaging/redeploy_desktop.py` so a process with
 `apply_archive` verifies and stages (`stage_from_archive`, a delta where the archive supports one) and then `apply_staged` does what the script always did: re-check the bundle holders, stop, rename each bundle to its slot under the bundle-swap hold, relaunch, wait for health, and roll every swapped bundle back if the new app never turns healthy.
 `MODE_SWAP` stops with detach intent and never touches the supervisor bundle; `MODE_REPLACE` stops with quit intent (every session ends, then `stop_supervisor` waits the supervisor out and terminates a straggler by its discovery pid) and swaps the supervisor bundle too.
 The console client is best effort in both modes - a `swemux` in a terminal holds it open, and the old one keeps working - while the app and, in replace mode, the supervisor are required and roll the run back on failure.
-`Outcome` records the mode, version, and swapped bundles in `redeploy-result.json` at the moment of decision; `bounce` is the script's `--skip-build`.
+The terminal gateway runs the app's image and survives the daemon's detach on purpose, so `stop_app_processes` spares it from the shell's termination and ends it last with `stop_terminal_gateway` (asked to quit, terminated by identity only if it stays).
+`report_terminal_transport` then waits, bounded, for the relaunched daemon's gateway and says which process carries the terminals - a warning when it is not the gateway, never a rollback.
+`Outcome` records the mode, version, swapped bundles and that terminal transport in `redeploy-result.json` at the moment of decision; `bounce` is the script's `--skip-build`, which renames nothing and so leaves the gateway running.
 The script keeps argument parsing, the build-environment preflight, and the PyInstaller build, and calls in here for everything after the staging tree exists.
 
 **Not:** the download, the hash against the manifest, or the consent gate (`update_install.py`); whether an install *may* run at all (each caller's own preflight); or the registry write after a healthy installer install (`install_location.record_installed_version`, which the CLI command passes as `on_success`).

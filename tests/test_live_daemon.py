@@ -64,6 +64,7 @@ rather than letting a finalizer report it against a neighbour.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import subprocess
 import uuid
@@ -75,11 +76,16 @@ import pytest
 
 from swe_mux import app_keys as keys
 from swe_mux.launchers import agent_harnesses
+from swe_mux.terminal_core.protocol import CLOSE_USE_GATEWAY
 from tests.support.live_daemon import (
+    PtyAttachment,
     alive,
     assert_startup_is_complete,
+    attach_gateway_pty,
     daemon_process,
     daemon_spec,
+    gateway_discovery_record,
+    gateway_reaped,
     isolated_daemon,
     supervisor_discovery,
     supervisor_reaped,
@@ -90,7 +96,12 @@ pytestmark = [pytest.mark.live_daemon, pytest.mark.xdist_group("live_daemon")]
 
 
 async def _assert_reaped(
-    pids: Sequence[int], *, supervisor_pid: int | None, what: str, seconds: float = 60.0
+    pids: Sequence[int],
+    *,
+    supervisor_pid: int | None,
+    what: str,
+    seconds: float = 60.0,
+    gateway_pid: int | None = None,
 ) -> None:
     """Every pid in `pids` is gone, with any survivor named by its role.
 
@@ -108,10 +119,8 @@ async def _assert_reaped(
         await until(gone, seconds=seconds, what=what)
     except AssertionError:
         survivors = [pid for pid in pids if alive(pid)]
-        named = [
-            f"{pid} (the PTY supervisor)" if pid == supervisor_pid else str(pid)
-            for pid in survivors
-        ]
+        roles = {supervisor_pid: "the PTY supervisor", gateway_pid: "the terminal gateway"}
+        named = [f"{pid} ({roles[pid]})" if pid in roles else str(pid) for pid in survivors]
         raise AssertionError(f"{what}; these survived: {', '.join(named)}") from None
 
 
@@ -541,3 +550,183 @@ async def test_a_supervised_shell_outlives_its_daemon_and_the_successor_adopts_i
                 "the daemon that detached either"
             ),
         )
+
+
+# ---------------------------------------------------------------- the terminal gateway
+
+
+async def _type_and_see(terminal: PtyAttachment, marker: str, *, where: str) -> None:
+    """Type `echo <marker>` and wait for the shell to echo it and then run it."""
+    await terminal.send_input(f"echo {marker}\r")
+    await until(
+        lambda: terminal.text.count(marker) >= 2,
+        seconds=90.0,
+        what=f"{where}: the shell echoed and ran `echo {marker}`; saw {terminal.text[-400:]!r}",
+    )
+
+
+async def _fresh_prompt(terminal: PtyAttachment) -> None:
+    """First output, a fresh prompt, then quiet: input typed into a shell that is
+    still starting is dropped by the pseudoterminal and nothing reports it."""
+    await until(lambda: bool(terminal.output), seconds=90.0, what="the shell produced output")
+    await terminal.settle()
+    await terminal.send_input("\r")
+    await terminal.settle()
+
+
+async def _git_repo(tmp_path: Path) -> Path:
+    root = tmp_path / "repo"
+    root.mkdir(parents=True, exist_ok=True)
+    await asyncio.to_thread(subprocess.run, ["git", "init", "-q"], cwd=root, check=True)
+    return root
+
+
+@pytest.mark.asyncio
+async def test_a_terminal_runs_through_the_gateway_and_quit_leaves_nothing_behind(
+    tmp_path: Path,
+) -> None:
+    """`DAEMON_LOAD_ISOLATION.md` items 32 and 33, over the real entry point.
+
+    The daemon starts the gateway (from source here, which is how the Linux and
+    macOS legs run it), a shell spawned while the gateway is connected is handed to
+    it before the spawn returns - the daemon's own `/pty` already sends a browser
+    there - and typing into the gateway reaches the shell. Then `quit` must take
+    the gateway too: it is spawned outside every Job and in a process group of its
+    own, so nothing but the daemon's quit intent ends it, and a gateway left running
+    would hold the app's image against the next update.
+    """
+    marker = f"muxlive{uuid.uuid4().hex[:8]}"
+    root = await _git_repo(tmp_path)
+    spec = daemon_spec(tmp_path, gateway=True)
+    assert spec.gateway_port is not None
+
+    async with (
+        supervisor_reaped(spec.data_dir),
+        gateway_reaped(spec.data_dir),
+        daemon_process(spec) as daemon,
+    ):
+        health = await daemon.wait_ready()
+        assert_startup_is_complete(health)
+        assert health["supervisor"] is True, daemon.diagnostics()
+        supervisor_pid = int(health["supervisor_pid"])
+
+        transport = await daemon.wait_gateway()
+        assert transport["port"] == spec.gateway_port, transport
+        record = gateway_discovery_record(daemon.data_dir)
+        assert record is not None, "the gateway wrote no discovery record"
+        gateway_pid = int(record["pid"])
+        block = await daemon.gateway_block()
+        assert block["gateway"]["pid"] == gateway_pid, block
+        assert block["spawns"] == 1 and block["adoptions"] == 0, block
+
+        project_id = await daemon.register_project(root)
+        sid = await daemon.spawn_shell(project_id, root, name="live-gateway")
+        # Placed at spawn: the gateway held the terminal before the spawn returned,
+        # so the daemon refuses to serve it and names where to go instead.
+        assert await daemon.daemon_pty_close_code(sid) == CLOSE_USE_GATEWAY
+        assert (await daemon.gateway_block())["placement"]["remote"] == 1
+
+        async with attach_gateway_pty(spec.gateway_port, sid) as terminal:
+            await _fresh_prompt(terminal)
+            await _type_and_see(terminal, marker, where="through the gateway")
+
+        session_tree = [
+            child.pid for child in psutil.Process(supervisor_pid).children(recursive=True)
+        ]
+        descendants = [child.pid for child in daemon.descendants()]
+        assert gateway_pid in descendants, (
+            f"the gateway {gateway_pid} is not among this daemon's children {descendants}, "
+            "so the survivor check below would never have seen it"
+        )
+
+        assert await daemon.request_shutdown("quit") == 202, daemon.diagnostics()
+        assert await daemon.wait_for_exit() == 0, daemon.diagnostics()
+        await _assert_reaped(
+            [*descendants, *session_tree],
+            supervisor_pid=supervisor_pid,
+            gateway_pid=gateway_pid,
+            what="a `quit` must take the terminal gateway with everything else",
+        )
+        # It went by its own quit path, which removes its record; a terminated
+        # gateway would have left the record behind.
+        assert gateway_discovery_record(daemon.data_dir) is None
+
+
+@pytest.mark.asyncio
+async def test_typing_through_the_gateway_goes_on_while_the_daemon_restarts(
+    tmp_path: Path,
+) -> None:
+    """The point of the gateway, end to end: a daemon restart costs the keyboard nothing.
+
+    One browser socket on the gateway is held open across a detaching shutdown, a
+    stretch with no daemon at all, and a successor's start. The shell answers in
+    every one of those three stretches, the socket is never closed, and the
+    successor adopts the same gateway rather than starting another - which is what
+    lets the socket survive at all.
+    """
+    markers = [f"muxlive{uuid.uuid4().hex[:8]}" for _ in range(3)]
+    root = await _git_repo(tmp_path)
+    spec = daemon_spec(tmp_path, gateway=True)
+    assert spec.gateway_port is not None
+
+    async with (
+        supervisor_reaped(spec.data_dir),
+        gateway_reaped(spec.data_dir),
+        contextlib.AsyncExitStack() as stack,
+    ):
+        first = await stack.enter_async_context(daemon_process(spec))
+        health = await first.wait_ready()
+        assert health["supervisor"] is True, first.diagnostics()
+        supervisor_pid = int(health["supervisor_pid"])
+        await first.wait_gateway()
+        record = gateway_discovery_record(first.data_dir)
+        assert record is not None
+        gateway_pid = int(record["pid"])
+
+        project_id = await first.register_project(root)
+        sid = await first.spawn_shell(project_id, root, name="live-gateway-restart")
+        terminal = await stack.enter_async_context(attach_gateway_pty(spec.gateway_port, sid))
+        await _fresh_prompt(terminal)
+        await _type_and_see(terminal, markers[0], where="with the first daemon up")
+
+        session_tree = [
+            child.pid for child in psutil.Process(supervisor_pid).children(recursive=True)
+        ]
+        first_descendants = [child.pid for child in first.descendants()]
+        assert await first.request_shutdown("restart") == 202, first.diagnostics()
+        assert await first.wait_for_exit() == 0, first.diagnostics()
+
+        # No daemon at all now. The gateway still carries the terminal: typing
+        # reaches the shell and its answer comes back on the same socket.
+        assert alive(gateway_pid), "the gateway did not survive a detaching shutdown"
+        assert not terminal.closed.is_set(), "the gateway closed the browser on a detach"
+        await _type_and_see(terminal, markers[1], where="with no daemon running")
+
+        successor = await stack.enter_async_context(daemon_process(spec))
+        after = await successor.wait_ready()
+        assert_startup_is_complete(after)
+        assert int(after["supervisor_pid"]) == supervisor_pid, after
+        assert after["live_sessions"] == 1, after
+        await successor.wait_gateway()
+        block = await successor.gateway_block()
+        assert block["gateway"]["pid"] == gateway_pid, (
+            f"the successor started another gateway instead of adopting {gateway_pid}: {block}"
+        )
+        assert block["spawns"] == 0 and block["adoptions"] == 1, block
+        assert not terminal.closed.is_set(), "the browser was disconnected by the successor"
+        await _type_and_see(terminal, markers[2], where="after the successor adopted the gateway")
+
+        successor_descendants = [child.pid for child in successor.descendants()]
+        assert await successor.request_shutdown("quit") == 202, successor.diagnostics()
+        assert await successor.wait_for_exit() == 0, successor.diagnostics()
+        await _assert_reaped(
+            [*first_descendants, *session_tree, *successor_descendants, gateway_pid],
+            supervisor_pid=supervisor_pid,
+            gateway_pid=gateway_pid,
+            what=(
+                "a `quit` must end the gateway a predecessor started, with the supervisor "
+                "and every session tree"
+            ),
+        )
+        # The gateway told the browser where to go as it left, rather than dropping it.
+        await until(lambda: terminal.closed.is_set(), seconds=30.0, what="the browser was closed")

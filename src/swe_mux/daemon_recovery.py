@@ -185,7 +185,13 @@ def revoke_for_local_pty(data_dir: Path) -> None:
 
 
 def process_state(record: dict[str, Any]) -> str:
-    """alive | gone | unknown; permission failures never authorize a kill."""
+    """alive | gone | unknown; permission failures never authorize a kill.
+
+    A zombie is gone. On POSIX an exited process stays in the table until its parent
+    waits on it, and reading one as alive made a daemon wait out the full grace - and
+    then fail to "stop" - a terminal gateway it had already asked to quit, because the
+    daemon is that gateway's parent and had not yet reaped it.
+    """
     pid, created = record.get("pid"), record.get("created_at")
     if (
         type(pid) is not int
@@ -197,7 +203,9 @@ def process_state(record: dict[str, Any]) -> str:
         return "unknown"
     try:
         process = psutil.Process(pid)
-        return "alive" if abs(process.create_time() - created) < 0.001 else "gone"
+        if abs(process.create_time() - created) >= 0.001:
+            return "gone"
+        return "gone" if process.status() == psutil.STATUS_ZOMBIE else "alive"
     except psutil.NoSuchProcess:
         return "gone"
     except (psutil.Error, OSError):

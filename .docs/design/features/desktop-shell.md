@@ -531,6 +531,20 @@ Three independent layers now hold, each covering what the others cannot:
   on where an absent one is not. This is what the 300s→600s budget change of 2026-08-21 was
   really about: a healthy-but-slow deploy was indistinguishable from a hung one, and raising the
   ceiling only widened the window in which nobody could tell.
+  **The terminal gateway is stopped last, and asked first** (`terminal-gateway.md`, "Restarts,
+  redeploys and updates"). It runs the app's image as `swe-mux.exe --gateway-child`, so the
+  rename cannot happen while it lives, but a detaching daemon leaves it carrying every terminal
+  on purpose: the stop spares it from the shell's termination, ends it once nothing is left that
+  could start another, and does so with `quit` over its own control port so its browsers are told
+  to reconnect (`bundle_apply.stop_terminal_gateway`, over `gateway_discovery.stop_gateway`);
+  only one still there after ten seconds is terminated, by pid and creation time. The bundle-in-use
+  gate excludes it with every other `swe-mux.exe`, which is correct only because that stop exists.
+  After the health wait the run reports which process carries the terminals
+  (`report_terminal_transport`, up to 90 s for a gateway still starting, recorded as
+  `terminal_transport` in `redeploy-result.json`) - reported and never judged, because a gateway
+  that does not come up leaves every terminal on the daemon, and rolling a healthy app back over
+  that would make a degraded run an outage. `--skip-build` renames nothing and leaves the
+  gateway running for the successor to adopt.
   The UI endpoint invokes the script with `--restore-visibility`, so every relaunch path uses the presentation captured immediately before the old shell is stopped.
   The endpoint validates source checkout + `uv`, requires the
   attached supervisor (or `force`), and is single-flight via `<data_dir>/redeploy.lock` with

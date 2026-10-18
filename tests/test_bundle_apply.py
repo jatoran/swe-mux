@@ -39,6 +39,7 @@ from swe_mux.bundle_apply import (
     Outcome,
 )
 from swe_mux.bundle_metadata import bundle_metadata, write_bundle_metadata
+from swe_mux.gateway_discovery import STOP_NONE, STOP_QUIT, STOP_STUCK, GatewayStop
 from swe_mux.update_install import release_platform_tag
 
 
@@ -103,10 +104,17 @@ def result(config: Any) -> dict[str, Any]:
 class Machine:
     """The stop, the launch, and the health answer, recorded and scripted."""
 
-    def __init__(self, monkeypatch: Any, *, healthy: bool | list[bool] = True) -> None:
+    def __init__(
+        self,
+        monkeypatch: Any,
+        *,
+        healthy: bool | list[bool] = True,
+        transport: dict[str, Any] | None = None,
+    ) -> None:
         self.stops: list[str] = []
         self.launches: list[Path] = []
         self.answers = healthy if isinstance(healthy, list) else [healthy]
+        extra = {"terminal_transport": transport} if transport is not None else {}
         monkeypatch.setattr(bundle_apply, "stop_for_mode", lambda _c, mode: self.stops.append(mode))
         monkeypatch.setattr(bundle_apply, "abort_if_bundle_held", lambda *_a, **_k: False)
         monkeypatch.setattr(bundle_apply, "resolve_relaunch_hidden", lambda **_k: False)
@@ -117,7 +125,8 @@ class Machine:
 
         def wait(_config: Any, *_a: Any, **_k: Any) -> dict[str, Any] | None:
             answer = self.answers.pop(0) if len(self.answers) > 1 else self.answers[0]
-            return {"ok": True, "live_sessions": 3, "supervisor": True} if answer else None
+            healthy = {"ok": True, "live_sessions": 3, "supervisor": True, **extra}
+            return healthy if answer else None
 
         monkeypatch.setattr(bundle_apply, "launch_app", launch)
         monkeypatch.setattr(bundle_apply, "wait_healthy", wait)
@@ -405,6 +414,80 @@ def test_the_quit_stop_asks_for_quit_intent_then_waits_out_the_supervisor(
     assert requested == ["quit", "supervisor"]
 
 
+def test_the_swap_stop_ends_the_gateway_after_the_shell_and_a_bounce_leaves_it(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """The gateway runs the app's image, so a swap must end it - but last, and politely.
+
+    It is the one process still carrying the terminals while the app is down, so it
+    is spared from the shell's termination, and ended only once nothing is left that
+    could start another. A bounce renames nothing and leaves it for the successor.
+    """
+    import psutil
+
+    argv = {
+        11: [r"dist\swe-mux\swe-mux.exe"],
+        12: [r"dist\swe-mux\swe-mux.exe", "--daemon-child"],
+        13: [r"dist\swe-mux\swe-mux.exe", "--gateway-child", "--data-dir", str(tmp_path)],
+    }
+    monkeypatch.setattr(
+        bundle_apply, "processes_by_image", lambda _names: [(pid, "swe-mux.exe") for pid in argv]
+    )
+    monkeypatch.setattr(psutil, "Process", lambda pid: SimpleNamespace(cmdline=lambda: argv[pid]))
+    monkeypatch.setattr(bundle_apply, "health", lambda *_a, **_k: None)
+    monkeypatch.setattr(bundle_apply, "live_identity", lambda _data_dir: (13, 1.0))
+    events: list[Any] = []
+    monkeypatch.setattr(
+        bundle_apply, "terminate_pids", lambda pids, **_k: events.append(("terminate", pids))
+    )
+    monkeypatch.setattr(
+        bundle_apply,
+        "stop_gateway",
+        lambda data_dir, **_k: events.append(("gateway", data_dir))
+        or GatewayStop(STOP_QUIT, 13, "terminal gateway pid 13 quit"),
+    )
+    config = SimpleNamespace(port=1, data_dir=tmp_path)
+
+    bundle_apply.stop_app_processes(config)
+    assert events == [("terminate", [11, 12]), ("gateway", tmp_path)]
+
+    events.clear()
+    bundle_apply.stop_app_processes(config, gateway=False)
+    assert events == [("terminate", [11, 12])]
+
+
+def test_the_quit_stop_ends_a_gateway_its_daemon_could_not(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    order: list[str] = []
+    monkeypatch.setattr(bundle_apply, "health", lambda *_a, **_k: None)
+    monkeypatch.setattr(bundle_apply, "stop_terminal_gateway", lambda _c: order.append("gateway"))
+    monkeypatch.setattr(bundle_apply, "stop_supervisor", lambda _c: order.append("supervisor"))
+    monkeypatch.setattr(bundle_apply, "partition_app_processes", lambda **_k: ([], []))
+    bundle_apply.stop_everything(SimpleNamespace(data_dir=tmp_path, port=1))
+    assert order == ["gateway", "supervisor"]
+
+
+def test_a_gateway_that_cannot_be_ended_is_reported(tmp_path: Path, monkeypatch: Any) -> None:
+    lines: list[str] = []
+    monkeypatch.setattr(bundle_apply, "log", lines.append)
+    monkeypatch.setattr(
+        bundle_apply,
+        "stop_gateway",
+        lambda _d, **_k: GatewayStop(STOP_STUCK, 13, "terminal gateway pid 13 could not be ended"),
+    )
+    bundle_apply.stop_terminal_gateway(SimpleNamespace(data_dir=tmp_path))
+    assert lines[0] == "terminal gateway pid 13 could not be ended"
+    assert lines[1].startswith("WARNING") and "swap may fail" in lines[1]
+
+    lines.clear()
+    monkeypatch.setattr(
+        bundle_apply, "stop_gateway", lambda _d, **_k: GatewayStop(STOP_NONE, None, "none")
+    )
+    bundle_apply.stop_terminal_gateway(SimpleNamespace(data_dir=tmp_path))
+    assert lines == []
+
+
 def test_the_supervisor_preflight_refuses_only_in_swap_mode(
     tmp_path: Path, monkeypatch: Any
 ) -> None:
@@ -433,13 +516,111 @@ def test_a_bounce_restarts_without_swapping(tmp_path: Path, monkeypatch: Any) ->
     config = config_for(tmp_path)
     machine = Machine(monkeypatch, healthy=True)
     stops: list[str] = []
-    monkeypatch.setattr(bundle_apply, "stop_app_processes", lambda _c: stops.append("detach"))
+    monkeypatch.setattr(
+        bundle_apply,
+        "stop_app_processes",
+        lambda _c, *, gateway=True: stops.append(f"detach gateway={gateway}"),
+    )
 
     assert bundle_apply.bounce(config, layout, Outcome(config, 1.0)) == 0
-    assert stops == ["detach"]
+    # Nothing is renamed, so the terminal gateway is left carrying the terminals
+    # for the relaunched daemon to adopt.
+    assert stops == ["detach gateway=False"]
     assert machine.launches == [layout.app_exe]
     assert marker(layout, APP_BUNDLE) == b"old"
     assert result(config)["outcome"] == OUTCOME_SUCCEEDED
+
+
+# --- which process carries the terminals ---------------------------------------------
+
+
+GATEWAY_UP = {"transport": "gateway", "state": "running", "port": 8766}
+
+
+def test_a_healthy_swap_records_which_process_carries_the_terminals(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    layout = installed(tmp_path, APP_BUNDLE)
+    staged(layout, APP_BUNDLE)
+    config = config_for(tmp_path)
+    Machine(monkeypatch, healthy=True, transport=GATEWAY_UP)
+
+    assert bundle_apply.apply_staged(config, layout, Outcome(config, 1.0)) == 0
+    record = result(config)
+    assert record["outcome"] == OUTCOME_SUCCEEDED
+    assert record["terminal_transport"] == GATEWAY_UP
+
+
+def test_the_transport_report_waits_for_a_gateway_on_its_way(monkeypatch: Any) -> None:
+    """The daemon reports healthy before its gateway is up, so the report waits."""
+    answers = [
+        {"ok": True, "terminal_transport": {"transport": "daemon", "state": "backoff"}},
+        {"ok": False, "status": "starting"},
+        {"ok": True, "terminal_transport": GATEWAY_UP},
+    ]
+    monkeypatch.setattr(bundle_apply, "health_payload", lambda *_a, **_k: answers.pop(0))
+    lines: list[str] = []
+    monkeypatch.setattr(bundle_apply, "log", lines.append)
+    starting = {"ok": True, "terminal_transport": {"transport": "daemon", "state": "starting"}}
+
+    transport = bundle_apply.report_terminal_transport(SimpleNamespace(), starting)
+
+    assert transport == GATEWAY_UP
+    assert answers == []
+    assert lines == ["terminals are carried by the terminal gateway on port 8766"]
+
+
+def test_the_transport_report_is_bounded_and_never_waits_out_a_settled_state(
+    monkeypatch: Any,
+) -> None:
+    asked: list[object] = []
+    monkeypatch.setattr(bundle_apply, "health_payload", lambda *_a, **_k: asked.append(1) or None)
+    lines: list[str] = []
+    monkeypatch.setattr(bundle_apply, "log", lines.append)
+
+    disabled = {"ok": True, "terminal_transport": {"transport": "daemon", "state": "disabled"}}
+    assert bundle_apply.report_terminal_transport(SimpleNamespace(), disabled) is not None
+    unavailable = {
+        "ok": True,
+        "terminal_transport": {
+            "transport": "daemon",
+            "state": "unavailable",
+            "reason": "no PTY supervisor",
+        },
+    }
+    bundle_apply.report_terminal_transport(SimpleNamespace(), unavailable)
+    # Neither will become `gateway` on its own, so neither is polled.
+    assert asked == []
+    assert lines[0] == "terminals are carried by the daemon (the terminal gateway is disabled)"
+    assert lines[1].startswith("WARNING") and "unavailable: no PTY supervisor" in lines[1]
+
+    # One that is still starting when the budget runs out is a warning, not a failure.
+    starting = {"ok": True, "terminal_transport": {"transport": "daemon", "state": "starting"}}
+    lines.clear()
+    assert bundle_apply.report_terminal_transport(SimpleNamespace(), starting, seconds=0.0) == (
+        starting["terminal_transport"]
+    )
+    assert lines[0].startswith("WARNING") and "(starting)" in lines[0]
+
+
+def test_a_daemon_from_before_the_gateway_reports_no_transport(monkeypatch: Any) -> None:
+    lines: list[str] = []
+    monkeypatch.setattr(bundle_apply, "log", lines.append)
+    assert bundle_apply.report_terminal_transport(SimpleNamespace(), {"ok": True}) is None
+    assert "predates the gateway" in lines[0]
+
+
+def test_the_restated_transport_vocabulary_matches_the_daemons() -> None:
+    """`bundle_apply` cannot import `gateway_host` (the console client's bundle has no
+    aiohttp), so it restates the words it reads; these are the ones it means."""
+    from swe_mux import gateway_host
+
+    assert bundle_apply.TRANSPORT_GATEWAY == gateway_host.TRANSPORT_GATEWAY
+    assert bundle_apply.GATEWAY_SETTLED_STATES == {
+        gateway_host.STATE_DISABLED,
+        gateway_host.STATE_UNAVAILABLE,
+        gateway_host.STATE_STOPPED,
+    }
 
 
 # --- the record --------------------------------------------------------------------

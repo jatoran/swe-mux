@@ -602,6 +602,11 @@ UI infers that one from health probes rather than from here. `last_result` is
 the previous run's outcome, read from `<data_dir>/redeploy-result.json`, and is
 what lets a reconnecting client report a rollback: the app comes back looking
 normal, so otherwise nothing would say the change never shipped.
+A run that reached a healthy successor also records `terminal_transport` there: the
+successor's `/api/health` block of that name once its terminal gateway is carrying
+terminals, or once the run stopped waiting for it (90 s, `MUX_REDEPLOY_GATEWAY_TIMEOUT`),
+and `null` from a successor that predates the gateway. It is informational - a gateway
+that did not come up leaves terminals on the daemon and never makes a run fail.
 
 POST `/api/daemon/redeploy/announce` (loopback-only) broadcasts
 `daemon_redeploy_started` for a redeploy this daemon did not spawn - one run

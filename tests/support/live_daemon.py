@@ -456,6 +456,12 @@ DAEMON_READY_TIMEOUT_SECONDS = 180.0
 #: successor gate against.
 DAEMON_EXIT_TIMEOUT_SECONDS = 120.0
 
+#: How long a ready daemon's terminal gateway gets to start carrying terminals. The
+#: daemon starts it after the listener opens and its own spawn wait is 60s
+#: (`gateway_host.READY_TIMEOUT_SECONDS`); a cold runner importing the gateway's
+#: closure from source is the slow case this bounds, not one it measures.
+GATEWAY_READY_TIMEOUT_SECONDS = 120.0
+
 
 def muxd_executable() -> Path | None:
     """The real `swemuxd` console script for the interpreter running the tests.
@@ -523,16 +529,27 @@ class DaemonProcess:
         configured, the second carries the structured startup phases - so both
         are here.
         """
-        log = self.data_dir / "daemon.log"
-        tail = ""
-        if log.is_file():
-            logged = log.read_text(encoding="utf-8", errors="replace").splitlines()
-            tail = "\n".join(logged[-lines:])
+        def tail_of(name: str) -> str | None:
+            path = self.data_dir / name
+            if not path.is_file():
+                return None
+            logged = path.read_text(encoding="utf-8", errors="replace").splitlines()
+            return "\n".join(logged[-lines:])
+
+        # The terminal gateway is a process of its own with its own log, so a
+        # failure in it leaves nothing in the daemon's; its console log holds what
+        # it printed before logging started, which is where a failed start lands.
+        gateway = "".join(
+            f"\n--- {name} (tail) ---\n{text}"
+            for name in ("terminal-gateway.log", "terminal-gateway-console.log")
+            if (text := tail_of(name))
+        )
         return (
             f"--- muxd stdout ---\n{self.stdout.decode('utf-8', 'replace')}\n"
             f"--- muxd stderr (tail) ---\n"
             + "\n".join(self.stderr.decode("utf-8", "replace").splitlines()[-lines:])
-            + f"\n--- daemon.log (tail) ---\n{tail}"
+            + f"\n--- daemon.log (tail) ---\n{tail_of('daemon.log') or ''}"
+            + gateway
         )
 
     def descendants(self) -> list[psutil.Process]:
@@ -602,6 +619,44 @@ class DaemonProcess:
                 f"muxd never became ready in {seconds:.0f}s; last health was {last}\n"
                 f"{self.diagnostics()}"
             ) from None
+
+    async def wait_gateway(self, seconds: float = GATEWAY_READY_TIMEOUT_SECONDS) -> dict[str, Any]:
+        """Wait until the daemon reports the terminal gateway carrying its terminals.
+
+        Asked of `/api/health`'s `terminal_transport`, which is what a browser asks,
+        rather than of the gateway's record: a gateway that is running and that the
+        daemon never reached would send no browser anywhere.
+        """
+        last: dict[str, Any] = {}
+        try:
+            async with asyncio.timeout(seconds):
+                while True:
+                    _, payload = await self.health()
+                    last = dict(payload.get("terminal_transport") or {})
+                    if last.get("transport") == "gateway":
+                        return last
+                    await asyncio.sleep(0.1)
+        except TimeoutError:
+            block = (await self.background()).get("terminal_gateway")
+            raise AssertionError(
+                f"the daemon never reported the gateway carrying terminals in {seconds:.0f}s; "
+                f"last terminal_transport {last}, terminal_gateway {block}\n{self.diagnostics()}"
+            ) from None
+
+    async def gateway_block(self) -> dict[str, Any]:
+        """`terminal_gateway` on `/api/diagnostics/background`."""
+        return dict((await self.background()).get("terminal_gateway") or {})
+
+    async def daemon_pty_close_code(self, sid: str) -> int | None:
+        """The close code the daemon's own `/pty` answers for `sid`, or None if it serves it."""
+        ws = await self.session.ws_connect(f"{self.base_url}/pty/{sid}")
+        try:
+            message = await ws.receive(timeout=30)
+            if message.type in {WSMsgType.CLOSE, WSMsgType.CLOSING, WSMsgType.CLOSED}:
+                return ws.close_code
+            return None
+        finally:
+            await ws.close()
 
     async def wait_for_exit(self, seconds: float = DAEMON_EXIT_TIMEOUT_SECONDS) -> int:
         """Wait for the process to end and both its pipes to reach EOF."""
@@ -692,7 +747,46 @@ class DaemonProcess:
             await asyncio.gather(reader, return_exceptions=True)
 
 
-def _daemon_config_toml(port: int, *, supervisor: bool | None) -> str:
+@asynccontextmanager
+async def attach_gateway_pty(
+    port: int, sid: str, *, cols: int = 120, rows: int = 30
+) -> AsyncIterator[PtyAttachment]:
+    """Attach to a session's terminal on the terminal gateway, the way a browser does.
+
+    On a connection pool of its own rather than on a `DaemonProcess`'s: the point of
+    the gateway is a terminal that outlives the daemon, and a socket on the daemon's
+    session would be closed with it. Closed before its reader is cancelled, for the
+    reason `DaemonProcess.attach_pty` gives.
+    """
+    session = ClientSession(connector=TCPConnector(force_close=True))
+    try:
+        ws = await session.ws_connect(f"http://127.0.0.1:{port}/pty/{sid}")
+        attachment = PtyAttachment(ws)
+        reader = asyncio.create_task(attachment.read_forever(), name=f"gateway-reader-{sid}")
+        try:
+            await ws.send_json({"type": "claim_input"})
+            await ws.send_json({"type": "attach_ready", "cols": cols, "rows": rows})
+            yield attachment
+        finally:
+            with contextlib.suppress(Exception):
+                await ws.close()
+            reader.cancel()
+            await asyncio.gather(reader, return_exceptions=True)
+    finally:
+        await session.close()
+        await asyncio.sleep(0)
+
+
+def gateway_discovery_record(data_dir: Path) -> dict[str, Any] | None:
+    """The terminal gateway's own record of itself, or None when it wrote none."""
+    from swe_mux.gateway_discovery import read_discovery
+
+    return read_discovery(data_dir)
+
+
+def _daemon_config_toml(
+    port: int, *, supervisor: bool | None, gateway_port: int | None = None
+) -> str:
     """The smallest config that keeps this daemon off every shared resource.
 
     `tailnet_enabled` and `wsl_bridge_enabled` off so it binds exactly one
@@ -706,6 +800,9 @@ def _daemon_config_toml(port: int, *, supervisor: bool | None) -> str:
     a tier whose whole subject is "does the real entry point work on this host"
     was silently exercising a configuration no install has. A test that wants the
     unsupervised fallback asks for it explicitly.
+
+    `gateway_port` turns the terminal gateway on, on that port rather than on the
+    derived one (the daemon's plus one), which nothing has checked is free.
     """
     lines = [
         f"port = {port}",
@@ -716,6 +813,9 @@ def _daemon_config_toml(port: int, *, supervisor: bool | None) -> str:
     ]
     if supervisor is not None:
         lines.append(f"pty_supervisor_enabled = {str(supervisor).lower()}")
+    if gateway_port is not None:
+        lines.append("terminal_gateway_enabled = true")
+        lines.append(f"terminal_gateway_port = {gateway_port}")
     return "\n".join(lines) + "\n"
 
 
@@ -735,20 +835,29 @@ class DaemonSpec:
     config_path: Path
     port: int
     home: Path
+    gateway_port: int | None = None
 
 
-def daemon_spec(tmp_path: Path, *, supervisor: bool | None = None) -> DaemonSpec:
+def daemon_spec(
+    tmp_path: Path, *, supervisor: bool | None = None, gateway: bool = False
+) -> DaemonSpec:
     """Prepare an isolated data directory and config file for `daemon_process`.
 
     `supervisor=None` writes no `pty_supervisor_enabled` key, so the daemon runs
-    the shipped default; `True`/`False` pin it.
+    the shipped default; `True`/`False` pin it. `gateway` turns the terminal
+    gateway on, on an OS-allocated port of its own.
     """
     data_dir = tmp_path / "muxd-data"
     data_dir.mkdir(parents=True, exist_ok=True)
     port = free_port()
+    gateway_port = free_port() if gateway else None
+    while gateway_port == port:
+        gateway_port = free_port()
     config_path = data_dir / "config.toml"
     config_path.write_text(
-        _daemon_config_toml(port, supervisor=supervisor), encoding="utf-8", newline="\n"
+        _daemon_config_toml(port, supervisor=supervisor, gateway_port=gateway_port),
+        encoding="utf-8",
+        newline="\n",
     )
     # A separate process resolves `Path.home()` for itself, and several subsystems
     # read a real user profile through it. Re-homing makes "never touches the
@@ -757,7 +866,7 @@ def daemon_spec(tmp_path: Path, *, supervisor: bool | None = None) -> DaemonSpec
     # a successor that re-homed somewhere else would not be the same install.
     home = tmp_path / "home"
     home.mkdir(parents=True, exist_ok=True)
-    return DaemonSpec(data_dir, config_path, port, home)
+    return DaemonSpec(data_dir, config_path, port, home, gateway_port)
 
 
 def supervisor_discovery(data_dir: Path) -> dict[str, Any] | None:
@@ -801,6 +910,23 @@ async def supervisor_reaped(data_dir: Path) -> AsyncIterator[None]:
         yield
     finally:
         await reap_any_supervisor(data_dir)
+
+
+@asynccontextmanager
+async def gateway_reaped(data_dir: Path) -> AsyncIterator[None]:
+    """Guarantee no terminal gateway keyed on `data_dir` outlives this block.
+
+    The gateway outlives its daemon on purpose, like the supervisor, so a test that
+    fails between a detach and the final `quit` would leave one on the runner until
+    its idle exit. Ended with the same `stop_gateway` the staged swap uses: asked
+    first, terminated by pid and creation time only if it stays.
+    """
+    from swe_mux.gateway_discovery import stop_gateway
+
+    try:
+        yield
+    finally:
+        await asyncio.to_thread(stop_gateway, data_dir)
 
 
 async def _port_is_free(port: int, *, seconds: float = 30.0) -> None:

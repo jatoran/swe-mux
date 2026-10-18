@@ -37,6 +37,20 @@ is mid-rename (`bundle_swap.py`). A bundle that never turns healthy is rolled
 back from those slots, in reverse order, and the failed tree is kept at
 `<name>.failed` for inspection.
 
+**The terminal gateway is stopped last, and asked first.** The gateway
+(`swe-mux.exe --gateway-child`, `design/features/terminal-gateway.md`) runs the
+app's image, so the rename cannot happen while it lives - but a detaching daemon
+leaves it carrying every terminal on purpose, which makes it the one process still
+serving the operator while the app is down. So a swap stops it after the shell and
+the daemon, once nothing is left that could start another, and by asking it to quit
+over its own control port (`gateway_discovery.stop_gateway`): its browsers are told
+to reconnect rather than cut off, and the relaunched daemon starts the new build's
+gateway. A bounce renames nothing and leaves it running for the successor to adopt.
+Which process carries the relaunched app's terminals is reported and never judged:
+a gateway that does not come up leaves them on the daemon, which serves them as it
+always did, and rolling back a healthy app over that would turn a degraded run into
+an outage.
+
 **The console client is best effort.** A `swemux` sitting in a terminal holds
 `swe-mux-cli/` open, and killing a person's terminal command to refresh a
 client is the wrong trade: the old client keeps working against the new daemon
@@ -62,7 +76,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Collection, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
@@ -85,6 +99,7 @@ from .bundle_locks import (
 from .bundle_metadata import BundleMetadata
 from .bundle_stage import StageResult, stage_bundle
 from .bundle_swap import hold_bundle_swap
+from .gateway_discovery import STOP_NONE, live_identity, stop_gateway
 from .spawn_contract import scrub_claude_session_markers
 from .subprocess_flags import popen_outside_job
 from .supervisor import discovery_path
@@ -131,6 +146,19 @@ APP_HEALTH_TIMEOUT_SECONDS = float(os.environ.get("MUX_REDEPLOY_HEALTH_TIMEOUT",
 #: How long the quit-intent stop waits for the daemon to reap its sessions and
 #: for the supervisor to exit after it, before terminating what is left.
 QUIT_GRACE_SECONDS = 30.0
+#: How long a relaunched daemon's terminal gateway gets to start carrying terminals
+#: before the run reports that it has not. Generous for the reason the daemon's own
+#: spawn wait is (`gateway_host.READY_TIMEOUT_SECONDS`, 60s): a fresh frozen image
+#: pays an antivirus scan before it runs a line, and the gateway is started after
+#: the daemon's health already says ready.
+GATEWAY_REPORT_SECONDS = float(os.environ.get("MUX_REDEPLOY_GATEWAY_TIMEOUT", "90"))
+#: `terminal_transport` on `/api/health` (`gateway_host`), restated because this
+#: module also runs in the console client, whose bundle cannot import the daemon's
+#: side of the gateway. A test holds them equal.
+TRANSPORT_GATEWAY = "gateway"
+#: Gateway states that will not turn into `gateway` without a change of config or of
+#: supervisor, so the report does not wait them out.
+GATEWAY_SETTLED_STATES = frozenset({"disabled", "unavailable", "stopped"})
 # Outcomes recorded in `<data_dir>/redeploy-result.json`. The successor daemon
 # serves this so the reconnecting UI can say what actually happened: a rollback
 # used to be visible only as English in redeploy.log, which meant the app came
@@ -527,14 +555,18 @@ def is_session_helper(process: Any) -> bool:
     return False
 
 
-def partition_app_processes() -> tuple[list[int], list[int]]:
-    """Split live `swe-mux.exe` processes into (shell/daemon, session helpers)."""
+def partition_app_processes(*, spare: Collection[int] = ()) -> tuple[list[int], list[int]]:
+    """Split live `swe-mux.exe` processes into (shell/daemon, session helpers).
+
+    `spare` is left out of both: the terminal gateway, which the stop handles on
+    its own terms (`stop_app_processes`).
+    """
     import psutil
 
     shell: list[int] = []
     helpers: list[int] = []
     for pid, _ in processes_by_image(APP_IMAGE_NAMES):
-        if pid == os.getpid():
+        if pid == os.getpid() or pid in spare:
             continue
         try:
             process = psutil.Process(pid)
@@ -630,8 +662,16 @@ def force_stop_app_images() -> None:
     time.sleep(1.0)
 
 
-def stop_app_processes(config: Any) -> None:
-    """The session-preserving stop: detach the daemon, then stop the shell."""
+def stop_app_processes(config: Any, *, gateway: bool = True) -> None:
+    """The session-preserving stop: detach the daemon, stop the shell, then the gateway.
+
+    The terminal gateway runs the app's image too, but it is not terminated with
+    the shell and the daemon: it is the process carrying every terminal while the
+    app is down, so it goes last - once nothing is left that could start another -
+    and it is asked to quit rather than cut off (`stop_terminal_gateway`).
+    `gateway=False` is the bounce, which renames nothing: the gateway keeps carrying
+    the terminals and the relaunched daemon adopts it.
+    """
     if health(config) is not None:
         log("asking the daemon to shut down with detach intent (sessions stay up)")
         if request_shutdown(config, "restart"):
@@ -640,13 +680,37 @@ def stop_app_processes(config: Any) -> None:
                 time.sleep(0.25)
         else:
             log("daemon did not accept desktop shutdown (not desktop-managed?); continuing")
-    shell, helpers = partition_app_processes()
+    carrier = live_identity(Path(config.data_dir))
+    shell, helpers = partition_app_processes(spare=(carrier[0],) if carrier else ())
     if helpers:
         log(f"sparing {len(helpers)} in-session swe-mux helper(s) (hook clients)")
     if shell:
         log(f"terminating {len(shell)} swe-mux.exe process(es) (shell/daemon)")
         terminate_pids(shell)
         time.sleep(1.0)
+    if gateway:
+        stop_terminal_gateway(config)
+    elif carrier is not None:
+        log(
+            f"leaving terminal gateway pid {carrier[0]} running; it keeps carrying the "
+            "terminals and the relaunched daemon adopts it"
+        )
+
+
+def stop_terminal_gateway(config: Any) -> None:
+    """End this data directory's terminal gateway, politely, before its image is renamed.
+
+    Asked over its own control port first, so its browsers are closed with "the
+    gateway is restarting" and reconnect, and terminated - by pid and creation time,
+    never a recycled pid - only if it stays. One it cannot end is reported, because
+    the rename it would block is the next thing to fail.
+    """
+    result = stop_gateway(Path(config.data_dir), say=log)
+    if result.outcome == STOP_NONE:
+        return
+    log(result.detail)
+    if not result.stopped:
+        log("WARNING: the terminal gateway is still running; the swap may fail on its image")
 
 
 def stop_supervisor(config: Any, *, grace: float = QUIT_GRACE_SECONDS) -> None:
@@ -690,6 +754,10 @@ def stop_everything(config: Any) -> None:
                 time.sleep(0.25)
         else:
             log("daemon did not accept desktop shutdown (not desktop-managed?); continuing")
+    # A quitting daemon has already ended its gateway; this is for one that could
+    # not be asked, whose gateway would otherwise be terminated below without a word
+    # to its browsers.
+    stop_terminal_gateway(config)
     stop_supervisor(config)
     shell, helpers = partition_app_processes()
     if shell or helpers:
@@ -1087,6 +1155,52 @@ def wait_healthy(
     return None
 
 
+def _terminal_transport(payload: dict[str, Any] | None) -> dict[str, Any] | None:
+    transport = (payload or {}).get("terminal_transport")
+    return transport if isinstance(transport, dict) else None
+
+
+def report_terminal_transport(
+    config: Any,
+    payload: dict[str, Any],
+    *,
+    seconds: float = GATEWAY_REPORT_SECONDS,
+) -> dict[str, Any] | None:
+    """Say which process carries the relaunched app's terminals, once that is known.
+
+    The daemon reports healthy before its gateway is up - it starts the gateway in
+    the background - so a gateway still on its way is waited for, bounded. Reported,
+    never judged (see the module docstring): the return value goes into the run's
+    record, and nothing here can roll a healthy app back.
+    """
+    transport = _terminal_transport(payload)
+    if transport is None:
+        log("the relaunched daemon reports no terminal transport (it predates the gateway)")
+        return None
+    deadline = time.monotonic() + seconds
+    while (
+        transport.get("transport") != TRANSPORT_GATEWAY
+        and transport.get("state") not in GATEWAY_SETTLED_STATES
+        and time.monotonic() < deadline
+    ):
+        time.sleep(0.5)
+        fresh = health_payload(config, timeout=1.0)
+        if fresh is not None and fresh.get("ok"):
+            transport = _terminal_transport(fresh) or transport
+    state = transport.get("state")
+    if transport.get("transport") == TRANSPORT_GATEWAY:
+        log(f"terminals are carried by the terminal gateway on port {transport.get('port')}")
+    elif state == "disabled":
+        log("terminals are carried by the daemon (the terminal gateway is disabled)")
+    else:
+        reason = f": {transport['reason']}" if transport.get("reason") else ""
+        log(
+            f"WARNING: the terminal gateway is not carrying terminals ({state}{reason}); "
+            "the daemon serves them"
+        )
+    return transport
+
+
 def relaunch_and_report(
     config: Any, layout: Layout, *, note: str, no_launch: bool, hidden: bool
 ) -> int:
@@ -1194,6 +1308,7 @@ def apply_staged(
             f"daemon healthy: supervisor={payload.get('supervisor')} "
             f"live_sessions={payload.get('live_sessions')}"
         )
+        outcome.describe(terminal_transport=report_terminal_transport(config, payload))
         if on_success is not None:
             try:
                 on_success()
@@ -1259,9 +1374,11 @@ def bounce(
 
     The script's `--skip-build`: a session-preserving restart of the frozen app
     from outside it, for the case where the bundle is already the one wanted.
+    Nothing is renamed, so the terminal gateway is left carrying the terminals and
+    the relaunched daemon adopts it: typing goes on through the restart.
     """
     hidden = resolve_relaunch_hidden(hidden=hidden, restore_visibility=restore_visibility)
-    stop_app_processes(config)
+    stop_app_processes(config, gateway=False)
     if no_launch:
         log("done (relaunch skipped)")
         return 0
@@ -1275,6 +1392,7 @@ def bounce(
             f"daemon healthy: supervisor={payload.get('supervisor')} "
             f"live_sessions={payload.get('live_sessions')}"
         )
+        outcome.describe(terminal_transport=report_terminal_transport(config, payload))
         outcome.record(
             OUTCOME_SUCCEEDED,
             f"The app was restarted with {payload.get('live_sessions', 0)} live session(s).",
@@ -1393,6 +1511,7 @@ __all__ = [
     "live_lock_pid",
     "preflight_supervisor",
     "replace_dir",
+    "report_terminal_transport",
     "required_bundles",
     "resolve_relaunch_hidden",
     "rollback_bundles",
@@ -1400,6 +1519,7 @@ __all__ = [
     "stop_app_processes",
     "stop_everything",
     "stop_for_mode",
+    "stop_terminal_gateway",
     "supervisor_process",
     "swap_bundles",
     "wait_healthy",

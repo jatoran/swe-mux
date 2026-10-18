@@ -5,8 +5,8 @@ Every daemon stall - a GIL-heavy reconcile, a slow scan, a restart - therefore f
 The terminal gateway is a process of its own that carries terminals instead: browser -> gateway -> supervisor and back, with the daemon told about each keystroke afterwards.
 The daemon can stall, or restart, and typing keeps echoing.
 
-Status (2026-10-18): the gateway process exists (item 28) and, with `terminal_gateway_enabled` on, the daemon finds or starts it and owns its lifecycle (item 29).
-Browsers open terminals on it whenever the daemon reports it (item 30); the daemon does not yet hand it sessions, so until item 32 every session is still the daemon's and a browser that tries the gateway is sent back with 4010.
+Status (2026-10-18): with `terminal_gateway_enabled` on, the daemon finds or starts the gateway and owns its lifecycle (items 28 and 29), browsers open terminals on it whenever the daemon reports it (item 30, reached through Tailscale Serve from an `https:` page, item 31), and every supervised session's terminal is handed to it and taken back when it goes (item 32).
+A redeploy, an update and a daemon restart each treat it as below (item 33).
 The switch stays off until item 34.
 
 ## What runs where
@@ -114,6 +114,21 @@ Enabled with no supervisor it starts nothing and says why (`unavailable`), becau
 
 The build id this daemon computes and the one a freshly started gateway computes are asserted equal by a test, because the replacement rule compares them and a digest that depended on what else a process had loaded would replace every gateway on every daemon start.
 
+## Restarts, redeploys and updates
+
+The gateway runs the app's own image (`swe-mux.exe --gateway-child`), and that one fact decides what each way of reloading swe-mux does to it.
+
+- **A daemon restart leaves it alone.** "Reload daemon (keep sessions)", `swemux reload-daemon` and `POST /api/daemon/restart` detach the daemon; the gateway goes on carrying every terminal through the gap, and the successor adopts it (the same build, so it is not replaced).
+  Typing keeps echoing the whole time, which the `live_daemon` tier proves with one browser socket held open across a detach, a stretch with no daemon at all, and the successor's start.
+  The redeploy script's `--skip-build` bounce is the same: it renames nothing, so it leaves the gateway running too.
+- **A redeploy or an in-app update restarts it.** The staged swap renames the app bundle, which Windows refuses while any process runs an image from inside it, so the swap has to end the gateway first (`bundle_apply.stop_terminal_gateway`).
+  It does so last - after the daemon has detached and the shell has been stopped, once nothing is left that could start another - and politely: `quit` over the gateway's own control port, authenticated by the token in its record, so it closes every browser with 4011 and removes its record on the way out; only a gateway still there after ten seconds is terminated, by pid and creation time.
+  The relaunched daemon starts the new build's gateway and hands it the terminals again, and every browser reconnects with a delta.
+  The run's log and `redeploy-result.json` say which process carries the terminals afterwards (`report_terminal_transport`, waiting up to 90 s for a gateway on its way), and that is reported, never judged: a gateway that does not come up leaves the terminals on the daemon, which serves them as it always did, so it is a warning rather than a rollback.
+  The update applier is the same code (`swemux update-apply` runs `bundle_apply` from the console client's copy), which is why the stop lives in `gateway_discovery.py`: that bundle carries no aiohttp, so the module restates the control protocol's version and its `quit` message rather than importing `terminal_core`, and a test holds the copies equal.
+- **The installer needs nothing new.** It writes no firewall rule (the in-app repair does, and admits both ports with one rule naming the one program, item 31), and an upgrade meets the gateway exactly as it meets the windowless daemon child and the supervisor: a process holding a file under `{app}`, which its Restart Manager pass (`CloseApplications=yes`) is there to close.
+- **A supervisor update reaps it with everything else**, through the daemon's quit intent, which ends the gateway before the sessions.
+
 ## Which process holds a terminal
 
 A session's terminal core - input ownership, geometry, the keystroke accounting - lives in exactly one process at a time (item 32, `terminal_placement.TerminalPlacement`).
@@ -150,6 +165,8 @@ The daemon decides that one is hung, ends it, and takes its terminals back - and
 - `src/swe_mux/gateway_host.py` - the daemon's side: find or start, replace, restart, stop by intent, the liveness ping and the hung-gateway rule, `settle`, `terminal_transport`.
 - `src/swe_mux/terminal_placement.py` - which process holds each session's terminal, and the one place that moves it.
 - `src/swe_mux/terminal_gateway.py` - the process: `SupervisorLink`, `TerminalGateway`, `InstanceLock`, discovery, `gateway_command`, `main`.
+- `src/swe_mux/gateway_discovery.py` - the discovery record and `stop_gateway`, importable without the daemon or aiohttp, for the staged swap.
+- `src/swe_mux/bundle_apply.py` - the swap's gateway stop and its transport report.
 - `src/swe_mux/terminal_core/gateway.py` - `GatewayHub`, the cores it hosts and the daemon connection.
 - `src/swe_mux/terminal_core/remote.py` - the daemon's mirror.
 - `src/swe_mux/terminal_core/protocol.py` - the control protocol.
@@ -157,3 +174,5 @@ The daemon decides that one is hung, ends it, and takes its terminals back - and
 - `tests/test_terminal_gateway.py` - against a real in-process `SupervisorServer` (`tests/support/supervisor_wire.py`), ending with the gateway as a process and the daemon's loop blocked under it.
 - `tests/test_gateway_host.py` - the real gateway as a process, driven by the real host: start, adopt, replace, restart, quit, terminals taken back from a dead gateway and from a suspended one.
 - `tests/test_terminal_handoff.py` - both directions of the move with browsers attached, against a real `Session`, `TerminalPlacement`, `RemoteHub` and `GatewayHub`.
+- `tests/test_gateway_discovery.py` - `stop_gateway` against the real gateway and against stand-ins it cannot ask.
+- `tests/test_live_daemon.py` - the real `muxd` entry point with the gateway on: a terminal through it, `quit` taking it, and typing across a detach restart; run in CI on all three hosts, from source on Linux and macOS.

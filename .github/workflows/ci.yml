@@ -155,6 +155,10 @@ jobs:
       # Copied rather than uploaded in place: pytest's basetemp lives under the
       # user TEMP, not the workspace, and the copy happens after the run so the
       # path lengths the test actually used are left alone.
+      #
+      # The terminal gateway is the same kind of process for the same reason - its
+      # own log, nothing on stdout - so its two logs ride along. The live tier's
+      # failure messages carry their tails too (`DaemonProcess.diagnostics`).
       - name: Collect supervisor logs
         if: failure()
         shell: pwsh
@@ -163,7 +167,7 @@ jobs:
           New-Item -ItemType Directory -Force -Path $dest | Out-Null
           Get-ChildItem -LiteralPath $env:TEMP -Directory -Filter 'pytest-of-*' -ErrorAction SilentlyContinue |
             Get-ChildItem -Recurse -File -ErrorAction SilentlyContinue |
-            Where-Object { $_.Name -like 'supervisor*.log*' -or $_.Name -eq 'crash.log' } |
+            Where-Object { $_.Name -like 'supervisor*.log*' -or $_.Name -like 'terminal-gateway*.log*' -or $_.Name -eq 'crash.log' } |
             ForEach-Object {
               $flat = $_.FullName.Substring($env:TEMP.Length).TrimStart('\') -replace '[\\/]', '_'
               Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $dest $flat) -ErrorAction SilentlyContinue
