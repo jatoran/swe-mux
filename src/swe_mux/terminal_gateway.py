@@ -74,7 +74,9 @@ from .terminal_core import GATEWAY_PROTOCOL_VERSION, GatewayHub
 from .terminal_core.protocol import CLOSE_GATEWAY_RESTARTING, CLOSE_USE_DAEMON
 from .timer_resolution import raise_timer_resolution
 
-log = logging.getLogger(__name__)
+# Named, not `__name__`: from source this module runs as `-m swe_mux.terminal_gateway`,
+# where `__name__` is `__main__`, and a log line should say which process wrote it.
+log = logging.getLogger("swe_mux.terminal_gateway")
 
 #: The supervisor's protocol (`supervisor.PROTOCOL_VERSION`), restated rather than
 #: imported: `supervisor.py` drags in the PTY stack. A test holds the two equal.
