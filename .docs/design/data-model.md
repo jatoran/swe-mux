@@ -202,6 +202,7 @@ Fields and invariants: `features/daemon-resilience.md`.
 - `status_timeline`: the durable per-session detection timeline — every transition-ledger
   entry (transitions *and* the non-transition kinds: `watchdog_recovery`,
   `standing_activity`, `cli_state`, `layer_reading`, `screen_classifier_blind`,
+  `screen_repaint_requested`,
   `foreign_conversation_hook_ignored`, `foreign_thread_turn_end_ignored`,
   `transition_refused`, `reopen_blocked`,
   `observer_fault`, `approval_auto_decision`, `approval_mode_set`, `approval_mode_revoked`,

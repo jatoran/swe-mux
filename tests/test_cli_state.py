@@ -232,6 +232,35 @@ def test_settled_disagreement_counts_once_per_standing_fact(tmp_path: Path) -> N
     assert session.status_health_counters["cli_state_disagrees"] == 2
 
 
+def test_cli_at_its_prompt_with_a_background_shell_disagrees_with_working(
+    tmp_path: Path,
+) -> None:
+    # `shell` is Claude idle at its prompt while a background shell runs. A session
+    # stuck `working` after a compaction read `shell` throughout, and the check that
+    # exists to count that contradiction knew only `idle`.
+    session = claude_session(str(tmp_path))
+    session.record.state = "working"
+    now = session.clock.wall()
+    session.last_state_change_ts = now - 60
+    monitor = CliStateMonitor(tmp_path)
+    write_state(
+        tmp_path, 100, OWN, cwd=str(tmp_path), status="shell",
+        status_updated_at_ms=(now - 60) * 1000,
+    )
+    monitor.observe(monitor.poll(), [session], now)
+    assert session.status_health_counters["cli_state_disagrees"] == 1
+    (entry,) = ledger(session, "cli_state")
+    assert (entry["cli_status"], entry["mux_state"]) == ("shell", "working")
+    # It is still corroboration only.
+    assert session.record.state == "working"
+    # And `shell` against an idle mux is agreement, not the busy/idle contradiction.
+    other = claude_session(str(tmp_path))
+    other.record.state = "idle"
+    other.last_state_change_ts = now - 60
+    CliStateMonitor(tmp_path).observe(monitor.poll(), [other], now)
+    assert "cli_state_disagrees" not in other.status_health_counters
+
+
 def test_unsettled_or_agreeing_status_never_counts(tmp_path: Path) -> None:
     session = claude_session(str(tmp_path))
     session.record.state = "working"

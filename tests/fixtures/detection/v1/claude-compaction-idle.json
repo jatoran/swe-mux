@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "backend": "claude",
+  "edge_case": "compaction_idle",
+  "description": "Claude compacting on its own while idle, before the prompt cache expires (record shapes captured 2026-10-18 on 2.1.302, summary text trimmed). The compaction writes a compact_boundary, then the summary as a user record flagged isCompactSummary, then attachments and an informational notice - and no turn follows. The summary is not a submission, so the session stays idle throughout and the watchdog, reading the same tail, finds the turn that ended before the compaction.",
+  "steps": [
+    {"kind": "transcript", "record": {"type": "user", "isSidechain": false, "message": {"role": "user", "content": "check the backlog"}}, "expect_state": "working"},
+    {"kind": "transcript", "record": {"type": "assistant", "isSidechain": false, "message": {"role": "assistant", "content": [{"type": "text", "text": "The waiter is still tracking the rebuild."}], "stop_reason": "end_turn"}}, "expect_state": "idle"},
+    {"kind": "transcript", "record": {"type": "system", "subtype": "turn_duration", "durationMs": 3132, "isMeta": false, "isSidechain": false}, "expect_state": "idle"},
+    {"kind": "cli_state", "status": "busy"},
+    {"kind": "timer", "seconds": 77},
+    {"kind": "transcript", "record": {"type": "system", "subtype": "compact_boundary", "content": "Conversation compacted", "isMeta": false, "isSidechain": false, "level": "info", "parentUuid": null, "logicalParentUuid": "a545d723-cc0d-481c-8363-0171dc9882e4", "compactMetadata": {"trigger": "auto", "preTokens": 230646, "postTokens": 13071, "durationMs": 77470}}, "expect_state": "idle"},
+    {"kind": "hook", "event": "SessionStart", "payload": {"session_id": "native-replay", "source": "compact"}, "expect_state": "idle"},
+    {"kind": "transcript", "record": {"type": "user", "isCompactSummary": true, "isVisibleInTranscriptOnly": true, "isSidechain": false, "message": {"role": "user", "content": "This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.\n\nSummary:\n1. Primary Request and Intent: check the backlog"}}, "expect_delivery": "safe", "oracle_safe": true, "expect_state": "idle"},
+    {"kind": "transcript", "record": {"type": "attachment", "isSidechain": false, "attachment": {"type": "todo"}}, "expect_state": "idle"},
+    {"kind": "transcript", "record": {"type": "system", "subtype": "informational", "content": "Compacted while idle, before the prompt cache expired · turn off with \"idleCompaction\": false in settings.json", "isMeta": false, "isSidechain": false, "level": "notice"}, "expect_state": "idle"},
+    {"kind": "cli_state", "status": "shell"},
+    {"kind": "pty_tail", "data": " Conversation compacted (ctrl+o for history)\n ❯ \n 0.0% (0/1.0M) · Opus 5.5 (high)\n"},
+    {"kind": "timer", "seconds": 130},
+    {"kind": "watchdog", "expect_state": "idle"}
+  ],
+  "expected": {
+    "events": [
+      {"type": "turn_started", "source": "transcript", "scope": "root"},
+      {"type": "turn_ended", "source": "transcript", "scope": "root", "outcome": "completed"},
+      {"type": "context_compacted", "source": "transcript", "scope": "root"}
+    ],
+    "states": [
+      {"previous": "idle", "state": "working", "source": "transcript", "proof": "proven"},
+      {"previous": "working", "state": "idle", "source": "transcript", "proof": "proven"}
+    ],
+    "parser": {"status": "ready", "recognized": 7, "unknown": 0, "unknown_signatures": {}},
+    "delivery_state": "safe",
+    "delivery_reason": "all_required_evidence_positive"
+  }
+}

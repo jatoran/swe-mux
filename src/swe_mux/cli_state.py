@@ -2,9 +2,12 @@
 
 The CLI writes one JSON file per running process — verified live 2026-07-31 on
 2.1.220: ``{sessionId, cwd, pid, procStart, kind, name, status, statusUpdatedAt,
-updatedAt, version}``. Observed ``status`` values are ``busy``, ``idle``, and
+updatedAt, version}``. Observed ``status`` values are ``busy``, ``idle``,
 ``waiting`` (measured 2026-08-01: the file reads ``waiting`` for the duration of
-a permission dialog, flipping ``busy`` → ``waiting`` → ``busy`` around it).
+a permission dialog, flipping ``busy`` → ``waiting`` → ``busy`` around it), and
+``shell`` (measured 2026-10-18 on 2.1.302: the CLI is back at its prompt while a
+background shell it started is still running; 284 of 311 ``busy`` → ``shell``
+flips coincided with a turn mux had just closed).
 This is the `cli-state` layer of the detection ladder (status-detection.md):
 hook-free and CLI-authoritative. It feeds counters and the ledger, and its
 ``waiting`` value conservatively vetoes raw PTY evidence that would otherwise
@@ -65,6 +68,12 @@ log = logging.getLogger(__name__)
 # flip and mux's own transition race each other at boundaries, and a comparison
 # inside that window measures the race, not a defect.
 CLI_STATE_SETTLE_SECONDS = 10.0
+# The statuses that mean the CLI is sitting at its input prompt. ``shell`` is idle
+# with a background shell still running - the turn is over all the same, so mux
+# showing `working` against it is the same contradiction as against ``idle``.
+# Leaving it out hid exactly the stuck-after-compaction sessions this check exists
+# to count, because a session with a background shell reads ``shell`` throughout.
+CLI_IDLE_STATUSES = frozenset({"idle", "shell"})
 # A move the pane refuses to adopt is retried a bounded number of times and then
 # left alone. Retrying forever is not free: `roll_agent_conversation` stops and
 # restarts the observer on every attempt, so an unadoptable move would thrash
@@ -509,7 +518,8 @@ class CliStateMonitor:
         """Count a settled contradiction between the CLI's status and mux's.
 
         Only the two clear-cut cases count: the CLI saying ``busy`` while mux
-        shows ``idle``, and the CLI saying ``idle`` while mux shows ``working``.
+        shows ``idle``, and the CLI at its prompt (``CLI_IDLE_STATUSES``) while mux
+        shows ``working``.
         ``awaiting``/``starting``/``running`` involve dialogs and lifecycle the
         comparison deliberately stays out of. ``waiting`` (the CLI's own
         dialog status) therefore counts as neither agreement nor disagreement
@@ -519,7 +529,7 @@ class CliStateMonitor:
         """
         record = session.record
         mismatch = (state.status == "busy" and record.state == "idle") or (
-            state.status == "idle" and record.state == "working"
+            state.status in CLI_IDLE_STATUSES and record.state == "working"
         )
         if not mismatch:
             self._counted_disagreements.pop(record.id, None)

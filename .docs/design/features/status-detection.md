@@ -38,12 +38,14 @@ Per signal class, every layer feeds the same ledger with its own `source` string
 stat-then-parse-on-change): Claude publishes per-process state files carrying
 `{sessionId, cwd, pid, procStart, kind, status, statusUpdatedAt, updatedAt, version}`
 (verified 2.1.220), plus `parkedJobId` and `entrypoint` from 2.1.227.
-Observed `status` values are `busy`, `idle`, and `waiting` — measured 2026-08-01, the
-file reads `waiting` for the duration of a permission dialog. Files map to sessions by
-conversation id.
+Observed `status` values are `busy`, `idle`, `waiting`, and `shell`.
+Measured 2026-08-01, the file reads `waiting` for the duration of a permission dialog.
+Measured 2026-10-18 on 2.1.302, it reads `shell` when the CLI is back at its prompt while a background shell it started is still running: 284 of 311 `busy` → `shell` flips coincided with a turn mux had just closed.
+Files map to sessions by conversation id.
 What it feeds:
 
-- **Status corroboration**: a *settled* contradiction (CLI `busy` while mux `idle`, CLI `idle` while mux `working`, both sides at least 10 s old) counts `cli_state_disagrees` once per standing fact and ledgers it (`kind: "cli_state"`).
+- **Status corroboration**: a *settled* contradiction (CLI `busy` while mux `idle`, CLI at its prompt - `idle` or `shell`, `CLI_IDLE_STATUSES` - while mux `working`, both sides at least 10 s old) counts `cli_state_disagrees` once per standing fact and ledgers it (`kind: "cli_state"`).
+  `shell` belongs on the idle side because the turn is over all the same; leaving it out hid every session stuck `working` after an idle compaction, since a session with a background shell reads `shell` throughout.
   `waiting` is outside that disagreement counter and is recorded as a `layer_reading`.
   It also conservatively overrides a raw PTY `working` result to `approval`, because measured Claude behavior makes `waiting` exact for the permission-dialog lifetime while the append-only PTY tail can contain later parallel redraws.
   This override can preserve or extend an existing approval but cannot initiate a state transition by itself.
@@ -203,6 +205,16 @@ there.
 `SessionStart` is lifecycle and identity evidence, never a turn boundary.
 When it arrives during an active `working` or `awaiting` root turn, including Codex compaction, it is ledgered as `session_start_state_ignored` and cannot move the session to `idle`.
 A `SessionStart` refused as another process generation returns from hook ingress before binding, liveness, automation, or status observation.
+
+**A compaction is not a turn, and neither is its summary.**
+Every Claude compaction writes a `compact_boundary` and then the summary as a `user` record with string content, flagged `isCompactSummary: true` (`_is_claude_compact_summary`).
+Nobody submitted that record, so the observer and the watchdog's tail classifier both treat it as turn-neutral: it opens no turn, closes none, is not remembered as the session's latest prompt, and the tail verdict is whatever preceded it.
+Opening a turn there is the failure that rule exists for.
+Since 2026-10, Claude also compacts on its own while idle, before the prompt cache expires (the `idleCompaction` setting), and writes no turn after the summary.
+Read as a prompt, the summary opened a `working` turn that nothing could close: the tail read the same record as open, and the screen after a compaction carried no idle marker for the PTY backstop.
+Measured 2026-10-18, 36 of the 37 PTY-backstop recoveries in the preceding four days were this shape, stuck from 1 minute to 21 hours, each ended only by a viewer attaching (see the blind-screen repaint in "Watchdog recovery").
+Closing a turn there would be wrong the other way, because a mid-turn compaction writes the same record inside a turn that goes on; before the rule, that record also superseded the running turn and restarted its timer.
+Fixtures: `claude-compaction-idle`, `claude-compaction-mid-turn`.
 
 **Terminal latch.** `exited`/`crashed` is process ground truth, so once a record is in one of
 them only `source="daemon"` may move it out; every other source is refused and ledgered
@@ -825,6 +837,25 @@ silently dead, discovered only by a user report. Two independently blind session
 the fleet status-health alarm (`screen_classifier_blind` in `alarm_reasons`); an
 unwitnessed session is exempt by construction (its state *came* from the screen).
 
+**Blind-screen repaint.**
+A blind screen is often an incomplete one rather than one the classifier cannot read.
+An alternate-screen CLI's write log restates its input box and footer only when they change (`replay_needs_repaint`), so a quiet session's 32 KiB tail can hold no idle marker at all, and the PTY backstop can never fire.
+The same pass therefore asks the CLI to restate its screen when `blind_repaint_due` holds: `working` past `STATE_WATCHDOG_PTY_STUCK_SECONDS`, a tail verdict of `unknown` or `open`, a screen reading `unknown`, a CLI state that is neither `busy` nor `waiting`, and an alternate-screen harness.
+The request is the one-column width pulse a viewer's attach already sends (`repaint_current_geometry`), so the backstop reads the restated frame on the next pass.
+It is started as a task and never awaited, so a gateway round trip cannot delay the rest of the pass.
+Every exclusion is deliberate:
+
+- `awaiting` is left alone, because a block the classifier cannot read is where hiding a prompt is the cost;
+- a `working`, `approval` or `uninformative` screen is already an answer;
+- a `busy` CLI would veto the idle frame anyway;
+- a normal-screen harness keeps a transcript rather than a frame stream, and its pulse can cost a whole transcript re-render.
+
+The pulse also repaints any attached viewer, so it is rate-limited to once per `STATE_WATCHDOG_BLIND_REPAINT_INTERVAL_SECONDS` (600 s) per session.
+Each one counts `screen_blind_repaints`, which the fleet status-health sums into `consolidation_counters`, and ledgers `screen_repaint_requested` with whether the pulse was applied, the stall, and the tail verdict.
+It also emits `terminal_repaint_requested` (`reason: "screen_blind"`) and logs `screen_blind_repaint` to `daemon.log`.
+A steady count means some CLI state routinely leaves no marker on screen, which is drift worth a fixture.
+The replay harness mirrors the decision and records it as `repaint_requests`; replay has no PTY, so a test supplies the restated frame as its next `pty_tail` step.
+
 ## Foreign conversations on the hook channel
 
 The hook ingress authenticates the *session*, not the process: a nested child CLI
@@ -919,7 +950,7 @@ fact, including for sessions that no longer exist.
   `_mark_ended`, and daemon shutdown drains once more after `sessions.shutdown()`.
 - **Every ledger kind persists** — transitions *and* the non-transition kinds
   (`watchdog_recovery`, `standing_activity`, `cli_state`, `layer_reading`,
-  `screen_classifier_blind`, `foreign_conversation_hook_ignored`,
+  `screen_classifier_blind`, `screen_repaint_requested`, `foreign_conversation_hook_ignored`,
   `foreign_thread_turn_end_ignored`, `transition_refused`,
   `reopen_blocked`, `observer_fault`, hook-spool records) — payloads verbatim. Same-state
   detail churn is deliberately kept (it is the evidence that a session was being
@@ -929,7 +960,7 @@ fact, including for sessions that no longer exist.
   `pty_tail_state` verdict and the hook-recency bucket (`fresh`/`stale` against
   `TRANSCRIPT_STALE_SECONDS`, `never` before the first turn hook; always
   `last_turn_hook_ts`, never `last_hook_ts`), and the cli-state poll records the file's
-  `status` (`busy`/`idle`/`absent`) — each as a `layer_reading` entry appended **only when
+  `status` (`busy`/`idle`/`waiting`/`shell`/`absent`) — each as a `layer_reading` entry appended **only when
   the reading changes**, never per 5 s pass. The reading at any instant is the last entry
   at or before it, which is what lets a post-mortem adjudicate the displayed state
   against every layer of the ladder without a polling firehose.
@@ -1106,12 +1137,13 @@ consumer looking as solid as a hook-proven turn end.
   `watchdog_decision`, `pty_tail_appears_idle`, `apply_watchdog_recovery`,
   `session_is_unwitnessed`, `session_status_health`, `fleet_status_health`,
   standing-activity set management, `startup_dialog_observation`,
-  `note_classifier_blindness`, `_relocated_transcript_candidate`,
+  `note_classifier_blindness`, `blind_repaint_due`, `_request_blind_repaint`,
+  `_relocated_transcript_candidate`,
   `note_hook_transcript_path`, `_staged_transcript_relocation`,
   `_relocated_conversation_transcript`, `note_hook_cwd`, `_note_transcript_staleness`
 - `src/swe_mux/observation.py` — evidence extraction, `tail_turn_state`, hook/transcript
   handlers, `closed_by_transcript` latch, trailing-completion guard, standing-activity
-  extractors
+  extractors, `_is_claude_compact_summary`
 - `src/swe_mux/cli_state.py` — the `cli-state` corroboration poller, and the conversation
   ownership oracle (`ConversationHolder`, `conversation_holders`) that resume preflights read
 - `src/swe_mux/status_timeline.py` — `LedgerRing`, `note_layer_reading`, and the durable

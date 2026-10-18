@@ -2275,6 +2275,83 @@ async def test_watchdog_pty_backstop_covers_a_missing_transcript(
     assert [call["source"] for call in calls] == ["watchdog-pty"]
 
 
+async def test_watchdog_pulses_a_blind_screen_once_and_records_it(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    # A working session whose transcript proves nothing and whose screen holds no
+    # marker: the PTY backstop cannot fire, so the watchdog asks the CLI to restate
+    # its screen - the pulse a viewer attaching used to be the only source of.
+    from collections import deque
+
+    from swe_mux.session import SessionManager
+
+    calls: list[dict[str, Any]] = []
+
+    async def fake_finish(_session: Any, _events: Any, **kwargs: Any) -> None:
+        calls.append(kwargs)
+
+    monkeypatch.setattr("swe_mux.observation._finish_root_turn", fake_finish)
+
+    path = tmp_path / "native.jsonl"
+    _open_tail_transcript(path)
+    now = time.time() + 10.0
+    session = _watchdog_session(path, now, b" Conversation compacted\n \xe2\x9d\xaf \n")
+    pulses: list[float] = []
+
+    async def repaint_current_geometry() -> bool:
+        pulses.append(time.time())
+        return True
+
+    session.repaint_current_geometry = repaint_current_geometry
+    session.blind_repaint_at = None
+    session.classifier_blind_since = None
+    session.classifier_blind_counted = False
+    session.status_health_counters = {}
+    session.state_transitions = deque(maxlen=64)
+    session.tasks = set()
+    session.cli_state = {"status": "shell"}
+    emitted: list[tuple[str, dict[str, Any]]] = []
+
+    async def emit(kind: str, **payload: Any) -> None:
+        emitted.append((kind, payload))
+
+    mgr = _fake_manager()
+    mgr.events = SimpleNamespace(emit=emit)
+    mgr._start_session_task = lambda s, coro, name: SessionManager._start_session_task(
+        cast(Any, mgr), s, coro, name
+    )
+
+    await SessionManager._watchdog_check_session(mgr, session, now)
+    await asyncio.gather(*session.tasks)
+
+    assert calls == []
+    assert session.record.state == "working"
+    assert len(pulses) == 1
+    assert session.blind_repaint_at == now
+    assert session.status_health_counters["screen_blind_repaints"] == 1
+    [entry] = [e for e in session.state_transitions if e["kind"] == "screen_repaint_requested"]
+    assert entry["reason"] == "screen_blind"
+    assert entry["applied"] is True
+    assert entry["tail_verdict"] == "open"
+    assert emitted == [
+        (
+            "terminal_repaint_requested",
+            {
+                "session_id": session.record.id,
+                "source": "watchdog-pty",
+                "reason": "screen_blind",
+                "backend": "claude",
+                "applied": True,
+            },
+        )
+    ]
+
+    # The next pass inside the interval does not pulse again.
+    await SessionManager._watchdog_check_session(mgr, session, now + 5)
+    await asyncio.gather(*session.tasks)
+    assert len(pulses) == 1
+
+
 async def test_watchdog_missing_transcript_still_spares_a_busy_cli(
     monkeypatch: Any,
 ) -> None:

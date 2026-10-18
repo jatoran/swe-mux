@@ -50,7 +50,12 @@
     "compaction_mid_turn": {
       "fixture": "claude-compaction-mid-turn.json",
       "guard": "tests/test_status_contract.py::test_compaction_records_never_disturb_turn_state",
-      "root_cause": "Compaction boundaries are telemetry, not turn evidence; treating them as activity would reopen or close turns spuriously."
+      "root_cause": "Compaction boundaries are telemetry, not turn evidence; treating them as activity would reopen or close turns spuriously. The summary record that follows a boundary used to read as a fresh prompt and supersede the running turn, splitting one turn into two and restarting its timer."
+    },
+    "compaction_idle": {
+      "fixture": "claude-compaction-idle.json",
+      "guard": "tests/test_status_contract.py::test_idle_compaction_summary_never_opens_a_turn",
+      "root_cause": "Claude compacts on its own while idle, before the prompt cache expires, and writes the summary as a user record (isCompactSummary) with no turn after it. Read as a prompt it opened a working turn nothing could close - the tail classifier read the same record as an open turn and the post-compaction screen held no idle marker - so 36 of 37 PTY watchdog recoveries 2026-10-14..18 were this, stuck 1 minute to 21 hours until a viewer attached."
     },
     "resume_open_turn_recent": {
       "fixture": "claude-resume-catchup-recent.json",

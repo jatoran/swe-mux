@@ -364,6 +364,21 @@ def _is_interrupt_text(text: str) -> bool:
     return text.lstrip().startswith(CLAUDE_INTERRUPT_PREFIX)
 
 
+def _is_claude_compact_summary(event: dict[str, Any]) -> bool:
+    """Whether a Claude ``user`` record is the CLI's own compaction summary.
+
+    Every compaction writes the summary as a ``user`` record with string content
+    (``isCompactSummary: true``) directly after its ``compact_boundary``. Nobody
+    submitted it, so it is turn-neutral: it neither opens a turn nor closes one.
+    Opening one is the measured failure (2026-10-18): an *idle* compaction - the
+    CLI compacting on its own before the prompt cache expires - has no turn after
+    the summary, so a turn opened here stayed `working` with nothing able to close
+    it, for up to 21 hours. Closing one would be wrong the other way, because a
+    mid-turn compaction writes the same record inside a turn that goes on.
+    """
+    return event.get("isCompactSummary") is True
+
+
 def _event_timestamp(event: dict[str, Any]) -> float | None:
     raw = event.get("timestamp") or event.get("ts")
     if isinstance(raw, (int, float)):
@@ -1438,7 +1453,11 @@ def _claude_tail_state(records: list[dict[str, Any]]) -> str:
         if event_type == "user":
             content = event.get("message", {}).get("content") if event.get("message") else None
             text = _claude_user_text(content)
-            if event.get("isMeta") is True or _is_local_command_text(text):
+            if (
+                event.get("isMeta") is True
+                or _is_claude_compact_summary(event)
+                or _is_local_command_text(text)
+            ):
                 continue
             if _is_interrupt_text(text):
                 return "ended"
@@ -5122,6 +5141,10 @@ async def _claude(session: Session, event: dict[str, Any], events: EventBus) -> 
         )
         return
     if event_type == "user":
+        if _is_claude_compact_summary(event):
+            # Not a submission: no prompt to remember, no turn to open, nothing a
+            # task notification could be read out of (`_is_claude_compact_summary`).
+            return
         content = message.get("content")
         text = _claude_user_text(content)
         if event.get("isMeta") is True or _is_local_command_text(text):

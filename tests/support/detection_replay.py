@@ -37,6 +37,7 @@ from swe_mux.session import (
     SessionManager,
     apply_state_transition,
     apply_watchdog_recovery,
+    blind_repaint_due,
     expire_standing_activity,
     note_classifier_blindness,
     pty_tail_state,
@@ -205,6 +206,7 @@ class ReplaySession:
         self.startup_dialog_screen_since: float | None = None
         self.classifier_blind_since: float | None = None
         self.classifier_blind_counted = False
+        self.blind_repaint_at: float | None = None
         self.cli_state: dict[str, Any] | None = None
         # Mirrors Session: conversations this pane itself retired, which are
         # neither detection evidence nor nested children of it.
@@ -371,6 +373,10 @@ class DetectionReplay:
         # without driving the observer (modeling records the observer missed).
         self.tail_records: list[dict[str, Any]] = []
         self.pty_tail = ""
+        # Virtual-clock times at which the watchdog asked a blind screen to be
+        # restated (`blind_repaint_due`). Replay has no PTY to pulse, so a fixture
+        # that wants the restated frame supplies it as its next `pty_tail` step.
+        self.repaint_requests: list[float] = []
 
     async def drain(self) -> None:
         while not self.queue.empty():
@@ -710,6 +716,19 @@ class DetectionReplay:
                 startup_dialog_raised=startup_raised,
             )
         if action == "none":
+            # Mirrors SessionManager._request_blind_repaint.
+            if blind_repaint_due(
+                session.record.state,
+                backend=session.record.backend,
+                stalled_seconds=stalled,
+                tail_verdict=verdict,
+                pty_state=pty_state,
+                cli_state_status=session_cli_state_status(session),
+                last_repaint_at=session.blind_repaint_at,
+                now=now,
+            ):
+                session.blind_repaint_at = now
+                self.repaint_requests.append(now)
             return
         await apply_watchdog_recovery(
             session,

@@ -2,10 +2,11 @@
   "schema_version": 1,
   "backend": "claude",
   "edge_case": "compaction_mid_turn",
-  "description": "A compaction boundary mid-turn emits context_compacted without disturbing the working status; the turn still closes on its own proven evidence.",
+  "description": "A compaction mid-turn emits context_compacted without disturbing the working status: the summary record the CLI writes after the boundary is not a submission, so it neither closes the running turn nor splits it into a new one, and the turn still closes on its own proven evidence.",
   "steps": [
     {"kind": "transcript", "record": {"type": "user", "isSidechain": false, "message": {"content": "test"}}, "expect_delivery": "blocked", "oracle_safe": false, "expect_state": "working"},
-    {"kind": "transcript", "record": {"type": "system", "subtype": "compact_boundary"}, "expect_state": "working"},
+    {"kind": "transcript", "record": {"type": "system", "subtype": "compact_boundary", "compactMetadata": {"trigger": "auto"}}, "expect_state": "working"},
+    {"kind": "transcript", "record": {"type": "user", "isCompactSummary": true, "isVisibleInTranscriptOnly": true, "isSidechain": false, "message": {"role": "user", "content": "This session is being continued from a previous conversation that ran out of context."}}, "expect_delivery": "blocked", "oracle_safe": false, "expect_state": "working"},
     {"kind": "transcript", "record": {"type": "assistant", "isSidechain": false, "message": {"content": [{"type": "text", "text": "done"}], "stop_reason": "end_turn"}}, "expect_state": "idle"}
   ],
   "expected": {
@@ -18,7 +19,7 @@
       {"previous": "idle", "state": "working", "source": "transcript", "proof": "proven"},
       {"previous": "working", "state": "idle", "source": "transcript", "proof": "proven"}
     ],
-    "parser": {"status": "ready", "recognized": 3, "unknown": 0, "unknown_signatures": {}},
+    "parser": {"status": "ready", "recognized": 4, "unknown": 0, "unknown_signatures": {}},
     "delivery_state": "unknown",
     "delivery_reason": "readiness_debounce_pending"
   }

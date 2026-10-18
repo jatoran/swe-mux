@@ -15,12 +15,14 @@ from swe_mux.session import (
     SCREEN_CLASSIFIER_BLIND_SECONDS,
     STATE_EVIDENCE_SOURCES,
     STATE_WATCHDOG_AWAITING_RESUME_SECONDS,
+    STATE_WATCHDOG_BLIND_REPAINT_INTERVAL_SECONDS,
     STATE_WATCHDOG_ENDED_STUCK_SECONDS,
     STATE_WATCHDOG_PTY_STUCK_SECONDS,
     STATE_WATCHDOG_STARTUP_DIALOG_SECONDS,
     STATUS_HEALTH_MAX_INFERRED_TERMINAL_RATIO,
     STATUS_HEALTH_MIN_TERMINALS_FOR_RATIO_ALARM,
     STATUS_HEALTH_STUCK_ACTIVE_SECONDS,
+    blind_repaint_due,
     fleet_status_health,
     note_classifier_blindness,
     pty_tail_appears_idle,
@@ -535,6 +537,177 @@ async def test_compaction_records_never_disturb_turn_state() -> None:
     assert len(compacted) == 1
 
 
+# The record every Claude compaction writes after its boundary, in the captured
+# shape (2026-10-18, 2.1.302; the summary text trimmed).
+COMPACT_SUMMARY: dict[str, Any] = {
+    "type": "user",
+    "isCompactSummary": True,
+    "isVisibleInTranscriptOnly": True,
+    "isSidechain": False,
+    "message": {
+        "role": "user",
+        "content": "This session is being continued from a previous conversation that "
+        "ran out of context. The summary below covers the earlier portion.",
+    },
+}
+COMPACT_BOUNDARY: dict[str, Any] = {
+    "type": "system",
+    "subtype": "compact_boundary",
+    "content": "Conversation compacted",
+    "compactMetadata": {"trigger": "auto"},
+}
+
+
+def _prompt(text: str) -> dict[str, Any]:
+    return {"type": "user", "isSidechain": False, "message": {"role": "user", "content": text}}
+
+
+def _end_turn(text: str = "done") -> dict[str, Any]:
+    return {
+        "type": "assistant",
+        "isSidechain": False,
+        "message": {"content": [{"type": "text", "text": text}], "stop_reason": "end_turn"},
+    }
+
+
+async def test_idle_compaction_summary_never_opens_a_turn() -> None:
+    # Claude compacting on its own while idle writes a summary with no turn after it.
+    # Read as a prompt, it opened a `working` turn that nothing could ever close.
+    replay = DetectionReplay("claude")
+    session = replay.session
+    await replay.step({"kind": "transcript", "record": _prompt("check the backlog")})
+    await replay.step({"kind": "transcript", "record": _end_turn()})
+    assert session.record.state == "idle"
+
+    await replay.step({"kind": "transcript", "record": COMPACT_BOUNDARY})
+    await replay.step({"kind": "transcript", "record": COMPACT_SUMMARY})
+
+    assert session.record.state == "idle"
+    assert session.observation_state["root_turn_active"] is False
+    assert [e["type"] for e in replay.normalized].count("turn_started") == 1
+    # Nor is the summary what the user asked for, which is what the titler reads.
+    assert session.last_user_prompt == "check the backlog"
+
+
+async def test_compaction_summary_never_splits_a_running_turn() -> None:
+    # The same record mid-turn used to read as a second prompt and supersede the
+    # running turn: an aborted turn, a new one, and a working timer that restarted.
+    replay = DetectionReplay("claude")
+    session = replay.session
+    await replay.step({"kind": "transcript", "record": _prompt("refactor the parser")})
+    epoch = session.record.turn_epoch
+    started_at = session.observation_state["turn_started_at"]
+    await replay.step({"kind": "timer", "seconds": 30})
+
+    await replay.step({"kind": "transcript", "record": COMPACT_BOUNDARY})
+    await replay.step({"kind": "transcript", "record": COMPACT_SUMMARY})
+
+    assert session.record.state == "working"
+    assert session.record.turn_epoch == epoch
+    assert session.observation_state["turn_started_at"] == started_at
+    assert not [e for e in replay.normalized if e["type"] == "turn_aborted"]
+    await replay.step({"kind": "transcript", "record": _end_turn()})
+    assert session.record.state == "idle"
+
+
+def test_transcript_tail_reads_past_a_compaction_summary() -> None:
+    # The watchdog's tail read has to agree with the observer: the summary is
+    # neither an open turn nor an ended one, so the verdict is whatever came first.
+    from swe_mux.observation import tail_turn_state
+
+    idle_compaction = [
+        _prompt("check the backlog"),
+        _end_turn(),
+        {"type": "system", "subtype": "turn_duration", "durationMs": 3132},
+        COMPACT_BOUNDARY,
+        COMPACT_SUMMARY,
+        {"type": "attachment", "attachment": {"type": "todo"}},
+        {"type": "system", "subtype": "informational", "content": "Compacted while idle"},
+    ]
+    assert tail_turn_state("claude", idle_compaction) == "ended"
+    mid_turn = [
+        _prompt("refactor the parser"),
+        {
+            "type": "assistant",
+            "message": {
+                "content": [{"type": "tool_use", "id": "t1", "name": "Read", "input": {}}],
+                "stop_reason": "tool_use",
+            },
+        },
+        COMPACT_BOUNDARY,
+        COMPACT_SUMMARY,
+    ]
+    assert tail_turn_state("claude", mid_turn) == "open"
+
+
+def test_blind_repaint_is_due_only_where_the_pty_backstop_is_the_last_recovery() -> None:
+    now = 10_000.0
+    due: dict[str, Any] = {
+        "backend": "claude",
+        "stalled_seconds": STATE_WATCHDOG_PTY_STUCK_SECONDS,
+        "tail_verdict": "open",
+        "pty_state": "unknown",
+        "cli_state_status": "shell",
+        "last_repaint_at": None,
+        "now": now,
+    }
+    assert blind_repaint_due("working", **due)
+    assert blind_repaint_due("working", **{**due, "tail_verdict": "unknown"})
+    assert blind_repaint_due("working", **{**due, "cli_state_status": None})
+    assert blind_repaint_due("working", **{**due, "backend": "opencode"})
+
+    # A block the classifier cannot read is where hiding a prompt is the cost.
+    assert not blind_repaint_due("awaiting", **due)
+    assert not blind_repaint_due("idle", **due)
+    # A screen that already answers is not blind.
+    for pty_state in ("working", "approval", "idle", "uninformative"):
+        assert not blind_repaint_due("working", **{**due, "pty_state": pty_state})
+    # A tail that proves the end recovers without the screen; an unread tail is the
+    # cheap pass, which never reaches the backstop.
+    for verdict in ("ended", None):
+        assert not blind_repaint_due("working", **{**due, "tail_verdict": verdict})
+    assert not blind_repaint_due(
+        "working", **{**due, "stalled_seconds": STATE_WATCHDOG_PTY_STUCK_SECONDS - 0.1}
+    )
+    # A busy CLI vetoes the idle frame a pulse could produce; waiting is a dialog.
+    for status in ("busy", "waiting"):
+        assert not blind_repaint_due("working", **{**due, "cli_state_status": status})
+    # A normal-screen harness keeps a transcript, not a frame stream.
+    for backend in ("codex", "omp", "pi"):
+        assert not blind_repaint_due("working", **{**due, "backend": backend})
+    # Rate-limited per session.
+    interval = STATE_WATCHDOG_BLIND_REPAINT_INTERVAL_SECONDS
+    assert not blind_repaint_due("working", **{**due, "last_repaint_at": now - interval + 1})
+    assert blind_repaint_due("working", **{**due, "last_repaint_at": now - interval})
+
+
+async def test_blind_screen_is_restated_then_the_pty_backstop_recovers() -> None:
+    # The incident end to end, minus the viewer who had to attach to end it: a
+    # turn whose transcript proves nothing, on a screen that holds no idle marker.
+    replay = DetectionReplay("claude")
+    session = replay.session
+    await replay.step({"kind": "transcript", "record": _prompt("check the backlog")})
+    await replay.step({"kind": "cli_state", "status": "shell"})
+    await replay.step({"kind": "pty_tail", "data": " Conversation compacted\n ❯ \n"})
+    await replay.step({"kind": "timer", "seconds": STATE_WATCHDOG_PTY_STUCK_SECONDS - 1})
+    await replay.step({"kind": "watchdog"})
+    assert replay.repaint_requests == []
+
+    await replay.step({"kind": "timer", "seconds": 2})
+    await replay.step({"kind": "watchdog"})
+    assert len(replay.repaint_requests) == 1
+    assert session.record.state == "working"
+    await replay.step({"kind": "watchdog"})
+    assert len(replay.repaint_requests) == 1, "one pulse per interval"
+
+    # The restated frame carries the footer the differential stream had dropped.
+    await replay.step({"kind": "pty_tail", "data": " ❯ \n  ⏵⏵ auto mode on (shift+tab to cycle)\n"})
+    await replay.step({"kind": "timer", "seconds": 5})
+    await replay.step({"kind": "watchdog"})
+    assert session.record.state == "idle"
+    assert replay.normalized[-1]["source"] == "watchdog-pty"
+
+
 async def test_omp_hook_and_transcript_compaction_evidence_is_one_boundary() -> None:
     replay = DetectionReplay("omp")
 
@@ -848,3 +1021,15 @@ def test_classifier_blind_fleet_alarm_needs_two_sessions() -> None:
     both = fleet_status_health([one, two], now=now)
     assert "screen_classifier_blind" in both["alarm_reasons"]
     assert both["consolidation_counters"]["screen_classifier_blind"] == 3
+
+
+def test_blind_repaints_are_consolidated_fleet_wide() -> None:
+    # How often the watchdog had to pulse a screen is a fleet-level drift signal:
+    # a steady count means some CLI state routinely leaves no marker on screen.
+    one = ReplaySession("claude")
+    one.status_health_counters["screen_blind_repaints"] = 2
+    two = ReplaySession("claude")
+    two.status_health_counters["screen_blind_repaints"] = 1
+    health = fleet_status_health([one, two], now=one.clock.wall())
+    assert health["consolidation_counters"]["screen_blind_repaints"] == 3
+    assert "screen_blind_repaints" not in health["alarm_reasons"]

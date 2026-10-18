@@ -249,6 +249,15 @@ STATE_WATCHDOG_STARTUP_DIALOG_SECONDS = 10.0
 # tail classifier cannot see the current CLI at all — the 2026-07-31 failure
 # mode, previously discoverable only by a user noticing a stuck status.
 SCREEN_CLASSIFIER_BLIND_SECONDS = 120.0
+# A blind screen is often an incomplete one rather than an unknown one. An
+# alternate-screen CLI's write log restates its input box and footer only when they
+# change, so a quiet session's tail can hold no idle marker at all, and the PTY
+# backstop - the one recovery that does not need the transcript - can never fire.
+# Measured 2026-10-18: Claude after an idle compaction stayed `working` until a
+# viewer attached, because attaching pulses the width and the CLI restates its
+# screen. The watchdog asks for that same pulse itself, at most this often per
+# session, since the pulse also repaints any viewer that is attached.
+STATE_WATCHDOG_BLIND_REPAINT_INTERVAL_SECONDS = 600.0
 # An "awaiting" that the user has already answered is invisible to the hook that
 # raised it: nothing fires when a permission dialog is dismissed. The PTY is this
 # session's own ground truth for that — once the CLI is back to its working
@@ -416,6 +425,7 @@ def fleet_status_health(sessions: Any, *, now: float | None = None) -> dict[str,
             classifier_blind_sessions.append(record.id)
         for key in (
             "screen_classifier_blind",
+            "screen_blind_repaints",
             "cli_state_disagrees",
             "nested_children_observed",
             "standing_activity_expired",
@@ -2144,6 +2154,51 @@ def note_classifier_blindness(session: Any, pty_state: PtyTailState, now: float)
     return True
 
 
+def blind_repaint_due(
+    state: SessionState,
+    *,
+    backend: str,
+    stalled_seconds: float,
+    tail_verdict: str | None,
+    pty_state: PtyTailState,
+    cli_state_status: str | None,
+    last_repaint_at: float | None,
+    now: float,
+) -> bool:
+    """Whether the watchdog should make this session's CLI restate its screen.
+
+    Pure, shared with the replay harness. True only where the PTY backstop is the
+    one recovery left and a restated screen is the one thing it lacks: `working`
+    past the backstop's stall window, a transcript tail that proves nothing
+    (``unknown``/``open``), and a screen that reads nothing at all. Every narrower
+    reading is excluded on purpose:
+
+    - a screen reading ``working``, ``approval`` or ``uninformative`` is already an
+      answer, and a pulse would not change it;
+    - a CLI reporting ``busy`` vetoes an idle screen anyway (`pty_tail_explain`), so
+      the restated frame could not end the turn, and ``waiting`` is a dialog;
+    - ``awaiting`` is left alone, because a block the classifier cannot read is the
+      case where hiding a prompt is the cost;
+    - a harness whose retained bytes are a transcript rather than a frame stream
+      (`replay_needs_repaint`) is not blind for this reason, and its pulse can cost a
+      whole transcript re-render.
+    """
+    if state != "working" or pty_state != "unknown":
+        return False
+    if tail_verdict not in {"unknown", "open"}:
+        return False
+    if stalled_seconds < STATE_WATCHDOG_PTY_STUCK_SECONDS:
+        return False
+    if cli_state_status in {"busy", "waiting"}:
+        return False
+    if not replay_needs_repaint(backend):
+        return False
+    return (
+        last_repaint_at is None
+        or now - last_repaint_at >= STATE_WATCHDOG_BLIND_REPAINT_INTERVAL_SECONDS
+    )
+
+
 async def apply_watchdog_recovery(
     session: Any,
     events: EventBus,
@@ -2638,6 +2693,9 @@ class Session:
         # working-but-screen-unknown window began, and whether it was counted.
         self.classifier_blind_since: float | None = None
         self.classifier_blind_counted = False
+        # When the watchdog last pulsed this session's width so a blind screen
+        # would be restated (`blind_repaint_due`). Rate-limits the pulse.
+        self.blind_repaint_at: float | None = None
         # Latest CLI-published side state for this session's conversation
         # (~/.claude/sessions/<pid>.json), corroboration only — never a
         # transition source. None until the poller matches a file.
@@ -7171,6 +7229,14 @@ class SessionManager:
             awaiting_reason=record.awaiting_reason,
         )
         if action == "none":
+            SessionManager._request_blind_repaint(
+                self,
+                session,
+                now=now,
+                stalled_seconds=stalled,
+                tail_verdict=verdict,
+                pty_explanation=pty_explanation,
+            )
             return
         await apply_watchdog_recovery(
             session,
@@ -7178,6 +7244,94 @@ class SessionManager:
             action,
             stalled_seconds=stalled,
             tail_verdict=verdict,
+        )
+
+    def _request_blind_repaint(
+        self,
+        session: Session,
+        *,
+        now: float,
+        stalled_seconds: float,
+        tail_verdict: str | None,
+        pty_explanation: dict[str, Any],
+    ) -> None:
+        """Pulse a blind session's width so its CLI restates the whole screen.
+
+        The PTY backstop reads the screen on the *next* pass, so this only starts the
+        pulse and returns: the watchdog visits every session in turn, and a gateway
+        round trip awaited here would delay all of them. Called as an unbound method
+        so the lightweight watchdog stand-ins in tests, which carry no terminal, fall
+        straight through the `repaint_current_geometry` guard.
+        """
+        repaint = getattr(session, "repaint_current_geometry", None)
+        if repaint is None:
+            return
+        if not blind_repaint_due(
+            session.record.state,
+            backend=session.record.backend,
+            stalled_seconds=stalled_seconds,
+            tail_verdict=tail_verdict,
+            pty_state=cast(PtyTailState, pty_explanation["outcome"]),
+            cli_state_status=pty_explanation.get("cli_state_status"),
+            last_repaint_at=session.blind_repaint_at,
+            now=now,
+        ):
+            return
+        # Stamped before the pulse runs, so the next pass cannot start a second one
+        # while the first is still crossing to the gateway.
+        session.blind_repaint_at = now
+        counters = session.status_health_counters
+        counters["screen_blind_repaints"] = counters.get("screen_blind_repaints", 0) + 1
+        self._start_session_task(
+            session,
+            SessionManager._run_blind_repaint(
+                self,
+                session,
+                stalled_seconds=stalled_seconds,
+                tail_verdict=tail_verdict,
+            ),
+            name=f"blind-repaint-{session.record.id}",
+        )
+
+    async def _run_blind_repaint(
+        self,
+        session: Session,
+        *,
+        stalled_seconds: float,
+        tail_verdict: str | None,
+    ) -> None:
+        """Run one blind-screen pulse and record what it did, in all three places a
+        post-mortem looks: the session's ledger (and so the durable timeline), the
+        event log, and `daemon.log`."""
+        try:
+            applied = await session.repaint_current_geometry()
+        except Exception:
+            log.exception("blind-screen repaint failed for session %s", session.record.id)
+            applied = False
+        session.state_transitions.append(
+            {
+                "ts": time.time(),
+                "kind": "screen_repaint_requested",
+                "reason": "screen_blind",
+                "applied": applied,
+                "stalled_seconds": round(stalled_seconds, 3),
+                "tail_verdict": tail_verdict,
+            }
+        )
+        log.info(
+            "screen_blind_repaint session=%s applied=%s stalled_s=%.0f tail=%s",
+            session.record.id,
+            applied,
+            stalled_seconds,
+            tail_verdict,
+        )
+        await self.events.emit(
+            "terminal_repaint_requested",
+            session_id=session.record.id,
+            source="watchdog-pty",
+            reason="screen_blind",
+            backend=session.record.backend,
+            applied=applied,
         )
 
     async def _check_ssh_boundary_state(self, session: Session, now: float) -> bool:

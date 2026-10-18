@@ -2388,8 +2388,9 @@ GET /api/diagnostics/doctor
 
 `status-health` reports the fleet's transition ledger: proven/inferred counts, bounds, alarm.
 It aggregates the detection-hierarchy counters (`consolidation_counters`:
-`screen_classifier_blind`, `cli_state_disagrees`, `nested_children_observed`,
-`standing_activity_expired`) and lists `classifier_blind_sessions[]`; two or more blind
+`screen_classifier_blind`, `screen_blind_repaints`, `cli_state_disagrees`,
+`nested_children_observed`, `standing_activity_expired`) and lists
+`classifier_blind_sessions[]`; two or more blind
 sessions raise the alarm with reason `screen_classifier_blind`
 (`features/status-detection.md`).
 It also reports `identity_collisions[]` — live agent sessions sharing one

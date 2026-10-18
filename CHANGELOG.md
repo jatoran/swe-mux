@@ -40,6 +40,10 @@ The release procedure that maintains this file is [`RELEASING.md`](RELEASING.md)
 
 ### Fixed
 
+- **A Claude Code session no longer shows as working after it compacts itself while idle.**
+  Claude Code now compacts a quiet conversation on its own before its prompt cache expires, and swe-mux read the summary that compaction writes as a new prompt, so the session blinked as working until you opened its tab.
+  The summary no longer starts or splits a turn, which also stops a compaction in the middle of a turn from restarting that turn's timer.
+  When a working session's screen shows no sign of the agent's prompt, swe-mux now asks the agent to redraw it, which is what opening the tab used to do.
 - **Removing many worktrees at once no longer freezes swe-mux or gets it restarted.**
   Each removal used to start its own background deletion of every removed checkout in the repository, so removing a few dozen in a row ran that many deletions of the same files at once, and they took every thread swe-mux uses for background work.
   Everything else waiting on those threads stalled, including the signal the desktop app uses to tell a busy swe-mux from a hung one, so it restarted a swe-mux that was only busy.

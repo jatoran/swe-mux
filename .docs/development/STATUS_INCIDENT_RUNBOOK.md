@@ -68,13 +68,14 @@ kinds and what each means:
 | `kind` | Meaning |
 | --- | --- |
 | `transition` | An applied state transition: `previous` → `state`, with `source` (`hook`/`transcript`/`pty`/`watchdog`/`watchdog-pty`/`daemon`/`process`), `priority`, `evidence`, `proof` (`proven`/`inferred`), `allowed_source` (false = contract violation), `seconds_in_previous`. Same-state entries are detail churn (`working · Read` → `working · Bash`) — evidence the session was being observed. |
-| `layer_reading` | A detection-ladder layer's reading **changed**: `layer` (`pty_tail`/`cli_state`/`hook_recency`), `reading`, `previous`. The layer's reading at any instant is the last entry at or before it. `pty_tail`: `working`/`approval`/`idle`/`unknown` (the screen classifier's verdict). `cli_state`: `busy`/`idle`/`absent` (Claude's own side-state file). `hook_recency`: `fresh`/`stale` (90 s threshold on turn-affecting hooks)/`never`. |
+| `layer_reading` | A detection-ladder layer's reading **changed**: `layer` (`pty_tail`/`cli_state`/`hook_recency`), `reading`, `previous`. The layer's reading at any instant is the last entry at or before it. `pty_tail`: `working`/`approval`/`idle`/`unknown` (the screen classifier's verdict). `cli_state`: `busy`/`idle`/`waiting`/`shell`/`absent` (Claude's own side-state file; `waiting` is a permission dialog, `shell` is idle at the prompt with a background shell still running). `hook_recency`: `fresh`/`stale` (90 s threshold on turn-affecting hooks)/`never`. |
 | `watchdog_recovery` | The quiescence watchdog resolved something: `action` (e.g. `pty_idle_prompt`, `transcript_tail_terminal`, `pty_working_after_awaiting`, `startup_dialog_block`), `stalled_seconds`, `tail_verdict`. Recoveries are inferred — a healthy session has few. |
 | `standing_activity` | Annotation lifecycle: `action` (`added`/`updated`/`removed`/`expired`) for `loop`/`cron`/`background_tasks`/`subagents`. An `expired` without a positive clear is a small drift signal. |
-| `cli_state` | The corroboration layer counted something: `action: status_disagrees` (CLI `busy` vs mux `idle`, or CLI `idle` vs mux `working`, both settled ≥10 s) or `action: nested_child_observed` (a child CLI deterministically observed in this session's cwd). |
+| `cli_state` | The corroboration layer counted something: `action: status_disagrees` (CLI `busy` vs mux `idle`, or CLI `idle`/`shell` vs mux `working`, both settled ≥10 s) or `action: nested_child_observed` (a child CLI deterministically observed in this session's cwd). |
 | `transition_refused` | The terminal latch refused a resurrection: a late hook tried to move an `exited`/`crashed` session. |
 | `reopen_blocked` | The `closed_by_transcript` latch refused a late unordered begin that would have reopened `working` on a finished turn. |
 | `screen_classifier_blind` | A witnessed `working` session's screen read `unknown` continuously for 120 s — the classifier cannot see this CLI generation (marker drift). |
+| `screen_repaint_requested` | The watchdog pulsed a blind session's width so its CLI would restate a screen whose footer the differential stream had dropped (`reason: screen_blind`, `applied`, `stalled_seconds`, `tail_verdict`). A recovery with `pty_idle_prompt` on the next pass means the restated frame was the missing evidence; another pulse ten minutes later on the same session means it was not. |
 | `foreign_conversation_hook_ignored` | A nested child CLI's hook was dropped before it could move state (`native_session_id` names the child). A thread this session's *own* agent spawned is not counted here. |
 | `foreign_thread_turn_end_ignored` | A turn end belonging to another thread was dropped before it could close the root turn or bind identity: `reason` is `child_thread` (a subagent this session spawned) or `contradicts_witnessed_root` (it names a conversation no root hook has). A run of these against a pane that displays idle while its agent works is the subagent-thread failure in `status-detection.md` § Subagent threads and conversation binding. |
 | `observer_fault` | The transcript observer crashed and was restarted (`error`, `restart_count`). |
@@ -93,6 +94,9 @@ For the moment in question, from the timeline alone:
      there a Stop hook (`hook_recency` flipping fresh), a transcript close, or nothing?
      Was a `watchdog_recovery` late or absent? Was the screen classifier blind
      (`pty_tail: unknown` + `screen_classifier_blind`)?
+     A turn opened by `transcript:user_prompt_record` right after a `cli_state: busy` with
+     no `hook:UserPromptSubmit` is the idle-compaction shape: the opener was the CLI's own
+     compaction summary, which `status-detection.md` now treats as turn-neutral.
    - Displayed `idle`, `pty_tail: working` or `cli_state: busy` → work the daemon never
      saw. Check `hook_recency: never/stale` (hooks not wired or dropped), `unwitnessed`
      in the state-log, and `foreign_conversation_hook_ignored` (the work may belong to a
