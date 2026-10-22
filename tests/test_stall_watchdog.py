@@ -333,6 +333,61 @@ def test_a_capture_fires_only_once_the_loop_is_a_threshold_late(tmp_path: Path) 
         watchdog.close()
 
 
+def test_a_capture_past_the_thread_cap_still_lists_the_loop_thread_first(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`sys._current_frames()` is newest first; a bare cap dropped the oldest - the loop.
+
+    2026-10-22: with ~105 daemon threads against a cap of 100, both hangs that day
+    were sampled every three seconds and not one dump held the main thread.
+    """
+    import swe_mux.stall_watchdog as stall_watchdog
+
+    now = [100.0]
+    stop = threading.Event()
+    attached = threading.Event()
+    watchdog = StallWatchdog(
+        tmp_path / "loop-stalls.log",
+        threshold=3.0,
+        beat_interval=0.5,
+        monotonic=lambda: now[0],
+        cpu_reader=_NoCpu(),
+    )
+
+    def loop_thread() -> None:
+        from types import SimpleNamespace
+        from typing import Any, cast
+
+        watchdog.attach_loop(cast(Any, SimpleNamespace(_ready=[])))
+        attached.set()
+        stop.wait(10)
+
+    loop = threading.Thread(target=loop_thread, name="test-loop", daemon=True)
+    loop.start()
+    assert attached.wait(2)
+    newer = [threading.Thread(target=stop.wait, args=(10,), daemon=True) for _ in range(5)]
+    for thread in newer:
+        thread.start()
+    monkeypatch.setattr(stall_watchdog, "MAX_THREADS", 3)
+    watchdog.start()
+    try:
+        watchdog._canary_stop.set()  # drive the capture by hand, not from the thread
+        watchdog.beat()
+        now[0] = 104.0
+        watchdog._capture_if_stalled(now[0])
+        text = watchdog.trace_path.read_text(encoding="utf-8")
+        (dump,) = parse_stall_dumps(text)
+        assert loop.ident in dump.threads, "the watched loop thread survives the cap"
+        assert next(iter(dump.threads)) == loop.ident, "and is written first"
+        assert len(dump.threads) == 3
+        assert "listed=3" in text and "# threads=" in text, "the truncation is stated"
+    finally:
+        stop.set()
+        watchdog.close()
+        for thread in [loop, *newer]:
+            thread.join(timeout=2)
+
+
 def test_an_explanation_reads_only_the_dumps_captured_inside_its_stall() -> None:
     text = (
         "Timeout (0:00:00)!\n# captured_at=50.0\n"

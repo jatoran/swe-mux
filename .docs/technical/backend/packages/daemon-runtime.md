@@ -137,6 +137,7 @@ Moving a terminal out retires the daemon's core in the same instant (`TerminalCo
 
 Bounded sampling through owned Python frame references, canary starvation measurements, and rotating `loop-stalls.log` output.
 The event loop only publishes a timestamp; sampling and file IO happen elsewhere.
+A capture writes the watched loop thread first, because `sys._current_frames()` is ordered newest first and the thread cap would otherwise drop it.
 Native GIL-held stalls can prevent sampling, and the diagnostic snapshot reports that coverage limit explicitly.
 `server._loop_lag_loop` owns the lag measurement, explanation log, and telemetry write.
 Each explanation also differences per-thread, process and host CPU across the stall's window, reads the loop's ready-queue depth and the parked marks, optionally waits for one `py-spy dump` taken at the stall's onset, and states a verdict (`diagnose`).
@@ -195,6 +196,7 @@ The desktop verifies the current supervisor with a read-only handshake before re
 `desktop.py` owns the monitor thread, launch callback, and manual-action coordination.
 The hang threshold is decided with the daemon's heartbeat (`lifecycle.read_heartbeat`): a stale heartbeat is a stopped loop and earns `HANG_SECONDS`, a fresh one is a loop that is running and earns `UNREACHABLE_SECONDS`.
 `register_daemon` returns `False` rather than overwrite a record naming a live generation with no planned handoff.
+A kill that has not completed is tracked as `_terminating` and never re-issued; only a launched replacement is charged to the `MAX_RESTARTS` budget.
 
 **Not:** the PTY supervisor, standalone service management, or uninterrupted terminal transport.
 

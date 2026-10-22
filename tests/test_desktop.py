@@ -557,6 +557,29 @@ def test_the_daemon_gets_the_operators_webview_arguments_not_the_shells(
     assert seen.get(BROWSER_ARGUMENTS_ENV) == operator_value
 
 
+def test_a_tray_restart_that_fails_says_so_in_the_ledger(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A tray callback's exception is swallowed by the tray; it must not vanish too."""
+    runtime = tray_runtime(tmp_path)
+    warnings: list[tuple[str, str]] = []
+
+    def busy_fence(*_a: object, **_k: object) -> Any:
+        raise TimeoutError("daemon recovery lock busy")
+
+    monkeypatch.setattr("swe_mux.desktop.recovery_lock", busy_fence)
+    monkeypatch.setattr(
+        "swe_mux.desktop.show_desktop_warning", lambda title, body: warnings.append((title, body))
+    )
+
+    runtime.restart_daemon()
+
+    ledger_text = (tmp_path / "lifecycle.log").read_text(encoding="utf-8")
+    assert "tray restart requested" in ledger_text
+    assert "tray restart failed: TimeoutError: daemon recovery lock busy" in ledger_text
+    assert warnings == [("Restart failed", "daemon recovery lock busy")]
+
+
 def test_a_healthy_daemon_is_adopted_without_spawning(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

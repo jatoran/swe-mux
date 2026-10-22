@@ -221,6 +221,8 @@ Read `capture_mode` and `canary_starved` before interpreting frames.
 `canary_starved=true` means native GIL contention or host scheduling also delayed the sampler; absent frames do not identify a culprit.
 Explained stalls persist in `mux.db` (`loop_stalls`), while a daemon crash before explanation leaves OS crash evidence and any partial trace.
 For an outage that persists, inspect `daemon_recovery` state transitions in `lifecycle.log` and the generation record in `daemon-recovery.json`.
+A hang that ends only with a kill writes no `loop_stall` line, because the loop never resumes to explain it; its dumps are still in `loop-stalls.log`, and `terminal-gateway.log`'s `connection lost` line for the daemon's IPC connection dates its death.
+Both such hangs on 2026-10-22 followed 30-60 minutes in which every daemon git command ended as `git_read_slow` at exactly 24 s (the 4 s timeout, a 10 s `did not reap`, two 5 s abandoned drains: neither the process nor its pipes ever closed), so a run of `did not reap` warnings is the early sign worth checking `daemon.log` for.
 Desktop automatic recovery and its session-protection gates are defined in `design/features/daemon-resilience.md`.
 The original asynchronous native sampler is no longer used: it crashed Python while traversing a changing frame during the 2026-09-07 incident.
 

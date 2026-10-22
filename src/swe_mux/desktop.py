@@ -752,6 +752,10 @@ class DesktopRuntime:
             self.window.hide()
 
     def restart_daemon(self, *_: object) -> None:
+        # Ledgered on entry and on failure: this runs as a tray callback, where an
+        # exception is swallowed, so before this a click that did nothing left no
+        # trace at all (2026-10-22, a restart tried during a hang).
+        ledger(self.config.data_dir, "tray restart requested")
         pause = getattr(self, "recovery_pause", None)
         if pause is not None:
             pause.set()
@@ -761,6 +765,9 @@ class DesktopRuntime:
             with recovery_lock(self.config.data_dir):
                 pass
             self._restart_daemon()
+        except Exception as exc:  # noqa: BLE001 - the tray would otherwise drop it unseen
+            ledger(self.config.data_dir, f"tray restart failed: {type(exc).__name__}: {exc}")
+            show_desktop_warning("Restart failed", str(exc) or type(exc).__name__)
         finally:
             if pause is not None:
                 pause.clear()
@@ -775,7 +782,9 @@ class DesktopRuntime:
         if self.exiting:
             return
         if health_snapshot(self.url) is not None:
+            ledger(self.config.data_dir, "tray restart: asking the serving daemon to detach")
             if not request_daemon_shutdown(self.url, self.token, mode="restart"):
+                ledger(self.config.data_dir, "tray restart: the daemon refused the restart request")
                 show_desktop_warning(
                     "Restart failed",
                     "The daemon did not accept the restart request. It may not have "
@@ -791,6 +800,8 @@ class DesktopRuntime:
                 except subprocess.TimeoutExpired:
                     self.child.terminate()
             self.child = None
+        else:
+            ledger(self.config.data_dir, "tray restart: no daemon answered health; starting one")
         try:
             if not self.ensure_daemon(wait_seconds=DAEMON_RESTART_WAIT_SECONDS):
                 show_desktop_warning(

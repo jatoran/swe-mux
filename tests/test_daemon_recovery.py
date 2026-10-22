@@ -27,6 +27,8 @@ class Fleet:
         self.supervisor: dict[str, Any] | None = {"pid": 789, "created_at": 1.0}
         self.spawned: list[int] = []
         self.terminated: list[int] = []
+        #: False models a kill the OS has not finished: the process stays alive.
+        self.kills_complete = True
         self.deploying = False
         self.stop = threading.Event()
         self.monitor = recovery.DaemonRecovery(
@@ -65,6 +67,8 @@ class Fleet:
 
     def terminate(self, record: dict[str, Any]) -> bool:
         self.terminated.append(record["pid"])
+        if not self.kills_complete:
+            return False
         self.states[record["pid"]] = "gone"
         return True
 
@@ -199,6 +203,30 @@ def test_repeated_startup_crashes_are_rate_limited(fleet: Fleet) -> None:
     assert "state=retry_limit" in (fleet.path / "lifecycle.log").read_text()
     fleet.step(recovery.RETRY_WINDOW_SECONDS)
     assert len(fleet.spawned) == recovery.MAX_RESTARTS + 1
+
+
+def test_a_pending_kill_spends_no_budget_and_is_replaced_the_moment_it_exits(
+    fleet: Fleet,
+) -> None:
+    # 2026-10-22: a hung daemon took 4m15s to exit after TerminateProcess. Each
+    # poll re-issued the kill and spent a replacement attempt, so the budget was
+    # gone 31s in, and the dead daemon then waited 5m43s for the rolling window.
+    fleet.states[123] = "alive"
+    fleet.kills_complete = False
+    fleet.step()
+    fleet.step(recovery.HANG_SECONDS)
+    assert fleet.terminated == [123]
+    for _ in range(150):  # Five minutes of polls with the kill still pending.
+        fleet.step(recovery.POLL_SECONDS)
+    assert fleet.terminated == [123], "the kill is issued once; it is already final"
+    assert not fleet.spawned, "a live daemon still holds the port; nothing replaces it yet"
+    assert "state=termination_pending pid=123" in fleet.ledger()
+    assert "retry_limit" not in fleet.ledger()
+    fleet.states[123] = "gone"
+    fleet.step(recovery.POLL_SECONDS)
+    assert fleet.spawned == [456], "replaced on the first poll after it exits"
+    waited = 151 * recovery.POLL_SECONDS
+    assert f"termination of pid 123 completed {waited:.1f}s after" in fleet.ledger()
 
 
 def test_corrupt_record_does_not_authorize_recovery(fleet: Fleet) -> None:

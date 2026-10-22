@@ -15,6 +15,8 @@ A Python sampler checks it every 250 ms and captures bounded stacks after three 
 `sys._current_frames()` supplies owned frame references; automatic `faulthandler.dump_traceback_later()` traversal is forbidden because its asynchronous native frame reads can crash the interpreter.
 The ordinary fatal-crash handler remains enabled.
 The sampler writes at most 100 threads and 40 frames per thread to `loop-stalls.log`, with one predecessor and rotation at 4 MiB, including during a persistent stall.
+The watched loop thread is always written first and the cap applies to the rest; each capture states `# threads=N listed=M`, so a truncated dump says so.
+`sys._current_frames()` lists the newest thread first, so a cap applied to it in that order drops the oldest threads, the loop's among them: with about 105 daemon threads, no dump of either 2026-10-22 hang contained the main thread.
 File writes, rotation, explanation, and sampler shutdown run outside the event loop.
 
 A native call holding the GIL prevents Python sampling too.
@@ -92,13 +94,17 @@ A pool that has stopped serving the work behind it is now reported in `daemon.lo
 | Unknown process identity, local PTY allocation, or unavailable/changed supervisor | Refuse forced termination. |
 | Intentional quit or live redeploy | Suppress automatic recovery. |
 | Planned detach/restart | Allow five minutes for the handoff; recover a failed handoff afterward under the ordinary protection gates. |
-| Three attempted replacements within ten minutes | Suppress further attempts until the rolling window permits another. |
+| Terminated daemon still alive | Wait without re-issuing the kill or spending the budget (`termination_pending`), and launch the replacement on the first poll after the process exits; the ledger records how long the exit took. |
+| Three replacements launched within ten minutes | Suppress further attempts until the rolling window permits another. Only a launch counts: a kill still waiting on the OS is not a replacement. |
 | Replacement healthy for two minutes | Forget the attempts that produced it; the budget is for crash loops, not for the next outage. |
 
 Thresholds exclude probe time and replacement startup time.
+`TerminateProcess` is asynchronous: a process with a thread inside an uncancellable kernel wait goes on existing until that wait ends.
+On 2026-10-22 a hung daemon took 4m15s to exit after its kill; re-issuing the kill on every poll had spent all three attempts in 31 seconds, so the dead daemon then waited a further 5m43s for the window to reopen.
 A spawned replacement is tracked before it publishes its startup record, preventing duplicate launches during a slow process start.
 A daemon that starts while the record names a live generation with no planned handoff does not take the record (`register_daemon` returns `False` and says so in `lifecycle.log`): it is a duplicate about to lose its port bind, and taking the record made the monitor restart a daemon that was fine.
 Manual tray restart pauses and fences the monitor; tray Quit stops it before requesting shutdown.
+A tray restart ledgers its request, which path it took (detach a serving daemon, or start one when none answers), and any failure, which it also shows; the tray swallows an exception raised by a menu action, so without the ledger a click that did nothing leaves no trace.
 Recovery never invokes supervisor shutdown, kills a process tree, or rebuilds a bundle.
 It never signals the terminal gateway either (`terminal-gateway.md`): the record names it, `terminate_generation` refuses a record whose daemon pid is the gateway's or the supervisor's, and the replacement daemon finds the same gateway and connects to it, so terminals keep echoing through the recovery.
 The one thing that ends a running gateway outside a quit or a replacement is the daemon's own hung-gateway rule (`terminal-gateway.md`, "A hung gateway"), and it is built the other way round from this monitor's: it acts only after the gateway has stayed silent to pings timed on a daemon loop that was running, *and* to its own `/health` asked from a thread, so a stalled daemon can never end a healthy gateway.

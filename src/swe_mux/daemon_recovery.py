@@ -313,9 +313,18 @@ class DaemonRecovery:
         self.wall_clock = wall_clock
         self._generation: tuple[Any, Any] | None = None
         self._missed_since: float | None = None
+        #: When each replacement was spawned. Only spawns count: the budget exists
+        #: to stop a crash loop of replacements, and a kill still waiting for the OS
+        #: is not a replacement (see `_terminating`).
         self._attempts: deque[float] = deque()
         self._last_state: tuple[str, Any] | None = None
         self._pending: dict[str, Any] | None = None
+        #: The generation this monitor terminated that has not exited yet, and when
+        #: the termination was issued. `TerminateProcess` is asynchronous: a daemon
+        #: with a thread inside an uncancellable kernel wait goes on existing until
+        #: that wait ends (2026-10-22: 4m15s, then a dead daemon left unreplaced for
+        #: 5m43s because every re-issued kill had been spent from the budget).
+        self._terminating: dict[str, Any] | None = None
         # When the current run of successful probes began; None while probes
         # fail. A replacement that stays healthy past `RECOVERED_STABLE_SECONDS`
         # clears the attempts that produced it.
@@ -364,6 +373,7 @@ class DaemonRecovery:
         if self.health():
             self._missed_since = None
             self._pending = None
+            self._terminating = None
             if self._healthy_since is None:
                 self._healthy_since = now
             elif self._attempts and now - self._healthy_since >= RECOVERED_STABLE_SECONDS:
@@ -408,6 +418,22 @@ class DaemonRecovery:
             if state == "unknown":
                 self._state("identity_unavailable", pid)
                 return
+            terminating = self._terminating
+            if terminating is not None:
+                if (terminating["pid"], terminating["created_at"]) != generation:
+                    self._terminating = None  # The record has moved on to a successor.
+                elif state == "alive":
+                    # Issued once and never re-issued: the kill is already final, and
+                    # the replacement waits only for the OS to finish it.
+                    self._state("termination_pending", pid)
+                    return
+                else:
+                    ledger(
+                        self.data_dir,
+                        f"daemon_recovery termination of pid {pid} completed "
+                        f"{now - terminating['issued_at']:.1f}s after it was issued",
+                    )
+                    self._terminating = None
             if state == "alive" and record.get("ready") is not True:
                 self._state("starting", pid)
                 return  # Slow startup/maintenance is never force-terminated.
@@ -446,13 +472,18 @@ class DaemonRecovery:
             # The shared lock excludes local PTY creation and planned handoffs.
             if self.stop.is_set() or self.pause.is_set() or self._redeploying() or self.health():
                 return
-            self._attempts.append(now)
             self._state("restarting_hung" if state == "alive" else "restarting_dead", pid)
             if state == "alive" and not terminate_generation(record):
+                self._terminating = {
+                    "pid": pid,
+                    "created_at": record.get("created_at"),
+                    "issued_at": now,
+                }
                 self._state("termination_pending", pid)
                 return
             if self.stop.is_set() or self.pause.is_set() or self._redeploying():
                 return
+            self._attempts.append(now)
             self._pending = self.spawn()
             self._missed_since = now
             self._state("replacement_spawned", pid)

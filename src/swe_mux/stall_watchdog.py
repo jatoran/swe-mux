@@ -931,9 +931,17 @@ class StallWatchdog:
         marks = parked_threads()
         frames = sys._current_frames()
         try:
-            for ident, frame in list(frames.items())[:MAX_THREADS]:
-                if ident == threading.get_ident():
-                    continue
+            # `sys._current_frames()` lists the newest thread first, so the loop's
+            # thread - among the oldest - is exactly the one a bare cap drops. With
+            # ~105 daemon threads it was missing from every dump of the 2026-10-22
+            # hangs (`main=-`). The watched thread goes first; the rest keep order.
+            watched = self._watched_ident
+            own = threading.get_ident()
+            order = sorted((ident for ident in frames if ident != own), key=lambda i: i != watched)
+            listed = order[:MAX_THREADS]
+            lines.append(f"# threads={len(order)} listed={len(listed)}")
+            for ident in listed:
+                frame = frames[ident]
                 reason = marks.get(ident)
                 tag = f" [parked:{reason}]" if reason else ""
                 lines.append(f"Thread 0x{ident:08x}{tag} (most recent call first):")
