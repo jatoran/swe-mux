@@ -83,6 +83,14 @@ export function budgetLine(budget: AttentionBudget): string {
   return `${budget.used}/${budget.daily_budget} interrupts today · ${budget.burst_used}/${budget.hourly_cap} this hour`
 }
 
+/** What the counter does not count, drawn as visible text under it. A counter of
+ *  interrupts beside a list of waiting prompts reads as though each prompt spends one,
+ *  and a hover title cannot answer that on a phone. Only `interrupt_now` takes a slot:
+ *  cheap-blocking work routes to the next breakpoint before the budget is consulted,
+ *  and a session's `awaiting` status belongs to status detection, which no budget
+ *  state reaches. */
+export const BUDGET_NOTE = 'Permission prompts and anything else quick to resolve never count as interrupts, however many are waiting, and a session waiting on you shows as awaiting even with the budget spent.'
+
 export const fetchAttentionInbox = () => api<AttentionInbox>('GET', '/api/attention/inbox')
 
 export const sendAttentionFeedback = (itemId: string, action: 'acted' | 'dismissed') =>

@@ -58,6 +58,17 @@ Anything short of that is demoted with an explicit reason.
 `attention_daily_interrupt_budget` (default 4) bounds interruptions per calendar day, counted per incident.
 `attention_hourly_interrupt_cap` (default 2) is only a burst limiter beneath it: an hourly cap on its own silently authorizes 8 to 16 a day, which is already fatigue territory.
 
+Only an `interrupt_now` incident spends either counter.
+Cheap-blocking work routes to `next_breakpoint` before the budget is consulted, so a pending permission prompt never takes a slot however many are waiting.
+The budget also never reaches a session's own `awaiting` status, which belongs to status detection (`status-detection.md`): ranking produces no session writes, so a spent budget hides no session that is waiting on the human.
+
+The surface states both facts under the counter, as visible text (`BUDGET_NOTE` in `frontend/src/attention.ts`):
+
+> Permission prompts and anything else quick to resolve never count as interrupts, however many are waiting, and a session waiting on you shows as awaiting even with the budget spent.
+
+A counter of interrupts drawn beside a list of waiting prompts reads as though each prompt spends one.
+It is text rather than a hover title because a phone cannot hover.
+
 An incident that cannot take a slot is still recorded, still ranked, and still readable, carrying a `suppressed_reason`:
 
 | Reason | Meaning |

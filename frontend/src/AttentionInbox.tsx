@@ -1,6 +1,6 @@
 // The ranked half of the Alerts tab: which of N sessions actually needs you.
 //
-// Three rules shape this surface and are easy to lose in a redesign:
+// Four rules shape this surface and are easy to lose in a redesign:
 //
 // - The channels are drawn as separate groups, never as one score-sorted list.
 //   Merging cheap-blocking work (answer a prompt) with expensive-blocking work
@@ -9,6 +9,9 @@
 //   user cannot see is indistinguishable from a detector that silently broke.
 // - Rationale is evidence-first. The narration, when it exists at all, is drawn
 //   under the deterministic summary rather than in place of it.
+// - The budget counter says, in visible text, what it never counts. A counter of
+//   interrupts beside waiting permission prompts reads as though each prompt
+//   spends one, and a hover title is no answer on a phone.
 //
 // Nothing here is pushed. This is a surface you open; the daemon holds no push
 // route for ranked items.
@@ -21,7 +24,7 @@ import {
 } from './projectAutomations'
 import type { Project } from './types'
 import {
-  CHANNEL_HINTS, CHANNEL_LABELS, CHANNEL_ORDER,
+  BUDGET_NOTE, CHANNEL_HINTS, CHANNEL_LABELS, CHANNEL_ORDER,
   budgetLine, decideAttentionRule, fanoutHeadline, fetchAttentionInbox,
   sendAttentionFeedback, suppressedLabel,
   type AttentionChannel, type AttentionInbox as InboxData, type AttentionItem,
@@ -77,7 +80,8 @@ export function AttentionInbox({onOpenSession,project,visibleChannels}:{
 
   return <section class="attention-inbox">
     <p class="attention-fanout" aria-live="polite">{fanoutHeadline(data.fanout)}</p>
-    <p class="attention-budget">{budgetLine(data.budget)}{data.resumption_lag.mean_seconds!==null?` · returning to interrupted work takes you ${Math.round(data.resumption_lag.mean_seconds)}s on average`:''}</p>
+    <p class="attention-budget">{budgetLine(data.budget)}{data.resumption_lag.mean_seconds!==null?` · returning to interrupted work takes you ${Math.round(data.resumption_lag.mean_seconds)}s on average`:''}
+      <span class="attention-budget-note">{BUDGET_NOTE}</span></p>
     {error&&<p class="drawer-status">{error}</p>}
     {data.rules.filter(rule=>rule.state==='proposed'&&rule.total>0).map(rule=><article class="attention-rule">
       <div><strong>Rule suggestion</strong><span>{rule.statement}</span></div>

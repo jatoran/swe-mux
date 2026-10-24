@@ -5425,6 +5425,8 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .alerts-view-tabs{position:sticky;top:0;z-index:6;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));border-bottom:1px solid var(--line);background:var(--bg)}.alerts-view-tabs>button{min-height:34px;border:0;border-bottom:2px solid transparent;background:transparent;color:var(--muted);font:9px 'Cascadia Mono',Consolas,monospace}.alerts-view-tabs>button:hover{background:var(--panel2);color:var(--text)}.alerts-view-tabs>button.active{border-bottom-color:var(--green);background:color-mix(in srgb,var(--green) 7%,var(--panel));color:var(--text)}
 .attention-fanout{margin:0;color:var(--text);line-height:1.4}
 .attention-budget,.attention-rule-active{margin:0;color:var(--muted);font-size:9px;line-height:1.4}
+/* What the counter never counts: its own line under it, at the channel hints' size. */
+.attention-budget-note{display:block;margin-top:2px;font-size:8px}
 .attention-rule-active button{margin-left:6px;min-height:22px;padding:0 6px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit;cursor:pointer}
 .attention-rule{display:grid;gap:5px;padding:7px;border:1px solid var(--accent,var(--line));background:var(--panel2)}
 .attention-rule span{display:block;color:var(--muted);line-height:1.4}

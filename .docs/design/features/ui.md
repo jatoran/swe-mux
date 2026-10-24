@@ -3050,7 +3050,8 @@ The app-wide answer to "what is this", and the recovery path for the tour.
   continuation, the fixed point a fork is cut at, and what to say on arrival.
   The editor replaces the list rather than opening beside it, for the same width reason.
 - **Alerts** leads with ranked attention (`attention-ranking.md`): the fan-out headline, the
-  daily interrupt budget, incidents grouped by channel, any behaviour-mined rule awaiting an
+  daily interrupt budget with a line under it saying that permission prompts and other
+  cheap-blocking work never count against it, incidents grouped by channel, any behaviour-mined rule awaiting an
   explicit decision, and the count of what was held back and why. Ranking is the reading; the
   raw record list under it is how the decision is checked. It is one tab rather than two
   because a second app-wide icon would compete with the one that already exists for exactly

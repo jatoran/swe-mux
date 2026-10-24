@@ -100,9 +100,9 @@ The one-shot Approve lives on the command rail (`TerminalPane.tsx`) and routes t
 
 `attention.ts`, `AttentionInbox.tsx`, the head of `Notifications.tsx`
 
-`attention.ts` is the JSX-free half: the daemon shapes, the fixed channel order, the per-channel copy, the suppression-reason vocabulary, and the fan-out and budget headline builders, so the ordering and labelling rules are testable under the node runner.
+`attention.ts` is the JSX-free half: the daemon shapes, the fixed channel order, the per-channel copy, the suppression-reason vocabulary, the fan-out and budget headline builders, and `BUDGET_NOTE`, the line drawn under the budget counter saying what it never counts, so the ordering and labelling rules are testable under the node runner.
 `AttentionInbox.tsx` renders channels as separate groups rather than one score-sorted list, because merging cheap-blocking with expensive-blocking work is the failure mode the whole feature exists to avoid.
-It always draws the suppressed count, the budget line, and any mined rule awaiting an explicit accept or reject.
+It always draws the suppressed count, the budget line with `BUDGET_NOTE` as visible text inside it (never a hover title, which a phone cannot reach), and any mined rule awaiting an explicit accept or reject.
 Narration is drawn as an aside under the deterministic summary, never in place of it, so a narration failure reads as a missing aside.
 It leads the Alerts tab and holds no push or subscription path of its own.
 
