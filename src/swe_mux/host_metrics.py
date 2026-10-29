@@ -19,6 +19,17 @@ cheap. `time.pthread_getcpuclockid` is not used: its documentation warns that an
 expired thread id is undefined behaviour up to a segfault, and a thread can exit
 between being listed and being read.
 
+psutil's thread ids are only usable where they are the ids `threading` reports, which
+is true on Linux (they are TIDs) and not on macOS, where psutil identifies a thread by
+the handle `proc_pidinfo` lists it under rather than by the thread id
+`pthread_threadid_np` returns. There a reader matched nothing,
+said it was supported, and every stall explanation came back with no threads in it -
+which the macOS CI leg found on 2026-10-29, the first time it ran these tests. So
+support is decided by reading the calling thread's own id back, not by platform.
+Reading macOS threads properly would mean `task_threads` plus `thread_info`'s
+identifier and basic flavours over ctypes; until that exists, the watchdog falls back
+to what it does without per-thread CPU.
+
 Host memory and process count are read the opposite way on Windows, through ctypes
 calls that *release* the GIL, because psutil's equivalents do not: measured on the
 operator's host with ~1,200 processes, `psutil.virtual_memory()` held the GIL for
@@ -31,6 +42,7 @@ from __future__ import annotations
 import logging
 import os
 import sys
+import threading
 from collections.abc import Mapping
 from typing import Any, Protocol
 
@@ -64,11 +76,16 @@ class ThreadCpuReader:
             try:
                 import psutil
 
-                self._psutil_process = psutil.Process()
-                self._psutil_process.threads()
-                self.supported = True
+                process = psutil.Process()
+                listed = {int(item.id) for item in process.threads()}
             except Exception as exc:  # noqa: BLE001 - optional diagnostics only
                 log.warning("thread_cpu unavailable error=%s", exc)
+            else:
+                if threading.get_native_id() in listed:
+                    self._psutil_process = process
+                    self.supported = True
+                else:
+                    log.info("thread_cpu unavailable: psutil's thread ids are not native ids here")
 
     def read(self, threads: Mapping[int, int]) -> dict[int, float]:
         """CPU seconds (user plus kernel) for each ``native_id -> generation`` given.

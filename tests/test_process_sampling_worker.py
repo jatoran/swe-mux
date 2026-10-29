@@ -412,6 +412,18 @@ def _sleeper_running(tree: Tree) -> bool:
     return False
 
 
+def _uss_readable_here(pid: int) -> bool:
+    """Whether this host lets this test process read ``pid``'s unique memory at all.
+
+    The oracle for the worker's answer, taken from the environment rather than assumed
+    of it: the worker runs as the same user, so it can read exactly what this can.
+    """
+    try:
+        return int(psutil.Process(pid).memory_full_info().uss) > 0
+    except (AttributeError, psutil.Error, OSError):
+        return False
+
+
 async def settled_tree(tree: Tree) -> set[int]:
     """The session's pids once the whole tree has started."""
     await until(lambda: _sleeper_running(tree), seconds=30, what="the session tree started")
@@ -448,7 +460,12 @@ async def test_a_pass_in_the_worker_attributes_what_a_pass_here_does(tmp_path: P
             assert set(live_session_rows(there)) == expected
 
             usage = await there._unique_memory([tree.root])
-            assert usage.get(tree.root, 0) > 0, "USS is read in the worker"
+            if _uss_readable_here(tree.root):
+                assert usage.get(tree.root, 0) > 0, "USS is read in the worker"
+            else:
+                # A macOS runner is not root, and reading another process's USS there
+                # needs task_for_pid: unreadable is absent, never a zero.
+                assert tree.root not in usage, usage
 
 
 async def test_actions_run_in_the_worker_and_a_root_is_interrupted_through_its_pty(

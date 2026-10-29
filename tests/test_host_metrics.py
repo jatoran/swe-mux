@@ -5,15 +5,32 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import threading
 
 import pytest
 
 from swe_mux.host_metrics import (
+    ThreadCpuReader,
     host_memory_percent,
     host_process_count,
     process_exited,
     process_start_stamp,
 )
+
+
+def test_a_reader_that_says_it_is_supported_reads_the_calling_thread() -> None:
+    # The macOS CI leg's lesson: a reader that claimed support while its ids could never
+    # match a native id failed only downstream, as stall explanations naming no thread.
+    reader = ThreadCpuReader()
+    try:
+        if not reader.supported:
+            pytest.skip("per-thread CPU time is not readable on this host")
+        native = threading.get_native_id()
+        seconds = reader.read({native: id(threading.current_thread())})
+        assert native in seconds, "a supported reader reads the thread that asked"
+        assert seconds[native] >= 0.0
+    finally:
+        reader.close()
 
 
 def test_a_process_start_stamp_identifies_one_process() -> None:
