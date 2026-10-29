@@ -402,13 +402,34 @@ def _sleeper_running(tree: Tree) -> bool:
     Under a Windows virtual environment every `python.exe` here is a launcher with
     the real interpreter as its child, so the tree is two levels deeper than the
     script reads and is still growing well after the root exists.
+
+    A launcher has the same command line as the interpreter it starts and is
+    childless until it starts it, so "a childless sleeper" alone also matched the
+    innermost launcher in that moment - and the tree was read one process short,
+    which a Windows CI run caught on 2026-10-29 as a live row the test had not
+    counted. Where launchers are in play (the root's own child repeats the root's
+    arguments), the sleeper only counts once its parent repeats its arguments too.
+    Arguments, not the whole command line: argv[0] is the launcher's path in one and
+    the base interpreter's in the other.
     """
-    for child in psutil.Process(tree.root).children(recursive=True):
+    try:
+        root = psutil.Process(tree.root)
+        root_arguments = root.cmdline()[1:]
+        launched = any(child.cmdline()[1:] == root_arguments for child in root.children())
+        descendants = root.children(recursive=True)
+    except psutil.Error:
+        return False
+    for child in descendants:
         with contextlib.suppress(psutil.Error):
-            command = " ".join(child.cmdline())
-            if "time.sleep(300)" in command and "subprocess" not in command:
-                if not child.children():
-                    return True
+            arguments = child.cmdline()[1:]
+            joined = " ".join(arguments)
+            if "time.sleep(300)" not in joined or "subprocess" in joined or child.children():
+                continue
+            if not launched:
+                return True
+            parent = child.parent()
+            if parent is not None and parent.cmdline()[1:] == arguments:
+                return True
     return False
 
 
