@@ -1184,7 +1184,7 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
         <div class="head"><span class="n">#</span><h2>Previews</h2><span class="fill"></span></div>
         <p class="prose">swe-mux notices what your sessions started and what each one is listening on. A local development server can be opened as a <b>Preview</b> tab, and it is proxied through the daemon's own URL, hot module reload included - so a phone reaches it without ever needing a raw port on the host, and without a second thing to expose on your tailnet.</p>
         <p class="prose">A static document in the checkout can be previewed the same way, under a sandbox policy, which is how you read a built HTML report without leaving the workspace.</p>
-        <p class="note"><b>swe-mux finds hung processes; it does not kill them.</b> A suspected orphan is surfaced with what it is and what started it. Terminating it stays an explicit act you take.</p>
+        <p class="note"><b>swe-mux finds the processes a session left behind; it does not kill them.</b> A process still running after its session ended is surfaced with what it is and what started it. Terminating it stays an explicit act you take.</p>
       </div>
       <div class="docsec" id="prompt-templates">
         <div class="head"><span class="n">#</span><h2>Prompt templates</h2><span class="fill"></span></div>

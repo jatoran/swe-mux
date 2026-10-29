@@ -11,7 +11,7 @@
         projects change weekly. "Not described in the sources checked" is honest and
         checkable; a guess is neither, and one wrong cell discredits the other ninety.
      3. **swe-mux loses rows, on purpose.** A table where the author's own product has
-        a full column of ticks is read as marketing and dismissed whole. Four rows are
+        a full column of ticks is read as marketing and dismissed whole. Three rows are
         marked as losses and they are marked in the data, not in the prose, so removing
         one is a deliberate edit rather than a quiet omission. If a future edit leaves
         no losses, the page has stopped being worth publishing.
@@ -48,23 +48,22 @@
       comparison table hides. Read this before the matrix.</p>
       <ul class="flat">
         <li><b>swe-mux</b><span>A local daemon that owns pseudoterminals, with a browser
-        UI and a phone client in front of it, plus an evidence layer over what the agents
-        did. Windows-first, Apache-2.0.</span></li>
-        <li><b>Herdr</b><span>A single Rust binary that multiplexes terminals inside your
-        existing terminal and reads agent state into a sidebar. Apache-2.0.</span></li>
+        UI, a Windows desktop app and a phone web app in front of it, built around knowing
+        which agent needs you and working from the phone. Apache-2.0.</span></li>
+        <li><b>Orca</b><span>A desktop agent development environment with an editor, a
+        built-in browser, native iOS and Android apps, and a worktree per task. MIT, and
+        by far the largest project here.</span></li>
+        <li><b>Herdr</b><span>Two products that do not share agents: the Herdr TUI, a Rust
+        binary that multiplexes terminals inside your existing terminal and reads agent
+        state into a sidebar, and the newer Herdr app, a native window over herdr-core.
+        Apache-2.0. Cells describe the TUI unless they say otherwise.</span></li>
         <li><b>tmux</b><span>The terminal multiplexer everything in this category is
         measured against. It is here as the baseline, not as a competitor: it predates
         coding agents by twenty years and is not trying to understand them.</span></li>
-        <li><b>Orca</b><span>A desktop agent development environment with an editor, a
-        built-in browser, mobile apps, and a worktree per task. MIT.</span></li>
-        <li><b>Conductor</b><span>A Mac app that runs parallel Claude Code, Codex, and
-        Cursor agents in isolated git worktrees, with a hosted cloud tier.</span></li>
-        <li><b>Superset</b><span>A local-first desktop workspace for orchestrating any
-        CLI agent, one git worktree per task, aiming at very large agent counts.
-        Source-available under the Elastic License.</span></li>
-        <li><b>Warp</b><span>A terminal, an agent CLI, and cloud agent infrastructure.
-        The client is open source; the platform around it is a paid service.</span></li>
       </ul>
+      <p class="note">Until 2026-10-29 this page also covered Conductor, Superset and Warp.
+      Their cells had not been re-read since August, so they were taken out rather than
+      left standing.</p>
     </div>
 
     <!--COMPARISON-TABLE-->
@@ -74,18 +73,19 @@
       <p class="prose">Three things the matrix cannot say, and they matter more than most
       of the rows.</p>
       <ul class="flat">
-        <li><b>A phone client is not a phone client</b><span>Orca ships iOS and Android
-        apps and calls them companions; swe-mux's claim is parity, meaning nothing
-        functional exists on the desktop and not on the phone. Those are different
-        products in the same cell, and the row cannot tell you which one you want.</span></li>
+        <li><b>A phone client is not a phone client</b><span>Orca ships native iOS and
+        Android apps and its docs call them a read-mostly view of running agents and a
+        remote control for the desktop; swe-mux's claim is parity, the same application on
+        both, which is a web app rather than a native one. Those are different products in
+        the same cell, and the row cannot tell you which one you want.</span></li>
         <li><b>Breadth is not depth</b><span>Orca and Herdr recognize more agent CLIs
         than swe-mux does, and if the CLI you use is on their list and not in swe-mux's
         registry, that is the row that decides it. Every CLI still runs in swe-mux as an
         ordinary terminal program; what it does not get is the layer on top.</span></li>
         <li><b>Not built is not the same as not yet built</b><span>swe-mux has no hosted
-        runners and no team features, and neither is planned rather than pending: there is
-        no swe-mux account, server or relay by design. If you want either, two of the tools
-        above have them today.</span></li>
+        runners, no relay and no team features, and none of them is pending: there is no
+        swe-mux account or server by design. If you need a relay to reach your machine,
+        Orca has one in beta.</span></li>
       </ul>
       <p class="note">Nothing on this page is a benchmark. No tool here was run
       side by side against another, and none of the rows measure speed, reliability, or

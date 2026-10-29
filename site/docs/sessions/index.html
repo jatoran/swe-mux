@@ -1170,8 +1170,8 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
       </div>
       <div class="docsec" id="sessions-that-outlive-the-application">
         <div class="head"><span class="n">#</span><h2>Sessions that outlive the application</h2><span class="fill"></span></div>
-        <p class="prose">A supervisor process, separate from the daemon and from the UI, can hold every pseudoterminal. With it on, restarting the daemon or rebuilding the desktop app leaves the agents working, and reconnecting replays only the bytes you missed rather than the whole scrollback.</p>
-        <p class="note">It ships <b>off</b>. Turn it on in Settings, Terminals. With it off, in-process spawning is the fallback and a daemon restart reaps every session - which is why the restart endpoint refuses outright unless it is forced.</p>
+        <p class="prose">A supervisor process, separate from the daemon and from the UI, holds every pseudoterminal. Restarting the daemon or rebuilding the desktop app leaves the agents working, and reconnecting replays only the bytes you missed rather than the whole scrollback. A terminal gateway, a second small process, carries your typing to the terminals while the daemon is busy or restarting.</p>
+        <p class="note">Both are <b>on</b> by default. Turning the supervisor off in Settings, Terminals makes in-process spawning the fallback, and then a daemon restart reaps every session - which is why the restart endpoint refuses outright unless it is forced.</p>
       </div>
       <div class="docsec" id="what-survives-a-crash-is-a-separate-mechanism">
         <div class="head"><span class="n">#</span><h2>What survives a crash is a separate mechanism</h2><span class="fill"></span></div>

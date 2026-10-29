@@ -1096,7 +1096,7 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
         projects change weekly. "Not described in the sources checked" is honest and
         checkable; a guess is neither, and one wrong cell discredits the other ninety.
      3. **swe-mux loses rows, on purpose.** A table where the author's own product has
-        a full column of ticks is read as marketing and dismissed whole. Four rows are
+        a full column of ticks is read as marketing and dismissed whole. Three rows are
         marked as losses and they are marked in the data, not in the prose, so removing
         one is a deliberate edit rather than a quiet omission. If a future edit leaves
         no losses, the page has stopped being worth publishing.
@@ -1133,27 +1133,26 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
       comparison table hides. Read this before the matrix.</p>
       <ul class="flat">
         <li><b>swe-mux</b><span>A local daemon that owns pseudoterminals, with a browser
-        UI and a phone client in front of it, plus an evidence layer over what the agents
-        did. Windows-first, Apache-2.0.</span></li>
-        <li><b>Herdr</b><span>A single Rust binary that multiplexes terminals inside your
-        existing terminal and reads agent state into a sidebar. Apache-2.0.</span></li>
+        UI, a Windows desktop app and a phone web app in front of it, built around knowing
+        which agent needs you and working from the phone. Apache-2.0.</span></li>
+        <li><b>Orca</b><span>A desktop agent development environment with an editor, a
+        built-in browser, native iOS and Android apps, and a worktree per task. MIT, and
+        by far the largest project here.</span></li>
+        <li><b>Herdr</b><span>Two products that do not share agents: the Herdr TUI, a Rust
+        binary that multiplexes terminals inside your existing terminal and reads agent
+        state into a sidebar, and the newer Herdr app, a native window over herdr-core.
+        Apache-2.0. Cells describe the TUI unless they say otherwise.</span></li>
         <li><b>tmux</b><span>The terminal multiplexer everything in this category is
         measured against. It is here as the baseline, not as a competitor: it predates
         coding agents by twenty years and is not trying to understand them.</span></li>
-        <li><b>Orca</b><span>A desktop agent development environment with an editor, a
-        built-in browser, mobile apps, and a worktree per task. MIT.</span></li>
-        <li><b>Conductor</b><span>A Mac app that runs parallel Claude Code, Codex, and
-        Cursor agents in isolated git worktrees, with a hosted cloud tier.</span></li>
-        <li><b>Superset</b><span>A local-first desktop workspace for orchestrating any
-        CLI agent, one git worktree per task, aiming at very large agent counts.
-        Source-available under the Elastic License.</span></li>
-        <li><b>Warp</b><span>A terminal, an agent CLI, and cloud agent infrastructure.
-        The client is open source; the platform around it is a paid service.</span></li>
       </ul>
+      <p class="note">Until 2026-10-29 this page also covered Conductor, Superset and Warp.
+      Their cells had not been re-read since August, so they were taken out rather than
+      left standing.</p>
     </div>
 
     <div class="rel" id="matrix">
-      <div class="relhead"><h2>At a glance</h2><span class="when">sources read 2026-08-28</span><span class="fill"></span></div>
+      <div class="relhead"><h2>At a glance</h2><span class="when">sources read 2026-10-29</span><span class="fill"></span></div>
       <p class="prose">Markers only. Every one of them is a sentence with a source under it, in the section of the same name below, and a row label links straight there.</p>
       <div class="legend">
         <span><b class="v-yes">[x]</b> yes</span>
@@ -1163,21 +1162,24 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
       </div>
       <div class="tablewrap">
       <table class="cmp">
-        <thead><tr><th></th><th class="tool self">swe-mux</th><th class="tool">Herdr</th><th class="tool">tmux</th><th class="tool">Orca</th><th class="tool">Conductor</th><th class="tool">Superset</th><th class="tool">Warp</th></tr></thead>
+        <thead><tr><th></th><th class="tool self">swe-mux</th><th class="tool">Orca</th><th class="tool">Herdr</th><th class="tool">tmux</th></tr></thead>
         <tbody>
-        <tr><td><a href="#row-license">License</a></td><td class="c v-yes self" title="swe-mux: yes">[x]</td><td class="c v-yes" title="Herdr: yes">[x]</td><td class="c v-yes" title="tmux: yes">[x]</td><td class="c v-yes" title="Orca: yes">[x]</td><td class="c v-no" title="Conductor: no">[ ]</td><td class="c v-partial" title="Superset: partly">[~]</td><td class="c v-partial" title="Warp: partly">[~]</td></tr>
-        <tr><td><a href="#row-local">Runs entirely on hardware you control</a></td><td class="c v-yes self" title="swe-mux: yes">[x]</td><td class="c v-yes" title="Herdr: yes">[x]</td><td class="c v-yes" title="tmux: yes">[x]</td><td class="c v-yes" title="Orca: yes">[x]</td><td class="c v-partial" title="Conductor: partly">[~]</td><td class="c v-yes" title="Superset: yes">[x]</td><td class="c v-partial" title="Warp: partly">[~]</td></tr>
-        <tr><td><a href="#row-windows">Windows as a first-class host</a></td><td class="c v-yes self" title="swe-mux: yes">[x]</td><td class="c v-yes" title="Herdr: yes">[x]</td><td class="c v-no" title="tmux: no">[ ]</td><td class="c v-yes" title="Orca: yes">[x]</td><td class="c v-no" title="Conductor: no">[ ]</td><td class="c v-no" title="Superset: no">[ ]</td><td class="c v-yes" title="Warp: yes">[x]</td></tr>
-        <tr><td><a href="#row-macos">macOS as a first-class host</a></td><td class="c v-partial self" title="swe-mux: partly">[~]</td><td class="c v-yes" title="Herdr: yes">[x]</td><td class="c v-yes" title="tmux: yes">[x]</td><td class="c v-yes" title="Orca: yes">[x]</td><td class="c v-yes" title="Conductor: yes">[x]</td><td class="c v-yes" title="Superset: yes">[x]</td><td class="c v-yes" title="Warp: yes">[x]</td></tr>
-        <tr><td><a href="#row-persistence">Agent processes outlive the client</a></td><td class="c v-yes self" title="swe-mux: yes">[x]</td><td class="c v-yes" title="Herdr: yes">[x]</td><td class="c v-yes" title="tmux: yes">[x]</td><td class="c v-unclear" title="Orca: unclear">[?]</td><td class="c v-unclear" title="Conductor: unclear">[?]</td><td class="c v-yes" title="Superset: yes">[x]</td><td class="c v-unclear" title="Warp: unclear">[?]</td></tr>
-        <tr><td><a href="#row-worktrees">Per-agent git worktree isolation</a></td><td class="c v-yes self" title="swe-mux: yes">[x]</td><td class="c v-unclear" title="Herdr: unclear">[?]</td><td class="c v-no" title="tmux: no">[ ]</td><td class="c v-yes" title="Orca: yes">[x]</td><td class="c v-yes" title="Conductor: yes">[x]</td><td class="c v-yes" title="Superset: yes">[x]</td><td class="c v-unclear" title="Warp: unclear">[?]</td></tr>
-        <tr><td><a href="#row-harnesses">Breadth of recognized agent CLIs</a></td><td class="c v-partial self" title="swe-mux: partly">[~]</td><td class="c v-yes" title="Herdr: yes">[x]</td><td class="c v-no" title="tmux: no">[ ]</td><td class="c v-yes" title="Orca: yes">[x]</td><td class="c v-partial" title="Conductor: partly">[~]</td><td class="c v-yes" title="Superset: yes">[x]</td><td class="c v-partial" title="Warp: partly">[~]</td></tr>
-        <tr><td><a href="#row-phone">Phone client</a></td><td class="c v-yes self" title="swe-mux: yes">[x]</td><td class="c v-no" title="Herdr: no">[ ]</td><td class="c v-no" title="tmux: no">[ ]</td><td class="c v-yes" title="Orca: yes">[x]</td><td class="c v-no" title="Conductor: no">[ ]</td><td class="c v-unclear" title="Superset: unclear">[?]</td><td class="c v-unclear" title="Warp: unclear">[?]</td></tr>
-        <tr><td><a href="#row-voice">Voice control of the tool itself</a></td><td class="c v-yes self" title="swe-mux: yes">[x]</td><td class="c v-unclear" title="Herdr: unclear">[?]</td><td class="c v-no" title="tmux: no">[ ]</td><td class="c v-partial" title="Orca: partly">[~]</td><td class="c v-unclear" title="Conductor: unclear">[?]</td><td class="c v-unclear" title="Superset: unclear">[?]</td><td class="c v-unclear" title="Warp: unclear">[?]</td></tr>
-        <tr><td><a href="#row-evidence">Evidence about a run that is not the agent's own transcript</a></td><td class="c v-yes self" title="swe-mux: yes">[x]</td><td class="c v-partial" title="Herdr: partly">[~]</td><td class="c v-no" title="tmux: no">[ ]</td><td class="c v-unclear" title="Orca: unclear">[?]</td><td class="c v-unclear" title="Conductor: unclear">[?]</td><td class="c v-unclear" title="Superset: unclear">[?]</td><td class="c v-unclear" title="Warp: unclear">[?]</td></tr>
-        <tr><td><a href="#row-attention">Deciding which agent to look at next</a></td><td class="c v-yes self" title="swe-mux: yes">[x]</td><td class="c v-partial" title="Herdr: partly">[~]</td><td class="c v-no" title="tmux: no">[ ]</td><td class="c v-partial" title="Orca: partly">[~]</td><td class="c v-partial" title="Conductor: partly">[~]</td><td class="c v-partial" title="Superset: partly">[~]</td><td class="c v-unclear" title="Warp: unclear">[?]</td></tr>
-        <tr><td><a href="#row-cloud">Hosted runners the vendor operates</a></td><td class="c v-no self" title="swe-mux: no">[ ]</td><td class="c v-no" title="Herdr: no">[ ]</td><td class="c v-no" title="tmux: no">[ ]</td><td class="c v-no" title="Orca: no">[ ]</td><td class="c v-yes" title="Conductor: yes">[x]</td><td class="c v-no" title="Superset: no">[ ]</td><td class="c v-yes" title="Warp: yes">[x]</td></tr>
-        <tr><td><a href="#row-team">Teams, roles, and shared state</a></td><td class="c v-no self" title="swe-mux: no">[ ]</td><td class="c v-unclear" title="Herdr: unclear">[?]</td><td class="c v-partial" title="tmux: partly">[~]</td><td class="c v-unclear" title="Orca: unclear">[?]</td><td class="c v-yes" title="Conductor: yes">[x]</td><td class="c v-partial" title="Superset: partly">[~]</td><td class="c v-yes" title="Warp: yes">[x]</td></tr>
+        <tr><td><a href="#row-license">License</a></td><td class="c v-yes self" title="swe-mux: yes">[x]</td><td class="c v-yes" title="Orca: yes">[x]</td><td class="c v-yes" title="Herdr: yes">[x]</td><td class="c v-yes" title="tmux: yes">[x]</td></tr>
+        <tr><td><a href="#row-local">Runs on hardware you control, with nothing of the vendor's in the path</a></td><td class="c v-yes self" title="swe-mux: yes">[x]</td><td class="c v-partial" title="Orca: partly">[~]</td><td class="c v-yes" title="Herdr: yes">[x]</td><td class="c v-yes" title="tmux: yes">[x]</td></tr>
+        <tr><td><a href="#row-telemetry">No product telemetry</a></td><td class="c v-yes self" title="swe-mux: yes">[x]</td><td class="c v-no" title="Orca: no">[ ]</td><td class="c v-partial" title="Herdr: partly">[~]</td><td class="c v-yes" title="tmux: yes">[x]</td></tr>
+        <tr><td><a href="#row-windows">Windows as a first-class host</a></td><td class="c v-yes self" title="swe-mux: yes">[x]</td><td class="c v-yes" title="Orca: yes">[x]</td><td class="c v-yes" title="Herdr: yes">[x]</td><td class="c v-no" title="tmux: no">[ ]</td></tr>
+        <tr><td><a href="#row-macos">Desktop app on macOS and Linux</a></td><td class="c v-partial self" title="swe-mux: partly">[~]</td><td class="c v-yes" title="Orca: yes">[x]</td><td class="c v-yes" title="Herdr: yes">[x]</td><td class="c v-yes" title="tmux: yes">[x]</td></tr>
+        <tr><td><a href="#row-harnesses">Breadth of recognized agent CLIs</a></td><td class="c v-partial self" title="swe-mux: partly">[~]</td><td class="c v-yes" title="Orca: yes">[x]</td><td class="c v-yes" title="Herdr: yes">[x]</td><td class="c v-no" title="tmux: no">[ ]</td></tr>
+        <tr><td><a href="#row-status">How agent status is read</a></td><td class="c v-yes self" title="swe-mux: yes">[x]</td><td class="c v-yes" title="Orca: yes">[x]</td><td class="c v-yes" title="Herdr: yes">[x]</td><td class="c v-no" title="tmux: no">[ ]</td></tr>
+        <tr><td><a href="#row-phone">Phone client</a></td><td class="c v-yes self" title="swe-mux: yes">[x]</td><td class="c v-yes" title="Orca: yes">[x]</td><td class="c v-no" title="Herdr: no">[ ]</td><td class="c v-no" title="tmux: no">[ ]</td></tr>
+        <tr><td><a href="#row-preview">Your local dev server, opened on the phone</a></td><td class="c v-yes self" title="swe-mux: yes">[x]</td><td class="c v-yes" title="Orca: yes">[x]</td><td class="c v-no" title="Herdr: no">[ ]</td><td class="c v-no" title="tmux: no">[ ]</td></tr>
+        <tr><td><a href="#row-browser">A built-in browser with developer tools</a></td><td class="c v-partial self" title="swe-mux: partly">[~]</td><td class="c v-yes" title="Orca: yes">[x]</td><td class="c v-no" title="Herdr: no">[ ]</td><td class="c v-no" title="tmux: no">[ ]</td></tr>
+        <tr><td><a href="#row-quota">Subscription quota per account</a></td><td class="c v-yes self" title="swe-mux: yes">[x]</td><td class="c v-yes" title="Orca: yes">[x]</td><td class="c v-unclear" title="Herdr: unclear">[?]</td><td class="c v-no" title="tmux: no">[ ]</td></tr>
+        <tr><td><a href="#row-history">Search and resume past conversations</a></td><td class="c v-yes self" title="swe-mux: yes">[x]</td><td class="c v-yes" title="Orca: yes">[x]</td><td class="c v-partial" title="Herdr: partly">[~]</td><td class="c v-no" title="tmux: no">[ ]</td></tr>
+        <tr><td><a href="#row-environment">Per-session view of the tools, skills, MCP servers and hooks an agent can see</a></td><td class="c v-yes self" title="swe-mux: yes">[x]</td><td class="c v-unclear" title="Orca: unclear">[?]</td><td class="c v-unclear" title="Herdr: unclear">[?]</td><td class="c v-no" title="tmux: no">[ ]</td></tr>
+        <tr><td><a href="#row-processes">Processes a session left running</a></td><td class="c v-yes self" title="swe-mux: yes">[x]</td><td class="c v-partial" title="Orca: partly">[~]</td><td class="c v-unclear" title="Herdr: unclear">[?]</td><td class="c v-no" title="tmux: no">[ ]</td></tr>
+        <tr><td><a href="#row-persistence">Agent processes outlive the app</a></td><td class="c v-yes self" title="swe-mux: yes">[x]</td><td class="c v-yes" title="Orca: yes">[x]</td><td class="c v-yes" title="Herdr: yes">[x]</td><td class="c v-yes" title="tmux: yes">[x]</td></tr>
+        <tr><td><a href="#row-worktrees">Per-agent git worktree isolation</a></td><td class="c v-yes self" title="swe-mux: yes">[x]</td><td class="c v-yes" title="Orca: yes">[x]</td><td class="c v-unclear" title="Herdr: unclear">[?]</td><td class="c v-no" title="tmux: no">[ ]</td></tr>
         </tbody>
       </table>
       </div>
@@ -1187,156 +1189,144 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
       <div class="relhead"><h2>License</h2><span class="fill"></span></div>
       <ul class="cmprow">
         <li class="self"><span class="m v-yes" title="yes">[x]</span><span class="who">swe-mux</span><span class="d">Apache-2.0.<span class="cite">source: <a href="https://github.com/jatoran/swe-mux">swe-mux repository</a></span></span></li>
-        <li><span class="m v-yes" title="yes">[x]</span><span class="who">Herdr</span><span class="d">Apache-2.0.<span class="cite">source: <a href="https://herdr.dev/">herdr.dev</a></span></span></li>
-        <li><span class="m v-yes" title="yes">[x]</span><span class="who">tmux</span><span class="d">ISC.<span class="cite">source: <a href="https://github.com/tmux/tmux">tmux repository</a></span></span></li>
         <li><span class="m v-yes" title="yes">[x]</span><span class="who">Orca</span><span class="d">MIT.<span class="cite">source: <a href="https://github.com/stablyai/orca">Orca repository</a></span></span></li>
-        <li><span class="m v-no" title="no">[ ]</span><span class="who">Conductor</span><span class="d">Proprietary. Free tier, then paid plans.<span class="cite">source: <a href="https://conductor.build/pricing">Conductor pricing</a></span></span></li>
-        <li><span class="m v-partial" title="partly">[~]</span><span class="who">Superset</span><span class="d">Elastic License 2.0. Source-available, and its own site says not OSI-approved open source.<span class="cite">source: <a href="https://superset.sh/">superset.sh</a></span></span></li>
-        <li><span class="m v-partial" title="partly">[~]</span><span class="who">Warp</span><span class="d">The client is AGPL-3.0 with two MIT UI crates. The service around it is paid.<span class="cite">source: <a href="https://github.com/warpdotdev/Warp">Warp repository</a>, <a href="https://www.warp.dev/pricing">Warp pricing</a></span></span></li>
+        <li><span class="m v-yes" title="yes">[x]</span><span class="who">Herdr</span><span class="d">Apache-2.0, for the TUI, the app and herdr-core.<span class="cite">source: <a href="https://herdr.dev/">herdr.dev</a></span></span></li>
+        <li><span class="m v-yes" title="yes">[x]</span><span class="who">tmux</span><span class="d">ISC.<span class="cite">source: <a href="https://github.com/tmux/tmux">tmux repository</a></span></span></li>
       </ul>
     </div>
     <div class="rel" id="row-local">
-      <div class="relhead"><h2>Runs entirely on hardware you control</h2><span class="fill"></span></div>
+      <div class="relhead"><h2>Runs on hardware you control, with nothing of the vendor's in the path</h2><span class="fill"></span></div>
       <ul class="cmprow">
-        <li class="self"><span class="m v-yes" title="yes">[x]</span><span class="who">swe-mux</span><span class="d">Local app data, no swe-mux account and no vendor-operated backend or relay. Providers and optional integrations still use the network.<span class="cite">source: <a href="https://github.com/jatoran/swe-mux/blob/master/README.md">swe-mux README</a></span></span></li>
-        <li><span class="m v-yes" title="yes">[x]</span><span class="who">Herdr</span><span class="d">A local binary. Remote means your own SSH or your own rented box.<span class="cite">source: <a href="https://herdr.dev/">herdr.dev</a></span></span></li>
+        <li class="self"><span class="m v-yes" title="yes">[x]</span><span class="who">swe-mux</span><span class="d">Local app data, with no swe-mux account, server or relay. The phone reaches your machine over your own tailnet. Providers and optional integrations still use the network.<span class="cite">source: <a href="https://github.com/jatoran/swe-mux/blob/master/README.md">swe-mux README</a></span></span></li>
+        <li><span class="m v-partial" title="partly">[~]</span><span class="who">Orca</span><span class="d">A desktop app on your own machines and subscriptions. The phone pairs over LAN or Tailscale, or through Orca Relay, a hosted relay in beta that needs an Orca sign-in.<span class="cite">source: <a href="https://www.onorca.dev/docs/mobile">Orca mobile</a></span></span></li>
+        <li><span class="m v-yes" title="yes">[x]</span><span class="who">Herdr</span><span class="d">Local binaries. Other machines join over SSH.<span class="cite">source: <a href="https://herdr.dev/">herdr.dev</a></span></span></li>
         <li><span class="m v-yes" title="yes">[x]</span><span class="who">tmux</span><span class="d">A local process, and nothing else.<span class="cite">source: <a href="https://github.com/tmux/tmux">tmux repository</a></span></span></li>
-        <li><span class="m v-yes" title="yes">[x]</span><span class="who">Orca</span><span class="d">A desktop app on your own subscriptions, with SSH to your own VPS.<span class="cite">source: <a href="https://www.onorca.dev/">onorca.dev</a></span></span></li>
-        <li><span class="m v-partial" title="partly">[~]</span><span class="who">Conductor</span><span class="d">Local workspaces on the free plan; Conductor Cloud is a paid tier.<span class="cite">source: <a href="https://conductor.build/pricing">Conductor pricing</a></span></span></li>
-        <li><span class="m v-yes" title="yes">[x]</span><span class="who">Superset</span><span class="d">Local-first, and it states it never proxies model API calls.<span class="cite">source: <a href="https://superset.sh/">superset.sh</a></span></span></li>
-        <li><span class="m v-partial" title="partly">[~]</span><span class="who">Warp</span><span class="d">The terminal is local; Warp Drive, cloud agents, and conversation storage are account-backed.<span class="cite">source: <a href="https://www.warp.dev/pricing">Warp pricing</a></span></span></li>
+      </ul>
+    </div>
+    <div class="rel" id="row-telemetry">
+      <div class="relhead"><h2>No product telemetry</h2><span class="fill"></span></div>
+      <ul class="cmprow">
+        <li class="self"><span class="m v-yes" title="yes">[x]</span><span class="who">swe-mux</span><span class="d">None. The one request swe-mux itself makes is a daily update check, which the site counts as a constant label and an HTTP status, and which can be turned off.<span class="cite">source: <a href="https://swemux.dev/privacy/">swemux.dev privacy</a></span></span></li>
+        <li><span class="m v-no" title="no">[ ]</span><span class="who">Orca</span><span class="d">Anonymous usage events to PostHog Cloud (US), keyed to a random local ID. Settings, Privacy turns them off, as do DO_NOT_TRACK=1 and ORCA_TELEMETRY_DISABLED=1.<span class="cite">source: <a href="https://www.onorca.dev/docs/telemetry">Orca telemetry</a></span></span></li>
+        <li><span class="m v-partial" title="partly">[~]</span><span class="who">Herdr</span><span class="d">The app sends a daily report of versions and usage counts to telemetry.herdr.dev, on by default in release builds, never terminal text or prompts. Settings, Privacy turns it off.<span class="cite">source: <a href="https://github.com/herdrdev/herdr-app/blob/master/docs/security.md">Herdr app security</a></span></span></li>
+        <li><span class="m v-yes" title="yes">[x]</span><span class="who">tmux</span><span class="d">None.<span class="cite">source: <a href="https://github.com/tmux/tmux">tmux repository</a></span></span></li>
       </ul>
     </div>
     <div class="rel" id="row-windows">
       <div class="relhead"><h2>Windows as a first-class host</h2><span class="fill"></span></div>
       <ul class="cmprow">
-        <li class="self"><span class="m v-yes" title="yes">[x]</span><span class="who">swe-mux</span><span class="d">The proving platform, and the only one with a packaged desktop application.<span class="cite">source: <a href="https://github.com/jatoran/swe-mux/blob/master/README.md">swe-mux README</a></span></span></li>
-        <li><span class="m v-yes" title="yes">[x]</span><span class="who">Herdr</span><span class="d">Stable-channel Windows binaries; ARM64 runs the x86_64 build under emulation.<span class="cite">source: <a href="https://herdr.dev/docs/install">Herdr install docs</a></span></span></li>
-        <li><span class="m v-no" title="no">[ ]</span><span class="who">tmux</span><span class="d">OpenBSD, FreeBSD, NetBSD, Linux, macOS, Solaris. Windows only inside WSL or Cygwin.<span class="cite">source: <a href="https://github.com/tmux/tmux">tmux repository</a></span></span></li>
-        <li><span class="m v-yes" title="yes">[x]</span><span class="who">Orca</span><span class="d">Windows builds published.<span class="cite">source: <a href="https://www.onorca.dev/">onorca.dev</a></span></span></li>
-        <li><span class="m v-no" title="no">[ ]</span><span class="who">Conductor</span><span class="d">macOS only. Its own copy says 'on your Mac'.<span class="cite">source: <a href="https://conductor.build/">conductor.build</a></span></span></li>
-        <li><span class="m v-no" title="no">[ ]</span><span class="who">Superset</span><span class="d">macOS primary, an experimental Linux AppImage, Windows not yet available.<span class="cite">source: <a href="https://superset.sh/">superset.sh</a></span></span></li>
-        <li><span class="m v-yes" title="yes">[x]</span><span class="who">Warp</span><span class="d">Windows 10 and 11, x64 and ARM64.<span class="cite">source: <a href="https://www.warp.dev/">warp.dev</a></span></span></li>
+        <li class="self"><span class="m v-yes" title="yes">[x]</span><span class="who">swe-mux</span><span class="d">The proving platform, and the one with a native desktop app and tray.<span class="cite">source: <a href="https://github.com/jatoran/swe-mux/blob/master/README.md">swe-mux README</a></span></span></li>
+        <li><span class="m v-yes" title="yes">[x]</span><span class="who">Orca</span><span class="d">A Windows 10/11 x64 installer.<span class="cite">source: <a href="https://www.onorca.dev/download">Orca downloads</a></span></span></li>
+        <li><span class="m v-yes" title="yes">[x]</span><span class="who">Herdr</span><span class="d">Stable-channel Windows x86_64 binaries; ARM64 runs them under emulation.<span class="cite">source: <a href="https://herdr.dev/docs/install">Herdr install docs</a></span></span></li>
+        <li><span class="m v-no" title="no">[ ]</span><span class="who">tmux</span><span class="d">Windows only inside WSL or Cygwin.<span class="cite">source: <a href="https://github.com/tmux/tmux">tmux repository</a></span></span></li>
       </ul>
     </div>
     <div class="rel" id="row-macos">
-      <div class="relhead"><h2>macOS as a first-class host</h2><span class="loseflag">swe-mux loses</span><span class="fill"></span></div>
+      <div class="relhead"><h2>Desktop app on macOS and Linux</h2><span class="loseflag">swe-mux loses</span><span class="fill"></span></div>
       <ul class="cmprow">
-        <li class="self"><span class="m v-partial" title="partly">[~]</span><span class="who">swe-mux</span><span class="d">The wheel installs and the CLI runs, proven in CI. No CI job on any host has ever started a daemon, so the daemon on macOS is unproven, and there is no desktop application for it.<span class="cite">source: <a href="https://github.com/jatoran/swe-mux/blob/master/README.md">swe-mux README</a></span></span></li>
-        <li><span class="m v-yes" title="yes">[x]</span><span class="who">Herdr</span><span class="d">Stable-channel macOS binaries.<span class="cite">source: <a href="https://herdr.dev/docs/install">Herdr install docs</a></span></span></li>
-        <li><span class="m v-yes" title="yes">[x]</span><span class="who">tmux</span><span class="d">A listed platform.<span class="cite">source: <a href="https://github.com/tmux/tmux">tmux repository</a></span></span></li>
-        <li><span class="m v-yes" title="yes">[x]</span><span class="who">Orca</span><span class="d">ARM64 and Intel.<span class="cite">source: <a href="https://www.onorca.dev/">onorca.dev</a></span></span></li>
-        <li><span class="m v-yes" title="yes">[x]</span><span class="who">Conductor</span><span class="d">The only platform it ships on.<span class="cite">source: <a href="https://conductor.build/">conductor.build</a></span></span></li>
-        <li><span class="m v-yes" title="yes">[x]</span><span class="who">Superset</span><span class="d">The primary platform.<span class="cite">source: <a href="https://superset.sh/">superset.sh</a></span></span></li>
-        <li><span class="m v-yes" title="yes">[x]</span><span class="who">Warp</span><span class="d">macOS 10.14 and newer.<span class="cite">source: <a href="https://www.warp.dev/">warp.dev</a></span></span></li>
-      </ul>
-    </div>
-    <div class="rel" id="row-persistence">
-      <div class="relhead"><h2>Agent processes outlive the client</h2><span class="fill"></span></div>
-      <ul class="cmprow">
-        <li class="self"><span class="m v-yes" title="yes">[x]</span><span class="who">swe-mux</span><span class="d">A supervisor process separate from the daemon and the UI holds every terminal, so a daemon restart and a rebuild of the application itself leave the agents working. A reboot still ends the processes; the sessions stay readable afterwards.<span class="cite">source: <a href="https://github.com/jatoran/swe-mux/blob/master/README.md">swe-mux README</a></span></span></li>
-        <li><span class="m v-yes" title="yes">[x]</span><span class="who">Herdr</span><span class="d">Detach and reattach from any terminal or over SSH; its site states sessions survive restarts.<span class="cite">source: <a href="https://herdr.dev/">herdr.dev</a></span></span></li>
-        <li><span class="m v-yes" title="yes">[x]</span><span class="who">tmux</span><span class="d">The server keeps sessions after every client detaches. Not across a reboot.<span class="cite">source: <a href="https://github.com/tmux/tmux">tmux repository</a></span></span></li>
-        <li><span class="m v-unclear" title="unclear">[?]</span><span class="who">Orca</span><span class="d">Scrollback recovery after restart is documented; whether the process itself survives is not stated in the sources checked.<span class="cite">source: <a href="https://www.onorca.dev/">onorca.dev</a></span></span></li>
-        <li><span class="m v-unclear" title="unclear">[?]</span><span class="who">Conductor</span><span class="d">Not stated in the sources checked.<span class="cite">source: <a href="https://conductor.build/">conductor.build</a></span></span></li>
-        <li><span class="m v-yes" title="yes">[x]</span><span class="who">Superset</span><span class="d">'Persistent terminals: sessions survive app restarts.'<span class="cite">source: <a href="https://superset.sh/">superset.sh</a></span></span></li>
-        <li><span class="m v-unclear" title="unclear">[?]</span><span class="who">Warp</span><span class="d">Not stated for the local terminal in the sources checked.<span class="cite">source: <a href="https://www.warp.dev/">warp.dev</a></span></span></li>
-      </ul>
-    </div>
-    <div class="rel" id="row-worktrees">
-      <div class="relhead"><h2>Per-agent git worktree isolation</h2><span class="fill"></span></div>
-      <ul class="cmprow">
-        <li class="self"><span class="m v-yes" title="yes">[x]</span><span class="who">swe-mux</span><span class="d">Worktree creation and removal, plus a serialized land queue: reconcile with the trunk, run the verification command whose exact bytes you approved, then fast-forward only.<span class="cite">source: <a href="https://github.com/jatoran/swe-mux/blob/master/README.md">swe-mux README</a></span></span></li>
-        <li><span class="m v-unclear" title="unclear">[?]</span><span class="who">Herdr</span><span class="d">Not described in the sources checked.<span class="cite">source: <a href="https://herdr.dev/">herdr.dev</a>, <a href="https://herdr.dev/agent-guide.md">Herdr agent guide</a></span></span></li>
-        <li><span class="m v-no" title="no">[ ]</span><span class="who">tmux</span><span class="d">Out of scope. tmux knows nothing about git.<span class="cite">source: <a href="https://github.com/tmux/tmux">tmux repository</a></span></span></li>
-        <li><span class="m v-yes" title="yes">[x]</span><span class="who">Orca</span><span class="d">'Every task runs in its own isolated git worktree.'<span class="cite">source: <a href="https://www.onorca.dev/">onorca.dev</a></span></span></li>
-        <li><span class="m v-yes" title="yes">[x]</span><span class="who">Conductor</span><span class="d">Each workspace is created as its own git worktree and branch.<span class="cite">source: <a href="https://www.conductor.build/docs/guides/git-worktrees/run-claude-code-with-git-worktrees">Conductor worktree guide</a></span></span></li>
-        <li><span class="m v-yes" title="yes">[x]</span><span class="who">Superset</span><span class="d">'Each agent gets an isolated Git worktree and its own branch.'<span class="cite">source: <a href="https://superset.sh/">superset.sh</a></span></span></li>
-        <li><span class="m v-unclear" title="unclear">[?]</span><span class="who">Warp</span><span class="d">Not described in the sources checked.<span class="cite">source: <a href="https://www.warp.dev/">warp.dev</a></span></span></li>
+        <li class="self"><span class="m v-partial" title="partly">[~]</span><span class="who">swe-mux</span><span class="d">The daemon runs and the UI is a browser tab; CI starts a daemon from source on both. There is no desktop app for either.<span class="cite">source: <a href="https://github.com/jatoran/swe-mux/blob/master/README.md">swe-mux README</a></span></span></li>
+        <li><span class="m v-yes" title="yes">[x]</span><span class="who">Orca</span><span class="d">Apple silicon and Intel DMGs, and a Linux AppImage.<span class="cite">source: <a href="https://www.onorca.dev/download">Orca downloads</a></span></span></li>
+        <li><span class="m v-yes" title="yes">[x]</span><span class="who">Herdr</span><span class="d">The TUI on both, and the app on Apple silicon macOS and Linux.<span class="cite">source: <a href="https://herdr.dev/docs/install">Herdr install docs</a>, <a href="https://herdr.dev/">herdr.dev</a></span></span></li>
+        <li><span class="m v-yes" title="yes">[x]</span><span class="who">tmux</span><span class="d">A terminal program on both.<span class="cite">source: <a href="https://github.com/tmux/tmux">tmux repository</a></span></span></li>
       </ul>
     </div>
     <div class="rel" id="row-harnesses">
       <div class="relhead"><h2>Breadth of recognized agent CLIs</h2><span class="loseflag">swe-mux loses</span><span class="fill"></span></div>
       <ul class="cmprow">
-        <li class="self"><span class="m v-partial" title="partly">[~]</span><span class="who">swe-mux</span><span class="d">Any CLI or shell runs unchanged, including one swe-mux has never heard of. The registry that adds status, transcripts, history, and account switching on top recognizes fewer of them than Orca or Herdr list.<span class="cite">source: <a href="https://github.com/jatoran/swe-mux/blob/master/README.md">swe-mux README</a></span></span></li>
-        <li><span class="m v-yes" title="yes">[x]</span><span class="who">Herdr</span><span class="d">'21 agents detected out of the box.'<span class="cite">source: <a href="https://herdr.dev/">herdr.dev</a></span></span></li>
+        <li class="self"><span class="m v-partial" title="partly">[~]</span><span class="who">swe-mux</span><span class="d">Five: Claude Code, Codex, pi, oh-my-pi and opencode. Any other CLI or shell runs unchanged in a real terminal, without the status layer.<span class="cite">source: <a href="https://github.com/jatoran/swe-mux/blob/master/README.md">swe-mux README</a></span></span></li>
+        <li><span class="m v-yes" title="yes">[x]</span><span class="who">Orca</span><span class="d">41 in its supported-agents table, and it states it works with any CLI agent.<span class="cite">source: <a href="https://www.onorca.dev/docs/agents/supported">Orca supported agents</a></span></span></li>
+        <li><span class="m v-yes" title="yes">[x]</span><span class="who">Herdr</span><span class="d">23 detected, plus 4 that report their own state. Any CLI runs without a status.<span class="cite">source: <a href="https://herdr.dev/tui/docs/agents/">Herdr agents</a></span></span></li>
         <li><span class="m v-no" title="no">[ ]</span><span class="who">tmux</span><span class="d">None. It multiplexes terminals and does not read what is inside them.<span class="cite">source: <a href="https://github.com/tmux/tmux">tmux repository</a></span></span></li>
-        <li><span class="m v-yes" title="yes">[x]</span><span class="who">Orca</span><span class="d">Names more than twenty CLI agents by hand, and states any CLI agent works.<span class="cite">source: <a href="https://www.onorca.dev/">onorca.dev</a></span></span></li>
-        <li><span class="m v-partial" title="partly">[~]</span><span class="who">Conductor</span><span class="d">Claude Code, Codex, Cursor, and OpenCode.<span class="cite">source: <a href="https://conductor.build/">conductor.build</a></span></span></li>
-        <li><span class="m v-yes" title="yes">[x]</span><span class="who">Superset</span><span class="d">Names six and states any CLI-based coding agent works.<span class="cite">source: <a href="https://superset.sh/">superset.sh</a></span></span></li>
-        <li><span class="m v-partial" title="partly">[~]</span><span class="who">Warp</span><span class="d">Ships its own Agent CLI; other agents run inside it as ordinary terminal programs.<span class="cite">source: <a href="https://www.warp.dev/">warp.dev</a></span></span></li>
+      </ul>
+    </div>
+    <div class="rel" id="row-status">
+      <div class="relhead"><h2>How agent status is read</h2><span class="fill"></span></div>
+      <ul class="cmprow">
+        <li class="self"><span class="m v-yes" title="yes">[x]</span><span class="who">swe-mux</span><span class="d">Several signals combined: the CLI's hooks, its transcript, Claude's own session state file, the terminal screen and the process tree. Waiting names its reason (approval, question, rate limit, login), and idle with subagents still running is drawn apart from done.<span class="cite">source: <a href="https://github.com/jatoran/swe-mux/blob/master/README.md">swe-mux README</a></span></span></li>
+        <li><span class="m v-yes" title="yes">[x]</span><span class="who">Orca</span><span class="d">Terminal title sequences and agent hooks; for Claude Code, a status-line hook that emits OSC title events.<span class="cite">source: <a href="https://www.onorca.dev/docs/agents/claude-code">Orca and Claude Code</a></span></span></li>
+        <li><span class="m v-yes" title="yes">[x]</span><span class="who">Herdr</span><span class="d">The TUI reads the screen against per-agent detection manifests, and uses an integration's own reports where one sends them. Its docs say Claude Code's and Codex's state come from screen detection.<span class="cite">source: <a href="https://herdr.dev/tui/docs/agents/">Herdr agents</a>, <a href="https://herdr.dev/tui/docs/integrations/">Herdr integrations</a></span></span></li>
+        <li><span class="m v-no" title="no">[ ]</span><span class="who">tmux</span><span class="d">Out of scope.<span class="cite">source: <a href="https://github.com/tmux/tmux">tmux repository</a></span></span></li>
       </ul>
     </div>
     <div class="rel" id="row-phone">
       <div class="relhead"><h2>Phone client</h2><span class="fill"></span></div>
       <ul class="cmprow">
-        <li class="self"><span class="m v-yes" title="yes">[x]</span><span class="who">swe-mux</span><span class="d">An installable web app reached over your own tailnet, with no relay and no swe-mux login.<span class="cite">source: <a href="https://github.com/jatoran/swe-mux/blob/master/README.md">swe-mux README</a></span></span></li>
-        <li><span class="m v-no" title="no">[ ]</span><span class="who">Herdr</span><span class="d">No first-party client. Reachable from a phone by SSH into the host and attaching.<span class="cite">source: <a href="https://herdr.dev/docs/install">Herdr install docs</a>, <a href="https://herdr.dev/agent-guide.md">Herdr agent guide</a></span></span></li>
+        <li class="self"><span class="m v-yes" title="yes">[x]</span><span class="who">swe-mux</span><span class="d">The same application as an installable web app: the live terminal with a touch key rail, approvals, diffs, files, notes, the prompt queue, previews and push. No app store, login or relay.<span class="cite">source: <a href="https://github.com/jatoran/swe-mux/blob/master/README.md">swe-mux README</a></span></span></li>
+        <li><span class="m v-yes" title="yes">[x]</span><span class="who">Orca</span><span class="d">Native iOS and Android apps, which its docs call a read-mostly view of running agents: scrollback, short replies, source control, files, a browser view, account usage and push.<span class="cite">source: <a href="https://www.onorca.dev/docs/mobile">Orca mobile</a></span></span></li>
+        <li><span class="m v-no" title="no">[ ]</span><span class="who">Herdr</span><span class="d">No first-party client. Its docs say to install any SSH client and run the TUI there.<span class="cite">source: <a href="https://herdr.dev/tui/docs/how-to-work/">Herdr, how to work</a></span></span></li>
         <li><span class="m v-no" title="no">[ ]</span><span class="who">tmux</span><span class="d">None. SSH in and attach.<span class="cite">source: <a href="https://github.com/tmux/tmux">tmux repository</a></span></span></li>
-        <li><span class="m v-yes" title="yes">[x]</span><span class="who">Orca</span><span class="d">iOS and Android companion apps.<span class="cite">source: <a href="https://www.onorca.dev/">onorca.dev</a></span></span></li>
-        <li><span class="m v-no" title="no">[ ]</span><span class="who">Conductor</span><span class="d">Announced as coming soon, not shipping on the date below.<span class="cite">source: <a href="https://conductor.build/pricing">Conductor pricing</a></span></span></li>
-        <li><span class="m v-unclear" title="unclear">[?]</span><span class="who">Superset</span><span class="d">Not mentioned in the sources checked.<span class="cite">source: <a href="https://superset.sh/">superset.sh</a></span></span></li>
-        <li><span class="m v-unclear" title="unclear">[?]</span><span class="who">Warp</span><span class="d">Not mentioned in the sources checked.<span class="cite">source: <a href="https://www.warp.dev/">warp.dev</a></span></span></li>
       </ul>
     </div>
-    <div class="rel" id="row-voice">
-      <div class="relhead"><h2>Voice control of the tool itself</h2><span class="fill"></span></div>
+    <div class="rel" id="row-preview">
+      <div class="relhead"><h2>Your local dev server, opened on the phone</h2><span class="fill"></span></div>
       <ul class="cmprow">
-        <li class="self"><span class="m v-yes" title="yes">[x]</span><span class="who">swe-mux</span><span class="d">Hands-free conversation: on-device wake words, dictation, spoken navigation and commands, and read-aloud.<span class="cite">source: <a href="https://github.com/jatoran/swe-mux/blob/master/README.md">swe-mux README</a></span></span></li>
-        <li><span class="m v-unclear" title="unclear">[?]</span><span class="who">Herdr</span><span class="d">Not described in the sources checked.<span class="cite">source: <a href="https://herdr.dev/">herdr.dev</a>, <a href="https://herdr.dev/agent-guide.md">Herdr agent guide</a></span></span></li>
+        <li class="self"><span class="m v-yes" title="yes">[x]</span><span class="who">swe-mux</span><span class="d">A server on the host's 127.0.0.1 opens in a Preview pane on the phone through swe-mux itself, hot reload and WebSockets included, with no extra port exposed.<span class="cite">source: <a href="https://github.com/jatoran/swe-mux/blob/master/README.md">swe-mux README</a></span></span></li>
+        <li><span class="m v-yes" title="yes">[x]</span><span class="who">Orca</span><span class="d">A Web or Mobile browser view from the phone; its docs say Mobile asks the paired desktop browser for a phone-sized viewport.<span class="cite">source: <a href="https://www.onorca.dev/docs/mobile">Orca mobile</a></span></span></li>
+        <li><span class="m v-no" title="no">[ ]</span><span class="who">Herdr</span><span class="d">Links open in the default browser on the machine running the Herdr client.<span class="cite">source: <a href="https://herdr.dev/tui/docs/quick-start/">Herdr quick start</a></span></span></li>
         <li><span class="m v-no" title="no">[ ]</span><span class="who">tmux</span><span class="d">Out of scope.<span class="cite">source: <a href="https://github.com/tmux/tmux">tmux repository</a></span></span></li>
-        <li><span class="m v-partial" title="partly">[~]</span><span class="who">Orca</span><span class="d">Voice dictation with on-device models. Dictating into an agent, rather than driving the application.<span class="cite">source: <a href="https://www.onorca.dev/">onorca.dev</a></span></span></li>
-        <li><span class="m v-unclear" title="unclear">[?]</span><span class="who">Conductor</span><span class="d">Not mentioned in the sources checked.<span class="cite">source: <a href="https://conductor.build/">conductor.build</a></span></span></li>
-        <li><span class="m v-unclear" title="unclear">[?]</span><span class="who">Superset</span><span class="d">Not mentioned in the sources checked.<span class="cite">source: <a href="https://superset.sh/">superset.sh</a></span></span></li>
-        <li><span class="m v-unclear" title="unclear">[?]</span><span class="who">Warp</span><span class="d">Not mentioned in the sources checked.<span class="cite">source: <a href="https://www.warp.dev/">warp.dev</a></span></span></li>
       </ul>
     </div>
-    <div class="rel" id="row-evidence">
-      <div class="relhead"><h2>Evidence about a run that is not the agent's own transcript</h2><span class="fill"></span></div>
+    <div class="rel" id="row-browser">
+      <div class="relhead"><h2>A built-in browser with developer tools</h2><span class="loseflag">swe-mux loses</span><span class="fill"></span></div>
       <ul class="cmprow">
-        <li class="self"><span class="m v-yes" title="yes">[x]</span><span class="who">swe-mux</span><span class="d">Deterministic facts captured at the tool boundary - content hashes, parsed test outcomes, git tree hashes - and commit-level provenance separating who authored a change from who landed it. Off by default, per Project.<span class="cite">source: <a href="https://github.com/jatoran/swe-mux/blob/master/README.md">swe-mux README</a></span></span></li>
-        <li><span class="m v-partial" title="partly">[~]</span><span class="who">Herdr</span><span class="d">Semantic agent state forwarded by the agent integrations over its socket API. Status rather than an evidence record.<span class="cite">source: <a href="https://herdr.dev/">herdr.dev</a></span></span></li>
+        <li class="self"><span class="m v-partial" title="partly">[~]</span><span class="who">swe-mux</span><span class="d">A Preview pane with refresh, page capture and live reload, and no developer tools.<span class="cite">source: <a href="https://github.com/jatoran/swe-mux/blob/master/README.md">swe-mux README</a></span></span></li>
+        <li><span class="m v-yes" title="yes">[x]</span><span class="who">Orca</span><span class="d">A Chromium window per worktree, with an address bar, DevTools and viewport emulation.<span class="cite">source: <a href="https://www.onorca.dev/docs/browser/overview">Orca browser</a></span></span></li>
+        <li><span class="m v-no" title="no">[ ]</span><span class="who">Herdr</span><span class="d">Links open in the host's default browser.<span class="cite">source: <a href="https://herdr.dev/tui/docs/quick-start/">Herdr quick start</a></span></span></li>
         <li><span class="m v-no" title="no">[ ]</span><span class="who">tmux</span><span class="d">Out of scope.<span class="cite">source: <a href="https://github.com/tmux/tmux">tmux repository</a></span></span></li>
-        <li><span class="m v-unclear" title="unclear">[?]</span><span class="who">Orca</span><span class="d">No counterpart found in the sources checked.<span class="cite">source: <a href="https://www.onorca.dev/">onorca.dev</a></span></span></li>
-        <li><span class="m v-unclear" title="unclear">[?]</span><span class="who">Conductor</span><span class="d">No counterpart found in the sources checked.<span class="cite">source: <a href="https://conductor.build/">conductor.build</a></span></span></li>
-        <li><span class="m v-unclear" title="unclear">[?]</span><span class="who">Superset</span><span class="d">No counterpart found in the sources checked.<span class="cite">source: <a href="https://superset.sh/">superset.sh</a></span></span></li>
-        <li><span class="m v-unclear" title="unclear">[?]</span><span class="who">Warp</span><span class="d">No counterpart found in the sources checked.<span class="cite">source: <a href="https://www.warp.dev/">warp.dev</a></span></span></li>
       </ul>
     </div>
-    <div class="rel" id="row-attention">
-      <div class="relhead"><h2>Deciding which agent to look at next</h2><span class="fill"></span></div>
+    <div class="rel" id="row-quota">
+      <div class="relhead"><h2>Subscription quota per account</h2><span class="fill"></span></div>
       <ul class="cmprow">
-        <li class="self"><span class="m v-yes" title="yes">[x]</span><span class="who">swe-mux</span><span class="d">Ranked attention items with a hard daily interrupt budget, four a day by default, incident merging, and suppressed counts always shown rather than hidden.<span class="cite">source: <a href="https://github.com/jatoran/swe-mux/blob/master/README.md">swe-mux README</a></span></span></li>
-        <li><span class="m v-partial" title="partly">[~]</span><span class="who">Herdr</span><span class="d">A sidebar marking each agent working, blocked or idle. A view, not a budget.<span class="cite">source: <a href="https://herdr.dev/">herdr.dev</a></span></span></li>
+        <li class="self"><span class="m v-yes" title="yes">[x]</span><span class="who">swe-mux</span><span class="d">Claude and Codex accounts: 5-hour and weekly windows, history and resets, each window split into what swe-mux sessions used and what was used elsewhere. One-click login switching.<span class="cite">source: <a href="https://github.com/jatoran/swe-mux/blob/master/README.md">swe-mux README</a></span></span></li>
+        <li><span class="m v-yes" title="yes">[x]</span><span class="who">Orca</span><span class="d">Claude Code, Codex, Gemini, OpenCode, Cursor and others: 5-hour, daily and weekly windows, multiple accounts, and cost estimated from a local price table.<span class="cite">source: <a href="https://www.onorca.dev/docs/agents/usage-tracking">Orca usage tracking</a></span></span></li>
+        <li><span class="m v-unclear" title="unclear">[?]</span><span class="who">Herdr</span><span class="d">Not described in the sources checked.<span class="cite">source: <a href="https://herdr.dev/agent-guide.md">Herdr agent guide</a></span></span></li>
         <li><span class="m v-no" title="no">[ ]</span><span class="who">tmux</span><span class="d">Out of scope.<span class="cite">source: <a href="https://github.com/tmux/tmux">tmux repository</a></span></span></li>
-        <li><span class="m v-partial" title="partly">[~]</span><span class="who">Orca</span><span class="d">A fleet view with native notifications.<span class="cite">source: <a href="https://www.onorca.dev/">onorca.dev</a></span></span></li>
-        <li><span class="m v-partial" title="partly">[~]</span><span class="who">Conductor</span><span class="d">A dashboard of what the agents are doing.<span class="cite">source: <a href="https://conductor.build/">conductor.build</a></span></span></li>
-        <li><span class="m v-partial" title="partly">[~]</span><span class="who">Superset</span><span class="d">A workspace list. Its own roadmap names human review, not agent count, as the bottleneck.<span class="cite">source: <a href="https://superset.sh/blog/roadmap-to-100-agents">Superset, 100 parallel agents</a></span></span></li>
-        <li><span class="m v-unclear" title="unclear">[?]</span><span class="who">Warp</span><span class="d">Not described in the sources checked.<span class="cite">source: <a href="https://www.warp.dev/">warp.dev</a></span></span></li>
       </ul>
     </div>
-    <div class="rel" id="row-cloud">
-      <div class="relhead"><h2>Hosted runners the vendor operates</h2><span class="loseflag">swe-mux loses</span><span class="fill"></span></div>
+    <div class="rel" id="row-history">
+      <div class="relhead"><h2>Search and resume past conversations</h2><span class="fill"></span></div>
       <ul class="cmprow">
-        <li class="self"><span class="m v-no" title="no">[ ]</span><span class="who">swe-mux</span><span class="d">None, and none planned. Your machine, or a machine you own.<span class="cite">source: <a href="https://github.com/jatoran/swe-mux">swe-mux repository</a></span></span></li>
-        <li><span class="m v-no" title="no">[ ]</span><span class="who">Herdr</span><span class="d">A local binary. 'A box you rent' is still your box.<span class="cite">source: <a href="https://herdr.dev/">herdr.dev</a></span></span></li>
+        <li class="self"><span class="m v-yes" title="yes">[x]</span><span class="who">swe-mux</span><span class="d">Full-text search across every recognized agent's conversations, a transcript view, resume from any result, and branching a Claude conversation from any message.<span class="cite">source: <a href="https://github.com/jatoran/swe-mux/blob/master/README.md">swe-mux README</a></span></span></li>
+        <li><span class="m v-yes" title="yes">[x]</span><span class="who">Orca</span><span class="d">Session History over about 22 agents' transcripts, filtered by title, directory, branch, model or text, with Resume.<span class="cite">source: <a href="https://www.onorca.dev/docs/agents/session-history">Orca session history</a></span></span></li>
+        <li><span class="m v-partial" title="partly">[~]</span><span class="who">Herdr</span><span class="d">Resumes 18 agents' native sessions after a server restart. Transcript browsing or search is not described.<span class="cite">source: <a href="https://herdr.dev/tui/docs/session-state/">Herdr session state</a></span></span></li>
         <li><span class="m v-no" title="no">[ ]</span><span class="who">tmux</span><span class="d">Out of scope.<span class="cite">source: <a href="https://github.com/tmux/tmux">tmux repository</a></span></span></li>
-        <li><span class="m v-no" title="no">[ ]</span><span class="who">Orca</span><span class="d">SSH to your own VPS rather than a hosted runner.<span class="cite">source: <a href="https://www.onorca.dev/">onorca.dev</a></span></span></li>
-        <li><span class="m v-yes" title="yes">[x]</span><span class="who">Conductor</span><span class="d">Conductor Cloud, with cloud workspace hours, from the paid tier upward.<span class="cite">source: <a href="https://conductor.build/pricing">Conductor pricing</a></span></span></li>
-        <li><span class="m v-no" title="no">[ ]</span><span class="who">Superset</span><span class="d">Local-first, with no hosted execution in the sources checked.<span class="cite">source: <a href="https://superset.sh/">superset.sh</a></span></span></li>
-        <li><span class="m v-yes" title="yes">[x]</span><span class="who">Warp</span><span class="d">Warp Factories: cloud infrastructure for running fleets of coding agents.<span class="cite">source: <a href="https://www.warp.dev/">warp.dev</a></span></span></li>
       </ul>
     </div>
-    <div class="rel" id="row-team">
-      <div class="relhead"><h2>Teams, roles, and shared state</h2><span class="loseflag">swe-mux loses</span><span class="fill"></span></div>
+    <div class="rel" id="row-environment">
+      <div class="relhead"><h2>Per-session view of the tools, skills, MCP servers and hooks an agent can see</h2><span class="fill"></span></div>
       <ul class="cmprow">
-        <li class="self"><span class="m v-no" title="no">[ ]</span><span class="who">swe-mux</span><span class="d">A single-operator tool. No multi-tenancy, no role model, no audit subsystem, and none planned.<span class="cite">source: <a href="https://github.com/jatoran/swe-mux/blob/master/SECURITY.md">swe-mux SECURITY.md</a></span></span></li>
-        <li><span class="m v-unclear" title="unclear">[?]</span><span class="who">Herdr</span><span class="d">Not described in the sources checked.<span class="cite">source: <a href="https://herdr.dev/">herdr.dev</a></span></span></li>
-        <li><span class="m v-partial" title="partly">[~]</span><span class="who">tmux</span><span class="d">Several people can attach to one session on a host they all have accounts on. Not a product feature so much as a consequence.<span class="cite">source: <a href="https://github.com/tmux/tmux">tmux repository</a></span></span></li>
-        <li><span class="m v-unclear" title="unclear">[?]</span><span class="who">Orca</span><span class="d">Not described in the sources checked.<span class="cite">source: <a href="https://www.onorca.dev/">onorca.dev</a></span></span></li>
-        <li><span class="m v-yes" title="yes">[x]</span><span class="who">Conductor</span><span class="d">A Teams plan with live collaboration and admin controls, and SSO on Enterprise.<span class="cite">source: <a href="https://conductor.build/pricing">Conductor pricing</a></span></span></li>
-        <li><span class="m v-partial" title="partly">[~]</span><span class="who">Superset</span><span class="d">Paid seats above the free tier.<span class="cite">source: <a href="https://superset.sh/">superset.sh</a></span></span></li>
-        <li><span class="m v-yes" title="yes">[x]</span><span class="who">Warp</span><span class="d">Business and Enterprise plans with collaboration features.<span class="cite">source: <a href="https://www.warp.dev/pricing">Warp pricing</a></span></span></li>
+        <li class="self"><span class="m v-yes" title="yes">[x]</span><span class="who">swe-mux</span><span class="d">For Claude Code and Codex sessions, with where each came from and what changed after the CLI started. What the CLI can see, not proof a server connected.<span class="cite">source: <a href="https://github.com/jatoran/swe-mux/blob/master/README.md">swe-mux README</a></span></span></li>
+        <li><span class="m v-unclear" title="unclear">[?]</span><span class="who">Orca</span><span class="d">It reads each repository's .claude/ and .codex/ configuration; a per-session view is not described in the sources checked.<span class="cite">source: <a href="https://www.onorca.dev/docs/agents/hooks-memory">Orca hooks and memory</a></span></span></li>
+        <li><span class="m v-unclear" title="unclear">[?]</span><span class="who">Herdr</span><span class="d">Lists its own integrations; a view of what an agent loaded is not described in the sources checked.<span class="cite">source: <a href="https://herdr.dev/tui/docs/integrations/">Herdr integrations</a></span></span></li>
+        <li><span class="m v-no" title="no">[ ]</span><span class="who">tmux</span><span class="d">Out of scope.<span class="cite">source: <a href="https://github.com/tmux/tmux">tmux repository</a></span></span></li>
+      </ul>
+    </div>
+    <div class="rel" id="row-processes">
+      <div class="relhead"><h2>Processes a session left running</h2><span class="fill"></span></div>
+      <ul class="cmprow">
+        <li class="self"><span class="m v-yes" title="yes">[x]</span><span class="who">swe-mux</span><span class="d">Every process and port is attributed to its session; ones still running after it ended, ones that escaped its tree, and heavy CPU or memory are flagged, with terminate-tree on a press. Nothing is killed automatically.<span class="cite">source: <a href="https://github.com/jatoran/swe-mux/blob/master/README.md">swe-mux README</a></span></span></li>
+        <li><span class="m v-partial" title="partly">[~]</span><span class="who">Orca</span><span class="d">A Resource Manager covering CPU, memory and sessions. Left-behind processes are not described in the sources checked.<span class="cite">source: <a href="https://www.onorca.dev/docs/settings">Orca settings</a></span></span></li>
+        <li><span class="m v-unclear" title="unclear">[?]</span><span class="who">Herdr</span><span class="d">Runtime status commands; resource use and left-behind processes are not described in the sources checked.<span class="cite">source: <a href="https://herdr.dev/agent-guide.md">Herdr agent guide</a></span></span></li>
+        <li><span class="m v-no" title="no">[ ]</span><span class="who">tmux</span><span class="d">Out of scope.<span class="cite">source: <a href="https://github.com/tmux/tmux">tmux repository</a></span></span></li>
+      </ul>
+    </div>
+    <div class="rel" id="row-persistence">
+      <div class="relhead"><h2>Agent processes outlive the app</h2><span class="fill"></span></div>
+      <ul class="cmprow">
+        <li class="self"><span class="m v-yes" title="yes">[x]</span><span class="who">swe-mux</span><span class="d">A supervisor separate from the daemon and the UI holds every terminal through a daemon restart and an app update, and typing keeps reaching them meanwhile. A reboot ends the processes; the sessions stay readable and resumable.<span class="cite">source: <a href="https://github.com/jatoran/swe-mux/blob/master/README.md">swe-mux README</a></span></span></li>
+        <li><span class="m v-yes" title="yes">[x]</span><span class="who">Orca</span><span class="d">A background daemon owns the terminals through quit, auto-update and a crash. A host reboot ends every running agent.<span class="cite">source: <a href="https://www.onorca.dev/docs/model/session-restore">Orca session restore</a></span></span></li>
+        <li><span class="m v-yes" title="yes">[x]</span><span class="who">Herdr</span><span class="d">The app's agents keep running in herdr-core through quit, update and a crash. In the TUI a detach keeps them, and a server restart ends them and brings back the layout.<span class="cite">source: <a href="https://herdr.dev/">herdr.dev</a>, <a href="https://herdr.dev/tui/docs/session-state/">Herdr session state</a></span></span></li>
+        <li><span class="m v-yes" title="yes">[x]</span><span class="who">tmux</span><span class="d">The server keeps sessions after every client detaches. Not across a reboot.<span class="cite">source: <a href="https://github.com/tmux/tmux">tmux repository</a></span></span></li>
+      </ul>
+    </div>
+    <div class="rel" id="row-worktrees">
+      <div class="relhead"><h2>Per-agent git worktree isolation</h2><span class="fill"></span></div>
+      <ul class="cmprow">
+        <li class="self"><span class="m v-yes" title="yes">[x]</span><span class="who">swe-mux</span><span class="d">Worktree sessions, plus a land queue that merges a finished branch only after the check you approved passes, fast-forward only.<span class="cite">source: <a href="https://github.com/jatoran/swe-mux/blob/master/README.md">swe-mux README</a></span></span></li>
+        <li><span class="m v-yes" title="yes">[x]</span><span class="who">Orca</span><span class="d">Each agent runs in its own worktree.<span class="cite">source: <a href="https://www.onorca.dev/">onorca.dev</a></span></span></li>
+        <li><span class="m v-unclear" title="unclear">[?]</span><span class="who">Herdr</span><span class="d">Not described in the sources checked.<span class="cite">source: <a href="https://herdr.dev/agent-guide.md">Herdr agent guide</a></span></span></li>
+        <li><span class="m v-no" title="no">[ ]</span><span class="who">tmux</span><span class="d">Out of scope. tmux knows nothing about git.<span class="cite">source: <a href="https://github.com/tmux/tmux">tmux repository</a></span></span></li>
       </ul>
     </div>
 
@@ -1345,18 +1335,19 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
       <p class="prose">Three things the matrix cannot say, and they matter more than most
       of the rows.</p>
       <ul class="flat">
-        <li><b>A phone client is not a phone client</b><span>Orca ships iOS and Android
-        apps and calls them companions; swe-mux's claim is parity, meaning nothing
-        functional exists on the desktop and not on the phone. Those are different
-        products in the same cell, and the row cannot tell you which one you want.</span></li>
+        <li><b>A phone client is not a phone client</b><span>Orca ships native iOS and
+        Android apps and its docs call them a read-mostly view of running agents and a
+        remote control for the desktop; swe-mux's claim is parity, the same application on
+        both, which is a web app rather than a native one. Those are different products in
+        the same cell, and the row cannot tell you which one you want.</span></li>
         <li><b>Breadth is not depth</b><span>Orca and Herdr recognize more agent CLIs
         than swe-mux does, and if the CLI you use is on their list and not in swe-mux's
         registry, that is the row that decides it. Every CLI still runs in swe-mux as an
         ordinary terminal program; what it does not get is the layer on top.</span></li>
         <li><b>Not built is not the same as not yet built</b><span>swe-mux has no hosted
-        runners and no team features, and neither is planned rather than pending: there is
-        no swe-mux account, server or relay by design. If you want either, two of the tools
-        above have them today.</span></li>
+        runners, no relay and no team features, and none of them is pending: there is no
+        swe-mux account or server by design. If you need a relay to reach your machine,
+        Orca has one in beta.</span></li>
       </ul>
       <p class="note">Nothing on this page is a benchmark. No tool here was run
       side by side against another, and none of the rows measure speed, reliability, or

@@ -5,7 +5,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <title>Session status · swe-mux docs</title>
-<meta name="description" content="Working, ready, awaiting, blocked: one status vocabulary across every vendor&#x27;s CLI, how it is read, and why awaiting is the one to watch." />
+<meta name="description" content="Working, ready, awaiting, idle: one status vocabulary across every vendor&#x27;s CLI, how it is read, and why awaiting is the one to watch." />
 <meta name="color-scheme" content="dark" />
 <meta name="darkreader-lock" />
 <script>
@@ -1165,8 +1165,7 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
           <tbody>
             <tr><td>working</td><td>The agent is mid-turn and producing output.</td><td>Nothing. Stage your next message in the Queue tab if you have one.</td></tr>
             <tr><td>ready</td><td>The turn finished and the agent is waiting for input.</td><td>Type, or send a queued message.</td></tr>
-            <tr><td>awaiting</td><td>The agent is blocked on you specifically: an approval, a question, a choice.</td><td>This is the one to watch. It is not a stall.</td></tr>
-            <tr><td>blocked</td><td>Something outside the conversation is in the way.</td><td>Read the pane. The sub-reason names what.</td></tr>
+            <tr><td>awaiting</td><td>The agent is blocked on you specifically, and the reason is named: an approval, a question, a choice, a rate limit, or a login.</td><td>This is the one to watch. It is not a stall.</td></tr>
             <tr><td>idle</td><td>Nothing is happening in the terminal.</td><td>Not the same as finished. Background work can be running.</td></tr>
           </tbody>
         </table></div>

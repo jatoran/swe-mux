@@ -15,38 +15,48 @@
     "",
     "`checked` is the date every URL below was read. It is printed on the page, because",
     "several of these projects move weekly and a comparison with no date is a claim about",
-    "an unspecified past."
+    "an unspecified past.",
+    "",
+    "2026-10-29: narrowed to the two closest tools (Orca and Herdr) plus tmux as the",
+    "baseline, and every cell re-read that day. Conductor, Superset and Warp were dropped",
+    "rather than left standing on sources read two months earlier."
   ],
-  "checked": "2026-08-28",
+  "checked": "2026-10-29",
 
   "tools": [
     { "key": "swemux", "name": "swe-mux", "self": true },
-    { "key": "herdr", "name": "Herdr" },
-    { "key": "tmux", "name": "tmux" },
     { "key": "orca", "name": "Orca" },
-    { "key": "conductor", "name": "Conductor" },
-    { "key": "superset", "name": "Superset" },
-    { "key": "warp", "name": "Warp" }
+    { "key": "herdr", "name": "Herdr" },
+    { "key": "tmux", "name": "tmux" }
   ],
 
   "sources": {
     "swemux-readme": { "label": "swe-mux README", "url": "https://github.com/jatoran/swe-mux/blob/master/README.md" },
-    "swemux-security": { "label": "swe-mux SECURITY.md", "url": "https://github.com/jatoran/swe-mux/blob/master/SECURITY.md" },
     "swemux-repo": { "label": "swe-mux repository", "url": "https://github.com/jatoran/swe-mux" },
+    "swemux-privacy": { "label": "swemux.dev privacy", "url": "https://swemux.dev/privacy/" },
+    "orca-repo": { "label": "Orca repository", "url": "https://github.com/stablyai/orca" },
+    "orca-site": { "label": "onorca.dev", "url": "https://www.onorca.dev/" },
+    "orca-download": { "label": "Orca downloads", "url": "https://www.onorca.dev/download" },
+    "orca-restore": { "label": "Orca session restore", "url": "https://www.onorca.dev/docs/model/session-restore" },
+    "orca-supported": { "label": "Orca supported agents", "url": "https://www.onorca.dev/docs/agents/supported" },
+    "orca-claude": { "label": "Orca and Claude Code", "url": "https://www.onorca.dev/docs/agents/claude-code" },
+    "orca-mobile": { "label": "Orca mobile", "url": "https://www.onorca.dev/docs/mobile" },
+    "orca-browser": { "label": "Orca browser", "url": "https://www.onorca.dev/docs/browser/overview" },
+    "orca-usage": { "label": "Orca usage tracking", "url": "https://www.onorca.dev/docs/agents/usage-tracking" },
+    "orca-history": { "label": "Orca session history", "url": "https://www.onorca.dev/docs/agents/session-history" },
+    "orca-hooks": { "label": "Orca hooks and memory", "url": "https://www.onorca.dev/docs/agents/hooks-memory" },
+    "orca-settings": { "label": "Orca settings", "url": "https://www.onorca.dev/docs/settings" },
+    "orca-telemetry": { "label": "Orca telemetry", "url": "https://www.onorca.dev/docs/telemetry" },
     "herdr-site": { "label": "herdr.dev", "url": "https://herdr.dev/" },
     "herdr-install": { "label": "Herdr install docs", "url": "https://herdr.dev/docs/install" },
+    "herdr-agents": { "label": "Herdr agents", "url": "https://herdr.dev/tui/docs/agents/" },
+    "herdr-integrations": { "label": "Herdr integrations", "url": "https://herdr.dev/tui/docs/integrations/" },
+    "herdr-phone": { "label": "Herdr, how to work", "url": "https://herdr.dev/tui/docs/how-to-work/" },
+    "herdr-links": { "label": "Herdr quick start", "url": "https://herdr.dev/tui/docs/quick-start/" },
+    "herdr-state": { "label": "Herdr session state", "url": "https://herdr.dev/tui/docs/session-state/" },
     "herdr-guide": { "label": "Herdr agent guide", "url": "https://herdr.dev/agent-guide.md" },
-    "tmux-repo": { "label": "tmux repository", "url": "https://github.com/tmux/tmux" },
-    "orca-site": { "label": "onorca.dev", "url": "https://www.onorca.dev/" },
-    "orca-repo": { "label": "Orca repository", "url": "https://github.com/stablyai/orca" },
-    "conductor-site": { "label": "conductor.build", "url": "https://conductor.build/" },
-    "conductor-pricing": { "label": "Conductor pricing", "url": "https://conductor.build/pricing" },
-    "conductor-worktrees": { "label": "Conductor worktree guide", "url": "https://www.conductor.build/docs/guides/git-worktrees/run-claude-code-with-git-worktrees" },
-    "superset-site": { "label": "superset.sh", "url": "https://superset.sh/" },
-    "superset-roadmap": { "label": "Superset, 100 parallel agents", "url": "https://superset.sh/blog/roadmap-to-100-agents" },
-    "warp-site": { "label": "warp.dev", "url": "https://www.warp.dev/" },
-    "warp-pricing": { "label": "Warp pricing", "url": "https://www.warp.dev/pricing" },
-    "warp-repo": { "label": "Warp repository", "url": "https://github.com/warpdotdev/Warp" }
+    "herdr-security": { "label": "Herdr app security", "url": "https://github.com/herdrdev/herdr-app/blob/master/docs/security.md" },
+    "tmux-repo": { "label": "tmux repository", "url": "https://github.com/tmux/tmux" }
   },
 
   "rows": [
@@ -55,78 +65,50 @@
       "label": "License",
       "cells": {
         "swemux": { "v": "yes", "t": "Apache-2.0.", "src": ["swemux-repo"] },
-        "herdr": { "v": "yes", "t": "Apache-2.0.", "src": ["herdr-site"] },
-        "tmux": { "v": "yes", "t": "ISC.", "src": ["tmux-repo"] },
         "orca": { "v": "yes", "t": "MIT.", "src": ["orca-repo"] },
-        "conductor": { "v": "no", "t": "Proprietary. Free tier, then paid plans.", "src": ["conductor-pricing"] },
-        "superset": { "v": "partial", "t": "Elastic License 2.0. Source-available, and its own site says not OSI-approved open source.", "src": ["superset-site"] },
-        "warp": { "v": "partial", "t": "The client is AGPL-3.0 with two MIT UI crates. The service around it is paid.", "src": ["warp-repo", "warp-pricing"] }
+        "herdr": { "v": "yes", "t": "Apache-2.0, for the TUI, the app and herdr-core.", "src": ["herdr-site"] },
+        "tmux": { "v": "yes", "t": "ISC.", "src": ["tmux-repo"] }
       }
     },
     {
       "id": "local",
-      "label": "Runs entirely on hardware you control",
+      "label": "Runs on hardware you control, with nothing of the vendor's in the path",
       "cells": {
-        "swemux": { "v": "yes", "t": "Local app data, no swe-mux account and no vendor-operated backend or relay. Providers and optional integrations still use the network.", "src": ["swemux-readme"] },
-        "herdr": { "v": "yes", "t": "A local binary. Remote means your own SSH or your own rented box.", "src": ["herdr-site"] },
-        "tmux": { "v": "yes", "t": "A local process, and nothing else.", "src": ["tmux-repo"] },
-        "orca": { "v": "yes", "t": "A desktop app on your own subscriptions, with SSH to your own VPS.", "src": ["orca-site"] },
-        "conductor": { "v": "partial", "t": "Local workspaces on the free plan; Conductor Cloud is a paid tier.", "src": ["conductor-pricing"] },
-        "superset": { "v": "yes", "t": "Local-first, and it states it never proxies model API calls.", "src": ["superset-site"] },
-        "warp": { "v": "partial", "t": "The terminal is local; Warp Drive, cloud agents, and conversation storage are account-backed.", "src": ["warp-pricing"] }
+        "swemux": { "v": "yes", "t": "Local app data, with no swe-mux account, server or relay. The phone reaches your machine over your own tailnet. Providers and optional integrations still use the network.", "src": ["swemux-readme"] },
+        "orca": { "v": "partial", "t": "A desktop app on your own machines and subscriptions. The phone pairs over LAN or Tailscale, or through Orca Relay, a hosted relay in beta that needs an Orca sign-in.", "src": ["orca-mobile"] },
+        "herdr": { "v": "yes", "t": "Local binaries. Other machines join over SSH.", "src": ["herdr-site"] },
+        "tmux": { "v": "yes", "t": "A local process, and nothing else.", "src": ["tmux-repo"] }
+      }
+    },
+    {
+      "id": "telemetry",
+      "label": "No product telemetry",
+      "cells": {
+        "swemux": { "v": "yes", "t": "None. The one request swe-mux itself makes is a daily update check, which the site counts as a constant label and an HTTP status, and which can be turned off.", "src": ["swemux-privacy"] },
+        "orca": { "v": "no", "t": "Anonymous usage events to PostHog Cloud (US), keyed to a random local ID. Settings, Privacy turns them off, as do DO_NOT_TRACK=1 and ORCA_TELEMETRY_DISABLED=1.", "src": ["orca-telemetry"] },
+        "herdr": { "v": "partial", "t": "The app sends a daily report of versions and usage counts to telemetry.herdr.dev, on by default in release builds, never terminal text or prompts. Settings, Privacy turns it off.", "src": ["herdr-security"] },
+        "tmux": { "v": "yes", "t": "None.", "src": ["tmux-repo"] }
       }
     },
     {
       "id": "windows",
       "label": "Windows as a first-class host",
       "cells": {
-        "swemux": { "v": "yes", "t": "The proving platform, and the only one with a packaged desktop application.", "src": ["swemux-readme"] },
-        "herdr": { "v": "yes", "t": "Stable-channel Windows binaries; ARM64 runs the x86_64 build under emulation.", "src": ["herdr-install"] },
-        "tmux": { "v": "no", "t": "OpenBSD, FreeBSD, NetBSD, Linux, macOS, Solaris. Windows only inside WSL or Cygwin.", "src": ["tmux-repo"] },
-        "orca": { "v": "yes", "t": "Windows builds published.", "src": ["orca-site"] },
-        "conductor": { "v": "no", "t": "macOS only. Its own copy says 'on your Mac'.", "src": ["conductor-site"] },
-        "superset": { "v": "no", "t": "macOS primary, an experimental Linux AppImage, Windows not yet available.", "src": ["superset-site"] },
-        "warp": { "v": "yes", "t": "Windows 10 and 11, x64 and ARM64.", "src": ["warp-site"] }
+        "swemux": { "v": "yes", "t": "The proving platform, and the one with a native desktop app and tray.", "src": ["swemux-readme"] },
+        "orca": { "v": "yes", "t": "A Windows 10/11 x64 installer.", "src": ["orca-download"] },
+        "herdr": { "v": "yes", "t": "Stable-channel Windows x86_64 binaries; ARM64 runs them under emulation.", "src": ["herdr-install"] },
+        "tmux": { "v": "no", "t": "Windows only inside WSL or Cygwin.", "src": ["tmux-repo"] }
       }
     },
     {
       "id": "macos",
-      "label": "macOS as a first-class host",
+      "label": "Desktop app on macOS and Linux",
       "loses": true,
       "cells": {
-        "swemux": { "v": "partial", "t": "The wheel installs and the CLI runs, proven in CI. No CI job on any host has ever started a daemon, so the daemon on macOS is unproven, and there is no desktop application for it.", "src": ["swemux-readme"] },
-        "herdr": { "v": "yes", "t": "Stable-channel macOS binaries.", "src": ["herdr-install"] },
-        "tmux": { "v": "yes", "t": "A listed platform.", "src": ["tmux-repo"] },
-        "orca": { "v": "yes", "t": "ARM64 and Intel.", "src": ["orca-site"] },
-        "conductor": { "v": "yes", "t": "The only platform it ships on.", "src": ["conductor-site"] },
-        "superset": { "v": "yes", "t": "The primary platform.", "src": ["superset-site"] },
-        "warp": { "v": "yes", "t": "macOS 10.14 and newer.", "src": ["warp-site"] }
-      }
-    },
-    {
-      "id": "persistence",
-      "label": "Agent processes outlive the client",
-      "cells": {
-        "swemux": { "v": "yes", "t": "A supervisor process separate from the daemon and the UI holds every terminal, so a daemon restart and a rebuild of the application itself leave the agents working. A reboot still ends the processes; the sessions stay readable afterwards.", "src": ["swemux-readme"] },
-        "herdr": { "v": "yes", "t": "Detach and reattach from any terminal or over SSH; its site states sessions survive restarts.", "src": ["herdr-site"] },
-        "tmux": { "v": "yes", "t": "The server keeps sessions after every client detaches. Not across a reboot.", "src": ["tmux-repo"] },
-        "orca": { "v": "unclear", "t": "Scrollback recovery after restart is documented; whether the process itself survives is not stated in the sources checked.", "src": ["orca-site"] },
-        "conductor": { "v": "unclear", "t": "Not stated in the sources checked.", "src": ["conductor-site"] },
-        "superset": { "v": "yes", "t": "'Persistent terminals: sessions survive app restarts.'", "src": ["superset-site"] },
-        "warp": { "v": "unclear", "t": "Not stated for the local terminal in the sources checked.", "src": ["warp-site"] }
-      }
-    },
-    {
-      "id": "worktrees",
-      "label": "Per-agent git worktree isolation",
-      "cells": {
-        "swemux": { "v": "yes", "t": "Worktree creation and removal, plus a serialized land queue: reconcile with the trunk, run the verification command whose exact bytes you approved, then fast-forward only.", "src": ["swemux-readme"] },
-        "herdr": { "v": "unclear", "t": "Not described in the sources checked.", "src": ["herdr-site", "herdr-guide"] },
-        "tmux": { "v": "no", "t": "Out of scope. tmux knows nothing about git.", "src": ["tmux-repo"] },
-        "orca": { "v": "yes", "t": "'Every task runs in its own isolated git worktree.'", "src": ["orca-site"] },
-        "conductor": { "v": "yes", "t": "Each workspace is created as its own git worktree and branch.", "src": ["conductor-worktrees"] },
-        "superset": { "v": "yes", "t": "'Each agent gets an isolated Git worktree and its own branch.'", "src": ["superset-site"] },
-        "warp": { "v": "unclear", "t": "Not described in the sources checked.", "src": ["warp-site"] }
+        "swemux": { "v": "partial", "t": "The daemon runs and the UI is a browser tab; CI starts a daemon from source on both. There is no desktop app for either.", "src": ["swemux-readme"] },
+        "orca": { "v": "yes", "t": "Apple silicon and Intel DMGs, and a Linux AppImage.", "src": ["orca-download"] },
+        "herdr": { "v": "yes", "t": "The TUI on both, and the app on Apple silicon macOS and Linux.", "src": ["herdr-install", "herdr-site"] },
+        "tmux": { "v": "yes", "t": "A terminal program on both.", "src": ["tmux-repo"] }
       }
     },
     {
@@ -134,93 +116,111 @@
       "label": "Breadth of recognized agent CLIs",
       "loses": true,
       "cells": {
-        "swemux": { "v": "partial", "t": "Any CLI or shell runs unchanged, including one swe-mux has never heard of. The registry that adds status, transcripts, history, and account switching on top recognizes fewer of them than Orca or Herdr list.", "src": ["swemux-readme"] },
-        "herdr": { "v": "yes", "t": "'21 agents detected out of the box.'", "src": ["herdr-site"] },
-        "tmux": { "v": "no", "t": "None. It multiplexes terminals and does not read what is inside them.", "src": ["tmux-repo"] },
-        "orca": { "v": "yes", "t": "Names more than twenty CLI agents by hand, and states any CLI agent works.", "src": ["orca-site"] },
-        "conductor": { "v": "partial", "t": "Claude Code, Codex, Cursor, and OpenCode.", "src": ["conductor-site"] },
-        "superset": { "v": "yes", "t": "Names six and states any CLI-based coding agent works.", "src": ["superset-site"] },
-        "warp": { "v": "partial", "t": "Ships its own Agent CLI; other agents run inside it as ordinary terminal programs.", "src": ["warp-site"] }
+        "swemux": { "v": "partial", "t": "Five: Claude Code, Codex, pi, oh-my-pi and opencode. Any other CLI or shell runs unchanged in a real terminal, without the status layer.", "src": ["swemux-readme"] },
+        "orca": { "v": "yes", "t": "41 in its supported-agents table, and it states it works with any CLI agent.", "src": ["orca-supported"] },
+        "herdr": { "v": "yes", "t": "23 detected, plus 4 that report their own state. Any CLI runs without a status.", "src": ["herdr-agents"] },
+        "tmux": { "v": "no", "t": "None. It multiplexes terminals and does not read what is inside them.", "src": ["tmux-repo"] }
+      }
+    },
+    {
+      "id": "status",
+      "label": "How agent status is read",
+      "cells": {
+        "swemux": { "v": "yes", "t": "Several signals combined: the CLI's hooks, its transcript, Claude's own session state file, the terminal screen and the process tree. Waiting names its reason (approval, question, rate limit, login), and idle with subagents still running is drawn apart from done.", "src": ["swemux-readme"] },
+        "orca": { "v": "yes", "t": "Terminal title sequences and agent hooks; for Claude Code, a status-line hook that emits OSC title events.", "src": ["orca-claude"] },
+        "herdr": { "v": "yes", "t": "The TUI reads the screen against per-agent detection manifests, and uses an integration's own reports where one sends them. Its docs say Claude Code's and Codex's state come from screen detection.", "src": ["herdr-agents", "herdr-integrations"] },
+        "tmux": { "v": "no", "t": "Out of scope.", "src": ["tmux-repo"] }
       }
     },
     {
       "id": "phone",
       "label": "Phone client",
       "cells": {
-        "swemux": { "v": "yes", "t": "An installable web app reached over your own tailnet, with no relay and no swe-mux login.", "src": ["swemux-readme"] },
-        "herdr": { "v": "no", "t": "No first-party client. Reachable from a phone by SSH into the host and attaching.", "src": ["herdr-install", "herdr-guide"] },
-        "tmux": { "v": "no", "t": "None. SSH in and attach.", "src": ["tmux-repo"] },
-        "orca": { "v": "yes", "t": "iOS and Android companion apps.", "src": ["orca-site"] },
-        "conductor": { "v": "no", "t": "Announced as coming soon, not shipping on the date below.", "src": ["conductor-pricing"] },
-        "superset": { "v": "unclear", "t": "Not mentioned in the sources checked.", "src": ["superset-site"] },
-        "warp": { "v": "unclear", "t": "Not mentioned in the sources checked.", "src": ["warp-site"] }
+        "swemux": { "v": "yes", "t": "The same application as an installable web app: the live terminal with a touch key rail, approvals, diffs, files, notes, the prompt queue, previews and push. No app store, login or relay.", "src": ["swemux-readme"] },
+        "orca": { "v": "yes", "t": "Native iOS and Android apps, which its docs call a read-mostly view of running agents: scrollback, short replies, source control, files, a browser view, account usage and push.", "src": ["orca-mobile"] },
+        "herdr": { "v": "no", "t": "No first-party client. Its docs say to install any SSH client and run the TUI there.", "src": ["herdr-phone"] },
+        "tmux": { "v": "no", "t": "None. SSH in and attach.", "src": ["tmux-repo"] }
       }
     },
     {
-      "id": "voice",
-      "label": "Voice control of the tool itself",
+      "id": "preview",
+      "label": "Your local dev server, opened on the phone",
       "cells": {
-        "swemux": { "v": "yes", "t": "Hands-free conversation: on-device wake words, dictation, spoken navigation and commands, and read-aloud.", "src": ["swemux-readme"] },
-        "herdr": { "v": "unclear", "t": "Not described in the sources checked.", "src": ["herdr-site", "herdr-guide"] },
-        "tmux": { "v": "no", "t": "Out of scope.", "src": ["tmux-repo"] },
-        "orca": { "v": "partial", "t": "Voice dictation with on-device models. Dictating into an agent, rather than driving the application.", "src": ["orca-site"] },
-        "conductor": { "v": "unclear", "t": "Not mentioned in the sources checked.", "src": ["conductor-site"] },
-        "superset": { "v": "unclear", "t": "Not mentioned in the sources checked.", "src": ["superset-site"] },
-        "warp": { "v": "unclear", "t": "Not mentioned in the sources checked.", "src": ["warp-site"] }
+        "swemux": { "v": "yes", "t": "A server on the host's 127.0.0.1 opens in a Preview pane on the phone through swe-mux itself, hot reload and WebSockets included, with no extra port exposed.", "src": ["swemux-readme"] },
+        "orca": { "v": "yes", "t": "A Web or Mobile browser view from the phone; its docs say Mobile asks the paired desktop browser for a phone-sized viewport.", "src": ["orca-mobile"] },
+        "herdr": { "v": "no", "t": "Links open in the default browser on the machine running the Herdr client.", "src": ["herdr-links"] },
+        "tmux": { "v": "no", "t": "Out of scope.", "src": ["tmux-repo"] }
       }
     },
     {
-      "id": "evidence",
-      "label": "Evidence about a run that is not the agent's own transcript",
-      "cells": {
-        "swemux": { "v": "yes", "t": "Deterministic facts captured at the tool boundary - content hashes, parsed test outcomes, git tree hashes - and commit-level provenance separating who authored a change from who landed it. Off by default, per Project.", "src": ["swemux-readme"] },
-        "herdr": { "v": "partial", "t": "Semantic agent state forwarded by the agent integrations over its socket API. Status rather than an evidence record.", "src": ["herdr-site"] },
-        "tmux": { "v": "no", "t": "Out of scope.", "src": ["tmux-repo"] },
-        "orca": { "v": "unclear", "t": "No counterpart found in the sources checked.", "src": ["orca-site"] },
-        "conductor": { "v": "unclear", "t": "No counterpart found in the sources checked.", "src": ["conductor-site"] },
-        "superset": { "v": "unclear", "t": "No counterpart found in the sources checked.", "src": ["superset-site"] },
-        "warp": { "v": "unclear", "t": "No counterpart found in the sources checked.", "src": ["warp-site"] }
-      }
-    },
-    {
-      "id": "attention",
-      "label": "Deciding which agent to look at next",
-      "cells": {
-        "swemux": { "v": "yes", "t": "Ranked attention items with a hard daily interrupt budget, four a day by default, incident merging, and suppressed counts always shown rather than hidden.", "src": ["swemux-readme"] },
-        "herdr": { "v": "partial", "t": "A sidebar marking each agent working, blocked or idle. A view, not a budget.", "src": ["herdr-site"] },
-        "tmux": { "v": "no", "t": "Out of scope.", "src": ["tmux-repo"] },
-        "orca": { "v": "partial", "t": "A fleet view with native notifications.", "src": ["orca-site"] },
-        "conductor": { "v": "partial", "t": "A dashboard of what the agents are doing.", "src": ["conductor-site"] },
-        "superset": { "v": "partial", "t": "A workspace list. Its own roadmap names human review, not agent count, as the bottleneck.", "src": ["superset-roadmap"] },
-        "warp": { "v": "unclear", "t": "Not described in the sources checked.", "src": ["warp-site"] }
-      }
-    },
-    {
-      "id": "cloud",
-      "label": "Hosted runners the vendor operates",
+      "id": "browser",
+      "label": "A built-in browser with developer tools",
       "loses": true,
       "cells": {
-        "swemux": { "v": "no", "t": "None, and none planned. Your machine, or a machine you own.", "src": ["swemux-repo"] },
-        "herdr": { "v": "no", "t": "A local binary. 'A box you rent' is still your box.", "src": ["herdr-site"] },
-        "tmux": { "v": "no", "t": "Out of scope.", "src": ["tmux-repo"] },
-        "orca": { "v": "no", "t": "SSH to your own VPS rather than a hosted runner.", "src": ["orca-site"] },
-        "conductor": { "v": "yes", "t": "Conductor Cloud, with cloud workspace hours, from the paid tier upward.", "src": ["conductor-pricing"] },
-        "superset": { "v": "no", "t": "Local-first, with no hosted execution in the sources checked.", "src": ["superset-site"] },
-        "warp": { "v": "yes", "t": "Warp Factories: cloud infrastructure for running fleets of coding agents.", "src": ["warp-site"] }
+        "swemux": { "v": "partial", "t": "A Preview pane with refresh, page capture and live reload, and no developer tools.", "src": ["swemux-readme"] },
+        "orca": { "v": "yes", "t": "A Chromium window per worktree, with an address bar, DevTools and viewport emulation.", "src": ["orca-browser"] },
+        "herdr": { "v": "no", "t": "Links open in the host's default browser.", "src": ["herdr-links"] },
+        "tmux": { "v": "no", "t": "Out of scope.", "src": ["tmux-repo"] }
       }
     },
     {
-      "id": "team",
-      "label": "Teams, roles, and shared state",
-      "loses": true,
+      "id": "quota",
+      "label": "Subscription quota per account",
       "cells": {
-        "swemux": { "v": "no", "t": "A single-operator tool. No multi-tenancy, no role model, no audit subsystem, and none planned.", "src": ["swemux-security"] },
-        "herdr": { "v": "unclear", "t": "Not described in the sources checked.", "src": ["herdr-site"] },
-        "tmux": { "v": "partial", "t": "Several people can attach to one session on a host they all have accounts on. Not a product feature so much as a consequence.", "src": ["tmux-repo"] },
-        "orca": { "v": "unclear", "t": "Not described in the sources checked.", "src": ["orca-site"] },
-        "conductor": { "v": "yes", "t": "A Teams plan with live collaboration and admin controls, and SSO on Enterprise.", "src": ["conductor-pricing"] },
-        "superset": { "v": "partial", "t": "Paid seats above the free tier.", "src": ["superset-site"] },
-        "warp": { "v": "yes", "t": "Business and Enterprise plans with collaboration features.", "src": ["warp-pricing"] }
+        "swemux": { "v": "yes", "t": "Claude and Codex accounts: 5-hour and weekly windows, history and resets, each window split into what swe-mux sessions used and what was used elsewhere. One-click login switching.", "src": ["swemux-readme"] },
+        "orca": { "v": "yes", "t": "Claude Code, Codex, Gemini, OpenCode, Cursor and others: 5-hour, daily and weekly windows, multiple accounts, and cost estimated from a local price table.", "src": ["orca-usage"] },
+        "herdr": { "v": "unclear", "t": "Not described in the sources checked.", "src": ["herdr-guide"] },
+        "tmux": { "v": "no", "t": "Out of scope.", "src": ["tmux-repo"] }
+      }
+    },
+    {
+      "id": "history",
+      "label": "Search and resume past conversations",
+      "cells": {
+        "swemux": { "v": "yes", "t": "Full-text search across every recognized agent's conversations, a transcript view, resume from any result, and branching a Claude conversation from any message.", "src": ["swemux-readme"] },
+        "orca": { "v": "yes", "t": "Session History over about 22 agents' transcripts, filtered by title, directory, branch, model or text, with Resume.", "src": ["orca-history"] },
+        "herdr": { "v": "partial", "t": "Resumes 18 agents' native sessions after a server restart. Transcript browsing or search is not described.", "src": ["herdr-state"] },
+        "tmux": { "v": "no", "t": "Out of scope.", "src": ["tmux-repo"] }
+      }
+    },
+    {
+      "id": "environment",
+      "label": "Per-session view of the tools, skills, MCP servers and hooks an agent can see",
+      "cells": {
+        "swemux": { "v": "yes", "t": "For Claude Code and Codex sessions, with where each came from and what changed after the CLI started. What the CLI can see, not proof a server connected.", "src": ["swemux-readme"] },
+        "orca": { "v": "unclear", "t": "It reads each repository's .claude/ and .codex/ configuration; a per-session view is not described in the sources checked.", "src": ["orca-hooks"] },
+        "herdr": { "v": "unclear", "t": "Lists its own integrations; a view of what an agent loaded is not described in the sources checked.", "src": ["herdr-integrations"] },
+        "tmux": { "v": "no", "t": "Out of scope.", "src": ["tmux-repo"] }
+      }
+    },
+    {
+      "id": "processes",
+      "label": "Processes a session left running",
+      "cells": {
+        "swemux": { "v": "yes", "t": "Every process and port is attributed to its session; ones still running after it ended, ones that escaped its tree, and heavy CPU or memory are flagged, with terminate-tree on a press. Nothing is killed automatically.", "src": ["swemux-readme"] },
+        "orca": { "v": "partial", "t": "A Resource Manager covering CPU, memory and sessions. Left-behind processes are not described in the sources checked.", "src": ["orca-settings"] },
+        "herdr": { "v": "unclear", "t": "Runtime status commands; resource use and left-behind processes are not described in the sources checked.", "src": ["herdr-guide"] },
+        "tmux": { "v": "no", "t": "Out of scope.", "src": ["tmux-repo"] }
+      }
+    },
+    {
+      "id": "persistence",
+      "label": "Agent processes outlive the app",
+      "cells": {
+        "swemux": { "v": "yes", "t": "A supervisor separate from the daemon and the UI holds every terminal through a daemon restart and an app update, and typing keeps reaching them meanwhile. A reboot ends the processes; the sessions stay readable and resumable.", "src": ["swemux-readme"] },
+        "orca": { "v": "yes", "t": "A background daemon owns the terminals through quit, auto-update and a crash. A host reboot ends every running agent.", "src": ["orca-restore"] },
+        "herdr": { "v": "yes", "t": "The app's agents keep running in herdr-core through quit, update and a crash. In the TUI a detach keeps them, and a server restart ends them and brings back the layout.", "src": ["herdr-site", "herdr-state"] },
+        "tmux": { "v": "yes", "t": "The server keeps sessions after every client detaches. Not across a reboot.", "src": ["tmux-repo"] }
+      }
+    },
+    {
+      "id": "worktrees",
+      "label": "Per-agent git worktree isolation",
+      "cells": {
+        "swemux": { "v": "yes", "t": "Worktree sessions, plus a land queue that merges a finished branch only after the check you approved passes, fast-forward only.", "src": ["swemux-readme"] },
+        "orca": { "v": "yes", "t": "Each agent runs in its own worktree.", "src": ["orca-site"] },
+        "herdr": { "v": "unclear", "t": "Not described in the sources checked.", "src": ["herdr-guide"] },
+        "tmux": { "v": "no", "t": "Out of scope. tmux knows nothing about git.", "src": ["tmux-repo"] }
       }
     }
   ]

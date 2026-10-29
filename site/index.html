@@ -4,11 +4,11 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <title>swe-mux</title>
-<meta name="description" content="Run coding agents together. See which ones need you, use familiar shortcuts, and keep working from desktop or phone with voice, shared history and approved branch landing." />
+<meta name="description" content="A terminal multiplexer for coding agents. Run Claude Code, Codex, pi and opencode in real terminals, see which session needs you and why, and work from your phone over your own Tailscale. Open source." />
 <meta property="og:type" content="website" />
 <meta property="og:site_name" content="swe-mux" />
 <meta property="og:title" content="swe-mux - your coding agents, on your desktop and your phone" />
-<meta property="og:description" content="Run Claude Code, Codex, opencode and pi in real terminals on your own machine, see which session needs you, and use the same live sessions from your phone over Tailscale. Open source." />
+<meta property="og:description" content="Run Claude Code, Codex, pi and opencode in real terminals on your own machine, see which session needs you and why, and put the whole workspace on your phone over your own Tailscale. Open source, no account." />
 <meta property="og:url" content="https://swemux.dev/" />
 <meta property="og:image" content="https://swemux.dev/img/social-preview.png" />
 <meta property="og:image:width" content="1280" />
@@ -743,12 +743,12 @@ footer .social svg { width: 15px; height: 15px; fill: currentColor; display: blo
 <!-- ================================================================== HERO -->
 <section class="hero">
   <div class="wrap">
-    <div class="kick">A local workspace for the coding agents you already run</div>
-    <h1>Run your coding agents together.<br />Know which ones need you.<span class="cur"></span></h1>
-    <p class="sub">Keep Claude Code, Codex and other coding agents side by side, with live status,
-    flexible panes and messages between sessions. Work from your <b>desktop or phone</b>.
-    Dictate prompts, hear replies, and ask the assistant what needs attention.</p>
-    <p class="hero-facts">Real terminals. Persistent sessions. Your own machine and subscriptions.</p>
+    <div class="kick">A terminal multiplexer for coding agents, built for working from your phone</div>
+    <h1>Run every coding agent in one workspace.<br />Know which ones need you, from your desk or your phone.<span class="cur"></span></h1>
+    <p class="sub">Claude Code, Codex, pi, oh-my-pi, opencode or any shell, in real terminals on your own
+    machine. Every session says whether it is working or waiting on you, and why. The whole workspace
+    opens on your <b>phone</b>: the terminal, approvals, diffs and your running dev server.</p>
+    <p class="hero-facts">Open source. No account, relay or telemetry. Your own Tailscale network.</p>
     <div class="ic">
       <div class="ic-head">
         <div class="ic-tabs" role="tablist" aria-label="Install method">
@@ -823,26 +823,74 @@ footer .social svg { width: 15px; height: 15px; fill: currentColor; display: blo
 </section>
 <section class="sec" id="fleet"><div class="wrap">
     <div class="head"><span class="n">01</span><h2>Know which agent needs you</h2><span class="fill"></span></div>
-    <p class="intro">See who is working, waiting for approval, or blocked. Notifications name the session and the reason, so you can respond without watching every pane.</p>
+    <p class="intro">Every session says whether it is working, idle or waiting on you, read from the agent's own hooks, its transcript, the terminal and the process tree rather than the screen alone.
+    Waiting always names its reason: an approval, a question, a rate limit or a login. An agent that is idle with subagents or background tasks still running looks different from one that is done.</p>
     <p class="note">Select an image to view it at full size.</p>
     <div class="feature-fleet"><figure class="feature-shot"><a class="feature-image" href="img/frontpage/fleet.webp?v=94a071433f7c" title="View full-size image" aria-label="View full-size feature image"><img src="img/frontpage/fleet.webp?v=94a071433f7c" width="680" height="886" loading="lazy" decoding="async" alt="Session rows with blue working, green idle and amber waiting indicators, model names and worktree branches." /></a><figcaption>Live status, context usage and branches in the session list.</figcaption></figure><div><ul class="feature-states"><li>Working</li><li>Needs you</li><li>Idle</li></ul><figure class="feature-shot"><a class="feature-image" href="img/frontpage/alert.webp?v=98f772d87dad" title="View full-size image" aria-label="View full-size feature image"><img src="img/frontpage/alert.webp?v=98f772d87dad" width="1168" height="200" loading="lazy" decoding="async" alt="An alert asks who should own cache invalidation, with Open session and Dismiss controls." /></a><figcaption><strong>A reason to look.</strong> Read the decision, then jump to the session.</figcaption></figure></div></div>
-    <p class="note">Choose a sound and push notification for each event. Set quiet hours and separate Desktop and Mobile preferences.
-    The alert history stays readable when delivery is muted. <a href="docs/status/">Status and alerts</a></p>
+    <p class="note">Alerts and push notifications name the session and the reason, and reach a locked phone. A "ready" alert waits two minutes, because 89 of 211 measured idle moments went back to working inside that window.
+    Choose a sound per event, set quiet hours, and keep separate Desktop and Mobile preferences. <a href="docs/status/">Status and alerts</a></p>
 
   </div></section>
 <section class="sec" id="mobile"><div class="wrap">
-    <div class="head"><span class="n">02</span><h2>Keep working from your phone</h2><span class="fill"></span></div>
-    <p class="intro">Use the terminal, review changes, edit files and respond to agents from the same workspace. Mobile has its own touch controls and layout, with your desktop arrangement kept intact.</p>
+    <div class="head"><span class="n">02</span><h2>The whole workspace on your phone</h2><span class="fill"></span></div>
+    <p class="intro">The phone runs the same application as the desktop, not a companion app: the live terminal with a touch keyboard rail, approvals, diffs, files, notes, the prompt queue and your running dev server. It installs from the browser, with its own touch layout and your desktop arrangement kept intact.</p>
     <div class="showcase-pair"><figure class="feature-shot feature-phone"><a class="feature-image" href="img/frontpage/phone.webp?v=775e03d1a944" title="View full-size image" aria-label="View full-size feature image"><img src="img/frontpage/phone.webp?v=775e03d1a944" width="780" height="566" loading="lazy" decoding="async" alt="A waiting agent question, editable prompt and touch controls for arrows, Ctrl+C and sending, cropped from the phone layout." /></a><figcaption>The question, the prompt and touch controls, within reach.</figcaption></figure>
     <ul class="claims">
       <li><span><b>The same sessions.</b> Continue a conversation from either device. Input ownership keeps two devices from typing over each other.</span></li>
       <li><span><b>The tools you use at your desk.</b> Terminals, Git review, notes, files, prompt queues and previews.</span></li>
-      <li><span><b>Your preview travels with you.</b> Open a local dev server through swe-mux without exposing another port.</span></li>
-      <li><span><b>Your own connection.</b> Reach your machine over Tailscale. No swe-mux account or vendor-operated relay.</span></li>
+      <li><span><b>Your dev server, on the phone.</b> A server on the host's 127.0.0.1 opens in a Preview pane through swe-mux, hot reload and WebSockets included, without exposing another port. Tap a URL an agent printed to open it.</span></li>
+      <li><span><b>Your own connection.</b> Reach your machine over Tailscale. No app store, no swe-mux account and no relay.</span></li>
     </ul></div><p class="note"><a href="docs/phone/">Connect your phone</a>. HTTPS enables microphone and clipboard APIs; push also needs browser permission.</p>
   </div></section>
+<section class="sec" id="workbench"><div class="wrap">
+    <div class="head"><span class="n">03</span><h2>Every agent CLI in one workspace</h2><span class="fill"></span></div>
+    <p class="intro">Claude Code, Codex, pi, oh-my-pi and opencode are recognized, and any other CLI or shell runs in a real terminal. Type <code>claude</code> or <code>codex</code> in any pane and it becomes a tracked session in place, same pane and same scrollback. Split agents, notes, files and previews into panes, with tabs inside each.</p>
+    <figure class="feature-shot"><a class="feature-image" href="img/frontpage/panes.webp?v=1f19744a0bf6" title="View full-size image" aria-label="View full-size feature image"><img src="img/frontpage/panes.webp?v=1f19744a0bf6" width="2112" height="840" loading="lazy" decoding="async" alt="Two pane stacks, with agent tabs on the left and shell and checkout preview tabs on the right." /></a><figcaption><strong>Two panes, separate tab stacks.</strong> Keep the agent beside its running preview.</figcaption></figure>
+    <p class="note">Resume any recognized agent, branch a Claude conversation from any message, restart an agent onto the same conversation, and switch between saved Claude and Codex logins in one click.
+    The Markdown editor supports tables, code blocks and sending a selection to an agent. <a href="docs/workspace/">Workspace guide</a></p>
+  </div></section>
+<section class="sec" id="history"><div class="wrap">
+    <div class="head"><span class="n">04</span><h2>See what each agent loaded and did</h2><span class="fill"></span></div>
+    <p class="intro">The Agent tab lists the tools, skills, MCP servers, plugins and hooks a Claude Code or Codex session can see, where each came from, and what changed after the CLI started. Read CLAUDE.md, AGENTS.md and Claude's memory in one place, follow the transcript, and search every agent's past conversations at once.</p>
+    <figure class="feature-shot"><a class="feature-image" href="img/frontpage/history.webp?v=9adacc549b81" title="View full-size image" aria-label="View full-size feature image"><img src="img/frontpage/history.webp?v=9adacc549b81" width="1204" height="522" loading="lazy" decoding="async" alt="Transcript search for test highlights matching messages in the recorded conversation." /></a><figcaption><strong>Find the relevant exchange.</strong> Search the transcript and read the matching messages.</figcaption></figure>
+    <p class="note">Resume from any search result. Optional evidence capture records observed tool activity and attributes commits to contributing sessions.
+    The Agent tab is what the CLI can see, not proof that an MCP server connected; asking a server for its tools is a separate press. <a href="docs/history/">History and auditing</a></p>
+  </div></section>
+<section class="sec" id="quota"><div class="wrap">
+    <div class="head"><span class="n">05</span><h2>Quota for every account, and where it went</h2><span class="fill"></span></div>
+    <p class="intro">Each saved Claude and Codex account shows its 5-hour and weekly windows, read every 15 minutes, in the sidebar and on the phone's toolbar. Every window is split by where its usage came from, so a jump you did not cause shows up as one.</p>
+    <ul class="flat">
+      <li><b>Here or elsewhere</b><span>What swe-mux sessions used, the rises those sessions do not explain, and the rises while this computer was not using the account at all, such as another device or the web app.</span></li>
+      <li><b>History</b><span>Every account's percentage over the last week, the time each reading was true, and when the window resets.</span></li>
+      <li><b>Unexpected resets</b><span>A drop of 20 points or more to 10% or less, confirmed minutes later, can sound and push like any other alert.</span></li>
+      <li><b>Named accounts</b><span>Switch the system-wide Claude or Codex login in one click, and give each account a name that replaces its email everywhere.</span></li>
+    </ul><p class="note">Readings come from the providers' own CLI endpoints, which are undocumented and can change. Switching is always explicit and meant for accounts you own. <a href="docs/usage/">Usage and quota</a></p>
+  </div></section>
+<section class="sec" id="processes"><div class="wrap">
+    <div class="head"><span class="n">06</span><h2>Find what your agents leave running</h2><span class="fill"></span></div>
+    <p class="intro">Every process and listening port is attributed to the session that started it. A process still running after its session ended, one that escaped the session's tree, or one using 90% of a core or 2 GiB of memory is flagged where you can see it.</p>
+    <ul class="flat">
+      <li><b>One press to end it</b><span>Interrupt, terminate, or terminate the whole tree. Ownership is checked again right before acting, and nothing is ended automatically.</span></li>
+      <li><b>Resources at a glance</b><span>The sidebar shows live sessions, system CPU and RAM. Each process shows its CPU, memory and network, each session its totals, and a language server duplicated across sessions is named.</span></li>
+      <li><b>Ghost windows</b><span>On Windows, invisible headless-browser windows that agents leave over the screen are moved off it.</span></li>
+    </ul><p class="note">swe-mux reports what it observes and never guesses that a process is hung. <a href="docs/notes-files/">Files, previews and processes</a></p>
+  </div></section>
+<section class="sec" id="communication"><div class="wrap">
+    <div class="head"><span class="n">07</span><h2>Let agents coordinate</h2><span class="fill"></span></div>
+    <p class="intro">Sessions can exchange messages, read each other's progress and request help within the permissions you set. See who asked, what they requested and where the response went.</p>
+    <figure class="feature-shot"><a class="feature-image" href="img/frontpage/communication.webp?v=bbf1bb9a6e9e" title="View full-size image" aria-label="View full-size feature image"><img src="img/frontpage/communication.webp?v=bbf1bb9a6e9e" width="1204" height="682" loading="lazy" decoding="async" alt="The requesting agent queue holds replies from coupon readers and coupon writers, identifying who sent each message." /></a><figcaption><strong>Replies return to the requester.</strong> Each queued message keeps its sender and result.</figcaption></figure>
+    <p class="note">Messages can wait in a session's queue until it is ready. Spawn and control requests require approval by default.
+    Project permissions govern what agents can read and do. <a href="docs/queue/">Queues and communication</a></p>
+  </div></section>
+<section class="sec" id="git"><div class="wrap">
+    <div class="head"><span class="n">08</span><h2>Land finished branches behind your checks</h2><span class="fill"></span></div>
+    <p class="intro">A branch takes its turn in the queue, updates from master, and runs the checks you approved. Passed checks allow a fast-forward; a conflict or failed check stops the request.</p>
+    <figure class="feature-shot"><a class="feature-image" href="img/frontpage/land.webp?v=cb5501df2825" title="View full-size image" aria-label="View full-size feature image"><img src="img/frontpage/land.webp?v=cb5501df2825" width="1204" height="482" loading="lazy" decoding="async" alt="Expanded landing queue shows the approved verification gate running for agent/coupon-table." /></a><figcaption><strong>The check is the gate.</strong> See which branch is being verified and what happens next.</figcaption></figure>
+    <p class="note">A failed request returns to the agent that owns the branch. An agent cannot approve its own verification command.
+    Enable the required Project permissions before allowing agents to request landing. <a href="demo/?scenario=landfailure">Try the failed-check walkthrough</a> · <a href="docs/git/">Git and landing</a></p><figure class="feature-shot"><a class="feature-image" href="img/frontpage/landfailure.webp?v=633389ca5515" title="View full-size image" aria-label="View full-size feature image"><img src="img/frontpage/landfailure.webp?v=633389ca5515" width="1204" height="462" loading="lazy" decoding="async" alt="The branch owner receives a queued failure message: the coupon expiry test failed and landing stopped." /></a><figcaption><strong>A failed check stops the landing.</strong> The reason returns to the agent that owns the branch.</figcaption></figure>
+  </div></section>
 <section class="sec" id="voice"><div class="wrap">
-    <div class="head"><span class="n">03</span><h2>Talk to your agents. Ask the assistant.</h2><span class="fill"></span></div>
+    <div class="head"><span class="n">09</span><h2>Talk to your agents. Ask the assistant.</h2><span class="fill"></span></div>
     <p class="intro">Dictate a prompt, hear an agent reply, or ask which sessions need your attention. Voice works from desktop and phone, with separate controls for listening and playback.</p>
     <figure class="feature-shot"><a class="feature-image" href="img/frontpage/voice.webp?v=50b5e465dd9c" title="View full-size image" aria-label="View full-size feature image"><img src="img/frontpage/voice.webp?v=50b5e465dd9c" width="1372" height="560" loading="lazy" decoding="async" alt="Assistant chat with talk, chat and text-to-speech modes, a reply identifying a waiting agent, and a proposed message with Run now and Cancel controls." /></a><figcaption><strong>Ask what needs you.</strong> Read the answer and review the proposed action.</figcaption></figure>
 
@@ -854,7 +902,7 @@ footer .social svg { width: 15px; height: 15px; fill: currentColor; display: blo
     experimental Edge speech is a separate opt-in. <a href="docs/voice/">Voice setup</a></p>
   </div></section>
 <section class="sec" id="normalize"><div class="wrap">
-    <div class="head"><span class="n">04</span><h2>Keep the same editing habits across agents</h2><span class="fill"></span></div>
+    <div class="head"><span class="n">10</span><h2>Keep the same editing habits across agents</h2><span class="fill"></span></div>
     <p class="intro">Use familiar shortcuts across supported agent inputs. Shift+Enter inserts a new line, Ctrl+Backspace deletes a word, and clicking positions the cursor in recognized composers.</p>
     <div class="feature-inputs"><figure class="feature-shot"><a class="feature-image" href="img/frontpage/input.webp?v=1d029a7579bf" title="View full-size image" aria-label="View full-size feature image"><img src="img/frontpage/input.webp?v=1d029a7579bf" width="660" height="134" loading="lazy" decoding="async" alt="An agent composer with the unsent draft Review the checkout code and an editable cursor position." /></a><figcaption><strong>Your prompt stays editable.</strong><span class="feature-keys"><span><kbd>Shift+Enter</kbd> new line</span><span><kbd>Ctrl+Backspace</kbd> delete word</span></span></figcaption></figure><figure class="feature-shot"><a class="feature-image" href="img/frontpage/attachment.webp?v=cf998224b26a" title="View full-size image" aria-label="View full-size feature image"><img src="img/frontpage/attachment.webp?v=cf998224b26a" width="660" height="134" loading="lazy" decoding="async" alt="An image reference for cart.png pasted into the agent prompt, followed by a question." /></a><figcaption><strong>Paste an image.</strong> Attach the screenshot and add your question.</figcaption></figure></div>
     <ul class="flat">
@@ -864,37 +912,9 @@ footer .social svg { width: 15px; height: 15px; fill: currentColor; display: blo
     </ul><p class="note">Workspace keymaps and agent text editing are separate features. Browser-reserved shortcuts and individual CLI capabilities still apply.
     Clipboard history records in-app text copies; it does not synchronize the system clipboard. <a href="docs/keyboard/">Keyboard reference</a></p><figure class="feature-shot"><a class="feature-image" href="img/frontpage/clipboard.webp?v=abd114432469" title="View full-size image" aria-label="View full-size feature image"><img src="img/frontpage/clipboard.webp?v=abd114432469" width="1204" height="588" loading="lazy" decoding="async" alt="Shared clipboard history with a full command expanded, Insert and Copy controls, and a pinned entry." /></a><figcaption><strong>Keep useful text close.</strong> Read, insert, copy or pin a saved entry.</figcaption></figure>
   </div></section>
-<section class="sec" id="workbench"><div class="wrap">
-    <div class="head"><span class="n">05</span><h2>Arrange the work around you</h2><span class="fill"></span></div>
-    <p class="intro">Split agents, notes, files and previews into panes, with tabs inside each. Keep the code, conversation and running result in view together.</p>
-    <figure class="feature-shot"><a class="feature-image" href="img/frontpage/panes.webp?v=1f19744a0bf6" title="View full-size image" aria-label="View full-size feature image"><img src="img/frontpage/panes.webp?v=1f19744a0bf6" width="2112" height="840" loading="lazy" decoding="async" alt="Two pane stacks, with agent tabs on the left and shell and checkout preview tabs on the right." /></a><figcaption><strong>Two panes, separate tab stacks.</strong> Keep the agent beside its running preview.</figcaption></figure>
-    <p class="note">Run any shell, TUI or CLI in a real terminal. Recognized agents add status, transcripts and input support.
-    The Markdown editor supports tables, code blocks and sending a selection to an agent. <a href="docs/workspace/">Workspace guide</a></p>
-  </div></section>
-<section class="sec" id="communication"><div class="wrap">
-    <div class="head"><span class="n">06</span><h2>Let agents coordinate</h2><span class="fill"></span></div>
-    <p class="intro">Sessions can exchange messages, read each other's progress and request help within the permissions you set. See who asked, what they requested and where the response went.</p>
-    <figure class="feature-shot"><a class="feature-image" href="img/frontpage/communication.webp?v=bbf1bb9a6e9e" title="View full-size image" aria-label="View full-size feature image"><img src="img/frontpage/communication.webp?v=bbf1bb9a6e9e" width="1204" height="682" loading="lazy" decoding="async" alt="The requesting agent queue holds replies from coupon readers and coupon writers, identifying who sent each message." /></a><figcaption><strong>Replies return to the requester.</strong> Each queued message keeps its sender and result.</figcaption></figure>
-    <p class="note">Messages can wait in a session's queue until it is ready. Spawn and control requests require approval by default.
-    Project permissions govern what agents can read and do. <a href="docs/queue/">Queues and communication</a></p>
-  </div></section>
-<section class="sec" id="git"><div class="wrap">
-    <div class="head"><span class="n">07</span><h2>Land finished branches behind your checks</h2><span class="fill"></span></div>
-    <p class="intro">A branch takes its turn in the queue, updates from master, and runs the checks you approved. Passed checks allow a fast-forward; a conflict or failed check stops the request.</p>
-    <figure class="feature-shot"><a class="feature-image" href="img/frontpage/land.webp?v=cb5501df2825" title="View full-size image" aria-label="View full-size feature image"><img src="img/frontpage/land.webp?v=cb5501df2825" width="1204" height="482" loading="lazy" decoding="async" alt="Expanded landing queue shows the approved verification gate running for agent/coupon-table." /></a><figcaption><strong>The check is the gate.</strong> See which branch is being verified and what happens next.</figcaption></figure>
-    <p class="note">A failed request returns to the agent that owns the branch. An agent cannot approve its own verification command.
-    Enable the required Project permissions before allowing agents to request landing. <a href="demo/?scenario=landfailure">Try the failed-check walkthrough</a> · <a href="docs/git/">Git and landing</a></p><figure class="feature-shot"><a class="feature-image" href="img/frontpage/landfailure.webp?v=633389ca5515" title="View full-size image" aria-label="View full-size feature image"><img src="img/frontpage/landfailure.webp?v=633389ca5515" width="1204" height="462" loading="lazy" decoding="async" alt="The branch owner receives a queued failure message: the coupon expiry test failed and landing stopped." /></a><figcaption><strong>A failed check stops the landing.</strong> The reason returns to the agent that owns the branch.</figcaption></figure>
-  </div></section>
-<section class="sec" id="history"><div class="wrap">
-    <div class="head"><span class="n">08</span><h2>Find the session. Inspect the work.</h2><span class="fill"></span></div>
-    <p class="intro">Search conversations across agent CLIs, reopen the transcript, and inspect the commands, changes and test results that were recorded. Resume earlier work with its context close at hand.</p>
-    <figure class="feature-shot"><a class="feature-image" href="img/frontpage/history.webp?v=9adacc549b81" title="View full-size image" aria-label="View full-size feature image"><img src="img/frontpage/history.webp?v=9adacc549b81" width="1204" height="522" loading="lazy" decoding="async" alt="Transcript search for test highlights matching messages in the recorded conversation." /></a><figcaption><strong>Find the relevant exchange.</strong> Search the transcript and read the matching messages.</figcaption></figure>
-    <p class="note">Optional evidence capture records observed tool activity and attributes commits to contributing sessions.
-    It reports missing evidence rather than treating it as proof of success. <a href="docs/history/">History and auditing</a></p>
-  </div></section>
 <section class="sec" id="persistence"><div class="wrap">
-    <div class="head"><span class="n">09</span><h2>Keep your sessions through an app restart</h2><span class="fill"></span></div>
-    <p class="intro">A separate supervisor holds the terminals while the daemon restarts or the app updates. Reconnect to the working sessions and their scrollback.</p>
+    <div class="head"><span class="n">11</span><h2>Keep your sessions through an app restart</h2><span class="fill"></span></div>
+    <p class="intro">A separate supervisor holds the terminals while the daemon restarts or the app updates, and a terminal gateway keeps your typing reaching them through the restart. Reconnect to the working sessions and their scrollback.</p>
     <p class="note">The supervisor cannot survive its own death or a power loss. Cold recovery restores affected sessions as readable, resumable records.
     <a href="docs/sessions/">Session recovery</a></p>
     <ul class="flat">
@@ -905,7 +925,7 @@ footer .social svg { width: 15px; height: 15px; fill: currentColor; display: blo
   </div></section>
 <section class="sec" id="install">
   <div class="wrap">
-    <div class="head"><span class="n">10</span><h2>Install</h2><span class="fill"></span></div>
+    <div class="head"><span class="n">12</span><h2>Install</h2><span class="fill"></span></div>
     <p class="intro">You need at least one agent CLI already installed and logged in. swe-mux does
     not install, manage, or proxy them. It runs the ones you already have, on the subscription you
     already pay for.</p>

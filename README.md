@@ -1,10 +1,11 @@
 # swe-mux
 
-**Run your coding agents together, on your desktop and your phone. Know which ones need you.**
+**Run every coding agent in one workspace. Know which ones need you, from your desk or your phone.**
 
-Keep Claude Code, Codex and other coding agents side by side, with live status, flexible panes and messages between sessions.
-The same live sessions open on your phone over your own Tailscale network: terminal, git review, files, previews and push alerts, not a companion app.
-Dictate prompts, hear replies, and ask the assistant what needs attention.
+swe-mux is a terminal multiplexer for coding agents.
+It runs Claude Code, Codex, pi, oh-my-pi, opencode or any shell in real terminals on your own machine, shows which session needs you and why, and puts the whole workspace on your phone over your own Tailscale network.
+Open source (Apache-2.0), with no account, relay or telemetry.
+A native desktop app on Windows, the browser on Linux and macOS, and an installable web app on your phone.
 
 [![Agents and a preview arranged in the swe-mux workspace](site/img/showcase-panes.webp?v=e8ebca109a98)](https://swemux.dev/demo/)
 
@@ -21,14 +22,16 @@ https://github.com/user-attachments/assets/1f964770-bee4-4823-a341-4c123b40605b
 
 ## What you can do
 
-- **See which agent needs you.** Live status, searchable alert history, per-event sounds and push notifications, quiet hours and separate Desktop/Mobile profiles.
-- **Keep working from your phone.** Terminals, Git review, notes, files, queues and local previews over your own Tailscale connection.
-- **Keep familiar input.** Shared editing behavior across supported agent composers, workspace keymaps for tmux, VS Code, Vim and Emacs, and clipboard image paste for image-capable agents.
-- **Reuse copied text.** Shared history of text copied inside swe-mux, with optional persistence and pinned entries.
-- **Use voice.** Local speech recognition, optional read-aloud, and an assistant that can inspect sessions and propose actions under your chosen trust settings.
-- **Let sessions coordinate.** Messages, progress reads and requests for help governed by Project permissions.
-- **Finish parallel work.** Reconcile a branch, run approved checks and fast-forward through the land queue; conflicts and failed checks return to the owning agent.
-- **Find and inspect earlier work.** Search cross-agent conversations, reopen transcripts, and enable recorded evidence and commit provenance when you need them.
+- **See which agent needs you, and why.** One status for every CLI (working, idle, awaiting you), read from the agent's hooks, its transcript, the terminal and the process tree rather than the screen alone. Awaiting names its reason: an approval, a question, a rate limit, a login. An agent that is idle with subagents or background tasks still running looks different from one that is done. Alerts and push notifications name the session and the reason, reach a locked phone, and respect quiet hours.
+- **Work from your phone.** The phone runs the same workspace, not a companion app: the live terminal with a touch keyboard rail, approvals, git diff review, files, notes, the prompt queue and push. It installs from the browser as a web app and reaches your machine over your own Tailscale network, with no app store and no relay.
+- **Open your dev server on your phone.** A server on the host's `127.0.0.1` opens in a Preview pane on the desktop or the phone, proxied through swe-mux with hot reload and WebSockets, so no extra port is exposed. Click a URL an agent printed to open it.
+- **Run every agent CLI in one place.** Claude Code, Codex, pi, oh-my-pi and opencode are recognized, and any other CLI or shell runs in a real terminal. Type `claude` or `codex` in any pane and it becomes a tracked session in place. Resume any of them, branch a Claude conversation from any message, restart an agent onto the same conversation, and switch between saved Claude and Codex logins in one click.
+- **See what each agent loaded and did.** The Agent tab lists the tools, skills, MCP servers, plugins and hooks a Claude Code or Codex session can see, and flags configuration that changed after it started. Read CLAUDE.md, AGENTS.md and Claude's memory in one place, follow the transcript, and search every agent's past conversations at once.
+- **Know where your quota went.** Each saved Claude and Codex account shows its 5-hour and weekly windows, split into what swe-mux sessions used, what the account used outside them, and what was used on another device, with history and reset alerts.
+- **Find the processes agents leave behind.** Every process and listening port is attributed to the session that started it. Processes still running after their session ended, ones that escaped its tree, and anything over 90% CPU or 2 GiB of memory are flagged, with terminate-tree one press away. Nothing is killed automatically. The sidebar shows live sessions, CPU and RAM.
+- **Let sessions coordinate.** Queue a prompt behind a running turn, let a Codex session ask a Claude session something, and land a finished branch only after the checks you approved pass.
+- **Keep sessions through restarts and updates.** A separate supervisor holds every terminal, and typing keeps working while swe-mux restarts.
+- **Keep your habits.** The same editing keys in every agent's prompt, workspace keymaps for tmux, VS Code, Vim and Emacs, image paste, on-device dictation and read-aloud.
 
 ## What runs where
 
@@ -112,7 +115,7 @@ The **Run** menu starts an agent, a shell, a worktree session, or an imported ta
 
 ## Platform support
 
-CI builds, validates and install-smokes the wheel on Windows, Linux and macOS every push, and starts a real daemon on Linux and Windows from the source checkout to prove it serves a shell and exits cleanly.
+CI builds, validates and install-smokes the wheel on Windows, Linux and macOS every push, and starts a real daemon on Windows, Linux and macOS from the source checkout to prove it serves a shell and exits cleanly.
 No CI job starts a daemon from a **published artifact**, which is exactly where the proof stops.
 
 - **Windows 10/11 is the proving platform.** The full gate runs there, including real ConPTY integration and the Playwright renderer suite, and it is the only platform the desktop app ships on.

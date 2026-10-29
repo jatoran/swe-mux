@@ -720,16 +720,17 @@ SESSIONS = Page(
         ("h2", "Sessions that outlive the application"),
         (
             "p",
-            "A supervisor process, separate from the daemon and from the UI, can hold every "
-            "pseudoterminal. With it on, restarting the daemon or rebuilding the desktop app "
-            "leaves the agents working, and reconnecting replays only the bytes you missed rather "
-            "than the whole scrollback.",
+            "A supervisor process, separate from the daemon and from the UI, holds every "
+            "pseudoterminal. Restarting the daemon or rebuilding the desktop app leaves the agents "
+            "working, and reconnecting replays only the bytes you missed rather than the whole "
+            "scrollback. A terminal gateway, a second small process, carries your typing to the "
+            "terminals while the daemon is busy or restarting.",
         ),
         (
             "note",
-            "It ships <b>off</b>. Turn it on in Settings, Terminals. With it off, in-process "
-            "spawning is the fallback and a daemon restart reaps every session - which is why the "
-            "restart endpoint refuses outright unless it is forced.",
+            "Both are <b>on</b> by default. Turning the supervisor off in Settings, Terminals makes "
+            "in-process spawning the fallback, and then a daemon restart reaps every session - "
+            "which is why the restart endpoint refuses outright unless it is forced.",
         ),
         ("h2", "What survives a crash is a separate mechanism"),
         (
@@ -783,7 +784,7 @@ STATUS = Page(
     slug="status",
     title="Session status",
     description=(
-        "Working, ready, awaiting, blocked: one status vocabulary across every vendor's CLI, how "
+        "Working, ready, awaiting, idle: one status vocabulary across every vendor's CLI, how "
         "it is read, and why awaiting is the one to watch."
     ),
     lede=(
@@ -811,14 +812,9 @@ STATUS = Page(
                     ],
                     [
                         "awaiting",
-                        "The agent is blocked on you specifically: an approval, a question, a "
-                        "choice.",
+                        "The agent is blocked on you specifically, and the reason is named: an "
+                        "approval, a question, a choice, a rate limit, or a login.",
                         "This is the one to watch. It is not a stall.",
-                    ],
-                    [
-                        "blocked",
-                        "Something outside the conversation is in the way.",
-                        "Read the pane. The sub-reason names what.",
                     ],
                     [
                         "idle",
@@ -1578,9 +1574,9 @@ NOTES_FILES = Page(
         ),
         (
             "note",
-            "<b>swe-mux finds hung processes; it does not kill them.</b> A suspected orphan is "
-            "surfaced with what it is and what started it. Terminating it stays an explicit act "
-            "you take.",
+            "<b>swe-mux finds the processes a session left behind; it does not kill them.</b> A "
+            "process still running after its session ended is surfaced with what it is and what "
+            "started it. Terminating it stays an explicit act you take.",
         ),
         ("h2", "Prompt templates"),
         (
