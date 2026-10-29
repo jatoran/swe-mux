@@ -17,6 +17,13 @@ The release procedure that maintains this file is [`RELEASING.md`](RELEASING.md)
 
 ### Added
 
+- **Restart agent: a fresh process on the same conversation, in the same pane.**
+  The session menu, the command palette (`session.restartAgent`) and the leader tree (leader, `s`, `Shift+R`) end the agent CLI and resume its conversation in place, so a CLI update or a changed MCP configuration reaches a session without losing it.
+  It refuses while a turn is running, an approval is pending, input is unsent or messages are queued, and says which; a second press forces it after listing what would be lost.
+- **A newer PTY supervisor, offered rather than imposed.**
+  This release's supervisor fills a gap in a terminal's output instead of skipping it, reconnects to swe-mux by itself after a dropped connection, and no longer waits on a client that stopped reading.
+  Replacing the supervisor ends every live session, so an in-app update leaves the running one alone unless you tick the update dialog's box or pass `swemux update --install <version> --with-supervisor-update`, and `swemux doctor` warns while the running one is older.
+  The supervisor protocol is unchanged, so keeping the old supervisor is supported.
 - **A preview says when another process is listening on its port.**
   On Windows a Python server can start on a port another process already holds without any error, and then never receive a request, so its preview showed the other process's page instead.
   The preview now names every process on the port and which one actually answered, and Processes marks the shared listener.
@@ -36,7 +43,19 @@ The release procedure that maintains this file is [`RELEASING.md`](RELEASING.md)
   Each interval is attributed once from the requests swe-mux sessions billed to that account, so opening or refreshing the chart reads stored results.
   Quota → Attribution lists the same rises, and replaces an estimate that credited any session of a provider to whichever of its accounts moved.
 - **Each account says how much of its current window was used here and elsewhere.**
-  Under the weekly and 5-hour readings on Quota → Current, and for every charted account under the History chart, a bar on the limit's own scale splits what the window has used since it began into swe-mux sessions, not swe-mux, used elsewhere, and untracked, with when the window began.
+  On Quota → Current the weekly and 5-hour bars fill with what the window has used since it began, split into swe-mux sessions, not swe-mux, used elsewhere, and untracked, with when the window began; the empty rest is what is left.
+  Every charted account under the History chart gets the same split.
+  The account switcher moves each account's live-session count to its name line, so the quota columns keep the row's full width.
+- **Heavy background work runs in a second process.**
+  A worker process owned by swe-mux now samples processes, walks for conversations and keeps the telemetry ledgers, so that work no longer competes with your terminals for the daemon's time.
+  It restarts by itself if it fails; Settings → Processes → **Run bulk work in a worker process** turns it off, and the same work then runs inside swe-mux as before.
+  A start no longer re-reads every conversation (on the development machine, 1,481 summarized per start, now 133), the code graph re-parses only files that changed instead of the whole tree, and each checkout's Git state is read when it changes instead of every five seconds.
+  Settings → Processes also gains **GIL switch interval** (1-20 ms, default 5), for measuring a fleet unlike the one the default was chosen on.
+- **The Transcript tab opens on the newest messages** and loads older pages as you scroll up, asking only for what changed since its last reading; a tool call's input loads when you open it.
+- **History opens a conversation on the row you clicked**, with Resume usable at once, and pages its messages instead of parsing the whole transcript first.
+- The sidebar's resource row reads live sessions, system CPU and RAM; the process count is in the popover it opens.
+- Alerts says under its interrupt counter that permission prompts never spend the daily budget.
+- The PyPI package declares keywords matching the repository's topics.
 
 ### Fixed
 
@@ -60,6 +79,12 @@ The release procedure that maintains this file is [`RELEASING.md`](RELEASING.md)
 - **Reading a repository's diff no longer locks it.** The Git panel's line counts ran `git diff`, which takes `.git/index.lock` to refresh the index even when told not to take optional locks. In a large repository that read could hit its 4-second limit while holding the lock, and the lock it left behind blocked every commit there until someone deleted it by hand. Every read swe-mux makes now leaves the index alone.
 - **A one-point dip in a quota reading is no longer counted as a reset.** Codex sometimes reads a point or two lower inside the same window and climbs back, and each dip was booked as a fresh climb from zero, so a 57% to 56% dip added 56 points of usage to that account's attribution. Stored attribution is recomputed once at the next start.
 - **Quota → Attribution loads again.** Its request carried two query strings and was refused on every load.
+- **The desktop app replaces a killed daemon as soon as it exits.**
+  It used to re-issue the kill at every check and charge each one to its restart budget, so a hung daemon that took four minutes to die was replaced six minutes after that.
+  A tray **Restart daemon** that fails now says so instead of doing nothing.
+- **The Git panel stops re-running line counts it cannot finish.**
+  A checkout with thousands of changed files started two diffs on every read that were killed at the 4-second limit; the failure is now remembered and retried after ten minutes, and that checkout's ignore rules no longer vanish when its ignored-file listing passes 16 MiB.
+- **swe-mux no longer freezes for about four seconds the first time anything asks for voice status after a start**, while it looked for installed speech models.
 - **Codex telemetry events keep their real time.** Codex sends an empty event time, and every such event was being filed at 1970.
 
 ## [0.2.9] - 2026-09-25
