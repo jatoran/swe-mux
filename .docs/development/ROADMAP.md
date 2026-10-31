@@ -2,7 +2,13 @@
 
 ## Purpose
 
-This roadmap is the active delivery plan after the Windows multiplexer, explicit-Project,
+**Since 2026-10-31 the open work is planned in the maintainer's roadmap graph, not here.**
+It lives in `roadmap/` in the primary checkout only and is gitignored, so a clone does not have it; the public summary of what is planned is swemux.dev/roadmap.
+Each node links back to the section of this file that holds its design, decisions and measurements, and this file stays that record.
+An unchecked box below is not, by itself, evidence that work is open: the graph was seeded from these boxes after checking each against the code, and boxes for work that had shipped (the land queue's live run, control-plane step 9, the Phase 11 publication and website items) were left as they were.
+New open work becomes a node in the graph rather than a new unchecked box here.
+
+This roadmap was the delivery plan, and is now the design record, after the Windows multiplexer, explicit-Project,
 provider-account, and read-only control-plane foundations shipped. It sequences product
 work by dependency: prove observation first, persist evidence second, expose deliberate
 user actions third, and authorize bounded automation only after its safety predicates pass.

@@ -103,6 +103,12 @@ _agents-orchestrator/
 # that, and `verify_release_unit.py --sdist` checks the tarball against it.
 .private/
 
+# === Roadmap graphs ===
+# The maintainer's roadmap graphs (`roadmap` command) are local planning state and
+# are never committed. The public plan is `site/content/roadmap.html`; the design
+# record is `.docs/development/ROADMAP.md`.
+.docs/development/roadmap/
+
 # Deployment-time plugin discovery output. The source page and validator are tracked;
 # Pages rebuilds this exact-revision catalog from public GitHub repositories.
 site/plugins/catalog.json

@@ -862,7 +862,13 @@
   (2026-08-20). Announcing joins the stream already speaking; only a spoken verdict interrupts.
 - Changing listeners, Tailscale, browser security, or remote operation:
   `design/features/remote-access.md`
-- Planning remaining work: `development/ROADMAP.md`; control-plane plan + completion
+- Planning remaining work: the `swe-mux` roadmap graph in `development/roadmap/`, the open work,
+  decisions and maintainer-only checks. It is **gitignored and never committed**: it exists only in
+  the primary checkout, like `.private/`. Read it with `roadmap --at swe-mux` (`ready`,
+  `decisions`, `waiting --who operator`, `show <ID>`) and change it only through the `roadmap`
+  command. Each node links to the section holding its design detail, which is mostly
+  `development/ROADMAP.md`, the record of every phase's decisions and measurements; a new open item
+  becomes a roadmap node rather than an unchecked box there. Control-plane plan + completion
   checklist (start at §9): `development/CONTROL_PLANE_ROADMAP.md`; the completed
   audit-remediation programme and the decisions its twelve packages recorded:
   `development/archive/ROADMAP_V2.md` (source findings:
