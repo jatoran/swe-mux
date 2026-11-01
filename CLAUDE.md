@@ -118,13 +118,23 @@ follow that did not apply while it was local-only.
 **Everything you write is published.** Not just source: commit messages and all of `.docs/`
 are visible, and so is every sdist on PyPI, which packs the whole checkout. There is exactly
 one private place in the tree, `.private/`, which is gitignored and holds operator notes about
-running the project plus the launch drafts, outreach tracker and GTM plan
-(`.private/marketing/`, moved out of `.docs/` on 2026-09-07 after shipping in every sdist up
-to 0.2.7). It is not for secrets - a gitignore rule is one `git add -f` away from not
-protecting anything, so keys live in a password manager. Two consequences: `.private/` exists
-only in the primary checkout, so a worktree or a clone cannot read it; and `pyproject.toml`
-declares it excluded from the sdist, which `verify_release_unit.py --sdist` checks the built
-tarball against before a release publishes.
+running the project plus the marketing material (`.private/marketing/`, moved out of `.docs/`
+on 2026-09-07 after shipping in every sdist up to 0.2.7). It is not for secrets - a gitignore
+rule is one `git add -f` away from not protecting anything, so keys live in a password manager.
+Two consequences: `.private/` exists only in the primary checkout, so a worktree or a clone
+cannot read it; and `pyproject.toml` declares it excluded from the sdist, which
+`verify_release_unit.py --sdist` checks the built tarball against before a release publishes.
+
+**Outreach goes through the marketing kit, and nothing else.** Since 2026-11-01 every post,
+comment, email, DM, submission, list PR and upload is an item in `.private/marketing/kit/`, its
+own local git repository, which the operator's marketing hub reads live, puts in front of the
+operator for approval, and then sends, stages or hands back to them. Load the global
+`marketing-kit` skill before anything outreach-related, edit the item files in place, commit in
+the kit's repository, and run `mm kits validate` on it until it is clean. **Never post, email or
+submit anything yourself**, and never keep a posted-where list: the hub's ledger is the record.
+The older system beside the kit (`launch-kit/`, `launch-kit.html`, the campaign log and plan,
+the replies inbox, the Reddit queues) is retired; never use it or regenerate the kit from it.
+What is next in marketing is the `swe-mux-marketing` roadmap in `.private/marketing/roadmap/`.
 
 **A red badge is the first thing a visitor sees.** CI (`.github/workflows/ci.yml`) runs on
 every push to `master`: the full Windows gate, plus Ubuntu and macOS legs, plus a `site` job.

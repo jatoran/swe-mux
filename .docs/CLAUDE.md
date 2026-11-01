@@ -878,14 +878,21 @@
   names `component-jsx` and `composition-root` as the source-text test debt a renderer
   harness is the way off.
 - Changing public-site recordings, video playback, or roadmap claims: `site/README.md`, `site/DEMO.md`, `site/ROADMAP_AUDIT.md`; range delivery lives in `worker/media.mjs` and is covered by `tests/test_site_video_ranges.py`.
-- Changing launch marketing material - blog/post drafts, the positioning line, or the venue
-  checklist: `.private/marketing/README.md` (index + rules) and `development/ROADMAP.md`
-  Phase 11. That directory is operator-private and gitignored since 2026-09-07: it exists only
-  in the primary checkout, never in a worktree, a clone, or an sdist, and `pyproject.toml`
-  declares the sdist exclusion that `verify_release_unit.py --sdist` checks a release against.
-  The rule the drafts carry: every claim must be true of the shipped artifact on the day it
-  posts, `[verify]` markers are re-measured before publishing, and the positioning line is
-  one string used verbatim everywhere.
+- Changing outreach - a post, comment, email, submission, list PR or upload, the facts its copy
+  quotes, or the positioning line: the marketing kit in `.private/marketing/kit/` (its own
+  local git repository, read by the operator's marketing hub), through the global
+  `marketing-kit` skill: edit the item files, `brief.md`, `answers.md` or `facts.toml` in place,
+  commit in the kit's repository, and run `mm kits validate` until it is clean. Agents never
+  post, email or submit; the hub does that after the operator approves. What is next is the
+  `swe-mux-marketing` roadmap in `.private/marketing/roadmap/`; the claims rule is
+  `.private/marketing/POSITIONING_2026-10-29.md`. The launch kit, campaign log and plan,
+  replies inbox and Reddit queues beside them are retired and never regenerated. That
+  directory is operator-private and gitignored since 2026-09-07: it exists only in the primary
+  checkout, never in a worktree, a clone, or an sdist, and `pyproject.toml` declares the sdist
+  exclusion that `verify_release_unit.py --sdist` checks a release against.
+  The rule every item carries: every claim must be true of the shipped artifact on the day it
+  posts, and every number comes from a fact the hub re-measures (`refresh` in `facts.toml`)
+  rather than being typed into the copy.
 - Changing what an **installed** copy looks like from the operator's side - an install, upgrade,
   or uninstall path; what an uninstall leaves behind; where the data directory or any file under
   it lives; what `swemux doctor` answers in either mode, including its exit codes; a recovery

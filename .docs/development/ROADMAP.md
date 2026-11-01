@@ -4000,8 +4000,9 @@ Fix one positioning line and use it verbatim everywhere.
   Fix what they hit before widening.
 - [x] Show HN, posted 2026-09-27 as "A terminal multiplexer for coding agents optimized for
   mobile": 3 points and no discussion. A second, materially different attempt is planned only
-  after another channel has shown which story draws interest (the campaign plan in
-  `.private/marketing/`, operator-private).
+  after another channel has shown which story draws interest (decision Q22 in the operator's
+  marketing roadmap; the submission is an item in the marketing kit, both operator-private in
+  `.private/marketing/`).
 - [ ] Product Hunt and X after: short clips of specific moments outperform announcement
   posts, and the multi-agent-orchestration audience on X is the target demographic.
 - [ ] Ongoing multipliers, none time-critical: newsletter submissions (Console.dev has a
@@ -4021,8 +4022,9 @@ Fix one positioning line and use it verbatim everywhere.
   Vibe Kanban, Conductor, omnara) and state the differentiation - session-preserving
   supervisor, phone and voice control, the land queue, provenance - in the launch material
   rather than leaving readers to infer it.
-- [ ] Work the full venue checklist; every item has a draft in `.private/marketing/`
-  (operator-private since 2026-09-07; primary checkout only):
+- [ ] Work the full venue checklist. Since 2026-11-01 every venue is an item in the marketing
+  kit, `.private/marketing/kit/` (operator-private; primary checkout only), which the
+  operator's marketing hub sends or hands to the operator after approval:
   - Blog (the operator's own blog, adambandel.com, cross-posted to dev.to with a canonical
     link; the swemux.dev blog stays switched off): the launch post, the
     session-preserving-runtime story, the land queue, status detection, the first public CI
