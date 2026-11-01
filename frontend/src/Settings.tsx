@@ -38,6 +38,7 @@ import { enableMobileVoice } from './mobileVoice'
 import { autoplayEnabled, setAutoplayEnabled } from './voice'
 import { TailscaleConnection, PhoneDnsChecklist, FirewallPanel, type RemoteStatus, type FirewallStatus } from './remoteConnection'
 import { WslBridgePanel } from './WslBridgePanel'
+import { describeLastRun, describeUsageActivity, runUsageRefresh, type UsageCollector } from './usageRefresh'
 import { type WslBridgeStatus } from './wslBridge'
 import { ConnectPhone } from './ConnectPhone'
 import { UpdateDialog } from './UpdateDialog'
@@ -237,7 +238,7 @@ type ProviderStatus={secret:{configured:boolean;source:string;persistent:boolean
 
 type UsageStatus = {
   enabled:boolean; refreshing:boolean; package:string; install_command:string
-  collector:{id:string;status:string;error?:string;refreshed_at?:number}
+  collector:UsageCollector
   cache?:{updated_at?:number;sources?:Record<string,{totals?:Record<string,number>}>}
 }
 
@@ -1630,19 +1631,32 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   const moveProfile = (index:number,offset:number) => { const items=[...draft!.shell_profiles],target=index+offset;if(target<0||target>=items.length)return;[items[index],items[target]]=[items[target],items[index]];change('shell_profiles',items) }
   const restoreDetected = () => { const existing=new Set(draft!.shell_profiles.map(profile=>profile.id));change('shell_profiles',[...draft!.shell_profiles,...detectedProfiles.filter(profile=>!existing.has(profile.id)).map(profile=>({...profile,configured:undefined}))]) }
   const refreshUsage = async () => {
-    setUsageRefreshMessage('Refreshing agent usage… this may take up to a minute.')
+    setUsageRefreshMessage('Refreshing agent usage in the background…')
     setErrors(current=>{const next={...current};delete next.ccusage;return next})
     try {
-      const next=await api<UsageStatus>('POST','/api/usage/refresh',{})
-      setUsage(next)
-      setUsageRefreshMessage(`Refresh finished · ${next.collector.id} ${next.collector.status}`)
+      // The daemon answers at once and runs the contained scan in the background;
+      // follow it until it ends rather than holding a request open for minutes.
+      const next=await runUsageRefresh(
+        ()=>api<UsageStatus>('POST','/api/usage/refresh',{mode:'auto'}),
+        ()=>api<UsageStatus>('GET','/api/usage'),
+        status=>{
+          setUsage(status)
+          const activity=describeUsageActivity(status.collector,Date.now()/1000)
+          if(status.refreshing)setUsageRefreshMessage(`Refreshing agent usage… ${activity??''}`.trim())
+        },
+      )
+      if(next.collector.error)throw new Error(next.collector.error)
+      setUsageRefreshMessage(`Refresh finished · ${next.collector.id} ${next.collector.status}${describeLastRun(next.collector.last_run)?` · ${describeLastRun(next.collector.last_run)}`:''}`)
     } catch (error) {
       const message=(error as Error).message
       setUsageRefreshMessage(`Refresh failed · ${message}`)
       setErrors(current=>({...current,ccusage:message}))
     }
   }
-  const clearUsage = async () => setUsage(await api<UsageStatus>('DELETE','/api/usage/cache'))
+  const clearUsage = async () => {
+    try { setUsage(await api<UsageStatus>('DELETE','/api/usage/cache')) }
+    catch (error) { setUsageRefreshMessage(`Clear failed · ${(error as Error).message}`) }
+  }
   const providerKeyAction=async(operation:'test'|'set'|'clear',target:'openrouter'|'custom'='openrouter')=>{
     const key=target==='custom'?customKey:openRouterKey
     const label=target==='custom'?'Endpoint':'OpenRouter'
@@ -2418,7 +2432,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           </section>
         </Fragment>}
 
-        {activeTab==='usage'&&<Fragment><section><h3>Operational telemetry</h3><div class="theme-actions"><button class="primary" onClick={onOpenUsage}>Open telemetry dashboard</button><button disabled={!config?.ccusage_enabled || usage?.refreshing || usageRefreshMessage.startsWith('Refreshing')} onClick={()=>void refreshUsage()}>{usageRefreshMessage.startsWith('Refreshing')?'Refreshing…':'Refresh historical usage'}</button><button onClick={()=>void clearUsage()}>Clear ccusage cache</button></div><label>Operational telemetry retention days<input type="number" min="1" max="3650" value={draft.operational_telemetry_retention_days} onInput={e=>change('operational_telemetry_retention_days',Number(e.currentTarget.value))}/></label><label>Provider quota poll minutes<input type="number" min="5" max="1440" value={draft.provider_quota_poll_minutes} onInput={e=>change('provider_quota_poll_minutes',Number(e.currentTarget.value))}/></label><label class="check"><span>Refresh active quota after eligible root turns</span><input type="checkbox" checked={draft.provider_quota_turn_refresh_enabled} onChange={e=>change('provider_quota_turn_refresh_enabled',e.currentTarget.checked)}/></label><label>Minimum minutes between turn-triggered refreshes<input type="number" min="1" max="1440" value={draft.provider_quota_turn_refresh_min_minutes} onInput={e=>change('provider_quota_turn_refresh_min_minutes',Number(e.currentTarget.value))}/><small>Globally rate limited and selected-account only.</small></label></section><section><h3>Historical ccusage</h3><p class={usageRefreshMessage.startsWith('Refresh failed')?'settings-inline-error':''} aria-live="polite">{usageRefreshMessage || (usage ? `${usage.collector.id}: ${usage.collector.status}${usage.collector.error?` (${usage.collector.error})`:''}` : 'usage status unavailable')}</p>{draft.ccusage_enabled&&!config?.ccusage_enabled&&<p>Save these settings before refreshing.</p>}<label class="check" data-setting="ccusage_enabled"><span>Enable ccusage refresh</span><input type="checkbox" checked={draft.ccusage_enabled} onChange={e=>change('ccusage_enabled',e.currentTarget.checked)} /></label><label>Background refresh minutes<input type="number" min="0" max="1440" value={draft.ccusage_refresh_minutes} onInput={e=>change('ccusage_refresh_minutes',Number(e.currentTarget.value))} /></label><label>Install/update command<input readonly value={usage?.install_command||'npm install -g ccusage@latest'} onFocus={event=>event.currentTarget.select()} /></label><button onClick={()=>void navigator.clipboard.writeText(usage?.install_command||'npm install -g ccusage@latest')}>Copy install command</button><details class="settings-advanced"><summary>Advanced collector command</summary><label>ccusage collector command<textarea value={draft.usage_command.join('\n')} onInput={e=>change('usage_command',e.currentTarget.value.split('\n').filter(Boolean))} /></label>{Object.entries(draft.usage_commands).map(([name,command])=><label>{name} legacy source override<textarea value={command.join('\n')} onInput={e=>change('usage_commands',{...draft.usage_commands,[name]:e.currentTarget.value.split('\n').filter(Boolean)})} /></label>)}</details></section></Fragment>}
+        {activeTab==='usage'&&<Fragment><section><h3>Operational telemetry</h3><div class="theme-actions"><button class="primary" onClick={onOpenUsage}>Open telemetry dashboard</button><button disabled={!config?.ccusage_enabled || usage?.refreshing || usageRefreshMessage.startsWith('Refreshing')} onClick={()=>void refreshUsage()}>{usageRefreshMessage.startsWith('Refreshing')?'Refreshing…':'Refresh historical usage'}</button><button disabled={usage?.refreshing || usageRefreshMessage.startsWith('Refreshing')} onClick={()=>void clearUsage()}>Clear ccusage cache</button></div><label>Operational telemetry retention days<input type="number" min="1" max="3650" value={draft.operational_telemetry_retention_days} onInput={e=>change('operational_telemetry_retention_days',Number(e.currentTarget.value))}/></label><label>Provider quota poll minutes<input type="number" min="5" max="1440" value={draft.provider_quota_poll_minutes} onInput={e=>change('provider_quota_poll_minutes',Number(e.currentTarget.value))}/></label><label class="check"><span>Refresh active quota after eligible root turns</span><input type="checkbox" checked={draft.provider_quota_turn_refresh_enabled} onChange={e=>change('provider_quota_turn_refresh_enabled',e.currentTarget.checked)}/></label><label>Minimum minutes between turn-triggered refreshes<input type="number" min="1" max="1440" value={draft.provider_quota_turn_refresh_min_minutes} onInput={e=>change('provider_quota_turn_refresh_min_minutes',Number(e.currentTarget.value))}/><small>Globally rate limited and selected-account only.</small></label></section><section><h3>Historical ccusage</h3><p class={usageRefreshMessage.startsWith('Refresh failed')?'settings-inline-error':''} aria-live="polite">{usageRefreshMessage || (usage ? `${usage.collector.id}: ${usage.collector.status}${usage.collector.error?` (${usage.collector.error})`:''}` : 'usage status unavailable')}</p>{draft.ccusage_enabled&&!config?.ccusage_enabled&&<p>Save these settings before refreshing.</p>}<label class="check" data-setting="ccusage_enabled"><span>Enable ccusage refresh</span><input type="checkbox" checked={draft.ccusage_enabled} onChange={e=>change('ccusage_enabled',e.currentTarget.checked)} /></label><label>Background refresh minutes<input type="number" min="0" max="1440" value={draft.ccusage_refresh_minutes} onInput={e=>change('ccusage_refresh_minutes',Number(e.currentTarget.value))} /></label><label>Install/update command<input readonly value={usage?.install_command||'npm install -g ccusage@latest'} onFocus={event=>event.currentTarget.select()} /></label><button onClick={()=>void navigator.clipboard.writeText(usage?.install_command||'npm install -g ccusage@latest')}>Copy install command</button><details class="settings-advanced"><summary>Advanced collector command</summary><label>ccusage collector command<textarea value={draft.usage_command.join('\n')} onInput={e=>change('usage_command',e.currentTarget.value.split('\n').filter(Boolean))} /></label>{Object.entries(draft.usage_commands).map(([name,command])=><label>{name} legacy source override<textarea value={command.join('\n')} onInput={e=>change('usage_commands',{...draft.usage_commands,[name]:e.currentTarget.value.split('\n').filter(Boolean)})} /></label>)}</details></section></Fragment>}
 
         {activeTab==='automation'&&<section><h3>Automation workspace</h3>
           <p>Graph definitions, rules, Project policy, global limits, spend, learned fixes, and diagnostics now share one Automation workspace.</p>

@@ -17,7 +17,9 @@ Secondary navigation retains short visible tabs, and extra filters use a bounded
 `analyticsPresentation.ts` owns compact number formatting and calendar-based historical windows.
 `usagePots.ts` uses the same window helper for the Overview; it also owns tightest-window quota selection.
 
-`UsageDashboardView.tsx` owns Summary, Trends, and Models, the source picker, and explicit collection operations.
+`UsageDashboardView.tsx` owns Summary, Trends, and Models, the source picker, and explicit collection operations (refresh, rebuild history, clear cache).
+`usageRefresh.ts` is their shared pure half with Settings → Usage: it follows a background refresh by reading `GET /api/usage` until `refreshing` is false, and words the run in flight, a deferred run, and the last run.
+A refresh request answers at once, so both surfaces poll rather than holding a request open for a contained scan that can take minutes.
 `UsageModelBreakdown.tsx` aggregates by exact source/model identity and offers selected-model history.
 `QuotaAnalytics.tsx` owns Current, History, Resets, and Attribution and fetches only the evidence needed by the selected view.
 Its `WindowShares` is the one bar a window draws, in the cards and in History's window-now table: a source split where attribution reaches the window, the plain reading otherwise.

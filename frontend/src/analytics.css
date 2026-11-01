@@ -59,6 +59,7 @@
 .analytics-diagnostics>summary{cursor:pointer;min-height:28px;line-height:1.5;overflow-wrap:anywhere}
 .analytics-diagnostics>summary>small{display:block;color:var(--muted);font-weight:400;margin-top:4px}
 .analytics-actions{display:flex;gap:7px;flex-wrap:wrap;margin:8px 0}
+.usage-advisories{margin:6px 0;padding-left:18px;color:var(--amber);font-size:12px;line-height:1.5;overflow-wrap:anywhere}
 .analytics-actions button.active{border-color:var(--accent);color:var(--accent)}
 .analytics-inline-toolbar{padding:0 0 10px;justify-content:space-between;background:transparent}
 .analytics-run-card{display:flex;gap:16px;align-items:center;justify-content:space-between;padding:12px 0;border-bottom:1px solid var(--line);min-width:0}

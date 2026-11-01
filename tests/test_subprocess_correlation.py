@@ -50,7 +50,7 @@ async def test_a_ccusage_run_carries_the_refresh_it_belongs_to(
         return _outcome(b'{"daily": []}')
 
     monkeypatch.setattr(usage, "run_bounded", fake_run_bounded)
-    monkeypatch.setattr(usage, "prepare_usage_command", lambda command: list(command))
+    monkeypatch.setattr(usage, "resolve_usage_launch", _plain_launch)
     events = EventBus()
     queue = events.subscribe(name="test")
     manager = UsageManager(
@@ -77,6 +77,11 @@ def _drain(queue: asyncio.Queue[Any]) -> list[Any]:
     return events
 
 
+def _plain_launch(command: Any, **_kwargs: Any) -> usage.UsageLaunch:
+    command = list(command)
+    return usage.UsageLaunch(command[:1], command[1:], "command", command[0], False)
+
+
 async def test_a_ccusage_timeout_names_the_bound_and_what_it_spent(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -89,12 +94,13 @@ async def test_a_ccusage_timeout_names_the_bound_and_what_it_spent(
             stderr=b"",
             stdout_truncated=False,
             stderr_truncated=False,
-            duration_ms=usage.USAGE_TIMEOUT_SECONDS * 1000,
+            duration_ms=usage.USAGE_CEILING_SECONDS * 1000,
             timed_out=True,
+            resources={"read_bytes": 3 * 2**30, "cpu_seconds": 812.0},
         )
 
     monkeypatch.setattr(usage, "run_bounded", fake_run_bounded)
-    monkeypatch.setattr(usage, "prepare_usage_command", lambda command: list(command))
+    monkeypatch.setattr(usage, "resolve_usage_launch", _plain_launch)
     manager = UsageManager(
         Config(data_dir=tmp_path, ccusage_enabled=True, usage_command=["fixture-ccusage"]),
         EventBus(),
@@ -104,13 +110,44 @@ async def test_a_ccusage_timeout_names_the_bound_and_what_it_spent(
 
     assert manager.state.status == "error"
     error = manager.state.error or ""
-    assert f"{usage.USAGE_TIMEOUT_SECONDS:g}s" in error
+    assert f"{usage.USAGE_CEILING_SECONDS:g}s" in error
+    assert "read 3072 MB" in error
     assert "transcript corpus" in error
 
 
-def test_the_ccusage_bound_covers_the_measured_cold_read() -> None:
-    """The bound is a measurement, not a round number (see the constant's note)."""
-    assert usage.USAGE_TIMEOUT_SECONDS >= 120.0
+async def test_a_ccusage_stall_is_reported_as_hung_not_slow(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def fake_run_bounded(_argv: Any, **_kwargs: Any) -> ProcessOutcome:
+        return ProcessOutcome(
+            exit_code=None,
+            stdout=b"",
+            stderr=b"",
+            stdout_truncated=False,
+            stderr_truncated=False,
+            duration_ms=400_000,
+            stalled=True,
+        )
+
+    monkeypatch.setattr(usage, "run_bounded", fake_run_bounded)
+    monkeypatch.setattr(usage, "resolve_usage_launch", _plain_launch)
+    manager = UsageManager(
+        Config(data_dir=tmp_path, ccusage_enabled=True, usage_command=["fixture-ccusage"]),
+        EventBus(),
+    )
+
+    await manager.refresh()
+
+    error = manager.state.error or ""
+    assert f"no progress for {usage.USAGE_STALL_SECONDS:g}s" in error
+    assert "hung rather than slow" in error
+
+
+def test_the_ccusage_bounds_leave_room_for_a_contained_scan() -> None:
+    """The ceiling outlasts the measured cold read many times over (see the constants'
+    notes); a hung run is caught by the stall window long before it."""
+    assert usage.USAGE_CEILING_SECONDS >= 3600
+    assert 60 <= usage.USAGE_STALL_SECONDS < usage.USAGE_CEILING_SECONDS
 
 
 # --------------------------------------------------------------------------- #

@@ -82,10 +82,31 @@ There are two lanes, each its own loop and thread: `LANE_BACKGROUND` for pollers
 Callers since 2026-09-02 also include `git_operations.py`, `git_review.py`, `git_projects.py`, `tailscale.py`, `windows_firewall.py`, and `meta_hooks.py`; the only raw `create_subprocess_exec` left in the daemon is the Codex app-server in `provider_accounts.py` and `mcp_tools.py`, which holds stdin open.
 A query whose output would exceed its cap comes back refused (`git_review.GitResult.too_large`) rather than parsed clipped.
 
+A caller that passes `containment` gets a run the OS holds back (`background_containment.py`): its resources are read every `CONTAINED_POLL_SECONDS` on the spawn loop and handed to `on_sample` on the caller's loop, `stall_seconds` stops it once nothing has moved for that long (`ProcessOutcome.stalled`, `exit_code=None`), and its final accounting comes back as `ProcessOutcome.resources`.
+The stall window is the working bound for work that is slow by design; `timeout_seconds` stays the absolute ceiling.
+A host that cannot measure the tree never reports a stall, it falls back to the ceiling.
+
 Callers: `usage.py`, `provider_accounts.py`, `git_monitor.py`, and `worktree_exec.py` (whose pattern this is).
 Migrating the first three closed three real gaps - `usage.py` buffered ccusage to completion through `communicate()` and only then compared it against its own 10 MiB limit, the other two had no cap at all, and none of the three reaped on cancellation despite all of them running inside supervised background loops.
 
 **Not:** interpreting an exit status, decoding, long-lived or interactive stdio children (the Codex quota app-server in `provider_accounts.py` speaks JSON-RPC over a held stdin and stays hand-rolled), or ConPTY sessions.
+
+## `background_containment.py`
+
+Running a heavy daemon-owned batch command as background work the OS enforces, so it cannot starve the host (the 2026-10-31 ccusage freeze, `design/features/usage.md`).
+`prepare_spawn` chooses how the child starts and `attach` takes it over; `ContainedRun.poll` reads cumulative CPU, bytes read and members, and `close` returns the final accounting and releases the tree.
+
+- **Windows:** created suspended (`CREATE_SUSPENDED | IDLE_PRIORITY_CLASS`) and placed in a Job object before its first instruction.
+  The job limits every member's class to idle, hard-caps the tree's CPU share (`ContainmentPolicy.cpu_percent`, default 25), dies on an unhandled exception instead of raising a WER dialog, and kills any surviving member when it closes.
+  The root's I/O and memory priority are lowered to very low before it is resumed; children inherit both, and each poll lowers any member not yet seen.
+  An affinity mask is not used because Rust's `available_parallelism` on Windows reads `GetSystemInfo` and ignores it, so it would not reduce a program's worker count.
+- **macOS:** `taskpolicy -b`. **Linux:** `ionice -c 3 -t` and `nice -n 19` wrap the command, because both are per *thread* on Linux and a priority set after the program started its workers reaches only the main thread.
+  Each wrapper is probed once (`<wrapper> true`) and dropped if it cannot run here, so a container that refuses `ioprio_set` does not fail the command it wraps.
+
+A mechanism that could not be applied is a `degraded` reason on the run and a WARNING log line, never a refusal to run.
+A failure to *resume* a suspended child raises after releasing the job, which ends the child, so nothing is ever left parked.
+
+**Not:** a memory ceiling (it turns "slow" into "failed" for the run worth the most; callers bound memory by asking for less work), the session process-priority policy (`process_priority.py`), or the daemon-wide session reaper (`win_jobobj.py`, which belongs to the supervisor closure and must not change for this).
 
 ## `cli_version.py`
 

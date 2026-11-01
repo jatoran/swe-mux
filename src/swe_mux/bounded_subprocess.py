@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import asyncio
 import atexit
+import contextlib
 import contextvars
 import logging
 import threading
@@ -41,9 +42,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from . import background_containment
+from .background_containment import ContainedRun, ContainmentPolicy, ResourceSample
 from .subprocess_flags import background_creation_flags, reap_process_tree
 
 log = logging.getLogger(__name__)
+
+#: How often a contained run's resources are read while it runs. Each read is a few
+#: kernel queries on the spawn loop's thread, never on the daemon's loop.
+CONTAINED_POLL_SECONDS = 1.0
 
 #: The thread the spawn loop runs on. Named so a stall dump reads as what it is.
 SPAWN_THREAD_NAME = "subprocess-spawn"
@@ -98,13 +105,18 @@ def reset_log_windows() -> None:
 class ProcessOutcome:
     """What one bounded run produced, with no interpretation of its meaning.
 
-    `exit_code` is `None` only when no exit status exists to report, which today
-    means the run timed out. A caller must never read that as a zero.
+    `exit_code` is `None` only when no exit status exists to report, which means
+    the run was stopped by one of its bounds: it ran past its timeout
+    (`timed_out`), or it was contained and made no progress for its stall window
+    (`stalled`). A caller must never read that as a zero.
 
     Truncation is reported per stream rather than folded into the bytes, because a
     caller that parses its output (`git diff --numstat`) has to be able to refuse a
     capture that lost its middle, while one that only shows the tail to a human
     does not.
+
+    `resources` is the contained run's final accounting
+    (`ContainedRun.close`), and `None` for a run that was not contained.
     """
 
     exit_code: int | None
@@ -114,6 +126,8 @@ class ProcessOutcome:
     stderr_truncated: bool
     duration_ms: float
     timed_out: bool = False
+    stalled: bool = False
+    resources: Mapping[str, Any] | None = None
 
     @property
     def truncated(self) -> bool:
@@ -349,10 +363,20 @@ async def run_bounded(
     on_chunk: Callable[[bytes], None] | None = None,
     operation_id: str | None = None,
     lane: str = LANE_BACKGROUND,
+    containment: ContainmentPolicy | None = None,
+    stall_seconds: float | None = None,
+    on_sample: Callable[[ResourceSample], None] | None = None,
 ) -> ProcessOutcome:
     """Run one command to completion under a timeout and an output cap.
 
-    `argv` reaches the OS as given. `env` of `None` inherits this process's
+    `argv` reaches the OS as given, unless `containment` is set: then it runs as
+    background work the OS holds back (`background_containment`), its resources are
+    read every `CONTAINED_POLL_SECONDS` and handed to `on_sample`, and
+    `stall_seconds`, when given, stops it once that long passes with no CPU time and
+    no reads at all. That is the bound for work that is slow by design: a wall-clock
+    timeout cannot tell a contained scan that yields to the operator from one that
+    hung, and the progress counters can. `timeout_seconds` stays the absolute
+    ceiling either way. `env` of `None` inherits this process's
     environment, which is what every caller but the worktree commands wants;
     stdin is always `DEVNULL`, so a program that decides to prompt fails fast
     instead of blocking on a stdin the daemon holds and will never write to.
@@ -385,6 +409,9 @@ async def run_bounded(
             env=env,
             on_chunk=on_chunk,
             operation_id=operation_id,
+            containment=containment,
+            stall_seconds=stall_seconds,
+            on_sample=on_sample,
         )
 
     marshalled: Callable[[bytes], None] | None = None
@@ -396,6 +423,16 @@ async def run_bounded(
             # so they run where they were written, in the order the bytes arrived.
             try:
                 caller.call_soon_threadsafe(observer, chunk)
+            except RuntimeError:
+                pass
+
+    sample_marshalled: Callable[[ResourceSample], None] | None = None
+    if on_sample is not None:
+        sample_observer = on_sample
+
+        def sample_marshalled(sample: ResourceSample) -> None:
+            try:
+                caller.call_soon_threadsafe(sample_observer, sample)
             except RuntimeError:
                 pass
 
@@ -417,6 +454,9 @@ async def run_bounded(
                 env=env,
                 on_chunk=marshalled,
                 operation_id=operation_id,
+                containment=containment,
+                stall_seconds=stall_seconds,
+                on_sample=sample_marshalled,
             ),
             name=f"bounded:{label}",
             context=context,
@@ -454,27 +494,43 @@ async def _run_bounded_here(
     env: Mapping[str, str] | None,
     on_chunk: Callable[[bytes], None] | None,
     operation_id: str | None,
+    containment: ContainmentPolicy | None = None,
+    stall_seconds: float | None = None,
+    on_sample: Callable[[ResourceSample], None] | None = None,
 ) -> ProcessOutcome:
     """The run, on whichever loop is current. `run_bounded` puts it on the spawn loop."""
     loop = asyncio.get_running_loop()
     started = loop.time()
     stdout_task: asyncio.Task[tuple[bytes, bool]] | None = None
     stderr_task: asyncio.Task[tuple[bytes, bool]] | None = None
+    guard: ContainedRun | None = None
+    resources: Mapping[str, Any] | None = None
 
     def elapsed() -> float:
         return (loop.time() - started) * 1000
 
+    spawn_argv = list(argv)
+    creationflags = background_creation_flags()
+    prepared = None
+    if containment is not None:
+        prepared = background_containment.prepare_spawn(spawn_argv, containment)
+        spawn_argv = prepared.argv
+        creationflags |= prepared.creationflags
     process = await asyncio.create_subprocess_exec(
-        *argv,
+        *spawn_argv,
         cwd=None if cwd is None else str(cwd),
         stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT if merge_stderr else asyncio.subprocess.PIPE,
         env=None if env is None else dict(env),
-        creationflags=background_creation_flags(),
+        creationflags=creationflags,
     )
     try:
         try:
+            if containment is not None and prepared is not None:
+                # On Windows the child is still suspended here: `attach` resumes it
+                # only once it is held back, and a raise leaves it to the reap below.
+                guard = background_containment.attach(process.pid, prepared, containment)
             assert process.stdout is not None
             stdout_task = asyncio.create_task(
                 bounded_read(process.stdout, output_limit, label=label, on_chunk=on_chunk)
@@ -487,12 +543,27 @@ async def _run_bounded_here(
                         label=f"{label} stderr",
                     )
                 )
-            try:
-                exit_code: int | None = await asyncio.wait_for(process.wait(), timeout_seconds)
-                timed_out = False
-            except TimeoutError:
+            exit_code, timed_out, stalled = await _await_exit(
+                process,
+                timeout_seconds=timeout_seconds,
+                guard=guard,
+                stall_seconds=stall_seconds,
+                on_sample=on_sample,
+            )
+            if timed_out or stalled:
                 await reap_process_tree(process)
-                exit_code, timed_out = None, True
+            if stalled:
+                _rate_limited(
+                    "stall",
+                    label,
+                    "bounded_command_stalled label=%s executable=%s stall_s=%g "
+                    "operation_id=%s",
+                    label,
+                    argv[0] if argv else "",
+                    stall_seconds or 0.0,
+                    operation_id,
+                )
+            if timed_out:
                 _rate_limited(
                     "timeout",
                     label,
@@ -513,7 +584,11 @@ async def _run_bounded_here(
             if process.returncode is None:
                 await reap_process_tree(process)
             await _cancel(stdout_task, stderr_task)
+            if guard is not None:
+                guard.close()
             raise
+        if guard is not None:
+            resources = guard.close()
         if out_capped or err_capped:
             _rate_limited(
                 "capped",
@@ -534,9 +609,69 @@ async def _run_bounded_here(
             stderr_truncated=err_capped,
             duration_ms=elapsed(),
             timed_out=timed_out,
+            stalled=stalled,
+            resources=resources,
         )
     finally:
         # Unconditional, and after the drains rather than beside the reap: a pipe
         # still being read must not have its bytes cut short, and a run that gave up
         # on one must not leave the transport for a finalizer.
         release_subprocess_transport(process)
+
+
+async def _await_exit(
+    process: asyncio.subprocess.Process,
+    *,
+    timeout_seconds: float,
+    guard: ContainedRun | None,
+    stall_seconds: float | None,
+    on_sample: Callable[[ResourceSample], None] | None,
+) -> tuple[int | None, bool, bool]:
+    """Wait for the child: ``(exit_code, timed_out, stalled)``. Neither bound reaps.
+
+    An uncontained run waits once under its timeout. A contained one wakes every
+    `CONTAINED_POLL_SECONDS` to read its resources, and reports a stall only when the
+    readings exist and none of them has moved for `stall_seconds` - a host that
+    cannot measure the tree falls back to the timeout alone rather than guessing.
+    """
+    loop = asyncio.get_running_loop()
+    if guard is None:
+        try:
+            return await asyncio.wait_for(process.wait(), timeout_seconds), False, False
+        except TimeoutError:
+            return None, True, False
+    deadline = loop.time() + timeout_seconds
+    last_progress_at = loop.time()
+    last_progress = -1
+    waiter = asyncio.ensure_future(process.wait())
+    try:
+        # unsupervised-loop-ok: one run's wait, bounded by its deadline and stall window
+        while True:
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                return None, True, False
+            done, _pending = await asyncio.wait(
+                {waiter}, timeout=min(CONTAINED_POLL_SECONDS, remaining)
+            )
+            if done:
+                return waiter.result(), False, False
+            sample = guard.poll()
+            if on_sample is not None:
+                try:
+                    on_sample(sample)
+                except Exception:  # noqa: BLE001 - watching a run must not stop it
+                    log.debug("bounded_command_sample_observer_failed", exc_info=True)
+            now = loop.time()
+            if sample.progress != last_progress:
+                last_progress, last_progress_at = sample.progress, now
+            elif (
+                stall_seconds is not None
+                and sample.measured
+                and now - last_progress_at >= stall_seconds
+            ):
+                return None, False, True
+    finally:
+        if not waiter.done():
+            waiter.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await waiter

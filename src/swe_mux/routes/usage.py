@@ -37,8 +37,29 @@ async def get_usage(request: web.Request) -> web.Response:
 
 
 async def refresh_usage(request: web.Request) -> web.Response:
+    """Start a refresh and answer 202 at once; `GET /api/usage` reports its progress.
+
+    Body (optional): ``{"mode": "auto" | "incremental" | "rebuild"}``. A contained
+    scan can run for minutes, which no HTTP request should be held open for.
+    """
     usage: UsageManager = request.app[keys.USAGE]
-    return json_response(await usage.refresh())
+    body: Any = {}
+    if request.can_read_body:
+        try:
+            body = await request.json()
+        except json.JSONDecodeError:
+            raise ValueError("refresh body must be JSON") from None
+    if not isinstance(body, dict):
+        raise ValueError("refresh body must be a JSON object")
+    mode = body.get("mode", "auto")
+    if not isinstance(mode, str):
+        raise ValueError("mode must be a string")
+    snapshot = usage.start_refresh(mode)
+    log.info(
+        "usage refresh requested",
+        extra={"refresh_mode": mode, "started": snapshot.get("started")},
+    )
+    return json_response(snapshot, status=202)
 
 
 async def clear_usage_cache(request: web.Request) -> web.Response:

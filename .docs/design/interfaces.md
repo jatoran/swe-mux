@@ -3077,9 +3077,16 @@ POST   /telemetry/quota-resets/review {ids: [reset_id], resolution: seen|manual_
 
 `GET /usage` returns one ccusage `collector` state and cache version 3 with a dynamic `sources` map.
 Each source carries `source_id`, `source_label`, `collector_id`, daily, monthly, session, and model aggregates, totals, and provenance.
-`POST /usage` runs the configured unified `ccusage daily --json --by-agent` collector once and atomically replaces the cache after complete validation.
+The cache's `collection` block records provenance: `history` (`ccusage_version`, `timezone`, `rebuilt_at` of the last full read; all `null` for a cache from before provenance existed) and `last_refresh`.
+`collector` adds `phase` (`running`, `deferred`, or `null`), `deferred_reason`, `run` (the refresh in flight: `kind`, `since`, `reason`, `trigger`, `started_at`, and the live `read_bytes`/`cpu_seconds`), `last_run` (`kind`, `since`, `trigger`, `at`, `duration_ms`, `ccusage_version`, `timezone`, `launcher`, `resources`, `error`), `ccusage_version`, and `advisories` (sentences for the operator).
+`resources` is the contained run's accounting: `mechanism`, `cpu_percent_cap`, `degraded`, `cpu_seconds`, `read_bytes`, `peak_memory_bytes`, `processes`, `wall_seconds`.
+`POST /usage/refresh {mode?: "auto" | "incremental" | "rebuild"}` starts one refresh in the background and answers **202** at once with the snapshot plus `started` (`false` when a refresh was already running, which is not queued behind).
+The caller reads `GET /usage` until `refreshing` is false.
+`auto` reads the days since the last refresh when there is cached history and the whole history when there is none; `rebuild` always reads the whole history; a configured command that sets its own window runs as configured.
+An unknown mode, a non-object body, or a disabled collector answers 400.
+A refresh runs the configured unified `ccusage daily --json --by-agent` collector, merges or replaces atomically after complete validation, and never leaves a partially written cache.
 The historical source list is not derived from the harness registry and may include tools swe-mux does not launch.
-`DELETE /usage/cache` clears only historical ccusage data.
+`DELETE /usage/cache` clears only historical ccusage data, and answers 400 while a refresh is running.
 Quota provider and account telemetry is independent and remains under `/telemetry/*`.
 Canonical telemetry v2 defaults to the last seven days and `origin=mux_owned`.
 `origin=all` includes imported provider history.

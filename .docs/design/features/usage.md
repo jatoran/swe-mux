@@ -112,26 +112,68 @@ The API's workload summary is used to populate filter choices, not presented as 
 ## Operations and invariants
 
 - Historical collection is disabled by default.
-- Refresh runs only manually or on a configured low-priority cadence.
+- Refresh runs only manually or on a configured cadence.
 - Startup and PTY input never wait for it.
 - At most one refresh runs at a time.
-- Each command has a timeout and output cap.
 - The default collector command is `ccusage daily --json --by-agent`.
-- **The timeout is 120s because the collector's cost is the size of this host's transcript corpus, not anything the daemon controls.**
-  It was 30s, and every scheduled refresh timed out from 2026-08-21 on.
-  Measured 2026-08-24 on the primary host (36,529 Claude transcripts, ~21 GB across `~/.claude/projects` and `~/.codex/sessions`), running the daemon's exact command from a shell: 33.9s cold, 10.3s with the OS file cache warm, 5.8s warm with `--offline`.
-  Exit code 0 and an empty stderr in every run - the command was never hung, and there is no update check to blame; the bound was simply under the cost, and the corpus only grows.
-  `--offline` is deliberately not added to the default command: it would buy back ~4s of pricing fetch by changing what the dollar figures are computed from, and a cost basis is not a thing to trade for latency.
-  A refresh that does exceed the bound says so with the bound and the time it spent, because "timed out" alone cannot tell a hung command from a slow one.
-- Each run carries the refresh's own operation id, so the bounded runner's timeout or cap line, the adapter's failure line, and the `usage_refresh_failed` event are three readings of one failure rather than three unrelated ones.
+- Each run carries the refresh's own operation id, so the bounded runner's timeout, stall or cap line, the adapter's failure line, and the `usage_refresh_failed` event are three readings of one failure rather than three unrelated ones.
+
+### Why a refresh is windowed and contained
+
+On 2026-10-31 the scheduled refresh was found freezing the operator's whole PC for seconds at a time, every three hours.
+The collector re-read the entire transcript corpus each run (46 GB: `~/.claude/projects` 28.2 GB in 19,516 files, `~/.codex/sessions` 18.1 GB in 2,872 files), on one thread per logical CPU, briefly holding ~10 GB of RAM, while Windows Defender scanned what it opened.
+It ran at normal priority: the daemon runs above normal, but Windows passes a parent's class to a child only when that class is idle or below normal, so every child of the daemon starts level with the browser in front of the operator.
+Durations in `daemon.log` were 27-88 s, every one of them a full read of history that had not changed.
+Each rule in this section answers one part of that.
+
+- **A refresh reads only what can have changed.**
+  With cached history, `auto` appends `--since <date of the last refresh minus one day>` and merges the answer over the cache.
+  The window is anchored on the last successful refresh rather than on today, so a machine that was off for a week reads the week.
+  The window is authoritative for every date it covers: a cached day inside it that the window no longer reports is dropped, and monthly, model and total rows are derived again from the merged days, so a total never mixes a cached aggregate with fresh days.
+  An empty window (`{"daily": []}`) is "no usage since", not a failure.
+  The whole history is read only when there is no cache to merge into, or on **Rebuild history**.
+  A configured command that already sets a window (`--since`, `--until`, `--last`) runs as configured and replaces the cache, as before.
+- **How much `--since` saves is ccusage's.**
+  From ccusage 20.0.26 it skips Claude Code transcripts last written before the window (mtime, one day of margin, grouped by session id); 20.0.23 read every Claude transcript and filtered afterwards; Codex files are skipped by date in both.
+  A transcript written inside the window is still read whole, and ccusage still opens every Claude transcript to read its session id, so a host whose live sessions have very large transcripts still reads gigabytes: measured 2026-10-31 on the primary host, a three-day window with 20.0.46 read more than 4.4 GB, against 3.3 GB of transcripts touched in those days.
+  `ccusage --version` is probed once per installed binary, and a version older than 20.0.26 is named in `advisories` with the update command.
+- **Every ccusage run is contained** (`background_containment.py` through `bounded_subprocess.run_bounded`).
+  On Windows the child starts suspended inside a Job object that pins every member to the idle class, hard-caps the tree at 25% of all CPUs, lowers I/O and memory priority to very low, and ends any straggler when the run closes; macOS uses `taskpolicy -b`, Linux `ionice -c 3` and `nice -n 19`.
+  The job's accounting (`read_bytes`, `cpu_seconds`, `peak_memory_bytes`) is logged on `ccusage refresh completed` and kept in `last_run.resources`.
+  A mechanism that could not be applied is listed in `degraded` and in `advisories`; the run still happens.
+  CPU priority alone was not the fix: agents held the CPU at 100% for 18 s the same day without the browser lagging, while the collector froze it through I/O, memory and Defender.
+- **The npm shim is bypassed.**
+  ccusage 20's `cli.js` only spawns its platform binary (`@ccusage/ccusage-<platform>-<arch>/bin/ccusage`) with the same arguments, so the collector resolves that binary the way Node would and runs it directly (`launcher: native`), and the containment lands on the process doing the reading instead of on `cmd.exe` and node.
+  Any layout it cannot resolve falls back to the shim (`launcher: shim`); a command that is not ccusage itself (`npx ...`) is never rewritten.
+- **The bound is "no progress", not a wall clock.**
+  A contained scan is slow by design and yields to everything else, so a wall-clock guess at its cost would kill legitimate runs - the 30 s bound did exactly that from 2026-08-21, and the 120 s bound that replaced it was sized to an uncontained 21 GB read.
+  A run that uses no CPU and reads nothing for 300 s is stopped as hung, with an error that says so; two hours is the absolute ceiling.
+  Both errors state what the run spent (time, bytes read, CPU seconds).
+- **A scheduled refresh waits for a quieter host.**
+  Before a scheduled run the host is sampled over five seconds; at 85% CPU or 90% memory it waits, re-checking each minute, for at most an hour, then runs contained anyway.
+  `phase: deferred` and `deferred_reason` say so while it waits.
+  An operator's own refresh never waits.
+- **The schedule is re-read every minute.**
+  A refresh is due one cadence after the later of the last attempt and the cache's `updated_at`, and never within five minutes of daemon start.
+  A cadence or switch changed in Settings applies at the next minute rather than after the old cadence's sleep, which is what made turning the cadence down useless as a stopgap before.
+- **A refresh request answers at once.**
+  `POST /api/usage/refresh` starts the run and answers 202; both surfaces read `GET /api/usage` until `refreshing` is false, because no request should be held open for minutes.
+- **Provenance is recorded, and a version change advises rather than rebuilds.**
+  `collection.history` names the ccusage version and timezone that last computed the whole history; when either differs from now, `advisories` says older days may differ and offers Rebuild.
+  A rebuild is not automatic, because it is the one run that reads everything, and ccusage releases often.
+  A cache from before provenance existed keeps `null` provenance until its next rebuild rather than being claimed by the version that topped it up.
+  Merging also means history survives Claude Code deleting transcripts after `cleanupPeriodDays`: a full rescan would forget those days, and a windowed refresh keeps them.
+- `--offline` is deliberately not added to the default command: it would buy back ~4 s of pricing fetch by changing what the dollar figures are computed from, and a cost basis is not a thing to trade for latency.
+
+### Collector command and adapter
+
 - Settings installs or updates the CLI explicitly with `npm install -g ccusage@latest`.
 - Refresh uses the installed executable and never downloads or updates code.
-- The primary override is the single `usage_command` array.
-- Migrated custom per-source commands remain in `usage_commands` as legacy overrides and replace that source after the unified scan.
+- The primary override is the single `usage_command` array, which must accept ccusage's `--since YYYYMMDD`.
+- Migrated custom per-source commands remain in `usage_commands` as legacy overrides; they are windowed like the primary command and merge over that source, or replace it when they set their own window.
 - Exact old Claude and Codex defaults, including the former `npx --no-install` commands, migrate to the unified collector command.
-- Executables are resolved before launch.
-- On Windows, npm `.cmd` and `.bat` shims run through `COMSPEC`.
-- Linux and macOS execute the resolved native command directly.
+- Executables are resolved before launch, and a ccusage npm shim is resolved further to the platform binary behind it.
+- When that binary cannot be found, npm `.cmd` and `.bat` shims run through `COMSPEC` on Windows, and Linux and macOS execute the resolved command directly.
 - The adapter validates the unified payload, splits nested `agents` rows by source, and normalizes daily, monthly, model, token, and cost aggregates.
 - The adapter accepts legacy `modelBreakdowns` arrays and current `models` maps.
 - Tokens are transcript aggregates reported by ccusage.
@@ -139,9 +181,10 @@ The API's workload summary is used to populate filter choices, not presented as 
 - When a model map omits cost, the adapter allocates daily cost in proportion to model tokens and marks it `proportional`.
 - Read-only model labels may use the frontend compact display mapping.
 - Grouping, sorting, cache rows, tooltips, accessibility labels, and configuration preserve exact model identifiers.
-- Cache version 3 stores a dynamic `sources` map and one `collector` refresh state.
+- Cache version 3 stores a dynamic `sources` map, the `collection` provenance block, and one `collector` refresh state.
 - Cache version 2 provider rows migrate in memory to source rows.
-- A successful refresh atomically replaces the last-known-good cache.
+- A successful refresh atomically replaces the last-known-good cache with the merged (or rebuilt) result.
+- Clearing the cache is refused while a refresh runs, so a finishing merge cannot resurrect cleared history.
 - Failure preserves cached data and exposes stale or error state.
 - Tests consume version-labelled JSON fixtures and never invoke external tools.
 
@@ -155,9 +198,11 @@ The API's workload summary is used to populate filter choices, not presented as 
 
 ## Key files
 
-- Adapter and cache: `src/swe_mux/usage.py`
+- Adapter, cache, window planning and merge, schedule: `src/swe_mux/usage.py`
+- Containment and the stall bound: `src/swe_mux/background_containment.py`, `src/swe_mux/bounded_subprocess.py`
 - Config: `src/swe_mux/config.py`
 - Settings UI: `frontend/src/Settings.tsx`
+- Following a background refresh and wording its state: `frontend/src/usageRefresh.ts`
 - Dialog shell and segment list: `frontend/src/UsageModal.tsx`, `frontend/src/usageSegments.ts`
 - Overview: `frontend/src/UsageOverview.tsx`, `frontend/src/usagePots.ts`
 - Agents: `frontend/src/UsageDashboardView.tsx` (`UsageAgentsView`), `frontend/src/UsageModelBreakdown.tsx`
@@ -167,5 +212,7 @@ The API's workload summary is used to populate filter choices, not presented as 
 - Historical analytics helpers: `frontend/src/usageAnalytics.ts`, `frontend/src/analyticsPresentation.ts`
 - Operational store: `src/swe_mux/operational_telemetry.py`; frontend shapes: `frontend/src/operationalTelemetry.ts`
 - Fixtures and tests: `tests/fixtures/usage/`, `tests/test_usage_phase4.py`,
+  `tests/test_usage_incremental.py`, `tests/test_background_containment.py`,
   `tests/test_frontend_usage_phase5_contract.py`, `frontend/test/usagePots.test.ts`,
-  `frontend/test/quotaTimeline.test.ts`, `frontend/test/renderer/usage-layout.spec.ts`
+  `frontend/test/usageRefresh.test.ts`, `frontend/test/quotaTimeline.test.ts`,
+  `frontend/test/renderer/usage-layout.spec.ts`

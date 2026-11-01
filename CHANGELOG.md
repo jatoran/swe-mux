@@ -15,6 +15,15 @@ The release procedure that maintains this file is [`RELEASING.md`](RELEASING.md)
 
 ## [Unreleased]
 
+### Fixed
+
+- **Agent usage collection no longer freezes the computer.**
+  The scheduled refresh re-read every agent transcript you have ever written on every run, on all CPU cores at normal priority, which on a large history could stall the whole machine for seconds every few hours.
+  A refresh now reads only the days since the last one and merges them into the cached history; the whole history is read only the first time or when you choose **Rebuild history** (Usage → Agent usage → Source and collection details).
+  Every ccusage run now executes as background work the OS enforces: idle CPU priority, at most a quarter of the machine's CPU, very-low disk and memory priority, and on Windows a job that ends any leftover process.
+  A scheduled refresh waits while the machine is busy (up to an hour), a refresh request returns at once and the view follows it, and changing the refresh interval or switch in Settings takes effect within a minute.
+  How much a short window saves depends on ccusage itself: versions before 20.0.26 still read every Claude Code transcript, and swe-mux now says so with the update command.
+
 ## [0.3.0] - 2026-10-29
 
 ### Added

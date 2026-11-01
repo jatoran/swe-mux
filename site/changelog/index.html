@@ -1092,7 +1092,16 @@ table td.v { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
         <h2><a href="https://github.com/jatoran/swe-mux/compare/v0.3.0...HEAD">Unreleased</a></h2>
         <span class="fill"></span>
       </div>
-      <p class="prose">Nothing yet.</p>
+      <div class="relgroups">
+        <div><span class="k">Fixed</span> <span class="sep">1 entry</span></div>
+      </div>
+      <details class="relmore">
+        <summary>all 1 entry</summary>
+        <div class="changetype">Fixed</div>
+        <ul class="bullets">
+          <li><span><b>Agent usage collection no longer freezes the computer.</b> The scheduled refresh re-read every agent transcript you have ever written on every run, on all CPU cores at normal priority, which on a large history could stall the whole machine for seconds every few hours. A refresh now reads only the days since the last one and merges them into the cached history; the whole history is read only the first time or when you choose <b>Rebuild history</b> (Usage → Agent usage → Source and collection details). Every ccusage run now executes as background work the OS enforces: idle CPU priority, at most a quarter of the machine's CPU, very-low disk and memory priority, and on Windows a job that ends any leftover process. A scheduled refresh waits while the machine is busy (up to an hour), a refresh request returns at once and the view follows it, and changing the refresh interval or switch in Settings takes effect within a minute. How much a short window saves depends on ccusage itself: versions before 20.0.26 still read every Claude Code transcript, and swe-mux now says so with the update command.</span></li>
+        </ul>
+      </details>
     </div>
     <div class="rel">
       <div class="relhead">

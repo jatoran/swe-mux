@@ -123,5 +123,9 @@ What is logged is the resolution and the failure: the exit code and a `DIAGNOSTI
 ## `usage.py`
 
 One bounded ccusage `--by-agent` collector (through `bounded_subprocess.run_bounded`, so the 10 MiB limit bounds memory while reading rather than describing an error after `communicate()` already buffered the answer), dynamic historical source normalization, cache migration, atomic last-known-good persistence, and collector freshness.
+Since 2026-10-31 it also owns the refresh plan (`plan_refresh`: a `--since` window over cached history, a rebuild without one) and the merge that keeps cached days before the window and re-derives every aggregate (`merge_usage_window`).
+It resolves the npm shim to ccusage's platform binary (`resolve_usage_launch`) and probes `--version` once per installed binary for its advisories.
+It runs the minute-granular schedule with its startup grace and host-pressure deferral, and `start_refresh`, which the route uses so no request waits on a contained scan.
+Every run is contained (`background_containment.BACKGROUND_BATCH`) and bounded by `USAGE_STALL_SECONDS` of no progress under a `USAGE_CEILING_SECONDS` ceiling.
 
 **Not:** harness launchability, saved provider-account identity, or quota telemetry.

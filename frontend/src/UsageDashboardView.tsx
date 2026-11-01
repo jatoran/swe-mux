@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useState } from 'preact/hooks'
+import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { api } from './api'
 import { GrantGate } from './GrantGate'
 import { AnalyticsNav, MetricValue, UsageBreakdown, UsageDetails, UsageTrend } from './AnalyticsPrimitives'
 import { usagePeriods, usageWindow } from './analyticsPresentation'
 import { UsageModelBreakdown } from './UsageModelBreakdown'
 import { sumUsageRows, type UsageSource } from './usageAnalytics'
+import { describeLastRun, describeUsageActivity, pollUsageRefresh, type UsageCollector, type UsageRefreshMode } from './usageRefresh'
 
 export type UsageStatus = {
   enabled:boolean
@@ -12,7 +13,8 @@ export type UsageStatus = {
   refresh_minutes:number
   package:string
   install_command:string
-  collector:{id:string;status:string;error?:string;refreshed_at?:number}
+  started?:boolean
+  collector:UsageCollector
   cache?:{version?:number;updated_at?:number;sources?:Partial<Record<string,UsageSource>>}
 }
 
@@ -27,10 +29,23 @@ export function UsageAgentsView({onConfigure}:{onConfigure:()=>void}) {
   const [refreshing,setRefreshing]=useState(false)
   const [error,setError]=useState('')
   const [confirmClear,setConfirmClear]=useState(false)
+  const [confirmRebuild,setConfirmRebuild]=useState(false)
+  const [now,setNow]=useState(()=>Date.now()/1000)
+  const mounted=useRef(true)
+  const readUsage=()=>api<UsageStatus>('GET','/api/usage')
+  // A refresh runs in the daemon's background, so the view follows it by reading the
+  // status until it ends - whether this view started it or the schedule did.
+  const follow=async(first:UsageStatus)=>{
+    setRefreshing(first.refreshing)
+    try{
+      await pollUsageRefresh(first,readUsage,status=>{if(mounted.current){setUsage(status);setNow(Date.now()/1000)}},{cancelled:()=>!mounted.current})
+    }catch(cause){if(mounted.current)setError(String(cause))}
+    finally{if(mounted.current)setRefreshing(false)}
+  }
   useEffect(()=>{
-    let cancelled=false
-    api<UsageStatus>('GET','/api/usage').then(value=>{if(!cancelled)setUsage(value)}).catch(cause=>{if(!cancelled)setError(String(cause))})
-    return()=>{cancelled=true}
+    mounted.current=true
+    readUsage().then(value=>{if(mounted.current)void follow(value)}).catch(cause=>{if(mounted.current)setError(String(cause))})
+    return()=>{mounted.current=false}
   },[])
   const sourceList=useMemo(()=>Object.values(usage?.cache?.sources||{}).filter((source):source is UsageSource=>!!source).sort((a,b)=>a.source_label.localeCompare(b.source_label)),[usage])
   const visibleSources=sourceList.filter(source=>!hiddenSources.includes(source.source_id))
@@ -39,12 +54,18 @@ export function UsageAgentsView({onConfigure}:{onConfigure:()=>void}) {
   const totals=sumUsageRows(daily)
   const periods=usagePeriods(daily,resolution==='monthly')
   const sourceRows=visibleSources.map(source=>({id:source.source_id,label:source.source_label,row:sumUsageRows(source.daily.filter(row=>dates.has(row.date!)))})).sort((a,b)=>b.row.total_tokens-a.row.total_tokens)
-  const refresh=async()=>{
-    setRefreshing(true);setError('')
-    try {setUsage(await api<UsageStatus>('POST','/api/usage/refresh',{}))}
-    catch(cause){setError(String(cause))}
-    finally{setRefreshing(false)}
+  const refresh=async(mode:UsageRefreshMode)=>{
+    setRefreshing(true);setError('');setConfirmRebuild(false)
+    try{await follow(await api<UsageStatus>('POST','/api/usage/refresh',{mode}))}
+    catch(cause){setError(String(cause));setRefreshing(false)}
   }
+  const rebuild=()=>{
+    if(!confirmRebuild){setConfirmRebuild(true);return}
+    void refresh('rebuild')
+  }
+  const activity=describeUsageActivity(usage?.collector,now)
+  const lastRun=describeLastRun(usage?.collector.last_run)
+  const busy=refreshing||!!usage?.refreshing
   const clear=async()=>{
     if(!confirmClear){setConfirmClear(true);return}
     setConfirmClear(false);setError('')
@@ -60,9 +81,10 @@ export function UsageAgentsView({onConfigure}:{onConfigure:()=>void}) {
       </div></details>
       {view!=='summary'&&<label>Metric<select value={metric} onChange={event=>setMetric(event.currentTarget.value as typeof metric)}><option value="tokens">Tokens</option><option value="cost">Estimated cost</option></select></label>}
       {view==='trends'&&<label>Interval<select value={resolution} onChange={event=>setResolution(event.currentTarget.value as typeof resolution)}><option value="daily">Daily</option><option value="monthly">Monthly</option></select></label>}
-      <button class="analytics-refresh" disabled={!usage?.enabled||refreshing||usage.refreshing} onClick={()=>void refresh()}>{refreshing||usage?.refreshing?'Refreshing…':'Refresh'}</button>
+      <button class="analytics-refresh" disabled={!usage?.enabled||busy} onClick={()=>void refresh('auto')}>{busy?'Refreshing…':'Refresh'}</button>
     </div>
     <main class="analytics-content">
+      {activity&&<div class={`usage-progress ${busy?'running':''}`} role="status" aria-live="polite"><span>{busy?'◌':'·'}</span><strong>{activity}</strong></div>}
       {error&&<div class="usage-error" role="alert">{error}</div>}
       {usage?.collector.error&&<div class="usage-error" role="alert">{usage.collector.error} Cached results are preserved.</div>}
       {!usage&&!error?<p>Loading agent usage…</p>:usage&&!usage.enabled?<GrantGate ids={['usage.ccusage']} heading="Agent usage collection is off" onGranted={async()=>setUsage(await api<UsageStatus>('GET','/api/usage'))}><p>Enable collection, then refresh to read local transcript totals.</p></GrantGate>:!sourceList.length?<p>No cached usage. Refresh to collect historical sources.</p>:!visibleSources.length?<p>Select at least one source.</p>:<>
@@ -76,8 +98,11 @@ export function UsageAgentsView({onConfigure}:{onConfigure:()=>void}) {
       </>}
       <details class="analytics-diagnostics"><summary>Source and collection details{usage?.cache?.updated_at?` · updated ${new Date(usage.cache.updated_at*1000).toLocaleString()}`:''}</summary>
         <p>ccusage reads local transcripts across sources. Historical totals cannot be attributed to saved accounts. Estimated token cost is not a subscription bill.</p>
-        <p>{usage?.collector.status||'Loading'}{refreshing?' · Scanning transcripts; large histories can take up to two minutes.':''}</p>
-        <div class="analytics-actions"><button onClick={onConfigure}>Collection settings</button><button disabled={refreshing} onClick={()=>void clear()}>{confirmClear?'Confirm clear cache':'Clear cache'}</button>{confirmClear&&<button onClick={()=>setConfirmClear(false)}>Cancel</button>}</div>
+        <p>A refresh re-reads only the days since the last one and runs at background priority, so it yields to everything else on this machine. Rebuild re-reads every transcript, which can take a long time on a large history.</p>
+        <p>{usage?.collector.status||'Loading'}{usage?.collector.ccusage_version?` · ccusage ${usage.collector.ccusage_version}`:''}</p>
+        {lastRun&&<p class="analytics-muted">{lastRun}</p>}
+        {!!usage?.collector.advisories?.length&&<ul class="usage-advisories">{usage.collector.advisories.map(note=><li key={note}>{note}</li>)}</ul>}
+        <div class="analytics-actions"><button onClick={onConfigure}>Collection settings</button><button disabled={!usage?.enabled||busy} onClick={rebuild}>{confirmRebuild?'Confirm rebuild history':'Rebuild history'}</button>{confirmRebuild&&<button onClick={()=>setConfirmRebuild(false)}>Cancel rebuild</button>}<button disabled={busy} onClick={()=>void clear()}>{confirmClear?'Confirm clear cache':'Clear cache'}</button>{confirmClear&&<button onClick={()=>setConfirmClear(false)}>Cancel</button>}</div>
       </details>
     </main>
   </>
