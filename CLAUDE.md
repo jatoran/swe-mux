@@ -129,8 +129,9 @@ cannot read it; and `pyproject.toml` declares it excluded from the sdist, which
 comment, email, DM, submission, list PR and upload is an item in `.private/marketing/kit/`, its
 own local git repository, which the operator's marketing hub reads live, puts in front of the
 operator for approval, and then sends, stages or hands back to them. Load the global
-`marketing-kit` skill before anything outreach-related, edit the item files in place, commit in
-the kit's repository, and run `mm kits validate` on it until it is clean. **Never post, email or
+`marketing-kit` skill before anything outreach-related, run `mm kits sync swe-mux` first (the
+hub's own copy of the kit carries the operator's edits and approvals), edit the item files in
+place, commit in the kit's repository, and run `mm kits validate` on it until it is clean. **Never post, email or
 submit anything yourself**, and never keep a posted-where list: the hub's ledger is the record.
 The older system beside the kit (`launch-kit/`, `launch-kit.html`, the campaign log and plan,
 the replies inbox, the Reddit queues) is retired; never use it or regenerate the kit from it.
