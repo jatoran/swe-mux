@@ -2,6 +2,7 @@ import ts from 'typescript'
 import {readFileSync,readdirSync,writeFileSync} from 'node:fs'
 import {join,relative} from 'node:path'
 import {IntlMessageFormat} from 'intl-messageformat'
+import {messageContract} from '../src/localization/catalogContract.ts'
 const root=new URL('../',import.meta.url).pathname.replace(/^\/([A-Za-z]:)/,'$1')
 const sourceRoot=join(root,'src'),catalog=JSON.parse(readFileSync(join(sourceRoot,'localization/catalogs/en.json'),'utf8'))
 const displayProps=new Set(['label','title','description','tooltip','placeholder','alt','aria-label','aria-description','caption','heading','hint','blurb','subtitle','emptyText','emptyLabel','confirmLabel','cancelLabel','buttonLabel','disabledReason','ariaLabel','filterPlaceholder','consequence','where','listLabel'])
@@ -15,14 +16,18 @@ function parameters(ast,result=new Set()){
 }
 for(const [id,pattern] of Object.entries(catalog))try{messageParameters[id]=parameters(new IntlMessageFormat(pattern,'en',undefined,{ignoreTag:true}).getAst())}catch(error){errors.push(id+': '+error)}
 const target=JSON.parse(readFileSync(join(sourceRoot,'localization/catalogs/zh-Hans.json'),'utf8'))
+for(const id of Object.keys(catalog))if(typeof target[id]!=='string'||!target[id].trim())errors.push('Missing Chinese translation: '+id)
 for(const [id,pattern] of Object.entries(target)){
  if(!(id in catalog)){errors.push('Unknown Chinese message: '+id);continue}
  try{
   const a=parameters(new IntlMessageFormat(catalog[id],'en',undefined,{ignoreTag:true}).getAst())
   const b=parameters(new IntlMessageFormat(pattern,'zh-Hans',undefined,{ignoreTag:true}).getAst())
-  if(JSON.stringify(a)!==JSON.stringify(b))errors.push('Placeholder mismatch: '+id)
+  if(JSON.stringify(a)!==JSON.stringify(b)||messageContract(catalog[id])!==messageContract(pattern))errors.push('Placeholder or conditional-branch mismatch: '+id)
  }catch(error){errors.push(id+': '+error)}
 }
+const verbatim=JSON.parse(readFileSync(join(sourceRoot,'localization/verbatim.json'),'utf8'))
+if(new Set(verbatim).size!==verbatim.length)errors.push('Duplicate verbatim message id')
+for(const id of verbatim)if(!(id in catalog)||target[id]!==catalog[id])errors.push('Technical example must remain verbatim: '+id)
 for(const path of files(sourceRoot)){
  const file=relative(root,path).replaceAll('\\','/')
  // This standalone voice-model benchmark is a development entry, absent from production builds.

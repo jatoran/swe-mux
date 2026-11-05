@@ -5244,7 +5244,7 @@ Stack detection may inform the prompt; it may not substitute for writing and pro
 ## Phase 20 - English and Simplified Chinese UI
 
 Updated 2026-11-05 on `codex/localization-foundation`; not landed or deployed.
-The owner approved the complete application localization foundation, limited to English and Simplified Chinese, with actual translation work following separately.
+The owner approved the localization foundation and Simplified Chinese translations, limited to English and Simplified Chinese.
 This supersedes the earlier recommendation to translate only the website and documentation.
 
 The foundation uses one application and one installer, with catalogs for `en` and `zh-Hans`.
@@ -5256,14 +5256,14 @@ Foundation scope includes application chrome, help, accessibility labels, displa
 Message ids, protocol values, navigation keys, commands, terminal output, user content, provider output, and voice recognition retain their existing semantics.
 No additional language or voice work is included.
 
-The Chinese catalogs remain empty so the next task is translation, terminology review, and visual review with real Chinese copy.
+Both Chinese catalogs are populated: 8,081 frontend entries and 1,320 backend entries.
+Completeness, argument multiplicity, conditional branches, format specifications, and protected technical examples are enforced by verification.
+Browser localization tests use the shipped Chinese copy.
 The implementation and test workflow are documented in [UI localization](../design/features/localization.md) and [Localization catalogs](../technical/frontend/localization.md).
 
 Remaining release work:
 
-- Populate the two Chinese catalogs while preserving message ids and placeholders.
-- Review technical terminology and screen layouts with fluent Chinese readers.
-- Land and deploy only after owner authorization; the foundation branch remains separate.
+- Land and deploy only after owner authorization; the localization branch remains separate.
 
 ## Phase 21 - Update cost: making a shipped fix reach a user in seconds rather than minutes
 

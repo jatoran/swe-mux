@@ -10,29 +10,48 @@ Fill the matching keys in these UTF-8 JSON objects:
 | `src/swe_mux/assets/locales/en.json` | `src/swe_mux/assets/locales/zh-Hans.json` |
 
 Keep ids unchanged.
-A target may omit a key while work is incomplete; the application then uses English.
-Do not copy program identifiers, filesystem paths, model names, or user content into translations.
-Preserve product names and technical examples where they are part of a message.
-Review technical terminology with a fluent Chinese reader.
+Both target catalogs must cover every English key with a nonempty value before tests or builds pass.
+The application retains English fallback for runtime recovery.
+Keep program identifiers, filesystem paths, model names, product names, command examples, and recognized voice-command phrases unchanged.
+Translate explanations around those tokens; never rewrite user content.
+`frontend/src/localization/verbatim.json` protects technical examples and syntax whose Chinese value must equal the English source.
+Add an id there when a catalog entry is a literal command or configuration example rather than prose.
 
 The frontend uses ICU MessageFormat.
-Keep all named arguments, including rich-content slots.
-A translation may reorder arguments and change plural or select wording.
+Keep every argument occurrence, format style, rich-content slot, and conditional branch key.
+A translation may reorder arguments and change wording within plural or select branches.
+Chinese count labels omit English plural suffixes while preserving the original select structure.
+`catalogContract.ts` validates argument multiplicity and branch membership, so dropping one occurrence cannot silently pass.
 Apostrophes and literal braces follow ICU escaping rules.
 Rich slots represent existing controls, links, or emphasis; translation text is never parsed as HTML.
 
 The backend uses Python format strings with named arguments.
-Keep each argument name and format specification.
+Keep each argument occurrence, name, conversion, and format specification.
 Double literal braces.
 Do not translate protocol keys or change the structures surrounding a message.
 
 `frontend/src/localization/sources.json` locates frontend references and records bounded argument context.
-Regenerate it with `node frontend/scripts/check-localization.mjs --report` after moving code.
+Regenerate it with `node --experimental-strip-types frontend/scripts/check-localization.mjs --report` after moving code.
 The report is reference material; catalogs are the source of copy.
+
+## Chinese terminology
+
+| English | Chinese |
+|---|---|
+| Project / session / conversation | 项目 / 会话 / 对话 |
+| Agent / harness | 智能体 / 智能体工具 |
+| Worktree / trunk / land | 工作树 / 主干 / 合入 |
+| Daemon / supervisor | 守护进程 / 监督进程 |
+| Approval / grant | 审批 / 授权 |
+| Prompt / composer | 提示词 / 输入框 |
+| Turn / context compaction | 轮次 / 上下文压缩 |
+| Token count / authentication token | Token / 令牌 |
+
+Voice recognition remains English; translated UI descriptions do not add Chinese voice commands.
 
 ## Adding or changing UI copy
 
-Add the English message first, then reference its id through `t` or `rich`.
+Add matching English and Chinese messages, then reference their shared id through `t` or `rich`.
 New ids may be descriptive; existing ids remain stable when English wording changes.
 TypeScript derives valid ids from the source catalog.
 
@@ -72,13 +91,12 @@ Do not hand-edit `helpContent.generated.ts`.
 
 ## Verification
 
-`npm run check:localization` checks product display literals, message ids, ICU syntax, call arguments, and Chinese placeholder parity.
+`npm run check:localization` checks product display literals, message ids, ICU syntax, call arguments, complete Chinese coverage, formatting contracts, and verbatim examples.
 It runs before frontend tests and production builds.
 The two language self-names, decorative glyphs, and explicitly identified development-only surfaces are intentional exclusions.
 `tests/test_localization.py` checks backend catalog references and placeholder parity as well as persistence and presentation behavior.
 
-The renderer fixture installs test translations into the Chinese slot.
-It does not add a third production language or ship test copy.
+The renderer fixture installs the shipped Chinese catalog, so browser checks exercise production translations.
 It exercises selection, persistence, failure recovery, Settings navigation and search, and terminal preservation.
 Run it on a confirmed-free loopback port using the repository's renderer workflow.
 

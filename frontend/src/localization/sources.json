@@ -19787,11 +19787,11 @@
     },
     {
       "file": "src/Settings.tsx",
-      "line": 2396
+      "line": 2402
     },
     {
       "file": "src/Settings.tsx",
-      "line": 2956
+      "line": 2962
     },
     {
       "file": "src/settingsSearchAliases.ts",
@@ -21501,7 +21501,7 @@
     },
     {
       "file": "src/Settings.tsx",
-      "line": 2545
+      "line": 2551
     }
   ],
   "heading.0fe741492b": [
@@ -21511,7 +21511,7 @@
     },
     {
       "file": "src/Settings.tsx",
-      "line": 2620
+      "line": 2626
     },
     {
       "file": "src/VoiceSetup.tsx",
@@ -29405,7 +29405,7 @@
     },
     {
       "file": "src/Settings.tsx",
-      "line": 2287
+      "line": 2293
     }
   ],
   "ProviderSetup.f4d4377c78": [
@@ -35030,7 +35030,7 @@
     },
     {
       "file": "src/Settings.tsx",
-      "line": 2461
+      "line": 2467
     },
     {
       "file": "src/VoiceReadTab.tsx",
@@ -37078,3222 +37078,3244 @@
       "values": "{ value1: Object.entries(data.rejected).map(([keys,message])=>`${displayChord(keys,data.platform)}: ${message}`).join(' · ') }"
     }
   ],
+  "Settings.loading": [
+    {
+      "file": "src/Settings.tsx",
+      "line": 598
+    }
+  ],
+  "Settings.23e39291d6": [
+    {
+      "file": "src/Settings.tsx",
+      "line": 601
+    },
+    {
+      "file": "src/Settings.tsx",
+      "line": 3008
+    }
+  ],
+  "Settings.restoring": [
+    {
+      "file": "src/Settings.tsx",
+      "line": 602
+    }
+  ],
   "Settings.8621e92324": [
     {
       "file": "src/Settings.tsx",
-      "line": 690
+      "line": 696
     }
   ],
   "Settings.954b4955ec": [
     {
       "file": "src/Settings.tsx",
-      "line": 691
+      "line": 697
     }
   ],
   "Settings.7fa716b353": [
     {
       "file": "src/Settings.tsx",
-      "line": 693,
+      "line": 699,
       "values": "{ value1: cause instanceof Error ? cause.message : String(cause) }"
     }
   ],
   "Settings.10cc0c58dc": [
     {
       "file": "src/Settings.tsx",
-      "line": 737,
+      "line": 743,
       "values": "{ value1: bundle.errors.keybindings }"
     }
   ],
   "Settings.3bd15ed78f": [
     {
       "file": "src/Settings.tsx",
-      "line": 737
+      "line": 743
     }
   ],
   "Settings.b24d6d3373": [
     {
       "file": "src/Settings.tsx",
-      "line": 742
+      "line": 748
     }
   ],
   "Settings.34862d91a2": [
     {
       "file": "src/Settings.tsx",
-      "line": 1088
+      "line": 1094
     }
   ],
   "Settings.e748f0ba4a": [
     {
       "file": "src/Settings.tsx",
-      "line": 1091
+      "line": 1097
     }
   ],
   "Settings.39082c27d5": [
     {
       "file": "src/Settings.tsx",
-      "line": 1100
+      "line": 1106
     }
   ],
   "Settings.5edc7c8f56": [
     {
       "file": "src/Settings.tsx",
-      "line": 1107
+      "line": 1113
     }
   ],
   "Settings.d22a72ac6f": [
     {
       "file": "src/Settings.tsx",
-      "line": 1109
+      "line": 1115
     }
   ],
   "Settings.4c10b44589": [
     {
       "file": "src/Settings.tsx",
-      "line": 1111
+      "line": 1117
     },
     {
       "file": "src/Settings.tsx",
-      "line": 1166
+      "line": 1172
     }
   ],
   "Settings.3cffd0ae81": [
     {
       "file": "src/Settings.tsx",
-      "line": 1111
+      "line": 1117
     }
   ],
   "Settings.81c939c069": [
     {
       "file": "src/Settings.tsx",
-      "line": 1111
+      "line": 1117
     }
   ],
   "Settings.76781be616": [
     {
       "file": "src/Settings.tsx",
-      "line": 1124
+      "line": 1130
     }
   ],
   "Settings.e22c24238e": [
     {
       "file": "src/Settings.tsx",
-      "line": 1134
+      "line": 1140
     }
   ],
   "Settings.fb7bdec372": [
     {
       "file": "src/Settings.tsx",
-      "line": 1134
+      "line": 1140
     }
   ],
   "Settings.830c380805": [
     {
       "file": "src/Settings.tsx",
-      "line": 1141
+      "line": 1147
     }
   ],
   "Settings.fe05fa4611": [
     {
       "file": "src/Settings.tsx",
-      "line": 1141
+      "line": 1147
     }
   ],
   "Settings.e5a1b0bbf9": [
-    {
-      "file": "src/Settings.tsx",
-      "line": 1147,
-      "values": "{ value1: distro }"
-    }
-  ],
-  "Settings.bd2463d48f": [
     {
       "file": "src/Settings.tsx",
       "line": 1153,
       "values": "{ value1: distro }"
     }
   ],
+  "Settings.bd2463d48f": [
+    {
+      "file": "src/Settings.tsx",
+      "line": 1159,
+      "values": "{ value1: distro }"
+    }
+  ],
   "Settings.3954429732": [
     {
       "file": "src/Settings.tsx",
-      "line": 1154,
+      "line": 1160,
       "values": "{ value1: distro }"
     }
   ],
   "Settings.b669af169d": [
     {
       "file": "src/Settings.tsx",
-      "line": 1161
+      "line": 1167
     }
   ],
   "Settings.e491550b52": [
     {
       "file": "src/Settings.tsx",
-      "line": 1165
+      "line": 1171
     }
   ],
   "Settings.b46df5474d": [
     {
       "file": "src/Settings.tsx",
-      "line": 1166
+      "line": 1172
     }
   ],
   "Settings.1a459add2c": [
     {
       "file": "src/Settings.tsx",
-      "line": 1166
+      "line": 1172
     }
   ],
   "Settings.4ac6454068": [
     {
       "file": "src/Settings.tsx",
-      "line": 1166
+      "line": 1172
     }
   ],
   "Settings.f2464951b4": [
     {
       "file": "src/Settings.tsx",
-      "line": 1173
+      "line": 1179
     }
   ],
   "Settings.764ad7529b": [
     {
       "file": "src/Settings.tsx",
-      "line": 1180
+      "line": 1186
     }
   ],
   "Settings.9b24d678be": [
     {
       "file": "src/Settings.tsx",
-      "line": 1181
+      "line": 1187
     }
   ],
   "Settings.a4eca39cae": [
     {
       "file": "src/Settings.tsx",
-      "line": 1335
+      "line": 1341
     }
   ],
   "Settings.29f1e32ee1": [
     {
       "file": "src/Settings.tsx",
-      "line": 1341,
+      "line": 1347,
       "values": "{ value1: displayChord(keys,keymapHost.platform) }"
     }
   ],
   "Settings.d3057c783d": [
     {
       "file": "src/Settings.tsx",
-      "line": 1347,
+      "line": 1353,
       "values": "{ value1: displayChord(keys,keymapHost.platform), value2: label }"
     }
   ],
   "Settings.552eb2b36b": [
     {
       "file": "src/Settings.tsx",
-      "line": 1495,
+      "line": 1501,
       "values": "{ value1: next.restart_required.join(', ') }"
     }
   ],
   "Settings.3a6c0e6211": [
     {
       "file": "src/Settings.tsx",
-      "line": 1495
+      "line": 1501
     }
   ],
   "Settings.cc441de714": [
     {
       "file": "src/Settings.tsx",
-      "line": 1510
+      "line": 1516
     }
   ],
   "Settings.4b70d8d894": [
     {
       "file": "src/Settings.tsx",
-      "line": 1516,
+      "line": 1522,
       "values": "{ message: typed.message }"
     }
   ],
   "Settings.c53fae7495": [
     {
       "file": "src/Settings.tsx",
-      "line": 1534
+      "line": 1540
     }
   ],
   "Settings.8a926ed734": [
     {
       "file": "src/Settings.tsx",
-      "line": 1549
+      "line": 1555
     }
   ],
   "Settings.cc0601a4a7": [
     {
       "file": "src/Settings.tsx",
-      "line": 1555,
+      "line": 1561,
       "values": "{ value1: harnessDescriptor(backend)?.display_name||backend }"
     }
   ],
   "Settings.165390f773": [
     {
       "file": "src/Settings.tsx",
-      "line": 1618,
+      "line": 1624,
       "values": "{ value1: cause instanceof Error?cause.message:String(cause) }"
     }
   ],
   "Settings.c42ff1d4f4": [
     {
       "file": "src/Settings.tsx",
-      "line": 1648
+      "line": 1654
     }
   ],
   "Settings.4268b76361": [
     {
       "file": "src/Settings.tsx",
-      "line": 1659,
+      "line": 1665,
       "values": "{ value1: activity??'' }"
     }
   ],
   "Settings.505493b917": [
     {
       "file": "src/Settings.tsx",
-      "line": 1663,
+      "line": 1669,
       "values": "{ value1: next.collector.id, value2: codeLabel(next.collector.status), value3: describeLastRun(next.collector.last_run)?` · ${describeLastRun(next.collector.last_run)}`:'' }"
     }
   ],
   "Settings.bab4005814": [
     {
       "file": "src/Settings.tsx",
-      "line": 1666,
+      "line": 1672,
       "values": "{ value1: message }"
     }
   ],
   "Settings.a54468e4c9": [
     {
       "file": "src/Settings.tsx",
-      "line": 1675,
+      "line": 1681,
       "values": "{ value1: (error as Error).message }"
     }
   ],
   "Settings.ae46205194": [
     {
       "file": "src/Settings.tsx",
-      "line": 1680
+      "line": 1686
     }
   ],
   "Settings.e74bd3fc97": [
     {
       "file": "src/Settings.tsx",
-      "line": 1680
+      "line": 1686
     }
   ],
   "Settings.cb874cc434": [
     {
       "file": "src/Settings.tsx",
-      "line": 1680
+      "line": 1686
     }
   ],
   "Settings.353dbe46b0": [
     {
       "file": "src/Settings.tsx",
-      "line": 1690,
+      "line": 1696,
       "values": "{ value1: label }"
     }
   ],
   "Settings.7b7ebb8dc4": [
     {
       "file": "src/Settings.tsx",
-      "line": 1690,
+      "line": 1696,
       "values": "{ value1: label }"
     }
   ],
   "Settings.c5c2a4482c": [
     {
       "file": "src/Settings.tsx",
-      "line": 1690,
+      "line": 1696,
       "values": "{ value1: label }"
     }
   ],
   "Settings.90b756f119": [
     {
       "file": "src/Settings.tsx",
-      "line": 1692,
+      "line": 1698,
       "values": "{ value1: label, value2: (error as Error).message }"
     }
   ],
   "Settings.257a35d3de": [
     {
       "file": "src/Settings.tsx",
-      "line": 1716
+      "line": 1722
     }
   ],
   "Settings.f3b44d4b91": [
     {
       "file": "src/Settings.tsx",
-      "line": 1717,
+      "line": 1723,
       "values": "{ value1: models.models.length }"
     }
   ],
   "Settings.48282261e1": [
     {
       "file": "src/Settings.tsx",
-      "line": 1717,
+      "line": 1723,
       "values": "{ value1: (error as Error).message }"
     }
   ],
   "Settings.02f6ea1281": [
     {
       "file": "src/Settings.tsx",
-      "line": 1770
+      "line": 1776
     }
   ],
   "Settings.0590b57a08": [
     {
       "file": "src/Settings.tsx",
-      "line": 1770
+      "line": 1776
     }
   ],
   "Settings.74a883a037": [
     {
       "file": "src/Settings.tsx",
-      "line": 1771
+      "line": 1777
     },
     {
       "file": "src/Settings.tsx",
-      "line": 1830
+      "line": 1836
     },
     {
       "file": "src/Settings.tsx",
-      "line": 2981
+      "line": 2987
     }
   ],
   "Settings.e26d51d367": [
     {
       "file": "src/Settings.tsx",
-      "line": 1774
+      "line": 1780
     },
     {
       "file": "src/Settings.tsx",
-      "line": 1785
+      "line": 1791
     }
   ],
   "Settings.9a6d5164b0": [
     {
       "file": "src/Settings.tsx",
-      "line": 1810,
+      "line": 1816,
       "values": "{ value1: (expanded) ? 'yes' : 'no', label: tab.label }"
     }
   ],
   "Settings.05e9eb0145": [
     {
       "file": "src/Settings.tsx",
-      "line": 1812,
+      "line": 1818,
       "values": "{ label: tab.label }"
     }
   ],
   "Settings.304028d971": [
     {
       "file": "src/Settings.tsx",
-      "line": 1819
+      "line": 1825
     }
   ],
   "Settings.57054c5a04": [
     {
       "file": "src/Settings.tsx",
-      "line": 1829
+      "line": 1835
     },
     {
       "file": "src/Settings.tsx",
-      "line": 2974
+      "line": 2980
     }
   ],
   "Settings.9c927bd29c": [
     {
       "file": "src/Settings.tsx",
-      "line": 1829
+      "line": 1835
     }
   ],
   "Settings.2da15e4dad": [
     {
       "file": "src/Settings.tsx",
-      "line": 1833
+      "line": 1839
     },
     {
       "file": "src/Settings.tsx",
-      "line": 2984
+      "line": 2990
     }
   ],
   "Settings.19766ed6cc": [
     {
       "file": "src/Settings.tsx",
-      "line": 1838
+      "line": 1844
     },
     {
       "file": "src/Settings.tsx",
-      "line": 2393
+      "line": 2399
     },
     {
       "file": "src/Settings.tsx",
-      "line": 2410
+      "line": 2416
     },
     {
       "file": "src/Settings.tsx",
-      "line": 3002
+      "line": 3008
     },
     {
       "file": "src/Settings.tsx",
-      "line": 3015
+      "line": 3021
     }
   ],
   "Settings.1aef939917": [
     {
       "file": "src/Settings.tsx",
-      "line": 1853
+      "line": 1859
     }
   ],
   "Settings.610b7468ce": [
     {
       "file": "src/Settings.tsx",
-      "line": 1869
+      "line": 1875
     }
   ],
   "Settings.4093a17a2f": [
     {
       "file": "src/Settings.tsx",
-      "line": 1870,
+      "line": 1876,
       "values": "{ value1: <input value={draft.startup_cwd} onInput={e=>change('startup_cwd',e.currentTarget.value)} /> }"
     }
   ],
   "Settings.52c56b5713": [
     {
       "file": "src/Settings.tsx",
-      "line": 1871,
+      "line": 1877,
       "values": "{ value1: <Dropdown value={draft.default_backend} onChange={value=>change('default_backend',value)} options={allBackendNames().map(name=>({value:name,label:name==='shell'?t(\"Settings.a733285486\"):harnessDisplayName(name)}))}/> }"
     }
   ],
   "Settings.a733285486": [
     {
       "file": "src/Settings.tsx",
-      "line": 1871
+      "line": 1877
     },
     {
       "file": "src/Settings.tsx",
-      "line": 1990
+      "line": 1996
     }
   ],
   "Settings.b97dbb1da6": [
     {
       "file": "src/Settings.tsx",
-      "line": 1872
+      "line": 1878
     }
   ],
   "Settings.96d00c9bca": [
     {
       "file": "src/Settings.tsx",
-      "line": 1875
+      "line": 1881
     }
   ],
   "Settings.6b8492beae": [
     {
       "file": "src/Settings.tsx",
-      "line": 1876
+      "line": 1882
     }
   ],
   "Settings.c55d7900d9": [
     {
       "file": "src/Settings.tsx",
-      "line": 1877,
+      "line": 1883,
       "values": "{ value1: <Dropdown value={tierChoice} onChange={value=>setTierChoice(value as typeof tierChoice)} options={[...(draft.experience_tier===''?[{value:'',get label() { return t(\"Settings.2f7b5f0c93\") }}]:[]),{value:'terminal',get label() { return t(\"Settings.95f1428d07\") }},{value:'deterministic',get l"
     }
   ],
   "Settings.2f7b5f0c93": [
     {
       "file": "src/Settings.tsx",
-      "line": 1877
+      "line": 1883
     }
   ],
   "Settings.95f1428d07": [
     {
       "file": "src/Settings.tsx",
-      "line": 1877
+      "line": 1883
     }
   ],
   "Settings.ec6b656e17": [
     {
       "file": "src/Settings.tsx",
-      "line": 1877
+      "line": 1883
     }
   ],
   "Settings.ad1fb9ec0c": [
     {
       "file": "src/Settings.tsx",
-      "line": 1877
+      "line": 1883
     }
   ],
   "Settings.0bed26d526": [
     {
       "file": "src/Settings.tsx",
-      "line": 1879
+      "line": 1885
     }
   ],
   "Settings.1d9ec1f990": [
     {
       "file": "src/Settings.tsx",
-      "line": 1879
+      "line": 1885
     }
   ],
   "Settings.12f2e0cbaf": [
     {
       "file": "src/Settings.tsx",
-      "line": 1885
+      "line": 1891
     }
   ],
   "Settings.3d59314e38": [
     {
       "file": "src/Settings.tsx",
-      "line": 1886
+      "line": 1892
     }
   ],
   "Settings.708bf8b65a": [
     {
       "file": "src/Settings.tsx",
-      "line": 1886
+      "line": 1892
     }
   ],
   "Settings.f1c216ddf2": [
     {
       "file": "src/Settings.tsx",
-      "line": 1893
+      "line": 1899
     }
   ],
   "Settings.607aa1a896": [
     {
       "file": "src/Settings.tsx",
-      "line": 1894,
+      "line": 1900,
       "values": "{ value1: <code>{draft.data_dir}</code> }"
     }
   ],
   "Settings.1f2df45014": [
     {
       "file": "src/Settings.tsx",
-      "line": 1895
+      "line": 1901
     }
   ],
   "Settings.cf675af0cc": [
     {
       "file": "src/Settings.tsx",
-      "line": 1895
+      "line": 1901
     }
   ],
   "Settings.602f8e6370": [
     {
       "file": "src/Settings.tsx",
-      "line": 1895
+      "line": 1901
     },
     {
       "file": "src/Settings.tsx",
-      "line": 3015
+      "line": 3021
     }
   ],
   "Settings.a652bdce64": [
     {
       "file": "src/Settings.tsx",
-      "line": 1900
+      "line": 1906
     }
   ],
   "Settings.79dd867432": [
     {
       "file": "src/Settings.tsx",
-      "line": 1901
+      "line": 1907
     }
   ],
   "Settings.9be4b0b3ac": [
     {
       "file": "src/Settings.tsx",
-      "line": 1902
+      "line": 1908
     }
   ],
   "Settings.9826d8a4ee": [
     {
       "file": "src/Settings.tsx",
-      "line": 1903
+      "line": 1909
     }
   ],
   "Settings.ea63bde02d": [
     {
       "file": "src/Settings.tsx",
-      "line": 1904
+      "line": 1910
     }
   ],
   "Settings.5b0da44ddc": [
     {
       "file": "src/Settings.tsx",
-      "line": 1905
+      "line": 1911
     }
   ],
   "Settings.d597f45a94": [
     {
       "file": "src/Settings.tsx",
-      "line": 1916
+      "line": 1922
     }
   ],
   "Settings.eae5876f47": [
     {
       "file": "src/Settings.tsx",
-      "line": 1917,
+      "line": 1923,
       "values": "{ value1: <input value={draft.new_project_parent} placeholder={projectParentHint || t(\"Settings.8535f6ae6a\")} onInput={e=>change('new_project_parent',e.currentTarget.value)}/> }"
     }
   ],
   "Settings.8535f6ae6a": [
     {
       "file": "src/Settings.tsx",
-      "line": 1917
+      "line": 1923
     }
   ],
   "Settings.2742dd4f3c": [
     {
       "file": "src/Settings.tsx",
-      "line": 1918,
+      "line": 1924,
       "values": "{ value1: projectParentHint && <Fragment>{rich(\"Settings.ab34b4cc9f\", { value1: <code>{projectParentHint}</code> })}</Fragment> }"
     }
   ],
   "Settings.ab34b4cc9f": [
     {
       "file": "src/Settings.tsx",
-      "line": 1918,
+      "line": 1924,
       "values": "{ value1: <code>{projectParentHint}</code> }"
     }
   ],
   "Settings.d76e4fae48": [
     {
       "file": "src/Settings.tsx",
-      "line": 1924
+      "line": 1930
     }
   ],
   "Settings.b852090eca": [
     {
       "file": "src/Settings.tsx",
-      "line": 1926
+      "line": 1932
     }
   ],
   "Settings.705dd738d8": [
     {
       "file": "src/Settings.tsx",
-      "line": 1926
+      "line": 1932
     }
   ],
   "Settings.8415a53c5e": [
     {
       "file": "src/Settings.tsx",
-      "line": 1926
+      "line": 1932
     }
   ],
   "Settings.5b326d4444": [
     {
       "file": "src/Settings.tsx",
-      "line": 1928,
+      "line": 1934,
       "values": "{ value1: <input value={script.label} placeholder={t(\"Settings.75b7b54fd0\")} onInput={e=>updateInitScript(index,{label:e.currentTarget.value})} /> }"
     }
   ],
   "Settings.75b7b54fd0": [
     {
       "file": "src/Settings.tsx",
-      "line": 1928
+      "line": 1934
     }
   ],
   "Settings.624ed75acc": [
     {
       "file": "src/Settings.tsx",
-      "line": 1929,
+      "line": 1935,
       "values": "{ value1: <textarea value={script.command} placeholder={t(\"Settings.dd1f763fbb\")} onInput={e=>updateInitScript(index,{command:e.currentTarget.value})} /> }"
     }
   ],
   "Settings.dd1f763fbb": [
     {
       "file": "src/Settings.tsx",
-      "line": 1929
+      "line": 1935
     }
   ],
   "Settings.73e88dbcfe": [
     {
       "file": "src/Settings.tsx",
-      "line": 1931
+      "line": 1937
     }
   ],
   "Settings.c3812fc4ac": [
     {
       "file": "src/Settings.tsx",
-      "line": 1934
+      "line": 1940
     }
   ],
   "Settings.aaf875d75c": [
     {
       "file": "src/Settings.tsx",
-      "line": 1937
+      "line": 1943
     }
   ],
   "Settings.32fd0c7bc8": [
     {
       "file": "src/Settings.tsx",
-      "line": 1941
+      "line": 1947
     }
   ],
   "Settings.1ef5e70f2c": [
     {
       "file": "src/Settings.tsx",
-      "line": 1942,
+      "line": 1948,
       "values": "{ value1: <textarea value={draft.project_ignore_patterns.join('\\n')} onInput={e=>change('project_ignore_patterns',parseIgnorePatternDraft(e.currentTarget.value))}/> }"
     }
   ],
   "Settings.b4878aeb0e": [
     {
       "file": "src/Settings.tsx",
-      "line": 1943,
+      "line": 1949,
       "values": "{ value1: <strong>{t(\"Settings.6388650422\")}</strong> }"
     }
   ],
   "Settings.6388650422": [
     {
       "file": "src/Settings.tsx",
-      "line": 1943
+      "line": 1949
     }
   ],
   "Settings.e2fe353986": [
     {
       "file": "src/Settings.tsx",
-      "line": 1948
+      "line": 1954
     }
   ],
   "Settings.e57095b0ec": [
     {
       "file": "src/Settings.tsx",
-      "line": 1949,
+      "line": 1955,
       "values": "{ value1: <Dropdown value={draft.terminal_renderer} onChange={value=>change('terminal_renderer',value as Config['terminal_renderer'])} options={[{value:'auto',get label() { return t(\"Settings.79003a7b93\") }},{value:'webgl',get label() { return t(\"Settings.54953cd5cd\") }},{value:'dom',get label() { r"
     }
   ],
   "Settings.79003a7b93": [
     {
       "file": "src/Settings.tsx",
-      "line": 1949
+      "line": 1955
     }
   ],
   "Settings.54953cd5cd": [
     {
       "file": "src/Settings.tsx",
-      "line": 1949
+      "line": 1955
     }
   ],
   "Settings.45f5d80817": [
     {
       "file": "src/Settings.tsx",
-      "line": 1949
+      "line": 1955
     }
   ],
   "Settings.8e3970531d": [
     {
       "file": "src/Settings.tsx",
-      "line": 1950
+      "line": 1956
     }
   ],
   "Settings.e15c93639f": [
     {
       "file": "src/Settings.tsx",
-      "line": 1959
+      "line": 1965
     }
   ],
   "Settings.feb4d74fa3": [
     {
       "file": "src/Settings.tsx",
-      "line": 1960,
+      "line": 1966,
       "values": "{ value1: <input type=\"number\" min=\"1024\" max=\"1073741824\" value={draft.scrollback_bytes} onInput={e=>change('scrollback_bytes',Number(e.currentTarget.value))} />, value2: <small>{t(\"Settings.55ec2f69cf\")}</small> }"
     }
   ],
   "Settings.55ec2f69cf": [
     {
       "file": "src/Settings.tsx",
-      "line": 1960
+      "line": 1966
     }
   ],
   "Settings.7931662b58": [
     {
       "file": "src/Settings.tsx",
-      "line": 1961,
+      "line": 1967,
       "values": "{ value1: <input type=\"number\" min=\"1024\" max=\"1073741824\" value={draft.attach_replay_bytes} onInput={e=>change('attach_replay_bytes',Number(e.currentTarget.value))} />, value2: <small>{t(\"Settings.1210398c67\")}</small> }"
     }
   ],
   "Settings.1210398c67": [
     {
       "file": "src/Settings.tsx",
-      "line": 1961
+      "line": 1967
     }
   ],
   "Settings.3aef96e640": [
     {
       "file": "src/Settings.tsx",
-      "line": 1962
+      "line": 1968
     }
   ],
   "Settings.d3eaa29455": [
     {
       "file": "src/Settings.tsx",
-      "line": 1963,
+      "line": 1969,
       "values": "{ value1: <code>{t(\"Settings.1e768c98f8\")}</code> }"
     }
   ],
   "Settings.1e768c98f8": [
     {
       "file": "src/Settings.tsx",
-      "line": 1963
+      "line": 1969
     }
   ],
   "Settings.453bc00217": [
     {
       "file": "src/Settings.tsx",
-      "line": 1964,
+      "line": 1970,
       "values": "{ value1: <input type=\"number\" min=\"0\" max=\"67108864\" value={draft.session_recovery_checkpoint_bytes} onInput={e=>change('session_recovery_checkpoint_bytes',Number(e.currentTarget.value))} />, value2: <small>{t(\"Settings.d646181b8c\")}</small> }"
     }
   ],
   "Settings.d646181b8c": [
     {
       "file": "src/Settings.tsx",
-      "line": 1964
+      "line": 1970
     }
   ],
   "Settings.e745537ac7": [
     {
       "file": "src/Settings.tsx",
-      "line": 1965,
+      "line": 1971,
       "values": "{ value1: <input type=\"number\" min=\"0\" max=\"365\" value={draft.session_recovery_retention_days} onInput={e=>change('session_recovery_retention_days',Number(e.currentTarget.value))} />, value2: <small>{rich(\"Settings.c52d762da9\", { value1: <em>{t(\"Settings.e87ba7a0b7\")}</em> })}</small> }"
     }
   ],
   "Settings.c52d762da9": [
     {
       "file": "src/Settings.tsx",
-      "line": 1965,
+      "line": 1971,
       "values": "{ value1: <em>{t(\"Settings.e87ba7a0b7\")}</em> }"
     }
   ],
   "Settings.e87ba7a0b7": [
     {
       "file": "src/Settings.tsx",
-      "line": 1965
+      "line": 1971
     }
   ],
   "Settings.73f599952e": [
     {
       "file": "src/Settings.tsx",
-      "line": 1966,
+      "line": 1972,
       "values": "{ value1: <input type=\"number\" min=\"0\" max=\"1000\" value={draft.session_recovery_max_sessions} onInput={e=>change('session_recovery_max_sessions',Number(e.currentTarget.value))} />, value2: <small>{t(\"Settings.6bdbb7f402\")}</small> }"
     }
   ],
   "Settings.6bdbb7f402": [
     {
       "file": "src/Settings.tsx",
-      "line": 1966
+      "line": 1972
     }
   ],
   "Settings.ad30abd187": [
     {
       "file": "src/Settings.tsx",
-      "line": 1969
+      "line": 1975
     }
   ],
   "Settings.77a91ae469": [
     {
       "file": "src/Settings.tsx",
-      "line": 1970,
+      "line": 1976,
       "values": "{ value1: <Dropdown value={draft.default_shell_profile} onChange={value=>change('default_shell_profile',value)} options={draft.shell_profiles.filter(profile=>profile.enabled&&profile.backend==='shell').map(profile=>({value:profile.id,label:profile.label}))}/> }"
     }
   ],
   "Settings.04bd3e78d7": [
     {
       "file": "src/Settings.tsx",
-      "line": 1971
+      "line": 1977
     }
   ],
   "Settings.66907cf217": [
     {
       "file": "src/Settings.tsx",
-      "line": 1974
+      "line": 1980
     }
   ],
   "Settings.1037accf0f": [
     {
       "file": "src/Settings.tsx",
-      "line": 1975,
+      "line": 1981,
       "values": "{ value1: <em>{rich(\"Settings.8277415b2e\", { value1: <code>{t(\"Settings.c857d09db2\")}</code> })}</em> }"
     }
   ],
   "Settings.8277415b2e": [
     {
       "file": "src/Settings.tsx",
-      "line": 1975,
+      "line": 1981,
       "values": "{ value1: <code>{t(\"Settings.c857d09db2\")}</code> }"
     }
   ],
   "Settings.c857d09db2": [
     {
       "file": "src/Settings.tsx",
-      "line": 1975
+      "line": 1981
     },
     {
       "file": "src/Settings.tsx",
-      "line": 1977
+      "line": 1983
     },
     {
       "file": "src/Settings.tsx",
-      "line": 1977
+      "line": 1983
     }
   ],
   "Settings.85be6ef7a8": [
     {
       "file": "src/Settings.tsx",
-      "line": 1976,
+      "line": 1982,
       "values": "{ value1: <code>{t(\"Settings.204fcb78d9\")}</code> }"
     }
   ],
   "Settings.204fcb78d9": [
     {
       "file": "src/Settings.tsx",
-      "line": 1976
+      "line": 1982
     }
   ],
   "Settings.437109e789": [
     {
       "file": "src/Settings.tsx",
-      "line": 1977,
+      "line": 1983,
       "values": "{ value1: <code>{t(\"Settings.c857d09db2\")}</code>, value2: <code>{t(\"Settings.c857d09db2\")}</code> }"
     }
   ],
   "Settings.1fce70b800": [
     {
       "file": "src/Settings.tsx",
-      "line": 1980
+      "line": 1986
     }
   ],
   "Settings.82016fe5c7": [
     {
       "file": "src/Settings.tsx",
-      "line": 1982
+      "line": 1988
     }
   ],
   "Settings.ce635c4eab": [
     {
       "file": "src/Settings.tsx",
-      "line": 1983
+      "line": 1989
     }
   ],
   "Settings.b8d31e8527": [
     {
       "file": "src/Settings.tsx",
-      "line": 1983
+      "line": 1989
     }
   ],
   "Settings.b4dc66dde8": [
     {
       "file": "src/Settings.tsx",
-      "line": 1983
+      "line": 1989
     }
   ],
   "Settings.bd6a79817b": [
     {
       "file": "src/Settings.tsx",
-      "line": 1984
+      "line": 1990
     }
   ],
   "Settings.86a86c70f9": [
     {
       "file": "src/Settings.tsx",
-      "line": 1984,
+      "line": 1990,
       "values": "{ display_name: harness.display_name }"
     }
   ],
   "Settings.63b2db5c07": [
     {
       "file": "src/Settings.tsx",
-      "line": 1984
+      "line": 1990
     }
   ],
   "Settings.ff86ba0777": [
     {
       "file": "src/Settings.tsx",
-      "line": 1987,
+      "line": 1993,
       "values": "{ label: selectedProfile.label }"
     }
   ],
   "Settings.4ffba55e5d": [
     {
       "file": "src/Settings.tsx",
-      "line": 1987
+      "line": 1993
     }
   ],
   "Settings.62db5ee889": [
     {
       "file": "src/Settings.tsx",
-      "line": 1988,
+      "line": 1994,
       "values": "{ value1: <input value={selectedProfile.id} onInput={e=>updateProfile(selectedProfileIndex,{id:e.currentTarget.value})}/> }"
     }
   ],
   "Settings.babe8d3238": [
     {
       "file": "src/Settings.tsx",
-      "line": 1989,
+      "line": 1995,
       "values": "{ value1: <input value={selectedProfile.label} onInput={e=>updateProfile(selectedProfileIndex,{label:e.currentTarget.value})}/> }"
     }
   ],
   "Settings.5f008d7b9b": [
     {
       "file": "src/Settings.tsx",
-      "line": 1990,
+      "line": 1996,
       "values": "{ value1: <Dropdown value={selectedProfile.backend} onChange={value=>updateProfile(selectedProfileIndex,{backend:value as ProjectBackend})} options={[{value:'shell',get label() { return t(\"Settings.a733285486\") }},...harnesses().map(harness=>({value:harness.name,label:harness.display_name}))]}/> }"
     }
   ],
   "Settings.85e00278f6": [
     {
       "file": "src/Settings.tsx",
-      "line": 1991,
+      "line": 1997,
       "values": "{ value1: selectedProfile.backend!=='shell' && <em>{t(\"Settings.d422020daa\")}</em>, value2: <input value={selectedProfile.executable} placeholder={selectedProfile.backend==='shell' ? '' : draft.harness_exe[selectedProfile.backend] || ''} onInput={e=>updateProfile(selectedProfileIndex,{executable:e.c"
     }
   ],
   "Settings.d422020daa": [
     {
       "file": "src/Settings.tsx",
-      "line": 1991
+      "line": 1997
     }
   ],
   "Settings.dcd9b293a3": [
     {
       "file": "src/Settings.tsx",
-      "line": 1992,
+      "line": 1998,
       "values": "{ value1: <input value={argsText} spellcheck={false} placeholder={selectedProfile.backend==='shell' ? t(\"Settings.b90a5d2477\") : t(\"Settings.ece27d0c6a\")} onInput={e=>{const text=e.currentTarget.value;setArgsText(text);updateProfile(selectedProfileIndex,{args:parseCommandLine(text)})}}/> }"
     }
   ],
   "Settings.b90a5d2477": [
     {
       "file": "src/Settings.tsx",
-      "line": 1992
+      "line": 1998
     }
   ],
   "Settings.ece27d0c6a": [
     {
       "file": "src/Settings.tsx",
-      "line": 1992
+      "line": 1998
     },
     {
       "file": "src/Settings.tsx",
-      "line": 2123
+      "line": 2129
     }
   ],
   "Settings.c12839d10a": [
     {
       "file": "src/Settings.tsx",
-      "line": 1993,
+      "line": 1999,
       "values": "{ value1: <code>{t(\"Settings.364d30c5f3\")}</code> }"
     }
   ],
   "Settings.364d30c5f3": [
     {
       "file": "src/Settings.tsx",
-      "line": 1993
+      "line": 1999
     }
   ],
   "Settings.49b40019aa": [
     {
       "file": "src/Settings.tsx",
-      "line": 1994,
+      "line": 2000,
       "values": "{ value1: reservedConflict(selectedProfile.backend,selectedProfile.args), value2: harnessDisplayName(selectedProfile.backend) }"
     }
   ],
   "Settings.8667a37964": [
     {
       "file": "src/Settings.tsx",
-      "line": 1995,
+      "line": 2001,
       "values": "{ value1: <textarea value={Object.entries(selectedProfile.env).map(([key,value])=>`${key}=${value}`).join('\\n')} onInput={e=>updateProfile(selectedProfileIndex,{env:Object.fromEntries(e.currentTarget.value.split('\\n').filter(line=>line.includes('=')).map(line=>{const at=line.indexOf('=');return [lin"
     }
   ],
   "Settings.779525d2aa": [
     {
       "file": "src/Settings.tsx",
-      "line": 1996,
+      "line": 2002,
       "values": "{ value1: <Dropdown value={selectedProfile.cwd_strategy} onChange={value=>updateProfile(selectedProfileIndex,{cwd_strategy:value as LaunchProfile['cwd_strategy']})} options={[{value:'native',get label() { return t(\"Settings.bef32d2c31\") }},{value:'home',get label() { return t(\"Settings.4ea1405881\") "
     }
   ],
   "Settings.bef32d2c31": [
     {
       "file": "src/Settings.tsx",
-      "line": 1996
+      "line": 2002
     }
   ],
   "Settings.4ea1405881": [
     {
       "file": "src/Settings.tsx",
-      "line": 1996
+      "line": 2002
     }
   ],
   "Settings.42bda76ffe": [
     {
       "file": "src/Settings.tsx",
-      "line": 1996
+      "line": 2002
     }
   ],
   "Settings.45eb01ad80": [
     {
       "file": "src/Settings.tsx",
-      "line": 1997
+      "line": 2003
     }
   ],
   "Settings.7276b6d954": [
     {
       "file": "src/Settings.tsx",
-      "line": 1998
+      "line": 2004
     }
   ],
   "Settings.0de2bfdfe9": [
     {
       "file": "src/Settings.tsx",
-      "line": 1999
+      "line": 2005
     }
   ],
   "Settings.8e6876be17": [
     {
       "file": "src/Settings.tsx",
-      "line": 1999
+      "line": 2005
     }
   ],
   "Settings.f60f612dfe": [
     {
       "file": "src/Settings.tsx",
-      "line": 2001
+      "line": 2007
     }
   ],
   "Settings.1e17fa46dd": [
     {
       "file": "src/Settings.tsx",
-      "line": 2003
+      "line": 2009
     }
   ],
   "Settings.489161eace": [
     {
       "file": "src/Settings.tsx",
-      "line": 2004
+      "line": 2010
     }
   ],
   "Settings.2fa60cb489": [
     {
       "file": "src/Settings.tsx",
-      "line": 2004
+      "line": 2010
     }
   ],
   "Settings.4b6bad1ea4": [
     {
       "file": "src/Settings.tsx",
-      "line": 2006
+      "line": 2012
     }
   ],
   "Settings.08bc837a97": [
     {
       "file": "src/Settings.tsx",
-      "line": 2006
+      "line": 2012
     }
   ],
   "Settings.e24a5a32c9": [
     {
       "file": "src/Settings.tsx",
-      "line": 2006
+      "line": 2012
     }
   ],
   "Settings.e9d8992f34": [
     {
       "file": "src/Settings.tsx",
-      "line": 2006
+      "line": 2012
     }
   ],
   "Settings.e97166b545": [
     {
       "file": "src/Settings.tsx",
-      "line": 2006
+      "line": 2012
     }
   ],
   "Settings.7e5608ab61": [
     {
       "file": "src/Settings.tsx",
-      "line": 2009
+      "line": 2015
     }
   ],
   "Settings.3727d237a1": [
     {
       "file": "src/Settings.tsx",
-      "line": 2010
+      "line": 2016
     }
   ],
   "Settings.15073d5d0f": [
     {
       "file": "src/Settings.tsx",
-      "line": 2010,
+      "line": 2016,
       "values": "{ value1: harnessDisplayName(selectedProfile.backend), value2: reservedArgs(selectedProfile.backend).join(' ')||'none' }"
     }
   ],
   "Settings.546d26c986": [
     {
       "file": "src/Settings.tsx",
-      "line": 2012
+      "line": 2018
     }
   ],
   "Settings.ff0a1d133a": [
     {
       "file": "src/Settings.tsx",
-      "line": 2012
+      "line": 2018
     }
   ],
   "Settings.4775f76657": [
     {
       "file": "src/Settings.tsx",
-      "line": 2012
+      "line": 2018
     }
   ],
   "Settings.71b6da4552": [
     {
       "file": "src/Settings.tsx",
-      "line": 2017
+      "line": 2023
     }
   ],
   "Settings.f4c6a15182": [
     {
       "file": "src/Settings.tsx",
-      "line": 2017,
+      "line": 2023,
       "values": "{ value1: <input value={draft.worktree_root} onInput={e=>change('worktree_root',e.currentTarget.value)}/> }"
     }
   ],
   "Settings.f8fc2d7627": [
     {
       "file": "src/Settings.tsx",
-      "line": 2017,
+      "line": 2023,
       "values": "{ value1: <code>{rich(\"Settings.3889fda2be\", { data_dir: draft.data_dir, value2: (draft.data_dir.includes('\\\\')) ? 'yes' : 'no' })}</code> }"
     }
   ],
   "Settings.3889fda2be": [
     {
       "file": "src/Settings.tsx",
-      "line": 2017,
+      "line": 2023,
       "values": "{ data_dir: draft.data_dir, value2: (draft.data_dir.includes('\\\\')) ? 'yes' : 'no' }"
     }
   ],
   "Settings.58f6edf104": [
     {
       "file": "src/Settings.tsx",
-      "line": 2017,
+      "line": 2023,
       "values": "{ value1: <input type=\"number\" step=\".25\" value={draft.git_poll_seconds} onInput={e=>change('git_poll_seconds',Number(e.currentTarget.value))} /> }"
     }
   ],
   "Settings.cecdecba54": [
     {
       "file": "src/Settings.tsx",
-      "line": 2017,
+      "line": 2023,
       "values": "{ value1: <input type=\"checkbox\" checked={draft.git_swe_mux_prompt_enabled} onChange={e=>change('git_swe_mux_prompt_enabled',e.currentTarget.checked)}/> }"
     }
   ],
   "Settings.9ca0fac057": [
     {
       "file": "src/Settings.tsx",
-      "line": 2017,
+      "line": 2023,
       "values": "{ value1: <code>{t(\"Settings.64f9020bac\")}</code> }"
     }
   ],
   "Settings.64f9020bac": [
     {
       "file": "src/Settings.tsx",
-      "line": 2017
+      "line": 2023
     }
   ],
   "Settings.ae176d3571": [
     {
       "file": "src/Settings.tsx",
-      "line": 2017
+      "line": 2023
     }
   ],
   "Settings.aeae0524ec": [
     {
       "file": "src/Settings.tsx",
-      "line": 2017,
+      "line": 2023,
       "values": "{ length: Object.keys(draft.git_swe_mux_prompt_decisions||{}).length, value2: (Object.keys(draft.git_swe_mux_prompt_decisions||{}).length===1) ? 'yes' : 'no' }"
     }
   ],
   "Settings.b9b2de18eb": [
     {
       "file": "src/Settings.tsx",
-      "line": 2017
+      "line": 2023
     }
   ],
   "Settings.a5a5938bcf": [
     {
       "file": "src/Settings.tsx",
-      "line": 2017,
+      "line": 2023,
       "values": "{ value1: <strong>{t(\"Settings.31c05b41e5\")}</strong>, value2: <strong>{t(\"Settings.0e750756c8\")}</strong> }"
     }
   ],
   "Settings.31c05b41e5": [
     {
       "file": "src/Settings.tsx",
-      "line": 2017
+      "line": 2023
     }
   ],
   "Settings.0e750756c8": [
     {
       "file": "src/Settings.tsx",
-      "line": 2017
+      "line": 2023
     }
   ],
   "Settings.2ed6993b61": [
     {
       "file": "src/Settings.tsx",
-      "line": 2020
+      "line": 2026
     }
   ],
   "Settings.977c0a9783": [
     {
       "file": "src/Settings.tsx",
-      "line": 2020,
+      "line": 2026,
       "values": "{ value1: <input type=\"number\" min=\".5\" max=\"60\" step=\".5\" value={draft.process_poll_seconds} onInput={e=>change('process_poll_seconds',Number(e.currentTarget.value))}/> }"
     }
   ],
   "Settings.d97a0a476a": [
     {
       "file": "src/Settings.tsx",
-      "line": 2020,
+      "line": 2026,
       "values": "{ value1: <input type=\"number\" min=\"1\" max=\"3600\" value={draft.process_orphan_grace_seconds} onInput={e=>change('process_orphan_grace_seconds',Number(e.currentTarget.value))}/> }"
     }
   ],
   "Settings.93fce66a81": [
     {
       "file": "src/Settings.tsx",
-      "line": 2020,
+      "line": 2026,
       "values": "{ value1: <input type=\"number\" min=\"1\" max=\"3650\" value={draft.process_evidence_retention_days} onInput={e=>change('process_evidence_retention_days',Number(e.currentTarget.value))}/> }"
     }
   ],
   "Settings.4f2826faba": [
     {
       "file": "src/Settings.tsx",
-      "line": 2020,
+      "line": 2026,
       "values": "{ value1: <strong>{t(\"Settings.4a81a7ba53\")}</strong> }"
     }
   ],
   "Settings.4a81a7ba53": [
     {
       "file": "src/Settings.tsx",
-      "line": 2020
+      "line": 2026
     }
   ],
   "Settings.b35161bef3": [
     {
       "file": "src/Settings.tsx",
-      "line": 2021,
+      "line": 2027,
       "values": "{ value1: <Dropdown value={draft.session_process_priority} onChange={value=>change('session_process_priority',value as Config['session_process_priority'])} options={[{value:'below_normal',get label() { return t(\"Settings.d28e231ef0\") }},{value:'normal',get label() { return t(\"Settings.ea875c6854\") }"
     }
   ],
   "Settings.d28e231ef0": [
     {
       "file": "src/Settings.tsx",
-      "line": 2021
+      "line": 2027
     }
   ],
   "Settings.ea875c6854": [
     {
       "file": "src/Settings.tsx",
-      "line": 2021
+      "line": 2027
     }
   ],
   "Settings.fa39d2056b": [
     {
       "file": "src/Settings.tsx",
-      "line": 2022,
+      "line": 2028,
       "values": "{ value1: <Dropdown value={draft.daemon_process_priority} onChange={value=>change('daemon_process_priority',value as Config['daemon_process_priority'])} options={[{value:'above_normal',get label() { return t(\"Settings.ec47b10a17\") }},{value:'normal',get label() { return t(\"Settings.a7248eeb45\") }}]}"
     }
   ],
   "Settings.ec47b10a17": [
     {
       "file": "src/Settings.tsx",
-      "line": 2022
+      "line": 2028
     }
   ],
   "Settings.a7248eeb45": [
     {
       "file": "src/Settings.tsx",
-      "line": 2022
+      "line": 2028
     }
   ],
   "Settings.846a31434a": [
     {
       "file": "src/Settings.tsx",
-      "line": 2023
+      "line": 2029
     }
   ],
   "Settings.a10ce4071b": [
     {
       "file": "src/Settings.tsx",
-      "line": 2024,
+      "line": 2030,
       "values": "{ value1: <input type=\"number\" min=\"1\" max=\"20\" step=\".5\" value={draft.gil_switch_interval_ms} onInput={e=>change('gil_switch_interval_ms',Number(e.currentTarget.value))}/>, value2: <small>{t(\"Settings.360031df94\")}</small> }"
     }
   ],
   "Settings.360031df94": [
     {
       "file": "src/Settings.tsx",
-      "line": 2024
+      "line": 2030
     }
   ],
   "Settings.3622b018ac": [
     {
       "file": "src/Settings.tsx",
-      "line": 2025
+      "line": 2031
     }
   ],
   "Settings.ceef3d6ef2": [
     {
       "file": "src/Settings.tsx",
-      "line": 2025
+      "line": 2031
     }
   ],
   "Settings.959667c0c0": [
     {
       "file": "src/Settings.tsx",
-      "line": 2026
+      "line": 2032
     }
   ],
   "Settings.25da30eeb7": [
     {
       "file": "src/Settings.tsx",
-      "line": 2026
+      "line": 2032
     }
   ],
   "Settings.4dc456a205": [
     {
       "file": "src/Settings.tsx",
-      "line": 2027,
+      "line": 2033,
       "values": "{ value1: <input type=\"number\" min=\"0\" max=\"65535\" value={draft.terminal_gateway_port} onInput={e=>change('terminal_gateway_port',Number(e.currentTarget.value))}/>, value2: <small>{t(\"Settings.687ee3f1d6\")}</small> }"
     }
   ],
   "Settings.687ee3f1d6": [
     {
       "file": "src/Settings.tsx",
-      "line": 2027
+      "line": 2033
     }
   ],
   "Settings.2a8b718d0b": [
     {
       "file": "src/Settings.tsx",
-      "line": 2032
+      "line": 2038
     }
   ],
   "Settings.2680b29635": [
     {
       "file": "src/Settings.tsx",
-      "line": 2033
+      "line": 2039
     }
   ],
   "Settings.06c6c793a7": [
     {
       "file": "src/Settings.tsx",
-      "line": 2034
+      "line": 2040
     }
   ],
   "Settings.6fa12cdb55": [
     {
       "file": "src/Settings.tsx",
-      "line": 2034,
+      "line": 2040,
       "values": "{ value1: <code>{t(\"Settings.0b991fefcf\")}</code> }"
     }
   ],
   "Settings.0b991fefcf": [
     {
       "file": "src/Settings.tsx",
-      "line": 2034
+      "line": 2040
     }
   ],
   "Settings.f1f3d39c21": [
     {
       "file": "src/Settings.tsx",
-      "line": 2035,
+      "line": 2041,
       "values": "{ value1: <input type=\"number\" min=\".5\" max=\"60\" step=\".5\" value={draft.ghost_window_poll_seconds} onInput={e=>change('ghost_window_poll_seconds',Number(e.currentTarget.value))}/>, value2: <small>{t(\"Settings.839235ac8e\")}</small> }"
     }
   ],
   "Settings.839235ac8e": [
     {
       "file": "src/Settings.tsx",
-      "line": 2035
+      "line": 2041
     }
   ],
   "Settings.88bfa9d4b6": [
     {
       "file": "src/Settings.tsx",
-      "line": 2041
+      "line": 2047
     }
   ],
   "Settings.d46fe50b53": [
     {
       "file": "src/Settings.tsx",
-      "line": 2042,
+      "line": 2048,
       "values": "{ value1: <input type=\"number\" min=\"1\" max=\"3650\" value={draft.status_timeline_retention_days} onInput={e=>change('status_timeline_retention_days',Number(e.currentTarget.value))}/>, value2: <small>{t(\"Settings.e169612cbb\")}</small> }"
     }
   ],
   "Settings.e169612cbb": [
     {
       "file": "src/Settings.tsx",
-      "line": 2042
+      "line": 2048
     }
   ],
   "Settings.67ba93d745": [
     {
       "file": "src/Settings.tsx",
-      "line": 2051
+      "line": 2057
     }
   ],
   "Settings.b9b69191a6": [
     {
       "file": "src/Settings.tsx",
-      "line": 2052
+      "line": 2058
     }
   ],
   "Settings.05b557b651": [
     {
       "file": "src/Settings.tsx",
-      "line": 2052
+      "line": 2058
     }
   ],
   "Settings.2b1a1a8efc": [
     {
       "file": "src/Settings.tsx",
-      "line": 2054
+      "line": 2060
     }
   ],
   "Settings.8691e20252": [
     {
       "file": "src/Settings.tsx",
-      "line": 2055
+      "line": 2061
     }
   ],
   "Settings.6c163dc252": [
     {
       "file": "src/Settings.tsx",
-      "line": 2055
+      "line": 2061
     }
   ],
   "Settings.15da0874d2": [
     {
       "file": "src/Settings.tsx",
-      "line": 2056
+      "line": 2062
     }
   ],
   "Settings.749abfbd08": [
     {
       "file": "src/Settings.tsx",
-      "line": 2056
+      "line": 2062
     }
   ],
   "Settings.470cdab19f": [
     {
       "file": "src/Settings.tsx",
-      "line": 2057,
+      "line": 2063,
       "values": "{ value1: <Dropdown value={draft.note_syntax} onChange={value=>change('note_syntax',value as Config['note_syntax'])} options={[{value:'markdown',get label() { return t(\"Settings.62337e12ce\") }},{value:'plain',get label() { return t(\"Settings.0c1575ba8e\") }}]}/> }"
     }
   ],
   "Settings.62337e12ce": [
     {
       "file": "src/Settings.tsx",
-      "line": 2057
+      "line": 2063
     }
   ],
   "Settings.0c1575ba8e": [
     {
       "file": "src/Settings.tsx",
-      "line": 2057
+      "line": 2063
     }
   ],
   "Settings.d6b0d71e98": [
     {
       "file": "src/Settings.tsx",
-      "line": 2058
+      "line": 2064
     }
   ],
   "Settings.99da907ba1": [
     {
       "file": "src/Settings.tsx",
-      "line": 2059,
+      "line": 2065,
       "values": "{ value1: <Dropdown value={draft.note_tab_behavior} onChange={value=>change('note_tab_behavior',value as Config['note_tab_behavior'])} options={[{value:'indent',get label() { return t(\"Settings.f0a27473ee\") }},{value:'focus',get label() { return t(\"Settings.8140666b1b\") }}]}/> }"
     }
   ],
   "Settings.f0a27473ee": [
     {
       "file": "src/Settings.tsx",
-      "line": 2059
+      "line": 2065
     }
   ],
   "Settings.8140666b1b": [
     {
       "file": "src/Settings.tsx",
-      "line": 2059
+      "line": 2065
     }
   ],
   "Settings.0f94087686": [
     {
       "file": "src/Settings.tsx",
-      "line": 2060
+      "line": 2066
     }
   ],
   "Settings.1758bbe940": [
     {
       "file": "src/Settings.tsx",
-      "line": 2063
+      "line": 2069
     }
   ],
   "Settings.b0603de3db": [
     {
       "file": "src/Settings.tsx",
-      "line": 2064,
+      "line": 2070,
       "values": "{ value1: <input value={draft.note_font_family} placeholder={t(\"Settings.71fb1f9cb5\")} onInput={e=>change('note_font_family',e.currentTarget.value)}/> }"
     }
   ],
   "Settings.71fb1f9cb5": [
     {
       "file": "src/Settings.tsx",
-      "line": 2064
+      "line": 2070
     }
   ],
   "Settings.3323adcfd3": [
     {
       "file": "src/Settings.tsx",
-      "line": 2065,
+      "line": 2071,
       "values": "{ value1: <input type=\"number\" min=\"0\" max=\"48\" value={draft.note_font_size_px} onInput={e=>change('note_font_size_px',Number(e.currentTarget.value))}/> }"
     }
   ],
   "Settings.146c05dec2": [
     {
       "file": "src/Settings.tsx",
-      "line": 2066,
+      "line": 2072,
       "values": "{ value1: <input type=\"number\" min=\"0\" max=\"3\" step=\"0.05\" value={draft.note_line_height} onInput={e=>change('note_line_height',Number(e.currentTarget.value))}/> }"
     }
   ],
   "Settings.2c6fabdb76": [
     {
       "file": "src/Settings.tsx",
-      "line": 2067,
+      "line": 2073,
       "values": "{ value1: <strong>{t(\"Settings.371fe46d31\")}</strong> }"
     }
   ],
   "Settings.371fe46d31": [
     {
       "file": "src/Settings.tsx",
-      "line": 2067
+      "line": 2073
     }
   ],
   "Settings.95468a8905": [
     {
       "file": "src/Settings.tsx",
-      "line": 2070
+      "line": 2076
     }
   ],
   "Settings.7f69793973": [
     {
       "file": "src/Settings.tsx",
-      "line": 2071
+      "line": 2077
     }
   ],
   "Settings.33f513a038": [
     {
       "file": "src/Settings.tsx",
-      "line": 2072,
+      "line": 2078,
       "values": "{ value1: <Dropdown value={draft.note_command_rail} onChange={value=>change('note_command_rail',value as Config['note_command_rail'])} options={[{value:'auto',get label() { return t(\"Settings.99da46f473\") }},{value:'on',get label() { return t(\"Settings.de9f057a47\") }},{value:'off',get label() { retu"
     }
   ],
   "Settings.99da46f473": [
     {
       "file": "src/Settings.tsx",
-      "line": 2072
+      "line": 2078
     }
   ],
   "Settings.de9f057a47": [
     {
       "file": "src/Settings.tsx",
-      "line": 2072
+      "line": 2078
     }
   ],
   "Settings.6300ef800b": [
     {
       "file": "src/Settings.tsx",
-      "line": 2072
+      "line": 2078
     }
   ],
   "Settings.e8bc37b079": [
     {
       "file": "src/Settings.tsx",
-      "line": 2073,
+      "line": 2079,
       "values": "{ value1: <input type=\"number\" min=\"0\" max=\"96\" value={draft.note_rail_button_size_px} onInput={e=>change('note_rail_button_size_px',Number(e.currentTarget.value))}/>, value2: <small>{t(\"Settings.fb6ca3312e\")}</small> }"
     }
   ],
   "Settings.fb6ca3312e": [
     {
       "file": "src/Settings.tsx",
-      "line": 2073
+      "line": 2079
     }
   ],
   "Settings.253bcafe6f": [
     {
       "file": "src/Settings.tsx",
-      "line": 2074
+      "line": 2080
     }
   ],
   "Settings.0ce7deb840": [
     {
       "file": "src/Settings.tsx",
-      "line": 2074
+      "line": 2080
     }
   ],
   "Settings.3172ed0d7a": [
     {
       "file": "src/Settings.tsx",
-      "line": 2074
+      "line": 2080
     }
   ],
   "Settings.8178e6c324": [
     {
       "file": "src/Settings.tsx",
-      "line": 2077
+      "line": 2083
     }
   ],
   "Settings.419ccae7ac": [
     {
       "file": "src/Settings.tsx",
-      "line": 2078,
+      "line": 2084,
       "values": "{ value1: <Dropdown value={draft.note_shortcut_policy} onChange={value=>change('note_shortcut_policy',value as ShortcutPolicy)} options={[{value:'browser-safe',get label() { return t(\"Settings.d137c73eca\") }},{value:'editor-first',get label() { return t(\"Settings.90136025f0\") }},{value:'none',get la"
     }
   ],
   "Settings.d137c73eca": [
     {
       "file": "src/Settings.tsx",
-      "line": 2078
+      "line": 2084
     }
   ],
   "Settings.90136025f0": [
     {
       "file": "src/Settings.tsx",
-      "line": 2078
+      "line": 2084
     }
   ],
   "Settings.5dcf283732": [
     {
       "file": "src/Settings.tsx",
-      "line": 2078
+      "line": 2084
     }
   ],
   "Settings.3ece23954e": [
     {
       "file": "src/Settings.tsx",
-      "line": 2079
+      "line": 2085
     }
   ],
   "Settings.9ff4ec4a01": [
     {
       "file": "src/Settings.tsx",
-      "line": 2080
+      "line": 2086
     }
   ],
   "Settings.7dc336aa8b": [
     {
       "file": "src/Settings.tsx",
-      "line": 2080
+      "line": 2086
     }
   ],
   "Settings.6be24d9e75": [
     {
       "file": "src/Settings.tsx",
-      "line": 2080
+      "line": 2086
     }
   ],
   "Settings.a884e0e9dc": [
     {
       "file": "src/Settings.tsx",
-      "line": 2081
+      "line": 2087
     }
   ],
   "Settings.d773c44e7f": [
     {
       "file": "src/Settings.tsx",
-      "line": 2081
+      "line": 2087
     }
   ],
   "Settings.68c64a3df3": [
     {
       "file": "src/Settings.tsx",
-      "line": 2087
+      "line": 2093
     }
   ],
   "Settings.1ec18f6e0e": [
     {
       "file": "src/Settings.tsx",
-      "line": 2087
+      "line": 2093
     }
   ],
   "Settings.3097450f6c": [
     {
       "file": "src/Settings.tsx",
-      "line": 2089,
+      "line": 2095,
       "values": "{ value1: noteChordLabel(binding.chord) }"
     }
   ],
   "Settings.dfea46e31d": [
     {
       "file": "src/Settings.tsx",
-      "line": 2090
+      "line": 2096
     }
   ],
   "Settings.abac1508d2": [
     {
       "file": "src/Settings.tsx",
-      "line": 2091
+      "line": 2097
     }
   ],
   "Settings.97989ab1cd": [
     {
       "file": "src/Settings.tsx",
-      "line": 2092
+      "line": 2098
     }
   ],
   "Settings.c039f423b8": [
     {
       "file": "src/Settings.tsx",
-      "line": 2104
+      "line": 2110
     }
   ],
   "Settings.7655b44078": [
     {
       "file": "src/Settings.tsx",
-      "line": 2105
+      "line": 2111
     }
   ],
   "Settings.ed99b5afc7": [
     {
       "file": "src/Settings.tsx",
-      "line": 2106,
+      "line": 2112,
       "values": "{ value1: <Dropdown value={draft.default_harness} onChange={value=>change('default_harness',value)} options={[{value:'',get label() { return t(\"Settings.1696e54928\") }},...allHarnessesIncludingDisabled().map(harness=>({value:harness.name,label:harness.display_name}))]}/> }"
     }
   ],
   "Settings.1696e54928": [
     {
       "file": "src/Settings.tsx",
-      "line": 2106
+      "line": 2112
     }
   ],
   "Settings.1a4b9f37fd": [
     {
       "file": "src/Settings.tsx",
-      "line": 2107
+      "line": 2113
     }
   ],
   "Settings.f817714a1a": [
     {
       "file": "src/Settings.tsx",
-      "line": 2113
+      "line": 2119
     }
   ],
   "Settings.d9f64bd7ee": [
     {
       "file": "src/Settings.tsx",
-      "line": 2114
+      "line": 2120
     }
   ],
   "Settings.60922bba81": [
     {
       "file": "src/Settings.tsx",
-      "line": 2118,
+      "line": 2124,
       "values": "{ value1: detectedPath(harness.name) }"
     }
   ],
   "Settings.4aa307b579": [
     {
       "file": "src/Settings.tsx",
-      "line": 2118
+      "line": 2124
     }
   ],
   "Settings.9f4a106271": [
     {
       "file": "src/Settings.tsx",
-      "line": 2118
+      "line": 2124
     }
   ],
   "Settings.c8d4b58277": [
     {
       "file": "src/Settings.tsx",
-      "line": 2118,
+      "line": 2124,
       "values": "{ value1: (enablementChoice(harness.name)) ? 'yes' : 'no' }"
     }
   ],
   "Settings.882a3b849c": [
     {
       "file": "src/Settings.tsx",
-      "line": 2118
+      "line": 2124
     }
   ],
   "Settings.ea4a192a7d": [
     {
       "file": "src/Settings.tsx",
-      "line": 2119
+      "line": 2125
     }
   ],
   "Settings.3edf3221c9": [
     {
       "file": "src/Settings.tsx",
-      "line": 2121,
+      "line": 2127,
       "values": "{ cli_version: harness.cli_version, value2: harness.version_untested ? t(\"Settings.d110d389a5\", { tested_cli_version: harness.tested_cli_version }) : '' }"
     }
   ],
   "Settings.d110d389a5": [
     {
       "file": "src/Settings.tsx",
-      "line": 2121,
+      "line": 2127,
       "values": "{ tested_cli_version: harness.tested_cli_version }"
     }
   ],
   "Settings.a0d21df092": [
     {
       "file": "src/Settings.tsx",
-      "line": 2122,
+      "line": 2128,
       "values": "{ value1: <input value={draft.harness_exe[harness.name]||''} placeholder={harness.name} onInput={e=>change('harness_exe',{...draft.harness_exe,[harness.name]:e.currentTarget.value})} /> }"
     }
   ],
   "Settings.25e8f75d56": [
     {
       "file": "src/Settings.tsx",
-      "line": 2123,
+      "line": 2129,
       "values": "{ value1: <input value={harnessArgs[harness.name]||''} spellcheck={false} placeholder={t(\"Settings.ece27d0c6a\")} onInput={e=>setHarnessArgs(current=>({...current,[harness.name]:e.currentTarget.value}))} /> }"
     }
   ],
   "Settings.6637a3d49d": [
     {
       "file": "src/Settings.tsx",
-      "line": 2141
+      "line": 2147
     }
   ],
   "Settings.4390e35da6": [
     {
       "file": "src/Settings.tsx",
-      "line": 2141
+      "line": 2147
     }
   ],
   "Settings.0d43c90518": [
     {
       "file": "src/Settings.tsx",
-      "line": 2144
+      "line": 2150
     }
   ],
   "Settings.8063b300d8": [
     {
       "file": "src/Settings.tsx",
-      "line": 2145,
+      "line": 2151,
       "values": "{ value1: <em>{t(\"Settings.9491d29b33\")}</em> }"
     }
   ],
   "Settings.9491d29b33": [
     {
       "file": "src/Settings.tsx",
-      "line": 2145
+      "line": 2151
     }
   ],
   "Settings.a09793cc5c": [
     {
       "file": "src/Settings.tsx",
-      "line": 2146,
+      "line": 2152,
       "values": "{ value1: <em>{t(\"Settings.e310d3558b\")}</em> }"
     }
   ],
   "Settings.e310d3558b": [
     {
       "file": "src/Settings.tsx",
-      "line": 2146
+      "line": 2152
     }
   ],
   "Settings.e9bd014beb": [
     {
       "file": "src/Settings.tsx",
-      "line": 2147
+      "line": 2153
     }
   ],
   "Settings.271490250f": [
     {
       "file": "src/Settings.tsx",
-      "line": 2149,
+      "line": 2155,
       "values": "{ display_name: harness.display_name, value2: mcpCapable ? t(\"Settings.12b4f0aea7\") : t(\"Settings.87dcf52869\", { display_name: harness.display_name }) }"
     }
   ],
   "Settings.12b4f0aea7": [
     {
       "file": "src/Settings.tsx",
-      "line": 2149
+      "line": 2155
     }
   ],
   "Settings.87dcf52869": [
     {
       "file": "src/Settings.tsx",
-      "line": 2149,
+      "line": 2155,
       "values": "{ display_name: harness.display_name }"
     }
   ],
   "Settings.4a818f6bf3": [
     {
       "file": "src/Settings.tsx",
-      "line": 2150
-    }
-  ],
-  "Settings.6e0687dc54": [
-    {
-      "file": "src/Settings.tsx",
-      "line": 2151,
-      "values": "{ display_name: harness.display_name }"
-    }
-  ],
-  "Settings.82a96c602b": [
-    {
-      "file": "src/Settings.tsx",
-      "line": 2152
-    }
-  ],
-  "Settings.b5f492c37d": [
-    {
-      "file": "src/Settings.tsx",
-      "line": 2152,
-      "values": "{ value1: <code>{t(\"Settings.ca6d2d714f\")}</code>, display_name: harness.display_name, value3: <code>{t(\"Settings.c394175813\")}</code> }"
-    }
-  ],
-  "Settings.ca6d2d714f": [
-    {
-      "file": "src/Settings.tsx",
-      "line": 2152
-    }
-  ],
-  "Settings.c394175813": [
-    {
-      "file": "src/Settings.tsx",
-      "line": 2152
-    }
-  ],
-  "Settings.444ba75cec": [
-    {
-      "file": "src/Settings.tsx",
-      "line": 2156,
-      "values": "{ value1: <em>{t(\"Settings.c040421576\")}</em> }"
-    }
-  ],
-  "Settings.c040421576": [
-    {
-      "file": "src/Settings.tsx",
       "line": 2156
     }
   ],
-  "Settings.5761a17e44": [
+  "Settings.6e0687dc54": [
     {
       "file": "src/Settings.tsx",
       "line": 2157,
       "values": "{ display_name: harness.display_name }"
     }
   ],
+  "Settings.82a96c602b": [
+    {
+      "file": "src/Settings.tsx",
+      "line": 2158
+    }
+  ],
+  "Settings.b5f492c37d": [
+    {
+      "file": "src/Settings.tsx",
+      "line": 2158,
+      "values": "{ value1: <code>{t(\"Settings.ca6d2d714f\")}</code>, display_name: harness.display_name, value3: <code>{t(\"Settings.c394175813\")}</code> }"
+    }
+  ],
+  "Settings.ca6d2d714f": [
+    {
+      "file": "src/Settings.tsx",
+      "line": 2158
+    }
+  ],
+  "Settings.c394175813": [
+    {
+      "file": "src/Settings.tsx",
+      "line": 2158
+    }
+  ],
+  "Settings.444ba75cec": [
+    {
+      "file": "src/Settings.tsx",
+      "line": 2162,
+      "values": "{ value1: <em>{t(\"Settings.c040421576\")}</em> }"
+    }
+  ],
+  "Settings.c040421576": [
+    {
+      "file": "src/Settings.tsx",
+      "line": 2162
+    }
+  ],
+  "Settings.5761a17e44": [
+    {
+      "file": "src/Settings.tsx",
+      "line": 2163,
+      "values": "{ display_name: harness.display_name }"
+    }
+  ],
   "Settings.713c910218": [
     {
       "file": "src/Settings.tsx",
-      "line": 2159
+      "line": 2165
     }
   ],
   "Settings.6141b55522": [
     {
       "file": "src/Settings.tsx",
-      "line": 2161,
+      "line": 2167,
       "values": "{ value1: <Dropdown value={String(draft.claude_max_columns)} onChange={value=>change('claude_max_columns',Number(value) as ClaudeMaxColumns)} options={CLAUDE_MAX_COLUMN_STEPS.map(step=>({value:String(step),label:claudeMaxColumnsLabel(step)}))}/> }"
     }
   ],
   "Settings.1cea781564": [
     {
       "file": "src/Settings.tsx",
-      "line": 2162,
+      "line": 2168,
       "values": "{ display_name: harness.display_name }"
     }
   ],
   "Settings.aafa73b53f": [
     {
       "file": "src/Settings.tsx",
-      "line": 2164,
+      "line": 2170,
       "values": "{ display_name: harness.display_name, value2: (harness.reserved_launch_args||[]).join(' ') || t(\"Settings.140bedbf9c\") }"
     }
   ],
   "Settings.140bedbf9c": [
     {
       "file": "src/Settings.tsx",
-      "line": 2164
+      "line": 2170
     }
   ],
   "Settings.80c250f3db": [
     {
       "file": "src/Settings.tsx",
-      "line": 2171
+      "line": 2177
     }
   ],
   "Settings.5ed19b9885": [
     {
       "file": "src/Settings.tsx",
-      "line": 2172
+      "line": 2178
     }
   ],
   "Settings.1f280417b0": [
     {
       "file": "src/Settings.tsx",
-      "line": 2173
+      "line": 2179
     }
   ],
   "Settings.babf8188ae": [
     {
       "file": "src/Settings.tsx",
-      "line": 2174,
+      "line": 2180,
       "values": "{ value1: <input type=\"number\" min=\"1\" max=\"10000\" value={draft.history_limit} onInput={e=>change('history_limit',Number(e.currentTarget.value))} />, value2: <small>{t(\"Settings.a7f84f4c25\")}</small> }"
     }
   ],
   "Settings.a7f84f4c25": [
     {
       "file": "src/Settings.tsx",
-      "line": 2174
+      "line": 2180
     }
   ],
   "Settings.99d8c3676c": [
     {
       "file": "src/Settings.tsx",
-      "line": 2177
+      "line": 2183
     }
   ],
   "Settings.290fc26f3d": [
     {
       "file": "src/Settings.tsx",
-      "line": 2177
+      "line": 2183
     }
   ],
   "Settings.91b104db05": [
     {
       "file": "src/Settings.tsx",
-      "line": 2178
+      "line": 2184
     }
   ],
   "Settings.298360e0b1": [
     {
       "file": "src/Settings.tsx",
-      "line": 2178
+      "line": 2184
     }
   ],
   "Settings.c01d65df01": [
     {
       "file": "src/Settings.tsx",
-      "line": 2178
+      "line": 2184
     }
   ],
   "Settings.078ffdc731": [
     {
       "file": "src/Settings.tsx",
-      "line": 2180,
+      "line": 2186,
       "values": "{ processed: scanJob.processed, scanned: scanJob.scanned, imported: scanJob.imported }"
     }
   ],
   "Settings.7d8c668dc5": [
     {
       "file": "src/Settings.tsx",
-      "line": 2180,
+      "line": 2186,
       "values": "{ scanned: scanJob.scanned }"
     }
   ],
   "Settings.51a9ad7971": [
     {
       "file": "src/Settings.tsx",
-      "line": 2180,
+      "line": 2186,
       "values": "{ imported: scanJob.imported, scanned: scanJob.scanned, value3: scanJob.backends.join(', ')||t(\"Settings.a9460f3eaa\") }"
     }
   ],
   "Settings.a9460f3eaa": [
     {
       "file": "src/Settings.tsx",
-      "line": 2180
+      "line": 2186
     }
   ],
   "Settings.9f118efc15": [
     {
       "file": "src/Settings.tsx",
-      "line": 2180,
+      "line": 2186,
       "values": "{ imported: scanJob.imported }"
     }
   ],
   "Settings.6893223441": [
     {
       "file": "src/Settings.tsx",
-      "line": 2180,
+      "line": 2186,
       "values": "{ value1: scanJob.error||t(\"Settings.3e4443e522\") }"
     }
   ],
   "Settings.3e4443e522": [
     {
       "file": "src/Settings.tsx",
-      "line": 2180
+      "line": 2186
     }
   ],
   "Settings.d4b1ea5708": [
     {
       "file": "src/Settings.tsx",
-      "line": 2188
+      "line": 2194
     }
   ],
   "Settings.ad06b10257": [
     {
       "file": "src/Settings.tsx",
-      "line": 2189
+      "line": 2195
     }
   ],
   "Settings.a5c30a1abf": [
     {
       "file": "src/Settings.tsx",
-      "line": 2191
+      "line": 2197
     },
     {
       "file": "src/Settings.tsx",
-      "line": 2198
+      "line": 2204
     }
   ],
   "Settings.71f9fdbd1a": [
     {
       "file": "src/Settings.tsx",
-      "line": 2191,
+      "line": 2197,
       "values": "{ auto_delivery_stable_seconds: draft.auto_delivery_stable_seconds }"
     }
   ],
   "Settings.877792b6f2": [
     {
       "file": "src/Settings.tsx",
-      "line": 2191
+      "line": 2197
     }
   ],
   "Settings.2bfc347157": [
     {
       "file": "src/Settings.tsx",
-      "line": 2192
+      "line": 2198
     },
     {
       "file": "src/Settings.tsx",
-      "line": 2222
+      "line": 2228
     }
   ],
   "Settings.864978c6fb": [
     {
       "file": "src/Settings.tsx",
-      "line": 2192
+      "line": 2198
     }
   ],
   "Settings.822872c3d7": [
     {
       "file": "src/Settings.tsx",
-      "line": 2192
+      "line": 2198
     }
   ],
   "Settings.be19f68d0c": [
     {
       "file": "src/Settings.tsx",
-      "line": 2193
+      "line": 2199
     },
     {
       "file": "src/Settings.tsx",
-      "line": 2234
+      "line": 2240
     }
   ],
   "Settings.292c448d09": [
     {
       "file": "src/Settings.tsx",
-      "line": 2193
+      "line": 2199
     }
   ],
   "Settings.ca7981b46e": [
     {
       "file": "src/Settings.tsx",
-      "line": 2193
+      "line": 2199
     },
     {
       "file": "src/Settings.tsx",
-      "line": 2439
+      "line": 2445
     }
   ],
   "Settings.14be9614c7": [
     {
       "file": "src/Settings.tsx",
-      "line": 2194
+      "line": 2200
     },
     {
       "file": "src/Settings.tsx",
-      "line": 2251
+      "line": 2257
     }
   ],
   "Settings.175ef8fb52": [
     {
       "file": "src/Settings.tsx",
-      "line": 2194
+      "line": 2200
     }
   ],
   "Settings.46eadcf1ee": [
     {
       "file": "src/Settings.tsx",
-      "line": 2194
+      "line": 2200
     }
   ],
   "Settings.43a4c4ad66": [
     {
       "file": "src/Settings.tsx",
-      "line": 2196,
+      "line": 2202,
       "values": "{ value1: <strong>{t(\"Settings.93193607d7\")}</strong> }"
     }
   ],
   "Settings.93193607d7": [
     {
       "file": "src/Settings.tsx",
-      "line": 2196
+      "line": 2202
     }
   ],
   "Settings.34a9fb70ee": [
     {
       "file": "src/Settings.tsx",
-      "line": 2199
+      "line": 2205
     }
   ],
   "Settings.a7ed28c4c2": [
     {
       "file": "src/Settings.tsx",
-      "line": 2200
+      "line": 2206
     }
   ],
   "Settings.7d738775f2": [
     {
       "file": "src/Settings.tsx",
-      "line": 2201,
+      "line": 2207,
       "values": "{ value1: <input type=\"number\" min=\"2\" max=\"600\" step=\"0.5\" value={draft.auto_delivery_stable_seconds} onInput={e=>change('auto_delivery_stable_seconds',Number(e.currentTarget.value))} /> }"
     }
   ],
   "Settings.35a3bfe847": [
     {
       "file": "src/Settings.tsx",
-      "line": 2202,
+      "line": 2208,
       "values": "{ value1: <input type=\"number\" min=\"1\" max=\"50\" value={draft.auto_delivery_max_consecutive} onInput={e=>change('auto_delivery_max_consecutive',Number(e.currentTarget.value))} /> }"
     }
   ],
   "Settings.ab0de6e002": [
     {
       "file": "src/Settings.tsx",
-      "line": 2203,
+      "line": 2209,
       "values": "{ value1: <input type=\"number\" min=\"1\" max=\"1440\" value={draft.auto_delivery_session_ttl_minutes} onInput={e=>change('auto_delivery_session_ttl_minutes',Number(e.currentTarget.value))} /> }"
     }
   ],
   "Settings.6fe3a650dc": [
     {
       "file": "src/Settings.tsx",
-      "line": 2204,
+      "line": 2210,
       "values": "{ value1: <input type=\"number\" min=\"0\" max=\"1440\" value={draft.auto_delivery_reply_window_minutes} onInput={e=>change('auto_delivery_reply_window_minutes',Number(e.currentTarget.value))} />, value2: <small>{t(\"Settings.9286b51995\")}</small> }"
     }
   ],
   "Settings.9286b51995": [
     {
       "file": "src/Settings.tsx",
-      "line": 2204
+      "line": 2210
     }
   ],
   "Settings.46a9b670ad": [
     {
       "file": "src/Settings.tsx",
-      "line": 2205,
+      "line": 2211,
       "values": "{ value1: <input type=\"number\" min=\"0\" max=\"3600\" step=\"0.5\" value={draft.auto_delivery_refusal_backoff_seconds} onInput={e=>change('auto_delivery_refusal_backoff_seconds',Number(e.currentTarget.value))} /> }"
     }
   ],
   "Settings.32be2f94a7": [
     {
       "file": "src/Settings.tsx",
-      "line": 2206,
+      "line": 2212,
       "values": "{ value1: <input type=\"time\" value={draft.auto_delivery_quiet_start} onInput={e=>change('auto_delivery_quiet_start',e.currentTarget.value)} /> }"
     }
   ],
   "Settings.6c5bf405fb": [
     {
       "file": "src/Settings.tsx",
-      "line": 2206,
+      "line": 2212,
       "values": "{ value1: <input type=\"time\" value={draft.auto_delivery_quiet_end} onInput={e=>change('auto_delivery_quiet_end',e.currentTarget.value)} /> }"
     }
   ],
   "Settings.111dc8995a": [
     {
       "file": "src/Settings.tsx",
-      "line": 2207
+      "line": 2213
     }
   ],
   "Settings.eca2f107c3": [
     {
       "file": "src/Settings.tsx",
-      "line": 2212
+      "line": 2218
     }
   ],
   "Settings.8cb1be7eb3": [
     {
       "file": "src/Settings.tsx",
-      "line": 2213
+      "line": 2219
     }
   ],
   "Settings.a8eceb520f": [
     {
       "file": "src/Settings.tsx",
-      "line": 2214
+      "line": 2220
     }
   ],
   "Settings.ca34dedfda": [
     {
       "file": "src/Settings.tsx",
-      "line": 2215,
+      "line": 2221,
       "values": "{ value1: <input type=\"number\" min=\"0\" max=\"1000\" disabled={!draft.agent_message_limits_enabled} value={draft.agent_interject_hourly_budget} onInput={e=>change('agent_interject_hourly_budget',Number(e.currentTarget.value))} />, value2: <small>{t(\"Settings.aa7c0ea1d1\")}</small> }"
     }
   ],
   "Settings.aa7c0ea1d1": [
     {
       "file": "src/Settings.tsx",
-      "line": 2215
+      "line": 2221
     }
   ],
   "Settings.b85f7ffed7": [
     {
       "file": "src/Settings.tsx",
-      "line": 2216,
+      "line": 2222,
       "values": "{ value1: <input type=\"number\" min=\"0\" max=\"3600\" step=\"1\" disabled={!draft.agent_message_limits_enabled} value={draft.agent_interject_min_interval_seconds} onInput={e=>change('agent_interject_min_interval_seconds',Number(e.currentTarget.value))} />, value2: <small>{t(\"Settings.38dc1131d8\")}</small>"
     }
   ],
   "Settings.38dc1131d8": [
     {
       "file": "src/Settings.tsx",
-      "line": 2216
+      "line": 2222
     }
   ],
   "Settings.8cfbaf9589": [
     {
       "file": "src/Settings.tsx",
-      "line": 2223
+      "line": 2229
     }
   ],
   "Settings.98473e42a5": [
     {
       "file": "src/Settings.tsx",
-      "line": 2224
+      "line": 2230
     }
   ],
   "Settings.8715729de1": [
     {
       "file": "src/Settings.tsx",
-      "line": 2225
+      "line": 2231
     }
   ],
   "Settings.af857df0e5": [
     {
       "file": "src/Settings.tsx",
-      "line": 2226,
+      "line": 2232,
       "values": "{ value1: <input type=\"number\" min=\"1\" max=\"480\" value={draft.approval_grant_ttl_minutes} onInput={e=>change('approval_grant_ttl_minutes',Number(e.currentTarget.value))} /> }"
     }
   ],
   "Settings.f0a3211cad": [
     {
       "file": "src/Settings.tsx",
-      "line": 2227,
+      "line": 2233,
       "values": "{ value1: <input type=\"number\" min=\"1\" max=\"5000\" value={draft.approval_max_auto_per_grant} onInput={e=>change('approval_max_auto_per_grant',Number(e.currentTarget.value))} /> }"
     }
   ],
   "Settings.0bcc46f25d": [
     {
       "file": "src/Settings.tsx",
-      "line": 2228,
+      "line": 2234,
       "values": "{ value1: <input type=\"number\" min=\"1\" max=\"60\" step=\"0.5\" value={draft.approval_hook_timeout_seconds} onInput={e=>change('approval_hook_timeout_seconds',Number(e.currentTarget.value))} /> }"
     }
   ],
   "Settings.3d1ee6916a": [
     {
       "file": "src/Settings.tsx",
-      "line": 2229
+      "line": 2235
     }
   ],
   "Settings.26d22370ad": [
     {
       "file": "src/Settings.tsx",
-      "line": 2230,
+      "line": 2236,
       "values": "{ value1: <input type=\"number\" min=\"1\" max=\"300\" step=\"1\" value={draft.approval_keystroke_window_seconds} onInput={e=>change('approval_keystroke_window_seconds',Number(e.currentTarget.value))} /> }"
     }
   ],
   "Settings.f01a8c0c90": [
     {
       "file": "src/Settings.tsx",
-      "line": 2231,
+      "line": 2237,
       "values": "{ value1: <strong>{t(\"Settings.2aff632d47\")}</strong> }"
     }
   ],
   "Settings.2aff632d47": [
     {
       "file": "src/Settings.tsx",
-      "line": 2231
+      "line": 2237
     }
   ],
   "Settings.b343443ffa": [
     {
       "file": "src/Settings.tsx",
-      "line": 2235
+      "line": 2241
     }
   ],
   "Settings.6671bb2f54": [
     {
       "file": "src/Settings.tsx",
-      "line": 2236
+      "line": 2242
     }
   ],
   "Settings.05255bdaca": [
     {
       "file": "src/Settings.tsx",
-      "line": 2237
+      "line": 2243
     }
   ],
   "Settings.b6bad9ec57": [
     {
       "file": "src/Settings.tsx",
-      "line": 2237
+      "line": 2243
     }
   ],
   "Settings.fe4170da7b": [
     {
       "file": "src/Settings.tsx",
-      "line": 2238,
+      "line": 2244,
       "values": "{ value1: <input type=\"number\" min=\"1\" max=\"10\" disabled={!draft.agent_message_limits_enabled} value={draft.agent_message_max_chain_depth} onInput={e=>change('agent_message_max_chain_depth',Number(e.currentTarget.value))} /> }"
     }
   ],
   "Settings.bd8360f4ee": [
     {
       "file": "src/Settings.tsx",
-      "line": 2239,
+      "line": 2245,
       "values": "{ value1: <input type=\"number\" min=\"1\" max=\"100\" disabled={!draft.agent_message_limits_enabled} value={draft.agent_message_max_thread_turns} onInput={e=>change('agent_message_max_thread_turns',Number(e.currentTarget.value))} /> }"
     }
   ],
   "Settings.9dcc57f24d": [
     {
       "file": "src/Settings.tsx",
-      "line": 2240,
+      "line": 2246,
       "values": "{ value1: <input type=\"number\" min=\"1\" max=\"1000\" disabled={!draft.agent_message_limits_enabled} value={draft.agent_message_hourly_budget} onInput={e=>change('agent_message_hourly_budget',Number(e.currentTarget.value))} /> }"
     }
   ],
   "Settings.a46074d4d0": [
     {
       "file": "src/Settings.tsx",
-      "line": 2241,
+      "line": 2247,
       "values": "{ value1: <input type=\"number\" min=\"1\" max=\"100\" disabled={!draft.agent_message_limits_enabled} value={draft.agent_message_pending_per_target} onInput={e=>change('agent_message_pending_per_target',Number(e.currentTarget.value))} /> }"
     }
   ],
   "Settings.bcc36055f2": [
     {
       "file": "src/Settings.tsx",
-      "line": 2242,
+      "line": 2248,
       "values": "{ value1: <input type=\"number\" min=\"1\" max=\"100000\" value={draft.agent_message_max_chars} onInput={e=>change('agent_message_max_chars',Number(e.currentTarget.value))} />, value2: <small>{t(\"Settings.3d89b59858\")}</small> }"
     }
   ],
   "Settings.3d89b59858": [
     {
       "file": "src/Settings.tsx",
-      "line": 2242
+      "line": 2248
     }
   ],
   "Settings.c4e467b4a3": [
     {
       "file": "src/Settings.tsx",
-      "line": 2252
+      "line": 2258
     }
   ],
   "Settings.dc57c727ca": [
     {
       "file": "src/Settings.tsx",
-      "line": 2253
+      "line": 2259
     }
   ],
   "Settings.370087f10d": [
     {
       "file": "src/Settings.tsx",
-      "line": 2253
+      "line": 2259
     }
   ],
   "Settings.7d318e36e3": [
     {
       "file": "src/Settings.tsx",
-      "line": 2254,
+      "line": 2260,
       "values": "{ value1: <input type=\"number\" min=\"0\" max=\"1000\" value={draft.agent_spawn_hourly_budget} onInput={e=>change('agent_spawn_hourly_budget',Number(e.currentTarget.value))} />, value2: <small>{t(\"Settings.5e52f0eb53\")}</small> }"
     }
   ],
   "Settings.5e52f0eb53": [
     {
       "file": "src/Settings.tsx",
-      "line": 2254
+      "line": 2260
     }
   ],
   "Settings.b02851d3ef": [
     {
       "file": "src/Settings.tsx",
-      "line": 2255
+      "line": 2261
     }
   ],
   "Settings.eda25c1a19": [
     {
       "file": "src/Settings.tsx",
-      "line": 2256,
+      "line": 2262,
       "values": "{ value1: <input type=\"number\" min=\"0\" max=\"1000\" value={draft.session_control_hourly_budget} onInput={e=>change('session_control_hourly_budget',Number(e.currentTarget.value))} /> }"
     }
   ],
   "Settings.8007aa3154": [
     {
       "file": "src/Settings.tsx",
-      "line": 2257,
+      "line": 2263,
       "values": "{ value1: <input type=\"number\" min=\"1\" max=\"120\" step=\"1\" value={draft.session_control_graceful_timeout_s} onInput={e=>change('session_control_graceful_timeout_s',Number(e.currentTarget.value))} /> }"
     }
   ],
   "Settings.02b48ef0db": [
     {
       "file": "src/Settings.tsx",
-      "line": 2258
+      "line": 2264
     }
   ],
   "Settings.37e38a1f6c": [
     {
       "file": "src/Settings.tsx",
-      "line": 2258
+      "line": 2264
     }
   ],
   "Settings.7b7df55100": [
     {
       "file": "src/Settings.tsx",
-      "line": 2259,
+      "line": 2265,
       "values": "{ value1: <input type=\"number\" min=\"1\" max=\"100\" value={draft.session_watch_max_per_session} onInput={e=>change('session_watch_max_per_session',Number(e.currentTarget.value))} />, value2: <small>{t(\"Settings.067352455a\")}</small> }"
     }
   ],
   "Settings.067352455a": [
     {
       "file": "src/Settings.tsx",
-      "line": 2259
+      "line": 2265
     }
   ],
   "Settings.b34b6b45be": [
     {
       "file": "src/Settings.tsx",
-      "line": 2260,
+      "line": 2266,
       "values": "{ value1: <input type=\"number\" min=\"1\" max=\"1440\" value={draft.session_watch_max_minutes} onInput={e=>change('session_watch_max_minutes',Number(e.currentTarget.value))} />, value2: <small>{t(\"Settings.203fcc5d83\")}</small> }"
     }
   ],
   "Settings.203fcc5d83": [
     {
       "file": "src/Settings.tsx",
-      "line": 2260
+      "line": 2266
     }
   ],
   "Settings.4a7178cdec": [
     {
       "file": "src/Settings.tsx",
-      "line": 2263
+      "line": 2269
     }
   ],
   "Settings.dcaeb311f4": [
     {
       "file": "src/Settings.tsx",
-      "line": 2264,
+      "line": 2270,
       "values": "{ value1: <em>{t(\"Settings.62a2fed3d6\")}</em> }"
     }
   ],
   "Settings.62a2fed3d6": [
     {
       "file": "src/Settings.tsx",
-      "line": 2264
+      "line": 2270
     }
   ],
   "Settings.8047eaa8af": [
     {
       "file": "src/Settings.tsx",
-      "line": 2265,
+      "line": 2271,
       "values": "{ value1: <input type=\"number\" min=\"1\" max=\"3650\" value={draft.prompt_queue_retention_days} onInput={e=>change('prompt_queue_retention_days',Number(e.currentTarget.value))} /> }"
     }
   ],
   "Settings.ea70384c46": [
     {
       "file": "src/Settings.tsx",
-      "line": 2279
+      "line": 2285
     }
   ],
   "Settings.f67765370d": [
     {
       "file": "src/Settings.tsx",
-      "line": 2280,
+      "line": 2286,
       "values": "{ value1: <code>{t(\"Settings.99f784fabe\")}</code> }"
     }
   ],
   "Settings.99f784fabe": [
     {
       "file": "src/Settings.tsx",
-      "line": 2280
+      "line": 2286
     }
   ],
   "Settings.0c133d40b9": [
     {
       "file": "src/Settings.tsx",
-      "line": 2287,
+      "line": 2293,
       "values": "{ value1: <a href=\"https://openrouter.ai/keys\" target=\"_blank\" rel=\"noreferrer\">{t(\"heading.eb70c3bc14\")}</a> }"
     }
   ],
   "Settings.e8b793d21d": [
     {
       "file": "src/Settings.tsx",
-      "line": 2289
+      "line": 2295
     }
   ],
   "Settings.4b07dcdbc3": [
     {
       "file": "src/Settings.tsx",
-      "line": 2289
+      "line": 2295
     }
   ],
   "Settings.b0728b74a6": [
     {
       "file": "src/Settings.tsx",
-      "line": 2289
+      "line": 2295
     }
   ],
   "Settings.1047f5664b": [
     {
       "file": "src/Settings.tsx",
-      "line": 2290
+      "line": 2296
     }
   ],
   "Settings.7140f4f19d": [
     {
       "file": "src/Settings.tsx",
-      "line": 2295
+      "line": 2301
     }
   ],
   "Settings.9c3f3106f6": [
     {
       "file": "src/Settings.tsx",
-      "line": 2296
+      "line": 2302
     }
   ],
   "Settings.9687961165": [
     {
       "file": "src/Settings.tsx",
-      "line": 2300
+      "line": 2306
     },
     {
       "file": "src/Settings.tsx",
-      "line": 2676
+      "line": 2682
     }
   ],
   "Settings.47ae4fe851": [
     {
       "file": "src/Settings.tsx",
-      "line": 2303
+      "line": 2309
     }
   ],
   "Settings.1c4e8eeac2": [
     {
       "file": "src/Settings.tsx",
-      "line": 2303,
+      "line": 2309,
       "values": "{ model: entry.model }"
     },
     {
       "file": "src/Settings.tsx",
-      "line": 2305,
+      "line": 2311,
       "values": "{ model: entry.verification.model }"
     }
   ],
   "Settings.b86532800e": [
     {
       "file": "src/Settings.tsx",
-      "line": 2303
+      "line": 2309
     }
   ],
   "Settings.716361bdaa": [
     {
       "file": "src/Settings.tsx",
-      "line": 2304,
+      "line": 2310,
       "values": "{ value1: entry.verification.sample || t(\"Settings.00b0257114\"), latency_ms: entry.verification.latency_ms, value3: entry.verification.verified_at ? t(\"Settings.c4ab2248b9\", { value1: new Date(entry.verification.verified_at*1000).toLocaleString(uiLocale.value) }) : '' }"
     }
   ],
   "Settings.00b0257114": [
     {
       "file": "src/Settings.tsx",
-      "line": 2304
+      "line": 2310
     }
   ],
   "Settings.c4ab2248b9": [
     {
       "file": "src/Settings.tsx",
-      "line": 2304,
+      "line": 2310,
       "values": "{ value1: new Date(entry.verification.verified_at*1000).toLocaleString(uiLocale.value) }"
     }
   ],
   "Settings.0d4f39f698": [
     {
       "file": "src/Settings.tsx",
-      "line": 2305,
+      "line": 2311,
       "values": "{ value1: <strong>{t(\"Settings.941b310964\")}</strong>, value2: entry.verification.base_url || t(\"Settings.a75b5f840d\"), value3: entry.verification.model ? t(\"Settings.1c4e8eeac2\", { model: entry.verification.model }) : '' }"
     }
   ],
   "Settings.941b310964": [
     {
       "file": "src/Settings.tsx",
-      "line": 2305
+      "line": 2311
     }
   ],
   "Settings.a75b5f840d": [
     {
       "file": "src/Settings.tsx",
-      "line": 2305
+      "line": 2311
     }
   ],
   "Settings.63bbd08c91": [
     {
       "file": "src/Settings.tsx",
-      "line": 2310
+      "line": 2316
     }
   ],
   "Settings.c9d293565e": [
     {
       "file": "src/Settings.tsx",
-      "line": 2310,
+      "line": 2316,
       "values": "{ label: entry.label }"
     }
   ],
   "Settings.f1b837c46e": [
     {
       "file": "src/Settings.tsx",
-      "line": 2315,
+      "line": 2321,
       "values": "{ value1: <strong>{rich(\"Settings.1c7c902302\", { provider: verifyResult.provider })}</strong>, latency_ms: verifyResult.latency_ms, value3: <code>{verifyResult.resolved_model}</code> }"
     }
   ],
   "Settings.1c7c902302": [
     {
       "file": "src/Settings.tsx",
-      "line": 2315,
+      "line": 2321,
       "values": "{ provider: verifyResult.provider }"
     }
   ],
   "Settings.c9cffa00a7": [
     {
       "file": "src/Settings.tsx",
-      "line": 2316
+      "line": 2322
     }
   ],
   "Settings.dd36815024": [
     {
       "file": "src/Settings.tsx",
-      "line": 2316
+      "line": 2322
     }
   ],
   "Settings.d383c54bfd": [
     {
       "file": "src/Settings.tsx",
-      "line": 2317,
+      "line": 2323,
       "values": "{ provider: verifyResult.provider }"
     }
   ],
   "Settings.c6cc5ab037": [
     {
       "file": "src/Settings.tsx",
-      "line": 2322,
+      "line": 2328,
       "values": "{ value1: <input type=\"number\" min=\"1\" max=\"120\" step=\"1\" value={draft.openrouter_request_timeout_seconds} onInput={event=>change('openrouter_request_timeout_seconds',Number(event.currentTarget.value))}/>, value2: <small>{t(\"Settings.3ef516bbf9\")}</small> }"
     }
   ],
   "Settings.3ef516bbf9": [
     {
       "file": "src/Settings.tsx",
-      "line": 2322
+      "line": 2328
     }
   ],
   "Settings.d17d2d78d7": [
     {
       "file": "src/Settings.tsx",
-      "line": 2325
+      "line": 2331
     }
   ],
   "Settings.be18367df1": [
     {
       "file": "src/Settings.tsx",
-      "line": 2326
+      "line": 2332
     }
   ],
   "Settings.f62e0ff7ff": [
     {
       "file": "src/Settings.tsx",
-      "line": 2331,
+      "line": 2337,
       "values": "{ value1: <code>{draft.custom_llm_model || t(\"Settings.8330949bdc\")}</code> }"
     }
   ],
   "Settings.8330949bdc": [
     {
       "file": "src/Settings.tsx",
-      "line": 2331
+      "line": 2337
     }
   ],
   "Settings.04903063b2": [
     {
       "file": "src/Settings.tsx",
-      "line": 2332
+      "line": 2338
     }
   ],
   "Settings.62d1788186": [
     {
       "file": "src/Settings.tsx",
-      "line": 2332,
+      "line": 2338,
       "values": "{ value1: provider?.models.models.length || 0, value2: (provider?.models.stale) ? 'yes' : 'no', value3: provider?.models.error ? t(\"Settings.f3b99994b4\", { error: provider.models.error }) : '' }"
     }
   ],
   "Settings.f3b99994b4": [
     {
       "file": "src/Settings.tsx",
-      "line": 2332,
+      "line": 2338,
       "values": "{ error: provider.models.error }"
     }
   ],
   "Settings.81cb65d3ec": [
     {
       "file": "src/Settings.tsx",
-      "line": 2332,
+      "line": 2338,
       "values": "{ value1: new Date(provider.models.fetched_at*1000).toLocaleDateString(uiLocale.value) }"
     }
   ],
   "Settings.a09f2441f2": [
     {
       "file": "src/Settings.tsx",
-      "line": 2333,
+      "line": 2339,
       "values": "{ value1: <em>{t(\"Settings.d53585ea14\")}</em>, value2: <strong>{t(\"Settings.2cb99db5de\")}</strong> }"
     }
   ],
   "Settings.d53585ea14": [
     {
       "file": "src/Settings.tsx",
-      "line": 2333
+      "line": 2339
     }
   ],
   "Settings.2cb99db5de": [
     {
       "file": "src/Settings.tsx",
-      "line": 2333
+      "line": 2339
     }
   ],
   "Settings.d00f1e4dc0": [
     {
       "file": "src/Settings.tsx",
-      "line": 2339
+      "line": 2345
     }
   ],
   "Settings.42bdbfd3e3": [
     {
       "file": "src/Settings.tsx",
-      "line": 2340
+      "line": 2346
     }
   ],
   "Settings.fc1a062179": [
     {
       "file": "src/Settings.tsx",
-      "line": 2341
+      "line": 2347
     }
   ],
   "Settings.114b9bbcf1": [
     {
       "file": "src/Settings.tsx",
-      "line": 2344
+      "line": 2350
     }
   ],
   "Settings.d6fb1faf81": [
     {
       "file": "src/Settings.tsx",
-      "line": 2345
+      "line": 2351
     }
   ],
   "Settings.b27c4f6ecb": [
     {
       "file": "src/Settings.tsx",
-      "line": 2346,
+      "line": 2352,
       "values": "{ value1: <Dropdown value={draft.mobile_vertical_drag} onChange={value=>change('mobile_vertical_drag',value as Config['mobile_vertical_drag'])} options={[{value:'smart',get label() { return t(\"Settings.7e033650c4\") }},{value:'terminal',get label() { return t(\"Settings.0b10fbad3b\") }},{value:'applica"
     }
   ],
   "Settings.7e033650c4": [
     {
       "file": "src/Settings.tsx",
-      "line": 2346
+      "line": 2352
     }
   ],
   "Settings.0b10fbad3b": [
     {
       "file": "src/Settings.tsx",
-      "line": 2346
+      "line": 2352
     }
   ],
   "Settings.549844eaa2": [
     {
       "file": "src/Settings.tsx",
-      "line": 2346
+      "line": 2352
     }
   ],
   "Settings.75081b593d": [
     {
       "file": "src/Settings.tsx",
-      "line": 2346
+      "line": 2352
     },
     {
       "file": "src/Settings.tsx",
-      "line": 2349
+      "line": 2355
     },
     {
       "file": "src/Settings.tsx",
-      "line": 2366
+      "line": 2372
     }
   ],
   "Settings.c8a5697129": [
     {
       "file": "src/Settings.tsx",
-      "line": 2347,
+      "line": 2353,
       "values": "{ value1: <Dropdown value={draft.mobile_scroll_direction} onChange={value=>change('mobile_scroll_direction',value as Config['mobile_scroll_direction'])} options={[{value:'natural',get label() { return t(\"Settings.485677d14b\") }},{value:'wheel',get label() { return t(\"Settings.8bcec96308\") }}]}/> }"
     }
   ],
   "Settings.485677d14b": [
     {
       "file": "src/Settings.tsx",
-      "line": 2347
+      "line": 2353
     }
   ],
   "Settings.8bcec96308": [
     {
       "file": "src/Settings.tsx",
-      "line": 2347
+      "line": 2353
     }
   ],
   "Settings.2d58bfeb5a": [
     {
       "file": "src/Settings.tsx",
-      "line": 2348,
+      "line": 2354,
       "values": "{ value1: <input type=\"number\" min=\"0.25\" max=\"4\" step=\"0.25\" value={draft.mobile_scroll_sensitivity} onInput={e=>change('mobile_scroll_sensitivity',Number(e.currentTarget.value))} /> }"
     }
   ],
   "Settings.2683a40792": [
     {
       "file": "src/Settings.tsx",
-      "line": 2349,
+      "line": 2355,
       "values": "{ value1: <Dropdown value={draft.mobile_long_press} onChange={value=>change('mobile_long_press',value as Config['mobile_long_press'])} options={[{value:'context_menu',get label() { return t(\"Settings.7b3336ad1e\") }},{value:'disabled',get label() { return t(\"Settings.75081b593d\") }}]}/> }"
     }
   ],
   "Settings.7b3336ad1e": [
     {
       "file": "src/Settings.tsx",
-      "line": 2349
+      "line": 2355
     }
   ],
   "Settings.2d43587ee4": [
     {
       "file": "src/Settings.tsx",
-      "line": 2350
+      "line": 2356
     }
   ],
   "Settings.7ca62c6a45": [
     {
       "file": "src/Settings.tsx",
-      "line": 2353
+      "line": 2359
     }
   ],
   "Settings.5540449a20": [
     {
       "file": "src/Settings.tsx",
-      "line": 2354
+      "line": 2360
     }
   ],
   "Settings.5194a6b4e2": [
     {
       "file": "src/Settings.tsx",
-      "line": 2355
+      "line": 2361
     }
   ],
   "Settings.2427a2f323": [
     {
       "file": "src/Settings.tsx",
-      "line": 2356
+      "line": 2362
     }
   ],
   "Settings.fbd48019c6": [
     {
       "file": "src/Settings.tsx",
-      "line": 2357
+      "line": 2363
     }
   ],
   "Settings.f0165ce19b": [
     {
       "file": "src/Settings.tsx",
-      "line": 2358,
+      "line": 2364,
       "values": "{ value1: <input type=\"number\" min=\"1\" max=\"2000\" value={draft.clipboard_history_limit} onInput={e=>change('clipboard_history_limit',Number(e.currentTarget.value))}/> }"
     }
   ],
   "Settings.df8d2cc5b6": [
     {
       "file": "src/Settings.tsx",
-      "line": 2359,
+      "line": 2365,
       "values": "{ value1: <input type=\"number\" min=\"0\" max=\"8760\" value={draft.clipboard_history_retention_hours} onInput={e=>change('clipboard_history_retention_hours',Number(e.currentTarget.value))}/> }"
     }
   ],
   "Settings.976a7c24ce": [
     {
       "file": "src/Settings.tsx",
-      "line": 2360,
+      "line": 2366,
       "values": "{ value1: <input type=\"number\" min=\"256\" max=\"1000000\" value={draft.clipboard_history_entry_max_chars} onInput={e=>change('clipboard_history_entry_max_chars',Number(e.currentTarget.value))}/> }"
     }
   ],
   "Settings.2684bc3b5f": [
     {
       "file": "src/Settings.tsx",
-      "line": 2361
+      "line": 2367
     }
   ],
   "Settings.f3e334b454": [
     {
       "file": "src/Settings.tsx",
-      "line": 2365
+      "line": 2371
     }
   ],
   "Settings.95490f8640": [
     {
       "file": "src/Settings.tsx",
-      "line": 2365
+      "line": 2371
     }
   ],
   "Settings.e9b9eb34c5": [
     {
       "file": "src/Settings.tsx",
-      "line": 2365
+      "line": 2371
     }
   ],
   "Settings.c724ff46d1": [
     {
       "file": "src/Settings.tsx",
-      "line": 2367
+      "line": 2373
     }
   ],
   "Settings.f73a924fb5": [
     {
       "file": "src/Settings.tsx",
-      "line": 2368
+      "line": 2374
     }
   ],
   "Settings.a638f3a3f6": [
     {
       "file": "src/Settings.tsx",
-      "line": 2369
+      "line": 2375
     }
   ],
   "Settings.21ff6d239a": [
     {
       "file": "src/Settings.tsx",
-      "line": 2370
+      "line": 2376
     }
   ],
   "heading.f5281d5e03": [
     {
       "file": "src/Settings.tsx",
-      "line": 2377
+      "line": 2383
     },
     {
       "file": "src/settingsSearchAliases.ts",
@@ -40303,895 +40325,895 @@
   "Settings.af60b0ae49": [
     {
       "file": "src/Settings.tsx",
-      "line": 2378
+      "line": 2384
     }
   ],
   "Settings.64c6c17ec0": [
     {
       "file": "src/Settings.tsx",
-      "line": 2381
+      "line": 2387
     }
   ],
   "Settings.98969d9219": [
     {
       "file": "src/Settings.tsx",
-      "line": 2382,
+      "line": 2388,
       "values": "{ bindings: preset.bindings, value2: displayChord(preset.leader,keymapHost.platform), value3: preset.prefix ? t(\"Settings.c7cd4ea1e2\", { value1: displayChord(preset.prefix,keymapHost.platform) }) : '' }"
     }
   ],
   "Settings.c7cd4ea1e2": [
     {
       "file": "src/Settings.tsx",
-      "line": 2382,
+      "line": 2388,
       "values": "{ value1: displayChord(preset.prefix,keymapHost.platform) }"
     }
   ],
   "Settings.39c0725ac0": [
     {
       "file": "src/Settings.tsx",
-      "line": 2386
+      "line": 2392
     }
   ],
   "Settings.909168517f": [
     {
       "file": "src/Settings.tsx",
-      "line": 2386
+      "line": 2392
     }
   ],
   "Settings.46087b34e3": [
     {
       "file": "src/Settings.tsx",
-      "line": 2386
+      "line": 2392
     }
   ],
   "Settings.7cc962ed72": [
     {
       "file": "src/Settings.tsx",
-      "line": 2388
+      "line": 2394
     }
   ],
   "Settings.66d2236389": [
     {
       "file": "src/Settings.tsx",
-      "line": 2390,
+      "line": 2396,
       "values": "{ title: presetIntent.title }"
     }
   ],
   "Settings.3f112e7cd5": [
     {
       "file": "src/Settings.tsx",
-      "line": 2391,
+      "line": 2397,
       "values": "{ value1: <strong>{rich(\"Settings.e103549569\", { title: presetIntent.title })}</strong> }"
     }
   ],
   "Settings.e103549569": [
     {
       "file": "src/Settings.tsx",
-      "line": 2391,
+      "line": 2397,
       "values": "{ title: presetIntent.title }"
     }
   ],
   "Settings.0357f241c4": [
     {
       "file": "src/Settings.tsx",
-      "line": 2393,
+      "line": 2399,
       "values": "{ title: presetIntent.title }"
     }
   ],
   "Settings.f602db76ef": [
     {
       "file": "src/Settings.tsx",
-      "line": 2397
+      "line": 2403
     }
   ],
   "Settings.1759c54262": [
     {
       "file": "src/Settings.tsx",
-      "line": 2398
+      "line": 2404
     }
   ],
   "Settings.9f9b32826e": [
     {
       "file": "src/Settings.tsx",
-      "line": 2402,
+      "line": 2408,
       "values": "{ value1: <strong>{keymapHost.host==='desktop' ? t(\"Settings.81b5511666\") : t(\"Settings.51d4ec07e9\")}</strong>, value2: <strong>{keymapHost.platform==='mac' ? t(\"Settings.aed6b7aa2a\") : keymapHost.platform==='linux' ? t(\"Settings.4828e60247\") : t(\"Settings.d598026a9c\")}</strong> }"
     }
   ],
   "Settings.81b5511666": [
     {
       "file": "src/Settings.tsx",
-      "line": 2402
+      "line": 2408
     }
   ],
   "Settings.51d4ec07e9": [
     {
       "file": "src/Settings.tsx",
-      "line": 2402
+      "line": 2408
     }
   ],
   "Settings.aed6b7aa2a": [
     {
       "file": "src/Settings.tsx",
-      "line": 2402
+      "line": 2408
     }
   ],
   "Settings.4828e60247": [
     {
       "file": "src/Settings.tsx",
-      "line": 2402
+      "line": 2408
     }
   ],
   "Settings.d598026a9c": [
     {
       "file": "src/Settings.tsx",
-      "line": 2402
+      "line": 2408
     }
   ],
   "Settings.9c4e80eb20": [
     {
       "file": "src/Settings.tsx",
-      "line": 2403,
+      "line": 2409,
       "values": "{ length: keymapWarnings.length, value2: (keymapWarnings.length===1) ? 'yes' : 'no' }"
     }
   ],
   "Settings.488e04a52e": [
     {
       "file": "src/Settings.tsx",
-      "line": 2409
+      "line": 2415
     }
   ],
   "Settings.b3a6e3c215": [
     {
       "file": "src/Settings.tsx",
-      "line": 2409
+      "line": 2415
     }
   ],
   "Settings.750fcf031a": [
     {
       "file": "src/Settings.tsx",
-      "line": 2410
+      "line": 2416
     }
   ],
   "Settings.c98847c2f8": [
     {
       "file": "src/Settings.tsx",
-      "line": 2416,
+      "line": 2422,
       "values": "{ value1: commandCategoryLabel(category) }"
     }
   ],
   "Settings.97c7454bb3": [
     {
       "file": "src/Settings.tsx",
-      "line": 2416,
+      "line": 2422,
       "values": "{ label: command.label }"
     }
   ],
   "Settings.954d1afa82": [
     {
       "file": "src/Settings.tsx",
-      "line": 2416,
+      "line": 2422,
       "values": "{ label: command.label }"
     }
   ],
   "Settings.b8f2ddf7c5": [
     {
       "file": "src/Settings.tsx",
-      "line": 2418,
+      "line": 2424,
       "values": "{ value1: shortcutQuery.trim() }"
     }
   ],
   "Settings.13d5bc3903": [
     {
       "file": "src/Settings.tsx",
-      "line": 2420
+      "line": 2426
     }
   ],
   "Settings.aa96b076ec": [
     {
       "file": "src/Settings.tsx",
-      "line": 2426
+      "line": 2432
     }
   ],
   "Settings.6f1916567a": [
     {
       "file": "src/Settings.tsx",
-      "line": 2427
+      "line": 2433
     }
   ],
   "Settings.89eaedae86": [
     {
       "file": "src/Settings.tsx",
-      "line": 2428,
+      "line": 2434,
       "values": "{ value1: keymapHost.platform==='mac' ? t(\"Settings.15eb6ff730\") : keymapHost.platform==='linux' ? t(\"Settings.50f89f1aff\") : t(\"Settings.ab7e5c15a1\") }"
     }
   ],
   "Settings.15eb6ff730": [
     {
       "file": "src/Settings.tsx",
-      "line": 2428
+      "line": 2434
     }
   ],
   "Settings.50f89f1aff": [
     {
       "file": "src/Settings.tsx",
-      "line": 2428
+      "line": 2434
     }
   ],
   "Settings.ab7e5c15a1": [
     {
       "file": "src/Settings.tsx",
-      "line": 2428
+      "line": 2434
     }
   ],
   "Settings.9de03c564f": [
     {
       "file": "src/Settings.tsx",
-      "line": 2429
+      "line": 2435
     }
   ],
   "Settings.fbdc728a80": [
     {
       "file": "src/Settings.tsx",
-      "line": 2430
+      "line": 2436
     }
   ],
   "Settings.0f35a34d78": [
     {
       "file": "src/Settings.tsx",
-      "line": 2435
+      "line": 2441
     }
   ],
   "Settings.908e673dbf": [
     {
       "file": "src/Settings.tsx",
-      "line": 2435
+      "line": 2441
     }
   ],
   "Settings.1c0def7be0": [
     {
       "file": "src/Settings.tsx",
-      "line": 2435
+      "line": 2441
     }
   ],
   "Settings.14b793509c": [
     {
       "file": "src/Settings.tsx",
-      "line": 2435
+      "line": 2441
     }
   ],
   "Settings.064c8fec1a": [
     {
       "file": "src/Settings.tsx",
-      "line": 2435
+      "line": 2441
     }
   ],
   "Settings.4d78842bab": [
     {
       "file": "src/Settings.tsx",
-      "line": 2435,
+      "line": 2441,
       "values": "{ value1: <input type=\"number\" min=\"1\" max=\"3650\" value={draft.operational_telemetry_retention_days} onInput={e=>change('operational_telemetry_retention_days',Number(e.currentTarget.value))}/> }"
     }
   ],
   "Settings.4fa7547d68": [
     {
       "file": "src/Settings.tsx",
-      "line": 2435,
+      "line": 2441,
       "values": "{ value1: <input type=\"number\" min=\"5\" max=\"1440\" value={draft.provider_quota_poll_minutes} onInput={e=>change('provider_quota_poll_minutes',Number(e.currentTarget.value))}/> }"
     }
   ],
   "Settings.748c990f77": [
     {
       "file": "src/Settings.tsx",
-      "line": 2435
+      "line": 2441
     }
   ],
   "Settings.9334de77ea": [
     {
       "file": "src/Settings.tsx",
-      "line": 2435,
+      "line": 2441,
       "values": "{ value1: <input type=\"number\" min=\"1\" max=\"1440\" value={draft.provider_quota_turn_refresh_min_minutes} onInput={e=>change('provider_quota_turn_refresh_min_minutes',Number(e.currentTarget.value))}/>, value2: <small>{t(\"Settings.a181a7f8e5\")}</small> }"
     }
   ],
   "Settings.a181a7f8e5": [
     {
       "file": "src/Settings.tsx",
-      "line": 2435
+      "line": 2441
     }
   ],
   "Settings.9e82f50d8d": [
     {
       "file": "src/Settings.tsx",
-      "line": 2435
+      "line": 2441
     }
   ],
   "Settings.7e605ab36f": [
     {
       "file": "src/Settings.tsx",
-      "line": 2435,
+      "line": 2441,
       "values": "{ id: usage.collector.id, status: codeLabel(usage.collector.status), value3: usage.collector.error?` (${usage.collector.error})`:'' }"
     }
   ],
   "Settings.7dc32b8ddf": [
     {
       "file": "src/Settings.tsx",
-      "line": 2435
+      "line": 2441
     }
   ],
   "Settings.c7763caabd": [
     {
       "file": "src/Settings.tsx",
-      "line": 2435
+      "line": 2441
     }
   ],
   "Settings.d2ede78359": [
     {
       "file": "src/Settings.tsx",
-      "line": 2435
+      "line": 2441
     }
   ],
   "Settings.14256e81c4": [
     {
       "file": "src/Settings.tsx",
-      "line": 2435,
+      "line": 2441,
       "values": "{ value1: <input type=\"number\" min=\"0\" max=\"1440\" value={draft.ccusage_refresh_minutes} onInput={e=>change('ccusage_refresh_minutes',Number(e.currentTarget.value))} /> }"
     }
   ],
   "Settings.1e9226e0ed": [
     {
       "file": "src/Settings.tsx",
-      "line": 2435,
+      "line": 2441,
       "values": "{ value1: <input readonly value={usage?.install_command||'npm install -g ccusage@latest'} onFocus={event=>event.currentTarget.select()} /> }"
     }
   ],
   "Settings.d8222d3239": [
     {
       "file": "src/Settings.tsx",
-      "line": 2435
+      "line": 2441
     }
   ],
   "Settings.5b4d942d5c": [
     {
       "file": "src/Settings.tsx",
-      "line": 2435
+      "line": 2441
     }
   ],
   "Settings.12a3a76172": [
     {
       "file": "src/Settings.tsx",
-      "line": 2435,
+      "line": 2441,
       "values": "{ value1: <textarea value={draft.usage_command.join('\\n')} onInput={e=>change('usage_command',e.currentTarget.value.split('\\n').filter(Boolean))} /> }"
     }
   ],
   "Settings.be205f376c": [
     {
       "file": "src/Settings.tsx",
-      "line": 2435,
+      "line": 2441,
       "values": "{ name: name, value2: <textarea value={command.join('\\n')} onInput={e=>change('usage_commands',{...draft.usage_commands,[name]:e.currentTarget.value.split('\\n').filter(Boolean)})} /> }"
     }
   ],
   "Settings.235b14eb4e": [
     {
       "file": "src/Settings.tsx",
-      "line": 2437
+      "line": 2443
     }
   ],
   "Settings.60d1ff03f1": [
     {
       "file": "src/Settings.tsx",
-      "line": 2438
+      "line": 2444
     }
   ],
   "Settings.8e75ebbdb2": [
     {
       "file": "src/Settings.tsx",
-      "line": 2439
+      "line": 2445
     }
   ],
   "Settings.1300117561": [
     {
       "file": "src/Settings.tsx",
-      "line": 2439
+      "line": 2445
     }
   ],
   "Settings.4228aeb07c": [
     {
       "file": "src/Settings.tsx",
-      "line": 2439
+      "line": 2445
     }
   ],
   "Settings.e6f48714bd": [
     {
       "file": "src/Settings.tsx",
-      "line": 2439,
+      "line": 2445,
       "values": "{ value1: automation?.rules.length || 0 }"
     }
   ],
   "Settings.3b2fe03e36": [
     {
       "file": "src/Settings.tsx",
-      "line": 2439
+      "line": 2445
     }
   ],
   "Settings.1093115897": [
     {
       "file": "src/Settings.tsx",
-      "line": 2439
+      "line": 2445
     }
   ],
   "Settings.07297fa94a": [
     {
       "file": "src/Settings.tsx",
-      "line": 2439
+      "line": 2445
     }
   ],
   "Settings.7f1e323b62": [
     {
       "file": "src/Settings.tsx",
-      "line": 2439
+      "line": 2445
     }
   ],
   "Settings.9e8cab89ac": [
     {
       "file": "src/Settings.tsx",
-      "line": 2440
+      "line": 2446
     }
   ],
   "Settings.af13d7a94d": [
     {
       "file": "src/Settings.tsx",
-      "line": 2462,
+      "line": 2468,
       "values": "{ value1: <span class={`state-dot ${voiceInfo?.engine_available?'idle':'running'}`}/>, value2: voiceInfo?.engine || draft.tts_engine, value3: (voiceInfo?.engine_available) ? 'yes' : 'no', value4: voiceInfo?.diagnostic ? t(\"Settings.2a54e33e60\", { diagnostic: voiceInfo.diagnostic }) : '', value5: voi"
     }
   ],
   "Settings.2a54e33e60": [
     {
       "file": "src/Settings.tsx",
-      "line": 2462,
+      "line": 2468,
       "values": "{ diagnostic: voiceInfo.diagnostic }"
     }
   ],
   "Settings.d85a5650c2": [
     {
       "file": "src/Settings.tsx",
-      "line": 2463
+      "line": 2469
     }
   ],
   "Settings.e7e85b5eb4": [
     {
       "file": "src/Settings.tsx",
-      "line": 2463
+      "line": 2469
     }
   ],
   "Settings.d6b872c698": [
     {
       "file": "src/Settings.tsx",
-      "line": 2471
+      "line": 2477
     }
   ],
   "Settings.781d1ae86a": [
     {
       "file": "src/Settings.tsx",
-      "line": 2475
+      "line": 2481
     }
   ],
   "Settings.19405ffadd": [
     {
       "file": "src/Settings.tsx",
-      "line": 2476
+      "line": 2482
     }
   ],
   "Settings.4e735a3f48": [
     {
       "file": "src/Settings.tsx",
-      "line": 2482,
+      "line": 2488,
       "values": "{ value1: <Dropdown value={draft.tts_default_mode} onChange={value=>change('tts_default_mode',value as Config['tts_default_mode'])} options={[{value:'off',get label() { return t(\"Settings.fa188f48b8\") }},{value:'on_demand',get label() { return t(\"Settings.7fb69a3e88\") }},{value:'auto',get label() { "
     }
   ],
   "Settings.fa188f48b8": [
     {
       "file": "src/Settings.tsx",
-      "line": 2482
+      "line": 2488
     }
   ],
   "Settings.7fb69a3e88": [
     {
       "file": "src/Settings.tsx",
-      "line": 2482
+      "line": 2488
     }
   ],
   "Settings.76f5031f15": [
     {
       "file": "src/Settings.tsx",
-      "line": 2482
+      "line": 2488
     }
   ],
   "Settings.9e4eaab4b5": [
     {
       "file": "src/Settings.tsx",
-      "line": 2483
+      "line": 2489
     }
   ],
   "Settings.e89593e26a": [
     {
       "file": "src/Settings.tsx",
-      "line": 2489
+      "line": 2495
     }
   ],
   "Settings.f4cd17345f": [
     {
       "file": "src/Settings.tsx",
-      "line": 2490
+      "line": 2496
     }
   ],
   "heading.6491c8fb07": [
     {
       "file": "src/Settings.tsx",
-      "line": 2498
+      "line": 2504
     }
   ],
   "Settings.19ac8ae5f6": [
     {
       "file": "src/Settings.tsx",
-      "line": 2499
+      "line": 2505
     }
   ],
   "Settings.bb5a4bd4ec": [
     {
       "file": "src/Settings.tsx",
-      "line": 2500,
+      "line": 2506,
       "values": "{ value1: <Dropdown value={draft.tts_engine} onChange={value=>change('tts_engine',value as Config['tts_engine'])} options={[{value:'sapi',get label() { return t(\"Settings.d05bc04945\") }},{value:'kokoro',get label() { return t(\"Settings.2d39191ebd\") }},{value:'edge',get label() { return t(\"Settings.c"
     }
   ],
   "Settings.d05bc04945": [
     {
       "file": "src/Settings.tsx",
-      "line": 2500
+      "line": 2506
     }
   ],
   "Settings.2d39191ebd": [
     {
       "file": "src/Settings.tsx",
-      "line": 2500
+      "line": 2506
     }
   ],
   "Settings.c71cf9b29c": [
     {
       "file": "src/Settings.tsx",
-      "line": 2500
+      "line": 2506
     }
   ],
   "Settings.36828f0f9d": [
     {
       "file": "src/Settings.tsx",
-      "line": 2507
+      "line": 2513
     }
   ],
   "Settings.3ad436906d": [
     {
       "file": "src/Settings.tsx",
-      "line": 2507
+      "line": 2513
     }
   ],
   "Settings.115574e8f9": [
     {
       "file": "src/Settings.tsx",
-      "line": 2509,
+      "line": 2515,
       "values": "{ value1: <input value={draft.tts_sapi_voice} onInput={e=>change('tts_sapi_voice',e.currentTarget.value)} /> }"
     }
   ],
   "Settings.032ddce8cf": [
     {
       "file": "src/Settings.tsx",
-      "line": 2510,
+      "line": 2516,
       "values": "{ value1: <input type=\"number\" min=\"-10\" max=\"10\" value={draft.tts_sapi_rate} onInput={e=>change('tts_sapi_rate',Number(e.currentTarget.value))} /> }"
     }
   ],
   "Settings.5130db0ac8": [
     {
       "file": "src/Settings.tsx",
-      "line": 2519,
+      "line": 2525,
       "values": "{ value1: <em>· {kokoroVoiceLabel(draft.tts_kokoro_voice)}</em> }"
     }
   ],
   "Settings.d9ba5932b5": [
     {
       "file": "src/Settings.tsx",
-      "line": 2527,
+      "line": 2533,
       "values": "{ value1: <input type=\"number\" step=\"0.05\" min=\"0.5\" max=\"2\" value={draft.tts_kokoro_speed} onInput={e=>change('tts_kokoro_speed',Number(e.currentTarget.value))} /> }"
     }
   ],
   "heading.75cb1e131c": [
     {
       "file": "src/Settings.tsx",
-      "line": 2535
+      "line": 2541
     }
   ],
   "Settings.69b09cebd7": [
     {
       "file": "src/Settings.tsx",
-      "line": 2537,
+      "line": 2543,
       "values": "{ value1: <em>{rich(\"Settings.f58d2e7a6f\", { length: Object.keys(draft.tts_kokoro_lexicon||{}).length, value2: (Object.keys(draft.tts_kokoro_lexicon||{}).length===1) ? 'yes' : 'no' })}</em> }"
     }
   ],
   "Settings.f58d2e7a6f": [
     {
       "file": "src/Settings.tsx",
-      "line": 2537,
+      "line": 2543,
       "values": "{ length: Object.keys(draft.tts_kokoro_lexicon||{}).length, value2: (Object.keys(draft.tts_kokoro_lexicon||{}).length===1) ? 'yes' : 'no' }"
     }
   ],
   "Settings.dc1cb7cb60": [
     {
       "file": "src/Settings.tsx",
-      "line": 2538,
+      "line": 2544,
       "values": "{ value1: <code>{t(\"Settings.1534201ea0\")}</code> }"
     }
   ],
   "Settings.1534201ea0": [
     {
       "file": "src/Settings.tsx",
-      "line": 2538
+      "line": 2544
     }
   ],
   "Settings.ed4c2cfc9a": [
     {
       "file": "src/Settings.tsx",
-      "line": 2546
+      "line": 2552
     }
   ],
   "Settings.d315703f43": [
     {
       "file": "src/Settings.tsx",
-      "line": 2547,
+      "line": 2553,
       "values": "{ value1: <Dropdown value={draft.tts_content} onChange={value=>change('tts_content',value as Config['tts_content'])} options={[{value:'summary',get label() { return t(\"Settings.2cd818b2ca\") }},{value:'verbatim',get label() { return t(\"Settings.eaa72ef65b\") }}]}/>, value2: <small>{rich(\"Settings.46a1"
     }
   ],
   "Settings.2cd818b2ca": [
     {
       "file": "src/Settings.tsx",
-      "line": 2547
+      "line": 2553
     }
   ],
   "Settings.eaa72ef65b": [
     {
       "file": "src/Settings.tsx",
-      "line": 2547
+      "line": 2553
     }
   ],
   "Settings.46a1b41062": [
     {
       "file": "src/Settings.tsx",
-      "line": 2547,
+      "line": 2553,
       "values": "{ value1: <code>{t(\"Settings.317e938a48\")}</code> }"
     }
   ],
   "Settings.317e938a48": [
     {
       "file": "src/Settings.tsx",
-      "line": 2547
+      "line": 2553
     }
   ],
   "Settings.e271f60475": [
     {
       "file": "src/Settings.tsx",
-      "line": 2548
+      "line": 2554
     }
   ],
   "Settings.4f0c966dec": [
     {
       "file": "src/Settings.tsx",
-      "line": 2548
+      "line": 2554
     },
     {
       "file": "src/Settings.tsx",
-      "line": 2624
+      "line": 2630
     }
   ],
   "Settings.6ef36ef8ff": [
     {
       "file": "src/Settings.tsx",
-      "line": 2548
+      "line": 2554
     }
   ],
   "Settings.e2750052b9": [
     {
       "file": "src/Settings.tsx",
-      "line": 2549,
+      "line": 2555,
       "values": "{ value1: <input type=\"number\" min=\"64\" max=\"2000\" value={draft.tts_summary_max_tokens} onInput={e=>change('tts_summary_max_tokens',Number(e.currentTarget.value))} /> }"
     }
   ],
   "Settings.af92137de8": [
     {
       "file": "src/Settings.tsx",
-      "line": 2550
+      "line": 2556
     }
   ],
   "Settings.d2b83c6da7": [
     {
       "file": "src/Settings.tsx",
-      "line": 2551,
+      "line": 2557,
       "values": "{ value1: <input type=\"number\" min=\"200\" max=\"40000\" value={draft.tts_verbatim_max_chars} onInput={e=>change('tts_verbatim_max_chars',Number(e.currentTarget.value))} />, value2: <small>{t(\"Settings.3471d5712e\")}</small> }"
     }
   ],
   "Settings.3471d5712e": [
     {
       "file": "src/Settings.tsx",
-      "line": 2551
+      "line": 2557
     }
   ],
   "heading.af71af7319": [
     {
       "file": "src/Settings.tsx",
-      "line": 2554
+      "line": 2560
     }
   ],
   "Settings.be2caad105": [
     {
       "file": "src/Settings.tsx",
-      "line": 2555,
+      "line": 2561,
       "values": "{ value1: <input type=\"number\" min=\"10\" max=\"5000\" value={draft.tts_cache_mb} onInput={e=>change('tts_cache_mb',Number(e.currentTarget.value))} />, value2: <small>{t(\"Settings.9b89889c11\")}</small> }"
     }
   ],
   "Settings.9b89889c11": [
     {
       "file": "src/Settings.tsx",
-      "line": 2555
+      "line": 2561
     }
   ],
   "heading.116fe62640": [
     {
       "file": "src/Settings.tsx",
-      "line": 2561
+      "line": 2567
     }
   ],
   "Settings.e658b470c5": [
     {
       "file": "src/Settings.tsx",
-      "line": 2562,
+      "line": 2568,
       "values": "{ value1: <strong>{t(\"Settings.fb2b6737ad\")}</strong> }"
     }
   ],
   "Settings.fb2b6737ad": [
     {
       "file": "src/Settings.tsx",
-      "line": 2562
+      "line": 2568
     }
   ],
   "Settings.c04a719695": [
     {
       "file": "src/Settings.tsx",
-      "line": 2563
+      "line": 2569
     },
     {
       "file": "src/Settings.tsx",
-      "line": 2593
+      "line": 2599
     }
   ],
   "Settings.3c00265dee": [
     {
       "file": "src/Settings.tsx",
-      "line": 2564
+      "line": 2570
     }
   ],
   "Settings.3696304b53": [
     {
       "file": "src/Settings.tsx",
-      "line": 2565,
+      "line": 2571,
       "values": "{ value1: <Dropdown value={draft.stt_engine} onChange={value=>change('stt_engine',value as Config['stt_engine'])} options={[{value:'whisper',get label() { return t(\"Settings.5fcab2edf5\") }},{value:'sapi',get label() { return t(\"Settings.0457704efb\") }}]}/> }"
     }
   ],
   "Settings.5fcab2edf5": [
     {
       "file": "src/Settings.tsx",
-      "line": 2565
+      "line": 2571
     }
   ],
   "Settings.0457704efb": [
     {
       "file": "src/Settings.tsx",
-      "line": 2565
+      "line": 2571
     }
   ],
   "Settings.fb5ced330a": [
     {
       "file": "src/Settings.tsx",
-      "line": 2566,
+      "line": 2572,
       "values": "{ value1: <input value={draft.stt_language} placeholder={t(\"Settings.5c49f88daf\")} onInput={e=>change('stt_language',e.currentTarget.value)} />, value2: <small>{t(\"Settings.07aa13c9ee\")}</small> }"
     }
   ],
   "Settings.5c49f88daf": [
     {
       "file": "src/Settings.tsx",
-      "line": 2566
+      "line": 2572
     }
   ],
   "Settings.07aa13c9ee": [
     {
       "file": "src/Settings.tsx",
-      "line": 2566
+      "line": 2572
     }
   ],
   "Settings.a4bb95a06d": [
     {
       "file": "src/Settings.tsx",
-      "line": 2567,
+      "line": 2573,
       "values": "{ value1: <input value={draft.stt_whisper_model} placeholder={t(\"Settings.c3449cd99d\")} onInput={e=>change('stt_whisper_model',e.currentTarget.value)} /> }"
     }
   ],
   "Settings.c3449cd99d": [
     {
       "file": "src/Settings.tsx",
-      "line": 2567
+      "line": 2573
     }
   ],
   "Settings.14816a3f03": [
     {
       "file": "src/Settings.tsx",
-      "line": 2568
+      "line": 2574
     }
   ],
   "Settings.2ef3ca0f75": [
     {
       "file": "src/Settings.tsx",
-      "line": 2568,
+      "line": 2574,
       "values": "{ value1: <input value={draft.stt_routing_model} placeholder={t(\"Settings.3c5abaac19\")} onInput={e=>change('stt_routing_model',e.currentTarget.value)} /> }"
     }
   ],
   "Settings.3c5abaac19": [
     {
       "file": "src/Settings.tsx",
-      "line": 2568
+      "line": 2574
     }
   ],
   "Settings.2fbda81ee0": [
     {
       "file": "src/Settings.tsx",
-      "line": 2569,
+      "line": 2575,
       "values": "{ value1: (voiceInfo?.stt_available) ? 'yes' : 'no', value2: voiceInfo?.stt_engine || draft.stt_engine, value3: voiceInfo?.stt_diagnostic ? t(\"Settings.ba9fd14b65\", { stt_diagnostic: voiceInfo.stt_diagnostic }) : '' }"
     }
   ],
   "Settings.ba9fd14b65": [
     {
       "file": "src/Settings.tsx",
-      "line": 2569,
+      "line": 2575,
       "values": "{ stt_diagnostic: voiceInfo.stt_diagnostic }"
     }
   ],
   "Settings.6066bb7be1": [
     {
       "file": "src/Settings.tsx",
-      "line": 2571
+      "line": 2577
     }
   ],
   "Settings.f5f0563199": [
     {
       "file": "src/Settings.tsx",
-      "line": 2572
+      "line": 2578
     }
   ],
   "Settings.5394f490cc": [
     {
       "file": "src/Settings.tsx",
-      "line": 2573
+      "line": 2579
     }
   ],
   "Settings.0724540222": [
     {
       "file": "src/Settings.tsx",
-      "line": 2574,
+      "line": 2580,
       "values": "{ value1: <input value={(draft.voice_wake_words||[]).join(', ')} placeholder={t(\"Settings.25064f1cff\")} onInput={e=>change('voice_wake_words',e.currentTarget.value.split(',').map(item=>item.trim()).filter(Boolean))} /> }"
     }
   ],
   "Settings.25064f1cff": [
     {
       "file": "src/Settings.tsx",
-      "line": 2574
+      "line": 2580
     }
   ],
   "heading.7fca441bba": [
     {
       "file": "src/Settings.tsx",
-      "line": 2580
+      "line": 2586
     },
     {
       "file": "src/VoiceCommandsButton.tsx",
@@ -41205,912 +41227,912 @@
   "Settings.834428db08": [
     {
       "file": "src/Settings.tsx",
-      "line": 2581
+      "line": 2587
     }
   ],
   "Settings.5570379899": [
     {
       "file": "src/Settings.tsx",
-      "line": 2586
+      "line": 2592
     }
   ],
   "Settings.f1d8e67df7": [
     {
       "file": "src/Settings.tsx",
-      "line": 2593
+      "line": 2599
     }
   ],
   "Settings.a7c9b74775": [
     {
       "file": "src/Settings.tsx",
-      "line": 2593
+      "line": 2599
     }
   ],
   "heading.64a0c611be": [
     {
       "file": "src/Settings.tsx",
-      "line": 2602
+      "line": 2608
     }
   ],
   "Settings.e338cc2329": [
     {
       "file": "src/Settings.tsx",
-      "line": 2604
+      "line": 2610
     }
   ],
   "Settings.2621c5feb6": [
     {
       "file": "src/Settings.tsx",
-      "line": 2605
+      "line": 2611
     }
   ],
   "Settings.61166d13af": [
     {
       "file": "src/Settings.tsx",
-      "line": 2612
+      "line": 2618
     }
   ],
   "Settings.a472da6c22": [
     {
       "file": "src/Settings.tsx",
-      "line": 2617
+      "line": 2623
     }
   ],
   "Settings.86df6f4991": [
     {
       "file": "src/Settings.tsx",
-      "line": 2621,
+      "line": 2627,
       "values": "{ value1: <strong>{t(\"Settings.3c8fed9d38\")}</strong> }"
     }
   ],
   "Settings.3c8fed9d38": [
     {
       "file": "src/Settings.tsx",
-      "line": 2621
+      "line": 2627
     }
   ],
   "Settings.dff4641557": [
     {
       "file": "src/Settings.tsx",
-      "line": 2622
+      "line": 2628
     }
   ],
   "Settings.a105d3011c": [
     {
       "file": "src/Settings.tsx",
-      "line": 2623
+      "line": 2629
     }
   ],
   "Settings.b8014fea63": [
     {
       "file": "src/Settings.tsx",
-      "line": 2623
+      "line": 2629
     }
   ],
   "Settings.7c8dbb91df": [
     {
       "file": "src/Settings.tsx",
-      "line": 2624
+      "line": 2630
     }
   ],
   "Settings.53e8d5073a": [
     {
       "file": "src/Settings.tsx",
-      "line": 2624,
+      "line": 2630,
       "values": "{ value1: <code>{t(\"Settings.f8dbf8d16f\")}</code>, value2: <code>{t(\"Settings.65a8fc1dec\")}</code> }"
     }
   ],
   "Settings.f8dbf8d16f": [
     {
       "file": "src/Settings.tsx",
-      "line": 2624
+      "line": 2630
     }
   ],
   "Settings.65a8fc1dec": [
     {
       "file": "src/Settings.tsx",
-      "line": 2624
+      "line": 2630
     }
   ],
   "Settings.9f65f59e1c": [
     {
       "file": "src/Settings.tsx",
-      "line": 2625
+      "line": 2631
     }
   ],
   "Settings.1ead7b71d8": [
     {
       "file": "src/Settings.tsx",
-      "line": 2626,
+      "line": 2632,
       "values": "{ value1: <Dropdown value={draft.assistant_trust_reversible} onChange={value=>change('assistant_trust_reversible',value as Config['assistant_trust_reversible'])} options={[{value:'cancel_window',get label() { return t(\"Settings.89bb11ccf9\") }},{value:'confirm',get label() { return t(\"Settings.d106d4"
     }
   ],
   "Settings.89bb11ccf9": [
     {
       "file": "src/Settings.tsx",
-      "line": 2626
+      "line": 2632
     }
   ],
   "Settings.d106d42498": [
     {
       "file": "src/Settings.tsx",
-      "line": 2626
+      "line": 2632
     }
   ],
   "Settings.b16c1f3288": [
     {
       "file": "src/Settings.tsx",
-      "line": 2626
+      "line": 2632
     }
   ],
   "Settings.b384af6ab0": [
     {
       "file": "src/Settings.tsx",
-      "line": 2626
+      "line": 2632
     }
   ],
   "Settings.69c70bc61c": [
     {
       "file": "src/Settings.tsx",
-      "line": 2627
+      "line": 2633
     }
   ],
   "Settings.5620ecbaa7": [
     {
       "file": "src/Settings.tsx",
-      "line": 2628
+      "line": 2634
     }
   ],
   "Settings.36878b3bbe": [
     {
       "file": "src/Settings.tsx",
-      "line": 2629,
+      "line": 2635,
       "values": "{ value1: <input type=\"number\" min=\"128\" max=\"8192\" value={draft.assistant_max_output_tokens} onInput={e=>change('assistant_max_output_tokens',Number(e.currentTarget.value))} /> }"
     }
   ],
   "Settings.3ce9025c78": [
     {
       "file": "src/Settings.tsx",
-      "line": 2630,
+      "line": 2636,
       "values": "{ value1: <input type=\"number\" min=\"2\" max=\"200\" value={draft.assistant_context_messages} onInput={e=>change('assistant_context_messages',Number(e.currentTarget.value))} /> }"
     }
   ],
   "Settings.4e1d76efdb": [
     {
       "file": "src/Settings.tsx",
-      "line": 2631,
+      "line": 2637,
       "values": "{ value1: <input type=\"number\" min=\"0\" max=\"5000\" step=\"100\" value={draft.voice_chat_patience_ms} disabled={!draft.stt_enabled} onInput={e=>change('voice_chat_patience_ms',Number(e.currentTarget.value))} />, value2: <small>{draft.stt_enabled ? t(\"Settings.a49f853964\") : t(\"Settings.334d149375\")}</sm"
     }
   ],
   "Settings.a49f853964": [
     {
       "file": "src/Settings.tsx",
-      "line": 2631
+      "line": 2637
     }
   ],
   "Settings.334d149375": [
     {
       "file": "src/Settings.tsx",
-      "line": 2631
+      "line": 2637
     }
   ],
   "heading.cfc1c5858d": [
     {
       "file": "src/Settings.tsx",
-      "line": 2639
+      "line": 2645
     }
   ],
   "Settings.24cfd6dc4d": [
     {
       "file": "src/Settings.tsx",
-      "line": 2641
+      "line": 2647
     }
   ],
   "Settings.34e55f5ee9": [
     {
       "file": "src/Settings.tsx",
-      "line": 2642
+      "line": 2648
     }
   ],
   "Settings.c376f1d530": [
     {
       "file": "src/Settings.tsx",
-      "line": 2643
+      "line": 2649
     }
   ],
   "Settings.a32a4a4e02": [
     {
       "file": "src/Settings.tsx",
-      "line": 2650
+      "line": 2656
     }
   ],
   "Settings.a3399ffb60": [
     {
       "file": "src/Settings.tsx",
-      "line": 2651,
+      "line": 2657,
       "values": "{ value1: <code>{t(\"Settings.6131960bd0\")}</code> }"
     }
   ],
   "Settings.6131960bd0": [
     {
       "file": "src/Settings.tsx",
-      "line": 2651
+      "line": 2657
     }
   ],
   "heading.732d8524f8": [
     {
       "file": "src/Settings.tsx",
-      "line": 2659
+      "line": 2665
     }
   ],
   "Settings.93f3d2f9db": [
     {
       "file": "src/Settings.tsx",
-      "line": 2661
+      "line": 2667
     }
   ],
   "Settings.b8afb6e9c9": [
     {
       "file": "src/Settings.tsx",
-      "line": 2662
+      "line": 2668
     }
   ],
   "Settings.c894bba9c3": [
     {
       "file": "src/Settings.tsx",
-      "line": 2664
+      "line": 2670
     },
     {
       "file": "src/Settings.tsx",
-      "line": 2702
+      "line": 2708
     }
   ],
   "Settings.0e7a37d085": [
     {
       "file": "src/Settings.tsx",
-      "line": 2664
+      "line": 2670
     }
   ],
   "Settings.b63d1b949e": [
     {
       "file": "src/Settings.tsx",
-      "line": 2664
+      "line": 2670
     }
   ],
   "Settings.17833695a6": [
     {
       "file": "src/Settings.tsx",
-      "line": 2664
+      "line": 2670
     }
   ],
   "Settings.668c7def66": [
     {
       "file": "src/Settings.tsx",
-      "line": 2672
+      "line": 2678
     }
   ],
   "Settings.aba207e063": [
     {
       "file": "src/Settings.tsx",
-      "line": 2673
+      "line": 2679
     }
   ],
   "Settings.b87f5d702f": [
     {
       "file": "src/Settings.tsx",
-      "line": 2674
+      "line": 2680
     }
   ],
   "Settings.6d171eab20": [
     {
       "file": "src/Settings.tsx",
-      "line": 2674
+      "line": 2680
     }
   ],
   "Settings.58b471eed4": [
     {
       "file": "src/Settings.tsx",
-      "line": 2676
+      "line": 2682
     }
   ],
   "Settings.77f91a235f": [
     {
       "file": "src/Settings.tsx",
-      "line": 2676,
+      "line": 2682,
       "values": "{ host: draft.host, port: draft.port }"
     }
   ],
   "Settings.ec575b1542": [
     {
       "file": "src/Settings.tsx",
-      "line": 2676
+      "line": 2682
     }
   ],
   "Settings.0251499a6e": [
     {
       "file": "src/Settings.tsx",
-      "line": 2676
+      "line": 2682
     }
   ],
   "Settings.17eb3c0168": [
     {
       "file": "src/Settings.tsx",
-      "line": 2676
+      "line": 2682
     }
   ],
   "Settings.3170afddf2": [
     {
       "file": "src/Settings.tsx",
-      "line": 2676
+      "line": 2682
     }
   ],
   "Settings.88f432459c": [
     {
       "file": "src/Settings.tsx",
-      "line": 2677
+      "line": 2683
     }
   ],
   "Settings.8b4df73a36": [
     {
       "file": "src/Settings.tsx",
-      "line": 2680
+      "line": 2686
     }
   ],
   "Settings.a6dae8d816": [
     {
       "file": "src/Settings.tsx",
-      "line": 2681
+      "line": 2687
     }
   ],
   "Settings.5ea4f31d60": [
     {
       "file": "src/Settings.tsx",
-      "line": 2682
+      "line": 2688
     }
   ],
   "Settings.f12efc4df2": [
     {
       "file": "src/Settings.tsx",
-      "line": 2689
+      "line": 2695
     }
   ],
   "Settings.62ae343f37": [
     {
       "file": "src/Settings.tsx",
-      "line": 2690
+      "line": 2696
     }
   ],
   "Settings.2b925074f3": [
     {
       "file": "src/Settings.tsx",
-      "line": 2693
+      "line": 2699
     }
   ],
   "Settings.e2f251c813": [
     {
       "file": "src/Settings.tsx",
-      "line": 2696
+      "line": 2702
     }
   ],
   "Settings.88da55bde5": [
     {
       "file": "src/Settings.tsx",
-      "line": 2699
+      "line": 2705
     }
   ],
   "Settings.24cb39057d": [
     {
       "file": "src/Settings.tsx",
-      "line": 2700,
+      "line": 2706,
       "values": "{ value1: remote?.diagnostic || t(\"Settings.118602dd87\") }"
     }
   ],
   "Settings.118602dd87": [
     {
       "file": "src/Settings.tsx",
-      "line": 2700
+      "line": 2706
     }
   ],
   "Settings.d254e935d9": [
     {
       "file": "src/Settings.tsx",
-      "line": 2701
+      "line": 2707
     }
   ],
   "Settings.f46198787f": [
     {
       "file": "src/Settings.tsx",
-      "line": 2702
+      "line": 2708
     }
   ],
   "Settings.51523c1565": [
     {
       "file": "src/Settings.tsx",
-      "line": 2702
+      "line": 2708
     }
   ],
   "Settings.6d13a49e47": [
     {
       "file": "src/Settings.tsx",
-      "line": 2702
+      "line": 2708
     }
   ],
   "Settings.1f47d83669": [
     {
       "file": "src/Settings.tsx",
-      "line": 2702
+      "line": 2708
     }
   ],
   "Settings.4e3273f678": [
     {
       "file": "src/Settings.tsx",
-      "line": 2704
+      "line": 2710
     }
   ],
   "Settings.131638b04e": [
     {
       "file": "src/Settings.tsx",
-      "line": 2707
+      "line": 2713
     }
   ],
   "Settings.a7e863241f": [
     {
       "file": "src/Settings.tsx",
-      "line": 2724
+      "line": 2730
     }
   ],
   "Settings.3ab6ea948b": [
     {
       "file": "src/Settings.tsx",
-      "line": 2725,
+      "line": 2731,
       "values": "{ value1: <strong>{rich(\"Settings.b277ccf9f1\", { value1: runningVersion || t(\"Settings.a00d58b4a7\") })}</strong>, value2: (runningVersion&&updateStatus?.status==='ok'&&!updateStatus.update_available) ? 'yes' : 'no' }"
     }
   ],
   "Settings.b277ccf9f1": [
     {
       "file": "src/Settings.tsx",
-      "line": 2725,
+      "line": 2731,
       "values": "{ value1: runningVersion || t(\"Settings.a00d58b4a7\") }"
     }
   ],
   "Settings.a00d58b4a7": [
     {
       "file": "src/Settings.tsx",
-      "line": 2725
+      "line": 2731
     }
   ],
   "Settings.9f996710ad": [
     {
       "file": "src/Settings.tsx",
-      "line": 2726,
+      "line": 2732,
       "values": "{ value1: <code>{updateStatus?.manifest_url || t(\"Settings.a2711588a8\")}</code>, value2: <strong>{t(\"Settings.585dd00552\")}</strong> }"
     }
   ],
   "Settings.a2711588a8": [
     {
       "file": "src/Settings.tsx",
-      "line": 2726
+      "line": 2732
     }
   ],
   "Settings.585dd00552": [
     {
       "file": "src/Settings.tsx",
-      "line": 2726
+      "line": 2732
     }
   ],
   "Settings.029a85cb06": [
     {
       "file": "src/Settings.tsx",
-      "line": 2727
+      "line": 2733
     }
   ],
   "Settings.4a99175ce6": [
     {
       "file": "src/Settings.tsx",
-      "line": 2728
+      "line": 2734
     }
   ],
   "Settings.bad8675c88": [
     {
       "file": "src/Settings.tsx",
-      "line": 2728
+      "line": 2734
     }
   ],
   "Settings.ec3c366cff": [
     {
       "file": "src/Settings.tsx",
-      "line": 2731,
+      "line": 2737,
       "values": "{ updateChecked: updateChecked }"
     }
   ],
   "Settings.6c1357ac49": [
     {
       "file": "src/Settings.tsx",
-      "line": 2732,
+      "line": 2738,
       "values": "{ version: updateStatus.latest.version }"
     }
   ],
   "Settings.ec963ffc91": [
     {
       "file": "src/Settings.tsx",
-      "line": 2735
+      "line": 2741
     }
   ],
   "Settings.2937cffb37": [
     {
       "file": "src/Settings.tsx",
-      "line": 2735
+      "line": 2741
     }
   ],
   "Settings.b69eb65b13": [
     {
       "file": "src/Settings.tsx",
-      "line": 2736,
+      "line": 2742,
       "values": "{ version: updateStatus.latest.version }"
     }
   ],
   "Settings.ae763e6d95": [
     {
       "file": "src/Settings.tsx",
-      "line": 2743
+      "line": 2749
     }
   ],
   "Settings.74c8a0ca0b": [
     {
       "file": "src/Settings.tsx",
-      "line": 2744
+      "line": 2750
     }
   ],
   "Settings.712ba0b969": [
     {
       "file": "src/Settings.tsx",
-      "line": 2751
+      "line": 2757
     }
   ],
   "Settings.59b7d55a69": [
     {
       "file": "src/Settings.tsx",
-      "line": 2751
+      "line": 2757
     }
   ],
   "Settings.52af894101": [
     {
       "file": "src/Settings.tsx",
-      "line": 2752
+      "line": 2758
     }
   ],
   "Settings.4d345465e9": [
     {
       "file": "src/Settings.tsx",
-      "line": 2752
+      "line": 2758
     }
   ],
   "Settings.71d4a94286": [
     {
       "file": "src/Settings.tsx",
-      "line": 2752
+      "line": 2758
     }
   ],
   "Settings.2d31151b5f": [
     {
       "file": "src/Settings.tsx",
-      "line": 2756,
+      "line": 2762,
       "values": "{ path: prereq.path }"
     }
   ],
   "Settings.68ff63fb82": [
     {
       "file": "src/Settings.tsx",
-      "line": 2760
+      "line": 2766
     }
   ],
   "Settings.94c01d6425": [
     {
       "file": "src/Settings.tsx",
-      "line": 2761
+      "line": 2767
     }
   ],
   "Settings.a4a5659f66": [
     {
       "file": "src/Settings.tsx",
-      "line": 2761
+      "line": 2767
     }
   ],
   "Settings.a485cc349e": [
     {
       "file": "src/Settings.tsx",
-      "line": 2761
+      "line": 2767
     }
   ],
   "Settings.5cdbf06792": [
     {
       "file": "src/Settings.tsx",
-      "line": 2762
+      "line": 2768
     }
   ],
   "Settings.d77f40d58d": [
     {
       "file": "src/Settings.tsx",
-      "line": 2770
+      "line": 2776
     }
   ],
   "Settings.c1817945a6": [
     {
       "file": "src/Settings.tsx",
-      "line": 2771
+      "line": 2777
     }
   ],
   "Settings.2ac78ac747": [
     {
       "file": "src/Settings.tsx",
-      "line": 2773,
+      "line": 2779,
       "values": "{ overlayInstalled: overlayInstalled, value2: overlayStatus?.state?.requires_backend ? t(\"Settings.25d91a5442\", { requires_backend: overlayStatus.state.requires_backend }) : '' }"
     }
   ],
   "Settings.25d91a5442": [
     {
       "file": "src/Settings.tsx",
-      "line": 2773,
+      "line": 2779,
       "values": "{ requires_backend: overlayStatus.state.requires_backend }"
     }
   ],
   "Settings.3079da5837": [
     {
       "file": "src/Settings.tsx",
-      "line": 2774,
+      "line": 2780,
       "values": "{ value1: <code>{overlayStatus.state.installed_from}</code> }"
     }
   ],
   "Settings.74a527cd05": [
     {
       "file": "src/Settings.tsx",
-      "line": 2775
+      "line": 2781
     }
   ],
   "Settings.0e159d5ea7": [
     {
       "file": "src/Settings.tsx",
-      "line": 2775
+      "line": 2781
     }
   ],
   "Settings.29c23dbb5c": [
     {
       "file": "src/Settings.tsx",
-      "line": 2777
+      "line": 2783
     }
   ],
   "Settings.5474eef8d0": [
     {
       "file": "src/Settings.tsx",
-      "line": 2780
+      "line": 2786
     },
     {
       "file": "src/Settings.tsx",
-      "line": 2780
+      "line": 2786
     }
   ],
   "Settings.66f746259c": [
     {
       "file": "src/Settings.tsx",
-      "line": 2780
+      "line": 2786
     }
   ],
   "Settings.dab6a71282": [
     {
       "file": "src/Settings.tsx",
-      "line": 2780
+      "line": 2786
     }
   ],
   "Settings.b12a0f8d97": [
     {
       "file": "src/Settings.tsx",
-      "line": 2781
+      "line": 2787
     },
     {
       "file": "src/Settings.tsx",
-      "line": 2794
+      "line": 2800
     }
   ],
   "Settings.6e3a8d0788": [
     {
       "file": "src/Settings.tsx",
-      "line": 2790
+      "line": 2796
     }
   ],
   "Settings.3b08d15313": [
     {
       "file": "src/Settings.tsx",
-      "line": 2791,
+      "line": 2797,
       "values": "{ value1: <strong>{t(\"Settings.e71a8b379c\")}</strong>, value2: <strong>{t(\"Settings.6e1cbd000b\")}</strong>, value3: <strong>{t(\"Settings.9561c11798\")}</strong> }"
     }
   ],
   "Settings.e71a8b379c": [
     {
       "file": "src/Settings.tsx",
-      "line": 2791
+      "line": 2797
     },
     {
       "file": "src/Settings.tsx",
-      "line": 2793
+      "line": 2799
     }
   ],
   "Settings.6e1cbd000b": [
     {
       "file": "src/Settings.tsx",
-      "line": 2791
+      "line": 2797
     }
   ],
   "Settings.9561c11798": [
     {
       "file": "src/Settings.tsx",
-      "line": 2791
+      "line": 2797
     }
   ],
   "Settings.84ab91dbd0": [
     {
       "file": "src/Settings.tsx",
-      "line": 2795
+      "line": 2801
     }
   ],
   "Settings.d3ef01b4a9": [
     {
       "file": "src/Settings.tsx",
-      "line": 2802
-    }
-  ],
-  "Settings.c076417552": [
-    {
-      "file": "src/Settings.tsx",
-      "line": 2803,
-      "values": "{ value1: <code>{t(\"Settings.0ffd43f588\")}</code> }"
-    }
-  ],
-  "Settings.0ffd43f588": [
-    {
-      "file": "src/Settings.tsx",
-      "line": 2803
-    },
-    {
-      "file": "src/Settings.tsx",
-      "line": 2809
-    }
-  ],
-  "Settings.0898c2473b": [
-    {
-      "file": "src/Settings.tsx",
-      "line": 2804,
-      "values": "{ value1: <Dropdown value={draft.log_level} onChange={value=>change('log_level',value as Config['log_level'])} options={[\n            {value:'DEBUG',get label() { return t(\"Settings.914c586e27\") }},\n            {value:'INFO',get label() { return t(\"Settings.221cb5a321\") }},\n            {value:'WARNI"
-    }
-  ],
-  "Settings.914c586e27": [
-    {
-      "file": "src/Settings.tsx",
-      "line": 2805
-    }
-  ],
-  "Settings.221cb5a321": [
-    {
-      "file": "src/Settings.tsx",
-      "line": 2806
-    }
-  ],
-  "Settings.86f56fe822": [
-    {
-      "file": "src/Settings.tsx",
-      "line": 2807
-    }
-  ],
-  "Settings.d98ee0e5f9": [
-    {
-      "file": "src/Settings.tsx",
       "line": 2808
     }
   ],
-  "Settings.73721ce857": [
+  "Settings.c076417552": [
     {
       "file": "src/Settings.tsx",
       "line": 2809,
       "values": "{ value1: <code>{t(\"Settings.0ffd43f588\")}</code> }"
     }
   ],
-  "Settings.9e252559e7": [
+  "Settings.0ffd43f588": [
+    {
+      "file": "src/Settings.tsx",
+      "line": 2809
+    },
     {
       "file": "src/Settings.tsx",
       "line": 2815
     }
   ],
-  "Settings.e608f47623": [
+  "Settings.0898c2473b": [
     {
       "file": "src/Settings.tsx",
-      "line": 2816
+      "line": 2810,
+      "values": "{ value1: <Dropdown value={draft.log_level} onChange={value=>change('log_level',value as Config['log_level'])} options={[\n            {value:'DEBUG',get label() { return t(\"Settings.914c586e27\") }},\n            {value:'INFO',get label() { return t(\"Settings.221cb5a321\") }},\n            {value:'WARNI"
     }
   ],
-  "Settings.fca2999d30": [
+  "Settings.914c586e27": [
     {
       "file": "src/Settings.tsx",
-      "line": 2817
+      "line": 2811
     }
   ],
-  "Settings.4ec9cb75dd": [
+  "Settings.221cb5a321": [
     {
       "file": "src/Settings.tsx",
-      "line": 2818
+      "line": 2812
     }
   ],
-  "Settings.b4205182f0": [
+  "Settings.86f56fe822": [
+    {
+      "file": "src/Settings.tsx",
+      "line": 2813
+    }
+  ],
+  "Settings.d98ee0e5f9": [
+    {
+      "file": "src/Settings.tsx",
+      "line": 2814
+    }
+  ],
+  "Settings.73721ce857": [
+    {
+      "file": "src/Settings.tsx",
+      "line": 2815,
+      "values": "{ value1: <code>{t(\"Settings.0ffd43f588\")}</code> }"
+    }
+  ],
+  "Settings.9e252559e7": [
     {
       "file": "src/Settings.tsx",
       "line": 2821
-    },
-    {
-      "file": "src/Settings.tsx",
-      "line": 2823
     }
   ],
-  "Settings.d5c754ab15": [
+  "Settings.e608f47623": [
     {
       "file": "src/Settings.tsx",
       "line": 2822
     }
   ],
-  "Settings.3c0e2e7dd7": [
+  "Settings.fca2999d30": [
     {
       "file": "src/Settings.tsx",
       "line": 2823
     }
   ],
+  "Settings.4ec9cb75dd": [
+    {
+      "file": "src/Settings.tsx",
+      "line": 2824
+    }
+  ],
+  "Settings.b4205182f0": [
+    {
+      "file": "src/Settings.tsx",
+      "line": 2827
+    },
+    {
+      "file": "src/Settings.tsx",
+      "line": 2829
+    }
+  ],
+  "Settings.d5c754ab15": [
+    {
+      "file": "src/Settings.tsx",
+      "line": 2828
+    }
+  ],
+  "Settings.3c0e2e7dd7": [
+    {
+      "file": "src/Settings.tsx",
+      "line": 2829
+    }
+  ],
   "Settings.08b8bd7d04": [
     {
       "file": "src/Settings.tsx",
-      "line": 2825,
+      "line": 2831,
       "values": "{ value1: <textarea readOnly rows={10} value={diagnosticsText} onClick={event=>event.currentTarget.select()} /> }"
     }
   ],
   "Settings.46a0b85a51": [
     {
       "file": "src/Settings.tsx",
-      "line": 2833
+      "line": 2839
     }
   ],
   "Settings.4b8c2a87cf": [
     {
       "file": "src/Settings.tsx",
-      "line": 2834
+      "line": 2840
     }
   ],
   "Settings.cf6794d265": [
     {
       "file": "src/Settings.tsx",
-      "line": 2835,
+      "line": 2841,
       "values": "{ value1: <code>{t(\"Settings.e46d8b606c\")}</code>, value2: <strong>{t(\"Settings.30fc04c0e1\")}</strong> }"
     }
   ],
   "Settings.e46d8b606c": [
     {
       "file": "src/Settings.tsx",
-      "line": 2835
+      "line": 2841
     }
   ],
   "Settings.30fc04c0e1": [
     {
       "file": "src/Settings.tsx",
-      "line": 2835
+      "line": 2841
     }
   ],
   "Settings.8f6bc9df7a": [
     {
       "file": "src/Settings.tsx",
-      "line": 2836
+      "line": 2842
     }
   ],
   "heading.efb52e7172": [
     {
       "file": "src/Settings.tsx",
-      "line": 2841
+      "line": 2847
     },
     {
       "file": "src/Settings.tsx",
-      "line": 2843
+      "line": 2849
     },
     {
       "file": "src/settingsSearchAliases.ts",
@@ -42124,306 +42146,296 @@
   "Settings.f9cc639285": [
     {
       "file": "src/Settings.tsx",
-      "line": 2848
+      "line": 2854
     }
   ],
   "Settings.575ade1ff4": [
     {
       "file": "src/Settings.tsx",
-      "line": 2848
+      "line": 2854
     }
   ],
   "Settings.bcb3a1163c": [
     {
       "file": "src/Settings.tsx",
-      "line": 2849
+      "line": 2855
     }
   ],
   "heading.c70da52b01": [
     {
       "file": "src/Settings.tsx",
-      "line": 2850
+      "line": 2856
     },
     {
       "file": "src/Settings.tsx",
-      "line": 2872
+      "line": 2878
     }
   ],
   "Settings.6d0716a233": [
     {
       "file": "src/Settings.tsx",
-      "line": 2851,
+      "line": 2857,
       "values": "{ value1: <input value={draft.terminal_font_family} maxLength={TERMINAL_FONT_FAMILY_MAX_CHARS} placeholder={t(\"Settings.227958e927\", { value1: DEFAULT_TERMINAL_FONT_FAMILIES.join(', ') })} spellcheck={false} onInput={e=>change('terminal_font_family',e.currentTarget.value)}/> }"
     }
   ],
   "Settings.227958e927": [
     {
       "file": "src/Settings.tsx",
-      "line": 2851,
+      "line": 2857,
       "values": "{ value1: DEFAULT_TERMINAL_FONT_FAMILIES.join(', ') }"
     }
   ],
   "Settings.cd14ff0297": [
     {
       "file": "src/Settings.tsx",
-      "line": 2853,
+      "line": 2859,
       "values": "{ value1: <code>{t(\"Settings.56d61d7bc8\")}</code> }"
     }
   ],
   "Settings.56d61d7bc8": [
     {
       "file": "src/Settings.tsx",
-      "line": 2853
+      "line": 2859
     }
   ],
   "heading.14721e2ef2": [
     {
       "file": "src/Settings.tsx",
-      "line": 2855
+      "line": 2861
     }
   ],
   "Settings.5234b067b5": [
     {
       "file": "src/Settings.tsx",
-      "line": 2856,
+      "line": 2862,
       "values": "{ value1: <Dropdown value={draft.drawer_tab_display} onChange={value=>change('drawer_tab_display',value as Config['drawer_tab_display'])} options={[{value:'icon',get label() { return t(\"Settings.eae96e02bb\") }},{value:'title',get label() { return t(\"Settings.3b23a123fa\") }}]}/> }"
     }
   ],
   "Settings.eae96e02bb": [
     {
       "file": "src/Settings.tsx",
-      "line": 2856
+      "line": 2862
     },
     {
       "file": "src/Settings.tsx",
-      "line": 2857
+      "line": 2863
     }
   ],
   "Settings.3b23a123fa": [
     {
       "file": "src/Settings.tsx",
-      "line": 2856
+      "line": 2862
     },
     {
       "file": "src/Settings.tsx",
-      "line": 2857
+      "line": 2863
     }
   ],
   "Settings.8081e3347f": [
     {
       "file": "src/Settings.tsx",
-      "line": 2857,
+      "line": 2863,
       "values": "{ value1: <Dropdown value={draft.utility_rail_display} onChange={value=>change('utility_rail_display',value as Config['utility_rail_display'])} options={[{value:'icon',get label() { return t(\"Settings.eae96e02bb\") }},{value:'title',get label() { return t(\"Settings.3b23a123fa\") }}]}/> }"
     }
   ],
   "Settings.bbd666e760": [
     {
       "file": "src/Settings.tsx",
-      "line": 2858
+      "line": 2864
     }
   ],
   "Settings.f7f20aa575": [
     {
       "file": "src/Settings.tsx",
-      "line": 2861
+      "line": 2867
     }
   ],
   "Settings.421d20a7d2": [
     {
       "file": "src/Settings.tsx",
-      "line": 2866
+      "line": 2872
     }
   ],
   "Settings.2c9f742f6e": [
     {
       "file": "src/Settings.tsx",
-      "line": 2867
+      "line": 2873
     }
   ],
   "heading.6ba5218d81": [
     {
       "file": "src/Settings.tsx",
-      "line": 2868
+      "line": 2874
     }
   ],
   "Settings.3ac388f04e": [
     {
       "file": "src/Settings.tsx",
-      "line": 2869,
+      "line": 2875,
       "values": "{ value1: <Dropdown value={String(draft.ui_scale_desktop)} onChange={value=>changeUiScale('ui_scale_desktop',value)} options={UI_SCALE_STEPS.map(step=>({value:String(step),label:uiScaleLabel(step)}))}/> }"
     }
   ],
   "Settings.f0b81573e6": [
     {
       "file": "src/Settings.tsx",
-      "line": 2870,
+      "line": 2876,
       "values": "{ value1: <Dropdown value={String(draft.ui_scale_mobile)} onChange={value=>changeUiScale('ui_scale_mobile',value)} options={UI_SCALE_STEPS.map(step=>({value:String(step),label:uiScaleLabel(step)}))}/> }"
     }
   ],
   "Settings.30005ce0e1": [
     {
       "file": "src/Settings.tsx",
-      "line": 2871,
+      "line": 2877,
       "values": "{ value1: <strong>{currentProfile()==='mobile' ? t(\"Settings.d524c1a081\") : t(\"Settings.68693d02ab\")}</strong> }"
     }
   ],
   "Settings.d524c1a081": [
     {
       "file": "src/Settings.tsx",
-      "line": 2871
+      "line": 2877
     }
   ],
   "Settings.68693d02ab": [
     {
       "file": "src/Settings.tsx",
-      "line": 2871
+      "line": 2877
     }
   ],
   "Settings.46f97430b4": [
     {
       "file": "src/Settings.tsx",
-      "line": 2872,
+      "line": 2878,
       "values": "{ value1: <kbd>{t(\"Settings.e2ee2909fe\")}</kbd>, value2: <kbd>{t(\"Settings.e2ee2909fe\")}</kbd>, value3: <kbd>+</kbd>, value4: <kbd>-</kbd>, value5: <kbd>{t(\"Settings.e2ee2909fe\")}</kbd>, value6: <kbd>0</kbd>, value7: <strong>{t(\"heading.c70da52b01\")}</strong>, value8: <strong>{t(\"Settings.8a7525b149"
     }
   ],
   "Settings.e2ee2909fe": [
     {
       "file": "src/Settings.tsx",
-      "line": 2872
+      "line": 2878
     },
     {
       "file": "src/Settings.tsx",
-      "line": 2872
+      "line": 2878
     },
-    {
-      "file": "src/Settings.tsx",
-      "line": 2872
-    }
-  ],
-  "Settings.8a7525b149": [
-    {
-      "file": "src/Settings.tsx",
-      "line": 2872
-    }
-  ],
-  "Settings.f73cf84043": [
-    {
-      "file": "src/Settings.tsx",
-      "line": 2875
-    }
-  ],
-  "Settings.e04b865f75": [
-    {
-      "file": "src/Settings.tsx",
-      "line": 2876
-    }
-  ],
-  "Settings.38748adfc7": [
-    {
-      "file": "src/Settings.tsx",
-      "line": 2877
-    }
-  ],
-  "Settings.d8236f10f4": [
     {
       "file": "src/Settings.tsx",
       "line": 2878
     }
   ],
+  "Settings.8a7525b149": [
+    {
+      "file": "src/Settings.tsx",
+      "line": 2878
+    }
+  ],
+  "Settings.f73cf84043": [
+    {
+      "file": "src/Settings.tsx",
+      "line": 2881
+    }
+  ],
+  "Settings.e04b865f75": [
+    {
+      "file": "src/Settings.tsx",
+      "line": 2882
+    }
+  ],
+  "Settings.38748adfc7": [
+    {
+      "file": "src/Settings.tsx",
+      "line": 2883
+    }
+  ],
+  "Settings.d8236f10f4": [
+    {
+      "file": "src/Settings.tsx",
+      "line": 2884
+    }
+  ],
   "Settings.641b0f9dca": [
     {
       "file": "src/Settings.tsx",
-      "line": 2879
+      "line": 2885
     }
   ],
   "Settings.1d11026ad3": [
     {
       "file": "src/Settings.tsx",
-      "line": 2880
+      "line": 2886
     }
   ],
   "Settings.657b201d12": [
     {
       "file": "src/Settings.tsx",
-      "line": 2881,
+      "line": 2887,
       "values": "{ value1: <Dropdown value={draft.rail_density_desktop} onChange={value=>changeRailDensity('rail_density_desktop',value)} options={RAIL_DENSITIES.map(step=>({value:step,label:railDensityLabel(step)}))}/> }"
     }
   ],
   "Settings.9b8bca40cf": [
     {
       "file": "src/Settings.tsx",
-      "line": 2882,
+      "line": 2888,
       "values": "{ value1: <Dropdown value={draft.rail_density_mobile} onChange={value=>changeRailDensity('rail_density_mobile',value)} options={RAIL_DENSITIES.map(step=>({value:step,label:railDensityLabel(step)}))}/> }"
     }
   ],
   "Settings.24a536f5b0": [
     {
       "file": "src/Settings.tsx",
-      "line": 2883
+      "line": 2889
     }
   ],
   "Settings.36c88395a3": [
     {
       "file": "src/Settings.tsx",
-      "line": 2883
+      "line": 2889
     }
   ],
   "Settings.255b076dd8": [
     {
       "file": "src/Settings.tsx",
-      "line": 2974
+      "line": 2980
     }
   ],
   "Settings.e978b00de4": [
     {
       "file": "src/Settings.tsx",
-      "line": 2975
+      "line": 2981
     }
   ],
   "Settings.52c56456c4": [
     {
       "file": "src/Settings.tsx",
-      "line": 2977,
+      "line": 2983,
       "values": "{ value1: query.trim() }"
     }
   ],
   "Settings.6309326206": [
     {
       "file": "src/Settings.tsx",
-      "line": 2977,
+      "line": 2983,
       "values": "{ shortcutHits: shortcutHits, value2: (shortcutHits===1) ? 'yes' : 'no' }"
     }
   ],
   "Settings.6422f95e3b": [
     {
       "file": "src/Settings.tsx",
-      "line": 2978,
+      "line": 2984,
       "values": "{ value1: query.trim() }"
     }
   ],
   "Settings.b81f8fe779": [
     {
       "file": "src/Settings.tsx",
-      "line": 2992
+      "line": 2998
     }
   ],
   "Settings.c4751a7ab8": [
     {
       "file": "src/Settings.tsx",
-      "line": 3002
-    }
-  ],
-  "Settings.23e39291d6": [
-    {
-      "file": "src/Settings.tsx",
-      "line": 3002
+      "line": 3008
     }
   ],
   "Settings.dd0ae7a5cb": [
-    {
-      "file": "src/Settings.tsx",
-      "line": 3002
-    },
     {
       "file": "src/Settings.tsx",
       "line": 3008
@@ -42431,411 +42443,415 @@
     {
       "file": "src/Settings.tsx",
       "line": 3014
+    },
+    {
+      "file": "src/Settings.tsx",
+      "line": 3020
     }
   ],
   "Settings.b5c120b316": [
     {
       "file": "src/Settings.tsx",
-      "line": 3002
+      "line": 3008
     }
   ],
   "Settings.842e70aacb": [
     {
       "file": "src/Settings.tsx",
-      "line": 3005
+      "line": 3011
     }
   ],
   "Settings.4c1795372c": [
     {
       "file": "src/Settings.tsx",
-      "line": 3006
+      "line": 3012
     }
   ],
   "Settings.56dd16e7b1": [
     {
       "file": "src/Settings.tsx",
-      "line": 3006
+      "line": 3012
     }
   ],
   "Settings.e76fd2add0": [
     {
       "file": "src/Settings.tsx",
-      "line": 3006
+      "line": 3012
     },
     {
       "file": "src/Settings.tsx",
-      "line": 3008
+      "line": 3014
     }
   ],
   "Settings.77aee18f76": [
     {
       "file": "src/Settings.tsx",
-      "line": 3007
+      "line": 3013
     }
   ],
   "Settings.623ab0c19d": [
     {
       "file": "src/Settings.tsx",
-      "line": 3008
+      "line": 3014
     }
   ],
   "Settings.eb1a70e392": [
     {
       "file": "src/Settings.tsx",
-      "line": 3008
+      "line": 3014
     }
   ],
   "Settings.a3c85d9f8f": [
     {
       "file": "src/Settings.tsx",
-      "line": 3012
+      "line": 3018
     }
   ],
   "Settings.7cb9a23a6d": [
     {
       "file": "src/Settings.tsx",
-      "line": 3013
+      "line": 3019
     }
   ],
   "Settings.e1f16d4544": [
     {
       "file": "src/Settings.tsx",
-      "line": 3013
+      "line": 3019
     }
   ],
   "Settings.dc5f190d4f": [
     {
       "file": "src/Settings.tsx",
-      "line": 3013
+      "line": 3019
     }
   ],
   "Settings.2bdc0490be": [
     {
       "file": "src/Settings.tsx",
-      "line": 3014,
+      "line": 3020,
       "values": "{ value1: <code>{draft.data_dir}</code>, value2: <em>{t(\"Settings.dd0ae7a5cb\")}</em> }"
     }
   ],
   "Settings.cea63d4e0b": [
     {
       "file": "src/Settings.tsx",
-      "line": 3015
+      "line": 3021
     }
   ],
   "Settings.f3cf34b408": [
     {
       "file": "src/Settings.tsx",
-      "line": 3055
+      "line": 3061
     }
   ],
   "Settings.afb1ca89ca": [
     {
       "file": "src/Settings.tsx",
-      "line": 3064
+      "line": 3070
     }
   ],
   "Settings.a0df974b18": [
     {
       "file": "src/Settings.tsx",
-      "line": 3065
+      "line": 3071
     }
   ],
   "Settings.ac4d44b4ae": [
     {
       "file": "src/Settings.tsx",
-      "line": 3074,
+      "line": 3080,
       "values": "{ name: label.name, value2: label.flavor||voice }"
     }
   ],
   "Settings.03029b0319": [
     {
       "file": "src/Settings.tsx",
-      "line": 3097
+      "line": 3103
     }
   ],
   "Settings.eb22827454": [
     {
       "file": "src/Settings.tsx",
-      "line": 3097
+      "line": 3103
     }
   ],
   "Settings.1673f4411d": [
     {
       "file": "src/Settings.tsx",
-      "line": 3098
+      "line": 3104
     }
   ],
   "Settings.178b7f5a03": [
     {
       "file": "src/Settings.tsx",
-      "line": 3098
+      "line": 3104
     }
   ],
   "Settings.0bfcd9317d": [
     {
       "file": "src/Settings.tsx",
-      "line": 3099
+      "line": 3105
     }
   ],
   "Settings.7b4095a1f8": [
     {
       "file": "src/Settings.tsx",
-      "line": 3099
+      "line": 3105
     }
   ],
   "Settings.b6150a5c59": [
     {
       "file": "src/Settings.tsx",
-      "line": 3145
+      "line": 3151
     }
   ],
   "Settings.abb1f294e6": [
     {
       "file": "src/Settings.tsx",
-      "line": 3151
+      "line": 3157
     }
   ],
   "Settings.aa1b2246f7": [
     {
       "file": "src/Settings.tsx",
-      "line": 3152,
+      "line": 3158,
       "values": "{ value1: <code>{t(\"Settings.fed5038bf2\")}</code>, value2: <code>{t(\"Settings.e6184ce10e\")}</code> }"
     }
   ],
   "Settings.fed5038bf2": [
     {
       "file": "src/Settings.tsx",
-      "line": 3152
+      "line": 3158
     }
   ],
   "Settings.e6184ce10e": [
     {
       "file": "src/Settings.tsx",
-      "line": 3152
+      "line": 3158
     }
   ],
   "Settings.a8e6ecbb14": [
     {
       "file": "src/Settings.tsx",
-      "line": 3154,
+      "line": 3160,
       "values": "{ value1: present.length ? t(\"Settings.dff7f2dec0\", { value1: present.join(', ') }) : t(\"Settings.2a67beb3f4\") }"
     }
   ],
   "Settings.dff7f2dec0": [
     {
       "file": "src/Settings.tsx",
-      "line": 3154,
+      "line": 3160,
       "values": "{ value1: present.join(', ') }"
     }
   ],
   "Settings.2a67beb3f4": [
     {
       "file": "src/Settings.tsx",
-      "line": 3154
+      "line": 3160
     }
   ],
   "Settings.dda5e96744": [
     {
       "file": "src/Settings.tsx",
-      "line": 3161,
+      "line": 3167,
       "values": "{ value1: <code>{t(\"Settings.62e7f29f9e\")}</code> }"
     }
   ],
   "Settings.62e7f29f9e": [
     {
       "file": "src/Settings.tsx",
-      "line": 3161
+      "line": 3167
     }
   ],
   "Settings.bf209e8494": [
     {
       "file": "src/Settings.tsx",
-      "line": 3163
+      "line": 3169
     }
   ],
   "Settings.ef7b7e6abe": [
     {
       "file": "src/Settings.tsx",
-      "line": 3163
+      "line": 3169
     }
   ],
   "Settings.8c6dbc27bd": [
     {
       "file": "src/Settings.tsx",
-      "line": 3165,
+      "line": 3171,
       "values": "{ value1: <span class=\"state-dot idle\"/>, value2: (shell.frozen) ? 'yes' : 'no' }"
     }
   ],
   "Settings.6bfba04360": [
     {
       "file": "src/Settings.tsx",
-      "line": 3166,
+      "line": 3172,
       "values": "{ value1: <span class=\"state-dot stopped\"/>, value2: shell.missing.join(', ') }"
     }
   ],
   "Settings.77c2a1e56f": [
     {
       "file": "src/Settings.tsx",
-      "line": 3167,
+      "line": 3173,
       "values": "{ value1: shell.reinstall_command ? <>{rich(\"Settings.d4fa4e03fa\", { value1: <code>{shell.reinstall_command}</code> })}</> : t(\"Settings.4a81626dd4\") }"
     }
   ],
   "Settings.d4fa4e03fa": [
     {
       "file": "src/Settings.tsx",
-      "line": 3167,
+      "line": 3173,
       "values": "{ value1: <code>{shell.reinstall_command}</code> }"
     }
   ],
   "Settings.4a81626dd4": [
     {
       "file": "src/Settings.tsx",
-      "line": 3167
+      "line": 3173
     }
   ],
   "Settings.97dbd398d6": [
     {
       "file": "src/Settings.tsx",
-      "line": 3226
+      "line": 3232
     }
   ],
   "Settings.5dd5b63e92": [
     {
       "file": "src/Settings.tsx",
-      "line": 3244,
+      "line": 3250,
       "values": "{ word: word }"
     }
   ],
   "Settings.587a1d9085": [
     {
       "file": "src/Settings.tsx",
-      "line": 3245,
+      "line": 3251,
       "values": "{ phonemes: state.phonemes }"
     }
   ],
   "Settings.dc586a1f6a": [
     {
       "file": "src/Settings.tsx",
-      "line": 3245
+      "line": 3251
     }
   ],
   "Settings.d6a7e802a6": [
     {
       "file": "src/Settings.tsx",
-      "line": 3245
+      "line": 3251
     }
   ],
   "Settings.1ab10bf2a9": [
     {
       "file": "src/Settings.tsx",
-      "line": 3246
+      "line": 3252
     }
   ],
   "Settings.ad64ff185f": [
     {
       "file": "src/Settings.tsx",
-      "line": 3247
+      "line": 3253
     },
     {
       "file": "src/Settings.tsx",
-      "line": 3257
+      "line": 3263
     },
     {
       "file": "src/Settings.tsx",
-      "line": 3268
+      "line": 3274
     }
   ],
   "Settings.3f854e61f6": [
     {
       "file": "src/Settings.tsx",
-      "line": 3248,
+      "line": 3254,
       "values": "{ word: word }"
     }
   ],
   "Settings.945ff3fcb2": [
     {
       "file": "src/Settings.tsx",
-      "line": 3250,
+      "line": 3256,
       "values": "{ value1: state.unspeakable.map(piece=><code key={piece}>{piece}</code>) }"
     }
   ],
   "Settings.70da5d612d": [
     {
       "file": "src/Settings.tsx",
-      "line": 3250
+      "line": 3256
     }
   ],
   "Settings.98c1eb4ee9": [
     {
       "file": "src/Settings.tsx",
-      "line": 3254
+      "line": 3260
     }
   ],
   "Settings.275229d9fa": [
     {
       "file": "src/Settings.tsx",
-      "line": 3254
+      "line": 3260
     }
   ],
   "Settings.24f1b8254b": [
     {
       "file": "src/Settings.tsx",
-      "line": 3255
+      "line": 3261
     }
   ],
   "Settings.f30058f551": [
     {
       "file": "src/Settings.tsx",
-      "line": 3255
+      "line": 3261
     }
   ],
   "Settings.21c78f1d69": [
     {
       "file": "src/Settings.tsx",
-      "line": 3256
+      "line": 3262
     }
   ],
   "Settings.9fd728c66c": [
     {
       "file": "src/Settings.tsx",
-      "line": 3258
+      "line": 3264
     }
   ],
   "Settings.442a86ee10": [
     {
       "file": "src/Settings.tsx",
-      "line": 3261
+      "line": 3267
     }
   ],
   "Settings.0d11785a7f": [
     {
       "file": "src/Settings.tsx",
-      "line": 3263
+      "line": 3269
     }
   ],
   "Settings.bd8d2b7a80": [
     {
       "file": "src/Settings.tsx",
-      "line": 3266
+      "line": 3272
     }
   ],
   "Settings.78cdc43e57": [
     {
       "file": "src/Settings.tsx",
-      "line": 3266,
+      "line": 3272,
       "values": "{ word: item.word }"
     }
   ],
   "Settings.ffe04ba9ce": [
     {
       "file": "src/Settings.tsx",
-      "line": 3267
+      "line": 3273
     }
   ],
   "Settings.5f4ac9161a": [
     {
       "file": "src/Settings.tsx",
-      "line": 3269
+      "line": 3275
     }
   ],
   "settingsSave.cde0fb0dec": [
@@ -42853,27 +42869,27 @@
   "settingsSave.4d4b8d2d10": [
     {
       "file": "src/settingsSave.ts",
-      "line": 57,
-      "values": "{ value1: failed.map(label).join(' and ') }"
+      "line": 58,
+      "values": "{ value1: list.format(failed.map(label)) }"
     }
   ],
   "settingsSave.454c673bfa": [
     {
       "file": "src/settingsSave.ts",
-      "line": 58,
+      "line": 59,
       "values": "{ value1: landed, value2: missing, value3: error.message }"
     }
   ],
   "settingsSave.d223c2909c": [
     {
       "file": "src/settingsSave.ts",
-      "line": 60
+      "line": 61
     }
   ],
   "settingsSave.6c880661c1": [
     {
       "file": "src/settingsSave.ts",
-      "line": 61,
+      "line": 62,
       "values": "{ value1: error.message }"
     }
   ],

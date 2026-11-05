@@ -8077,5 +8077,7 @@
   "wslBridge.0c27b6ecb1": "The distro-side bridge is not installed yet.",
   "wslBridge.214da0041d": "The bridge is off. Turn it on to run an agent natively inside this distribution and have mux observe it.",
   "wslBridge.471c663416": "No agent CLI is installed natively inside this distribution. A Windows CLI reached through /mnt does not count - it would run, but write its transcript on the Windows side where mux cannot follow it.",
-  "wslBridge.fb1e0435d6": "Not checked yet - use \"Check distributions\"."
+  "wslBridge.fb1e0435d6": "Not checked yet - use \"Check distributions\".",
+  "Settings.loading": "loading…",
+  "Settings.restoring": "restoring defaults…"
 }

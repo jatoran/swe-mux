@@ -1,4 +1,4 @@
-import { t } from './localization/index.ts'
+import { locale, t } from './localization/index.ts'
 // What a Settings save is allowed to claim after it fails.
 //
 // Save was two requests — `PATCH /api/config` and `PUT /api/keybindings` — fired together,
@@ -53,8 +53,9 @@ export function saveFailureStatus(error: ApiError): string {
   if (committed.length) {
     const failed = (Array.isArray(error.detail?.failed) ? error.detail.failed : [])
       .filter((section): section is string => typeof section === 'string')
-    const landed = committed.map(label).join(' and ')
-    const missing = failed.length ? t("settingsSave.4d4b8d2d10", { value1: failed.map(label).join(' and ') }) : ''
+    const list = new Intl.ListFormat(locale.value, { style: 'long', type: 'conjunction' })
+    const landed = list.format(committed.map(label))
+    const missing = failed.length ? t("settingsSave.4d4b8d2d10", { value1: list.format(failed.map(label)) }) : ''
     return t("settingsSave.454c673bfa", { value1: landed, value2: missing, value3: error.message })
   }
   if (error.status) return t("settingsSave.d223c2909c")

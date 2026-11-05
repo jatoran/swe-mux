@@ -593,7 +593,13 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
       ? t("Settings.c3554b7e29", { value1: Object.entries(data.rejected).map(([keys,message])=>`${displayChord(keys,data.platform)}: ${message}`).join(' · ') })
       : '')
   },[])
-  const [status, setStatus] = useState('loading…')
+  // Keep the message recipe so an already-mounted status follows a language change.
+  // Busy markers remain stable control values, never translated comparisons.
+  const [statusState, setStatusState] = useState<string | (() => string)>(() => () => t('Settings.loading'))
+  const setStatus = (value: string | (() => string)) => setStatusState(() => value)
+  const status = typeof statusState === 'function' ? statusState()
+    : statusState === SAVING ? t('Settings.23e39291d6')
+    : statusState === RESTORING ? t('Settings.restoring') : statusState
   const [errors, setErrors] = useState<Record<string,string>>({})
   const [scanJob, setScanJob] = useState<HistoryScanJob|null>(null)
   const [activeTab,setActiveTab] = useState<SettingsTab>(()=>initialSection?tabForSection(initialSection):rememberedTab())
@@ -734,12 +740,12 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
       // would let a Save overwrite their file with empty defaults. (The rules
       // file left this transaction: the Automation dashboard owns its editor.)
       if (!keyData) {
-        setStatus(bundle.errors.keybindings?t("Settings.10cc0c58dc", { value1: bundle.errors.keybindings }):t("Settings.3bd15ed78f"))
+        setStatus(() => bundle.errors.keybindings?t("Settings.10cc0c58dc", { value1: bundle.errors.keybindings }):t("Settings.3bd15ed78f"))
         return
       }
       adoptConfig(next)
       adoptKeybindings(keyData)
-      setStatus(t("Settings.b24d6d3373"))
+      setStatus(() => t("Settings.b24d6d3373"))
       // Both halves of the profile payload are kept. `detected` seeds "restore
       // detected"; `profiles` carries the daemon's *derived* capabilities, which
       // /api/config does not (it returns the stored list, which is now vestigial).
@@ -1044,7 +1050,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   // A write to the daemon is in flight, or the last one was refused. Both are things the
   // footer has to say over the dirty hint, and `errors` is exactly the failure's lifetime:
   // every path that writes clears it on success and fills it on refusal.
-  const writeBusy = status===SAVING||status===RESTORING
+  const writeBusy = statusState===SAVING||statusState===RESTORING
   const writeFailed = Object.keys(errors).length>0
 
   const leaveSettings = useCallback((intent:CloseIntent) => {
@@ -1492,12 +1498,12 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
       adoptConfig(next); setErrors({})
       if (result.keybindings) adoptKeybindings(result.keybindings)
       else setSavedBindings(bindingRules)
-      setStatus(next.restart_required.length ? t("Settings.552eb2b36b", { value1: next.restart_required.join(', ') }) : t("Settings.3a6c0e6211"))
+      setStatus(() => next.restart_required.length ? t("Settings.552eb2b36b", { value1: next.restart_required.join(', ') }) : t("Settings.3a6c0e6211"))
       return true
     } catch (error) {
       const typed = error as ApiError
       setErrors(typed.fields || {settings:typed.message})
-      setStatus(saveFailureStatus(typed))
+      setStatus(() => saveFailureStatus(typed))
       return false
     }
   }
@@ -1507,13 +1513,13 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
     try {
       adoptConfig(await api<Config>('POST','/api/config/reset',{}))
       setErrors({})
-      setStatus(t("Settings.cc441de714"))
+      setStatus(() => t("Settings.cc441de714"))
     } catch (error) {
       // A failed reset used to be an unhandled rejection: the button reported nothing,
       // and the panel went on showing a draft that no longer matched the daemon.
       const typed = error as ApiError
       setErrors(typed.fields || {settings:typed.message})
-      setStatus(t("Settings.4b70d8d894", { message: typed.message }))
+      setStatus(() => t("Settings.4b70d8d894", { message: typed.message }))
     }
   }
   const exportConfig = () => {
@@ -1615,7 +1621,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   }
   const startHistoryScan = async ():Promise<void> => {
     try { setScanJob((await api<{job:HistoryScanJob}>('POST','/api/history/scan')).job) }
-    catch(cause){ setStatus(t("Settings.165390f773", { value1: cause instanceof Error?cause.message:String(cause) })) }
+    catch(cause){ setStatus(() => t("Settings.165390f773", { value1: cause instanceof Error?cause.message:String(cause) })) }
   }
   const cancelHistoryScan = async ():Promise<void> => {
     try { setScanJob((await api<{job:HistoryScanJob}>('DELETE','/api/history/scan')).job) }
@@ -2999,7 +3005,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
         the draft is still dirty after a failure, so the honest status was replaced by
         "unsaved changes" and only the errors block said what happened. A write in flight,
         or one that failed, has something to say that the hint does not. */}
-    <footer><span aria-live="polite">{writeBusy||writeFailed ? status : dirty ? t("Settings.c4751a7ab8") : status}</span><button onClick={()=>requestClose()}>{t("Settings.19766ed6cc")}</button><button class={`primary${dirty?' unsaved':''}`} disabled={!dirty||writeBusy} onClick={()=>void save()}>{status===SAVING ? t("Settings.23e39291d6") : dirty ? t("Settings.dd0ae7a5cb") : t("Settings.b5c120b316")}</button></footer>
+    <footer><span aria-live="polite">{writeBusy||writeFailed ? status : dirty ? t("Settings.c4751a7ab8") : status}</span><button onClick={()=>requestClose()}>{t("Settings.19766ed6cc")}</button><button class={`primary${dirty?' unsaved':''}`} disabled={!dirty||writeBusy} onClick={()=>void save()}>{statusState===SAVING ? t("Settings.23e39291d6") : dirty ? t("Settings.dd0ae7a5cb") : t("Settings.b5c120b316")}</button></footer>
   </section>
   {closeIntent && <div class="modal-layer settings-confirm-layer" onMouseDown={event=>event.target===event.currentTarget&&setCloseIntent(null)}>
     <section class="modal settings-confirm" ref={confirmPanel} role="alertdialog" aria-modal="true" aria-label={t("Settings.842e70aacb")} onMouseDown={event=>event.stopPropagation()}>

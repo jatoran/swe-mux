@@ -4,8 +4,9 @@
 
 One application supports English (`en`) and Simplified Chinese (`zh-Hans`).
 Both catalogs ship with the application; translation requires no network service or separate installer.
-The Chinese catalogs are intentionally empty until translations are supplied.
-Missing Chinese messages use the English source.
+Both catalogs contain complete Simplified Chinese copy, including help, backend errors, and native notifications.
+Release checks require every English key to have a Chinese value with the same formatting contract.
+Runtime English fallback remains available for damaged or partially installed catalogs.
 
 Application chrome, setup, Settings, help, accessible labels, display statuses, backend messages, native dialogs, and push copy use catalogs.
 Terminal output, user-authored names and content, provider output, command syntax, protocol values, and voice recognition are not translated.
@@ -41,6 +42,7 @@ Translated text is rendered as text; catalogs cannot introduce executable HTML.
 A shared Preact signal refreshes mounted consumers.
 Module-level display tables use accessors, and shared message functions resolve text when called.
 Cached date and number formatters follow the active locale.
+Settings retains status message render functions so existing status text changes language without changing its busy markers.
 Settings search accepts Unicode letters and numbers and invalidates language-dependent caches.
 
 Message ids, setting keys, page ids, command ids, and protocol status values remain stable.

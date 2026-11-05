@@ -3,6 +3,9 @@ import test from 'node:test'
 import { h } from 'preact'
 import { IntlMessageFormat } from 'intl-messageformat'
 import english from '../src/localization/catalogs/en.json' with { type: 'json' }
+import chinese from '../src/localization/catalogs/zh-Hans.json' with { type: 'json' }
+import verbatim from '../src/localization/verbatim.json' with { type: 'json' }
+import { messageContract } from '../src/localization/catalogContract.ts'
 import { applyLanguagePreference, dateTimeFormatter, numberFormatter, installCatalog, locale, resolveLocale, rich, setLocalizationReporter, t, type MessageId } from '../src/localization/index.ts'
 
 setLocalizationReporter(() => {})
@@ -98,4 +101,30 @@ test('formatters created before selection follow the selected language', () => {
   assert.equal(numbers.format(12345), new Intl.NumberFormat('zh-Hans',{notation:'compact',maximumFractionDigits:1}).format(12345))
   assert.equal(dates.format(new Date('2026-01-01T00:00:00Z')), '一月')
   applyLanguagePreference('en')
+})
+
+test('message contracts preserve conditional branches and argument multiplicity while allowing word order changes', () => {
+  assert.equal(messageContract('{name}: {count} items'), messageContract('共 {count} 项：{name}'))
+  assert.notEqual(messageContract('{name} / {name}'), messageContract('{name}'))
+  assert.notEqual(
+    messageContract('{ready, select, yes {{name} ready} other {{name} waiting}}'),
+    messageContract('{ready, select, yes {{name} 就绪} other {等待中}}'),
+  )
+})
+
+test('technical examples remain usable in either language', () => {
+  assert.equal(new Set(verbatim).size, verbatim.length)
+  for (const id of verbatim) {
+    assert.ok(id in english, id)
+    assert.equal((chinese as Record<string, string>)[id], (english as Record<string, string>)[id], id)
+  }
+})
+
+test('the shipped Chinese catalog covers every message and preserves its format contract', () => {
+  assert.deepEqual(Object.keys(chinese).sort(), Object.keys(english).sort())
+  for (const [id, source] of Object.entries(english)) {
+    const target = (chinese as Record<string, string>)[id]
+    assert.ok(target.trim(), id)
+    assert.equal(messageContract(target), messageContract(source), id)
+  }
 })

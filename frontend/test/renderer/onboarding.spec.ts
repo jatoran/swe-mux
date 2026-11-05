@@ -316,3 +316,23 @@ test('returning through an unchanged experience keeps later feature customizatio
   await next(page)
   expect(app.writes.filter(write=>write.path==='/api/experience-tier')).toHaveLength(1)
 })
+
+
+test('first-run language choice translates setup without losing its selection', async ({page}, testInfo) => {
+  const server = await daemon(page)
+  await page.goto('/onboarding-harness.html')
+  const smart = page.getByRole('radio', {name:/Smart workspace/})
+  await smart.check()
+  const selected = page.locator('input[type="radio"]:checked')
+  const value = await selected.inputValue()
+  await page.locator('.language-picker select').selectOption('zh-Hans')
+  await expect(page.locator('html')).toHaveAttribute('lang','zh-Hans')
+  await expect(page.getByRole('button',{name:'继续',exact:true})).toBeVisible()
+  await expect(selected).toHaveValue(value)
+  expect(server.config.ui_language).toBe('zh-Hans')
+  await page.screenshot({path:testInfo.outputPath('chinese-first-run.png'),fullPage:true})
+  await page.locator('.language-picker select').selectOption('en')
+  await expect(page.getByRole('radio',{name:/Smart workspace/})).toBeChecked()
+  await expect(page.getByRole('button',{name:'Continue',exact:true})).toBeVisible()
+  expect(server.config.ui_language).toBe('en')
+})

@@ -9,22 +9,22 @@
   "scripts": {
     "dev": "vite",
     "postinstall": "node scripts/patch-xterm-webgl.mjs && node scripts/patch-xterm-requestmode.mjs",
-    "prebuild": "node scripts/patch-xterm-webgl.mjs --check && node scripts/patch-xterm-requestmode.mjs --check && node scripts/check-localization.mjs",
+    "prebuild": "node scripts/patch-xterm-webgl.mjs --check && node scripts/patch-xterm-requestmode.mjs --check && node --experimental-strip-types scripts/check-localization.mjs",
     "build": "tsc && vite build",
     "postbuild": "node scripts/compress-static.mjs && node scripts/verify-bundle.mjs",
-    "prebuild:demo": "node scripts/patch-xterm-webgl.mjs --check && node scripts/patch-xterm-requestmode.mjs --check && node scripts/check-localization.mjs",
+    "prebuild:demo": "node scripts/patch-xterm-webgl.mjs --check && node scripts/patch-xterm-requestmode.mjs --check && node --experimental-strip-types scripts/check-localization.mjs",
     "build:demo": "tsc && vite build --config vite.demo.config.ts",
-    "precheck": "node scripts/patch-xterm-webgl.mjs --check && node scripts/patch-xterm-requestmode.mjs --check && node scripts/check-localization.mjs",
+    "precheck": "node scripts/patch-xterm-webgl.mjs --check && node scripts/patch-xterm-requestmode.mjs --check && node --experimental-strip-types scripts/check-localization.mjs",
     "check": "tsc --noEmit",
     "check:tests": "tsc --noEmit -p tsconfig.test.json",
-    "pretest": "node scripts/patch-xterm-webgl.mjs --check && node scripts/patch-xterm-requestmode.mjs --check && node scripts/check-localization.mjs",
+    "pretest": "node scripts/patch-xterm-webgl.mjs --check && node scripts/patch-xterm-requestmode.mjs --check && node --experimental-strip-types scripts/check-localization.mjs",
     "test": "node --experimental-strip-types test/all.ts",
     "test:renderer": "playwright test --config playwright.renderer.config.ts",
     "check:settings-aliases": "playwright test --config playwright.renderer.config.ts settings-search.spec.ts",
     "capture:demo": "node scripts/capture-demo.mjs",
     "capture:demo:check": "node scripts/capture-demo.mjs --scenario queue --check",
     "bench:smart-turn": "node --experimental-strip-types scripts/smart-turn-bench.mts",
-    "check:localization": "node scripts/check-localization.mjs"
+    "check:localization": "node --experimental-strip-types scripts/check-localization.mjs"
   },
   "dependencies": {
     "@codemirror/autocomplete": "^6.20.3",

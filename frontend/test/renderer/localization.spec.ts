@@ -21,11 +21,15 @@ test('language selection updates mounted Settings, preserves a draft, and surviv
   await expect(page.locator('.language-picker select')).toHaveValue('zh-Hans')
 })
 
-test('translated Settings headings retain stable page navigation on desktop and phone', async ({page}) => {
+test('translated Settings headings retain stable page navigation on desktop and phone', async ({page}, testInfo) => {
   for(const viewport of [{width:1280,height:900},{width:390,height:844}]){
     await page.setViewportSize(viewport)
     await page.goto('/settings-harness.html?localization=1&section=general')
     await page.locator('.language-picker select').selectOption('zh-Hans')
+    await expect(page.locator('[role="tab"][data-settings-tab="general"]')).toHaveAttribute('aria-selected','true')
+    await expect(page.locator('.settings-panel > footer [aria-live]')).toHaveText('就绪')
+    expect(await page.evaluate(()=>document.documentElement.scrollWidth)).toBeLessThanOrEqual(viewport.width)
+    await page.screenshot({path:testInfo.outputPath('chinese-general-'+viewport.width+'.png'),fullPage:true})
     if(viewport.width<760)await page.locator('.settings-nav-trigger').click()
     await page.locator('[role="tab"][data-settings-tab="appearance"]').click()
     if(viewport.width<760)await page.locator('.settings-nav-trigger').click()
@@ -88,6 +92,9 @@ test('Settings search rebuilds in the selected language and navigates to the tra
 test('every Settings tab remains usable after changing language', async ({page}) => {
   const failures: string[] = []
   page.on('pageerror', error => failures.push(error.message))
+  page.on('console', message => {
+    if(message.text().includes('message_fallback'))failures.push(message.text())
+  })
   await page.goto('/settings-harness.html?localization=1&section=general')
   await page.locator('.language-picker select').selectOption('zh-Hans')
   const tabs = await page.locator('[role="tab"][data-settings-tab]').evaluateAll(nodes=>nodes.map(node=>node.getAttribute('data-settings-tab')!))

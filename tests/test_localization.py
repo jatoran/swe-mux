@@ -153,12 +153,18 @@ def test_backend_catalog_references_and_translation_placeholders():
     english = json.loads((root / "assets/locales/en.json").read_text(encoding="utf-8"))
     chinese = json.loads((root / "assets/locales/zh-Hans.json").read_text(encoding="utf-8"))
     formatter = string.Formatter()
+    assert english.keys() == chinese.keys()
 
     def fields(text):
-        return {name for _, name, _, _ in formatter.parse(text) if name is not None}
+        return sorted(
+            (name, specification, conversion or "")
+            for _, name, specification, conversion in formatter.parse(text)
+            if name is not None
+        )
 
     for key, text in chinese.items():
         assert key in english
+        assert text.strip(), key
         assert fields(text) == fields(english[key]), key
     for path in root.rglob("*.py"):
         for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
@@ -245,3 +251,25 @@ def test_every_declared_settings_validation_message_is_catalog_backed(tmp_path, 
         lambda language: source if language == "en" else {port_message.message_id: "端口超出范围"},
     )
     assert ui.localize_payload(errors, "zh-Hans")["port"] == "端口超出范围"
+
+
+@pytest.mark.parametrize(
+    ("message_id", "values", "expected"),
+    [
+        ("desktop.b13472970c", {}, "打开 swe-mux"),
+        ("push.415d3bcb6c", {}, "智能体需要你的批准。"),
+        ("land_queue.d782fb8506", {"value1": 12.4}, "验证通过，耗时 12 秒"),
+        (
+            "project_actions.6135b23cc7",
+            {"value1": "input:branch"},
+            "不支持的变量：${input:branch}",
+        ),
+    ],
+)
+def test_shipped_chinese_messages_render_without_fallback(message_id, values, expected, caplog):
+    from swe_mux.ui_messages import render_message, ui_message
+
+    message = ui_message(message_id, **values)
+    assert render_message(message, "zh-Hans") == expected
+    assert render_message(message, "en") == str(message)
+    assert "ui_message_fallback" not in caplog.text
